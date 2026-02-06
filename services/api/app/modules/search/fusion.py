@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 
 from app.config import get_settings
 from app.logging_config import get_logger
+from app.modules.search.normalize import get_normalized_char_count
 
 logger = get_logger(__name__)
 
@@ -36,10 +37,26 @@ def rrf_score(rank: int | None, k: int = 60) -> float:
 
 
 def compute_quality_factor(source: dict) -> float:
-    char_count = source.get("transcript_char_count", 0)
+    """
+    Compute quality factor based on transcript character count.
+    
+    Fallback chain:
+    1. transcript_char_count_normalized (pre-computed normalized)
+    2. transcript_char_count (legacy, raw count)
+    3. Compute from transcript text using get_normalized_char_count()
+    
+    Returns:
+        Quality factor between QUALITY_FLOOR (0.7) and 1.0
+    """
+    char_count = source.get("transcript_char_count_normalized", 0)
+    
+    if char_count == 0:
+        char_count = source.get("transcript_char_count", 0)
+    
     if char_count == 0:
         transcript = source.get("transcript_raw", "") or source.get("transcript_norm", "")
-        char_count = len(transcript)
+        if transcript:
+            char_count = get_normalized_char_count(transcript)
     
     if char_count >= GOOD_TRANSCRIPT_CHARS:
         return 1.0

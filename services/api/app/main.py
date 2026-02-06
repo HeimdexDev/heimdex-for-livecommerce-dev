@@ -19,9 +19,76 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Application lifespan manager.
+    
+    Startup:
+    - Creates OpenSearch client and stores in app.state
+    - Runs infrastructure checks (Nori analyzer, index/alias)
+    
+    Shutdown:
+    - Closes OpenSearch client
+    """
+    from app.modules.search.client import OpenSearchClient
+    
     logger.info("application_starting", environment=get_settings().environment)
+    
+    opensearch_client = OpenSearchClient()
+    app.state.opensearch_client = opensearch_client
+    
+    await _startup_search_checks(opensearch_client)
+    
     yield
+    
     logger.info("application_shutting_down")
+    await opensearch_client.close()
+    app.state.opensearch_client = None
+
+
+async def _startup_search_checks(client):
+    """
+    Run startup checks for OpenSearch infrastructure.
+    
+    Checks:
+    1. Nori analyzer availability (warns if missing)
+    2. Index exists and alias state (warns on mismatch)
+    """
+    try:
+        nori_available = await client._check_nori_available()
+        if not nori_available:
+            logger.warning(
+                "nori_analyzer_not_available",
+                message="Korean analyzer (Nori) is NOT installed. "
+                        "Korean search quality will be degraded. "
+                        "Install with: bin/opensearch-plugin install analysis-nori",
+                impact="korean_search_quality_degraded",
+            )
+        else:
+            logger.info("nori_analyzer_available", status="ok")
+        
+        result = await client.ensure_index_exists()
+        
+        if result.get("alias_mismatch_warning"):
+            logger.warning(
+                "startup_alias_mismatch",
+                warning=result["alias_mismatch_warning"],
+                current_targets=result.get("alias_current_targets"),
+                intended_index=client.index_name,
+                action="Run 'python -m app.modules.search.promote_alias' to fix",
+            )
+        else:
+            logger.info(
+                "search_infrastructure_ready",
+                index=client.index_name,
+                alias=client.alias_name,
+            )
+        
+    except Exception as e:
+        logger.error(
+            "startup_search_check_failed",
+            error=str(e),
+            message="Search infrastructure check failed. Search may not work correctly.",
+        )
 
 
 app = FastAPI(

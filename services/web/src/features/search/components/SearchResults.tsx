@@ -231,11 +231,40 @@ function DebugPanel({ debug }: { debug: SegmentResult["debug"] }) {
             {debug.vector_score?.toFixed(3) ?? "N/A"}
           </span>
         </div>
-        <div className="col-span-2">
+        <div>
+          <span className="text-gray-500">Lexical Contribution:</span>{" "}
+          <span className="text-gray-900">
+            {debug.lexical_contribution.toFixed(4)}
+          </span>
+        </div>
+        <div>
+          <span className="text-gray-500">Vector Contribution:</span>{" "}
+          <span className="text-gray-900">
+            {debug.vector_contribution.toFixed(4)}
+          </span>
+        </div>
+        <div>
           <span className="text-gray-500">Fused Score:</span>{" "}
-          <span className="text-primary-600 font-semibold">
+          <span className="text-gray-900">
             {debug.fused_score.toFixed(6)}
           </span>
+        </div>
+        <div>
+          <span className="text-gray-500">Quality Factor:</span>{" "}
+          <span className="text-gray-900">
+            {debug.quality_factor.toFixed(2)}
+          </span>
+        </div>
+        <div className="col-span-2">
+          <span className="text-gray-500">Adjusted Score:</span>{" "}
+          <span className="text-primary-600 font-semibold">
+            {debug.adjusted_score.toFixed(6)}
+          </span>
+          {debug.diversification_penalty && (
+            <span className="ml-2 px-1.5 py-0.5 bg-yellow-100 text-yellow-800 rounded text-[10px]">
+              diversified
+            </span>
+          )}
         </div>
       </div>
     </div>

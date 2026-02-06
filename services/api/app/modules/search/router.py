@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.base import get_db_session
+from app.dependencies import get_search_service
 from app.logging_config import get_logger
-from app.modules.search.client import OpenSearchClient
+from app.modules.auth import get_current_user
 from app.modules.search.schemas import SearchRequest, SearchResponse
 from app.modules.search.service import SearchService
 from app.modules.tenancy import OrgContext, get_current_org
+from app.modules.users.models import User
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
@@ -16,16 +16,13 @@ router = APIRouter(prefix="/search", tags=["search"])
 async def search(
     request: SearchRequest,
     org_ctx: OrgContext = Depends(get_current_org),
-    db: AsyncSession = Depends(get_db_session),
+    user: User = Depends(get_current_user),
+    search_service: SearchService = Depends(get_search_service),
 ):
-    opensearch = OpenSearchClient()
-    try:
-        service = SearchService(db, opensearch)
-        return await service.search(
-            query=request.q,
-            org_id=org_ctx.org_id,
-            alpha=request.alpha,
-            filters=request.filters,
-        )
-    finally:
-        await opensearch.close()
+    logger.debug("search_request", user_id=str(user.id), org_id=str(org_ctx.org_id))
+    return await search_service.search(
+        query=request.q,
+        org_id=org_ctx.org_id,
+        alpha=request.alpha,
+        filters=request.filters,
+    )

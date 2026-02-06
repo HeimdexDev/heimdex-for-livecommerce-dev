@@ -1,0 +1,146 @@
+# Golden Query Set for Search Quality Evaluation
+# 
+# These queries define expected search behavior using property-based assertions
+# rather than brittle segment IDs. This allows tests to be deterministic while
+# remaining flexible to data changes.
+#
+# Assertion Types:
+#   - contains_term: Result snippets must contain this term (case-insensitive)
+#   - min_results: Minimum number of results expected
+#   - max_same_video: Maximum results from same video (diversification check)
+#   - top_n_has_term: At least one of top N results contains term
+#   - alpha_preference: Which alpha value should rank this query best
+
+queries:
+  # Category 1: Product Announcements (Korean e-commerce terms)
+  - id: product_launch
+    query: "신제품 출시"
+    description: "New product launch announcements"
+    category: product
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0  # May have 0 if no matching data
+      - type: max_same_video
+        value: 4  # Diversification should apply
+      - type: top_n_has_term
+        n: 5
+        term: "제품"  # At least one top-5 result should mention 제품
+
+  - id: discount_sale
+    query: "할인 행사"
+    description: "Discount/sale event announcements"
+    category: product
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0
+      - type: max_same_video
+        value: 4
+      - type: top_n_has_term
+        n: 5
+        term: "할인"
+
+  - id: free_shipping
+    query: "무료 배송"
+    description: "Free shipping mentions"
+    category: product
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0
+      - type: max_same_video
+        value: 4
+
+  # Category 2: Technical Terms (Mixed Korean/English)
+  - id: api_integration
+    query: "API 연동"
+    description: "API integration discussions"
+    category: technical
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0
+      - type: max_same_video
+        value: 4
+      - type: top_n_has_term
+        n: 10
+        term: "api"
+
+  - id: sdk_installation
+    query: "SDK 설치 방법"
+    description: "SDK installation tutorials"
+    category: technical
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0
+      - type: max_same_video
+        value: 4
+
+  # Category 3: Short Queries (Phrase Matching - should benefit from phrase boost)
+  - id: sale_period
+    query: "세일 기간"
+    description: "Sale period - exact phrase should boost"
+    category: short_phrase
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0
+      - type: max_same_video
+        value: 4
+      - type: alpha_preference
+        preferred: 0.0  # Short phrase queries should work well with lexical
+
+  - id: usage_instructions
+    query: "사용 방법"
+    description: "Usage instructions"
+    category: short_phrase
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0
+      - type: max_same_video
+        value: 4
+
+  - id: order_cancellation
+    query: "주문 취소"
+    description: "Order cancellation"
+    category: short_phrase
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0
+      - type: max_same_video
+        value: 4
+
+  # Category 4: Long-tail Queries (Should benefit from semantic search)
+  - id: special_discount_friday
+    query: "이번 주 금요일까지 진행하는 특별 할인"
+    description: "Special discount until Friday this week"
+    category: long_tail
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0
+      - type: max_same_video
+        value: 4
+      - type: alpha_preference
+        preferred: 1.0  # Long-tail should benefit from semantic
+
+  - id: return_within_7_days
+    query: "구매 후 7일 이내 반품 가능한지"
+    description: "Whether returns are possible within 7 days of purchase"
+    category: long_tail
+    test_alphas: [0.0, 0.5, 1.0]
+    assertions:
+      - type: min_results
+        value: 0
+      - type: max_same_video
+        value: 4
+
+# Test Configuration
+config:
+  default_target_count: 20
+  default_max_per_video: 4
+  quality_floor: 0.7

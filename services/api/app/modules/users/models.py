@@ -27,9 +27,10 @@ class User(Base, UUIDMixin, TimestampMixin):
     )
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[UserRole] = mapped_column(String(20), nullable=False, default=UserRole.MEMBER)
+    auth0_sub: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     
     org: Mapped["Org"] = relationship("Org", back_populates="users")
     
     __table_args__ = (
-        {"comment": "Users table with org-scoped emails"},
+        {"comment": "Users table with org-scoped emails and Auth0 subject ID"},
     )

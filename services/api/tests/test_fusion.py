@@ -96,9 +96,11 @@ class TestDiversifyResults:
             RankedItem(doc_id="seg1", video_id="v1", source={}, fused_score=1.0, adjusted_score=1.0),
             RankedItem(doc_id="seg2", video_id="v1", source={}, fused_score=0.9, adjusted_score=0.9),
             RankedItem(doc_id="seg3", video_id="v1", source={}, fused_score=0.8, adjusted_score=0.8),
-            RankedItem(doc_id="seg4", video_id="v1", source={}, fused_score=0.7, adjusted_score=0.7),
-            RankedItem(doc_id="seg5", video_id="v1", source={}, fused_score=0.6, adjusted_score=0.6),
-            RankedItem(doc_id="seg6", video_id="v2", source={}, fused_score=0.5, adjusted_score=0.5),
+            RankedItem(doc_id="seg4", video_id="v2", source={}, fused_score=0.7, adjusted_score=0.7),
+            RankedItem(doc_id="seg5", video_id="v2", source={}, fused_score=0.6, adjusted_score=0.6),
+            RankedItem(doc_id="seg6", video_id="v3", source={}, fused_score=0.5, adjusted_score=0.5),
+            RankedItem(doc_id="seg7", video_id="v3", source={}, fused_score=0.4, adjusted_score=0.4),
+            RankedItem(doc_id="seg8", video_id="v4", source={}, fused_score=0.3, adjusted_score=0.3),
         ]
         
         result = diversify_results(items, max_per_video=2, target_count=4)
@@ -147,11 +149,13 @@ class TestDiversifyResults:
             RankedItem(doc_id="seg1", video_id="v1", source={}, fused_score=1.0, adjusted_score=1.0),
             RankedItem(doc_id="seg2", video_id="v1", source={}, fused_score=0.9, adjusted_score=0.9),
             RankedItem(doc_id="seg3", video_id="v1", source={}, fused_score=0.8, adjusted_score=0.8),
-            RankedItem(doc_id="seg4", video_id="v2", source={}, fused_score=0.7, adjusted_score=0.7),
+            RankedItem(doc_id="seg4", video_id="v1", source={}, fused_score=0.7, adjusted_score=0.7),
+            RankedItem(doc_id="seg5", video_id="v2", source={}, fused_score=0.6, adjusted_score=0.6),
         ]
         
         result = diversify_results(items, max_per_video=2, target_count=4)
         
+        assert len(result) == 4
         penalized = [r for r in result if r.diversification_penalty]
         assert len(penalized) == 1
         assert penalized[0].doc_id == "seg3"

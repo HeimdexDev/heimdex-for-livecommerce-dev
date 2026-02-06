@@ -188,9 +188,90 @@ people_cluster_labels
   "required_drive_nickname": "keyword",
   "people_cluster_ids": "keyword[]",
   "capture_time": "date",
-  "embedding_vector": "knn_vector (768-dim)"
+  "embedding_vector": "knn_vector (1024-dim)"
 }
 ```
+
+### Index Versioning & Zero-Downtime Migrations
+
+Heimdex uses **versioned indices with aliases** for zero-downtime schema migrations.
+
+#### Naming Convention
+
+| Component | Pattern | Example |
+|-----------|---------|---------|
+| Alias (queries use this) | `{prefix}_segments` | `heimdex_segments` |
+| Versioned Index | `{alias}_{version}` | `heimdex_segments_v2` |
+| Version Constant | `INDEX_VERSION` in `client.py` | `"v2"` |
+
+#### Key Behaviors
+
+**`ensure_index_exists()`**:
+- Creates index + alias if neither exists
+- Creates alias only if missing (and index exists)
+- **DOES NOT auto-flip alias** if alias exists but points to different index
+- Warns loudly on alias mismatch - requires explicit promotion
+
+**`promote_alias_to_current_version()`**:
+- Atomically swaps alias to current versioned index
+- Uses `indices.update_aliases` for transactional swap
+- Safe to call multiple times (no-op if already current)
+
+#### Migration Workflow
+
+When changing the index schema (e.g., embedding dimension, new fields):
+
+```bash
+# 1. Bump INDEX_VERSION in services/api/app/modules/search/client.py
+#    e.g., "v2" -> "v3"
+
+# 2. Deploy new code
+docker compose up --build -d api
+
+# 3. Seed/reindex data into new versioned index
+docker compose exec api python -m app.seed
+
+# 4. Atomically promote alias to new index
+docker compose exec api python -m app.modules.search.promote_alias
+
+# 5. Verify search works correctly
+curl -X POST "http://devorg.app.heimdex.local:8000/api/search" \
+  -H "Content-Type: application/json" \
+  -d '{"q": "test", "alpha": 0.5}'
+
+# 6. (Later) Delete old index after confirming stability
+docker compose exec opensearch curl -X DELETE "localhost:9200/heimdex_segments_v2"
+```
+
+#### Diagnostics
+
+Get current index state:
+
+```python
+from app.modules.search.client import OpenSearchClient
+
+client = OpenSearchClient()
+info = await client.get_index_info()
+print(info)
+# {
+#   "alias_name": "heimdex_segments",
+#   "intended_index": "heimdex_segments_v3",
+#   "index_version": "v3",
+#   "alias_targets": ["heimdex_segments_v2"],  # <- mismatch!
+#   "alias_mismatch": True,
+#   "alias_points_to_current": False,
+#   ...
+# }
+```
+
+#### Safety Invariants
+
+| Rule | Rationale |
+|------|-----------|
+| Never auto-flip alias on mismatch | Prevents accidental data loss during migrations |
+| Promotion is explicit via CLI | Observable and auditable migration process |
+| Atomic alias swap | Zero-downtime, no moment where alias points nowhere |
+| Old index preserved | Enables rollback if issues discovered |
 
 ## Module Responsibilities
 
@@ -229,10 +310,15 @@ Current implementation uses a fallback analyzer. For production:
 
 ### Production Embedding Model
 
-Replace mock embeddings with:
-- Model: `intfloat/multilingual-e5-large` (768-dim)
-- Inference: GPU worker or embedding API service
-- Caching: Store embeddings per segment in object storage
+The system uses `intfloat/multilingual-e5-large` for semantic embeddings:
+- **Dimension**: 1024 (E5-large output dimension)
+- **Prefixes**: E5 models require specific prefixes:
+  - Queries: `"query: " + query_text`
+  - Passages/Documents: `"passage: " + document_text`
+- **Normalization**: Embeddings are L2-normalized (unit vectors)
+- **Similarity**: Cosine similarity (equivalent to dot product for normalized vectors)
+- **Inference**: CPU (default), CUDA (GPU), or MPS (Apple Silicon)
+- **Caching**: Model loaded once at startup; embeddings stored per segment in OpenSearch
 
 ### Scaling Considerations
 

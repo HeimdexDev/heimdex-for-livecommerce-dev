@@ -2,21 +2,24 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
 COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir -e ".[dev]"
 
-# Copy application code
 COPY . .
 
-# Create non-root user
+ARG PRELOAD_EMBEDDING_MODEL=false
+ENV HF_HOME=/app/.cache/huggingface
+
+RUN if [ "$PRELOAD_EMBEDDING_MODEL" = "true" ]; then \
+    python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"; \
+    fi
+
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 

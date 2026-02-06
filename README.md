@@ -234,11 +234,91 @@ docker compose exec api alembic downgrade -1
 | `DATABASE_URL` | `postgresql+asyncpg://...` | Async Postgres connection |
 | `OPENSEARCH_URL` | `http://opensearch:9200` | OpenSearch endpoint |
 | `JWT_SECRET_KEY` | `dev-secret...` | JWT signing key |
-| `EMBEDDING_DIMENSION` | `768` | Vector embedding size |
+| `EMBEDDING_DIMENSION` | `1024` | Vector embedding size (multilingual-e5-large) |
 | `SEARCH_LEXICAL_TOP_K` | `200` | Lexical candidate pool size |
 | `SEARCH_VECTOR_TOP_K` | `200` | Vector candidate pool size |
 | `SEARCH_RRF_K` | `60` | RRF ranking constant |
 | `SEARCH_MAX_SCENES_PER_VIDEO` | `4` | Diversification cap |
+
+### Environment Variables (Web)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEXT_PUBLIC_API_URL` | `http://devorg.app.heimdex.local:8000` | API endpoint (must use org subdomain) |
+| `NEXT_PUBLIC_AUTH0_ENABLED` | `false` | Enable Auth0 authentication |
+| `NEXT_PUBLIC_AUTH0_DOMAIN` | - | Auth0 tenant domain |
+| `NEXT_PUBLIC_AUTH0_CLIENT_ID` | - | Auth0 SPA client ID |
+| `NEXT_PUBLIC_AUTH0_AUDIENCE` | - | Auth0 API audience identifier |
+
+## Authentication
+
+Heimdex supports two authentication modes:
+
+### Development Mode (Default)
+
+When `AUTH0_ENABLED=false` (default), Heimdex uses a simple dev-login flow:
+
+1. Click "Dev Login" in the header
+2. Enter an email that exists in the database (e.g., `admin@devorg.test`)
+3. The API issues a JWT token stored in sessionStorage
+
+This mode is convenient for local development but NOT suitable for production.
+
+### Auth0 Mode (Production)
+
+For production, enable Auth0 authentication:
+
+#### 1. Create Auth0 Application
+
+1. Go to [Auth0 Dashboard](https://manage.auth0.com/)
+2. Create a new **Single Page Application**
+3. Configure these settings:
+   - **Allowed Callback URLs**: `http://localhost:3000/callback`, `https://your-domain.com/callback`
+   - **Allowed Logout URLs**: `http://localhost:3000`, `https://your-domain.com`
+   - **Allowed Web Origins**: `http://localhost:3000`, `https://your-domain.com`
+
+#### 2. Create Auth0 API
+
+1. In Auth0 Dashboard, go to **Applications > APIs**
+2. Create a new API with identifier: `https://api.heimdex.io` (or your custom identifier)
+3. Enable **RBAC** if you need role-based permissions
+
+#### 3. Configure Environment Variables
+
+**API (services/api or docker-compose.yml):**
+```bash
+AUTH0_ENABLED=true
+AUTH0_DOMAIN=your-tenant.auth0.com
+AUTH0_AUDIENCE=https://api.heimdex.io
+AUTH0_ORG_CLAIM=https://heimdex.io/org_id
+```
+
+**Web (services/web or docker-compose.yml):**
+```bash
+NEXT_PUBLIC_AUTH0_ENABLED=true
+NEXT_PUBLIC_AUTH0_DOMAIN=your-tenant.auth0.com
+NEXT_PUBLIC_AUTH0_CLIENT_ID=your-spa-client-id
+NEXT_PUBLIC_AUTH0_AUDIENCE=https://api.heimdex.io
+```
+
+#### 4. (Optional) Configure Organization Claim
+
+If using Auth0 Organizations:
+
+1. Enable Organizations in Auth0 Dashboard
+2. Add a custom claim to include org_id in tokens via Auth0 Actions:
+   ```javascript
+   exports.onExecutePostLogin = async (event, api) => {
+     if (event.organization) {
+       api.accessToken.setCustomClaim(
+         'https://heimdex.io/org_id',
+         event.organization.name
+       );
+     }
+   };
+   ```
+
+**Note**: Even with Auth0, tenancy is ALWAYS derived from the Host header subdomain. The org claim is for additional validation, not primary routing.
 
 ## Troubleshooting
 
@@ -251,11 +331,119 @@ Increase Docker memory limit or add to `~/.docker/daemon.json`:
 }
 ```
 
+### Embeddings: First Run Model Download
+
+On first run with `EMBEDDING_USE_MOCK=false`, the API downloads the embedding model from HuggingFace:
+- **Model**: `intfloat/multilingual-e5-large` (~2.4GB)
+- **Download time**: 2-10 minutes depending on network speed
+- **Cache location**: `huggingface_cache` Docker volume
+
+**Skip download for development:**
+```bash
+# In docker-compose.yml, EMBEDDING_USE_MOCK=true is the default
+# This uses deterministic mock embeddings (no download needed)
+```
+
+**Force real embeddings:**
+```bash
+# Edit docker-compose.yml:
+- EMBEDDING_USE_MOCK=false
+
+# Or override at runtime:
+docker compose exec api env EMBEDDING_USE_MOCK=false python -m app.seed
+```
+
+**Cache persistence:**
+The `huggingface_cache` volume persists the model between container rebuilds.
+To clear and re-download:
+```bash
+docker volume rm heimdex_huggingface_cache
+```
+
+### Index Migration (Schema Changes)
+
+When you need to change the OpenSearch index schema (e.g., new fields, different embedding dimension):
+
+```bash
+# 1. Bump INDEX_VERSION in services/api/app/modules/search/client.py
+#    Edit: INDEX_VERSION = "v3"  # was "v2"
+
+# 2. Rebuild and deploy
+docker compose up --build -d api
+
+# 3. Seed data into new index
+docker compose exec api python -m app.seed
+
+# 4. Promote alias to new index (atomic swap)
+docker compose exec api python -m app.modules.search.promote_alias
+
+# 5. Verify migration
+docker compose exec api python -c "
+import asyncio
+from app.modules.search.client import OpenSearchClient
+async def check():
+    c = OpenSearchClient()
+    print(await c.get_index_info())
+    await c.close()
+asyncio.run(check())
+"
+```
+
+**Expected promote_alias output:**
+```
+============================================================
+OpenSearch Alias Promotion Tool
+============================================================
+
+Target index: heimdex_segments_v3
+Target alias: heimdex_segments
+
+Step 1: Checking index state...
+  - Index already exists: heimdex_segments_v3
+  - WARNING: ALIAS MISMATCH DETECTED...
+
+Step 2: Getting current alias state...
+  - Current alias targets: ['heimdex_segments_v2']
+  - Alias mismatch: True
+
+Step 3: Promoting alias to current version...
+  - Before: ['heimdex_segments_v2']
+  - After: ['heimdex_segments_v3']
+
+Step 4: Verifying promotion...
+  - Alias targets: ['heimdex_segments_v3']
+  - Points to current: True
+
+============================================================
+SUCCESS: Alias promotion completed successfully!
+============================================================
+```
+
+### Alias Mismatch Warning
+
+If you see this warning during startup:
+```
+ALIAS MISMATCH DETECTED: Alias 'heimdex_segments' exists but points to 
+['heimdex_segments_v1'], not 'heimdex_segments_v2'.
+```
+
+This means the code version expects a newer index but the alias still points to an older one.
+
+**Fix:**
+```bash
+# Ensure new index has data
+docker compose exec api python -m app.seed
+
+# Promote alias
+docker compose exec api python -m app.modules.search.promote_alias
+```
+
 ### Korean search not working well
 
-The current setup uses a fallback analyzer. For proper Korean support:
-1. Install the `analysis-nori` plugin in OpenSearch
-2. Update index mappings in `search/client.py`
+The current setup uses Nori analyzer when the plugin is available. If Korean search quality is poor:
+1. Verify Nori plugin: `docker compose exec opensearch bin/opensearch-plugin list`
+2. Check logs for `"nori_available": true` during index creation
+3. Re-create index if needed: delete and re-seed
 
 ### Org not found error / Tenancy errors
 
@@ -279,8 +467,8 @@ curl http://devorg.app.heimdex.local:8000/health | jq .tenancy
 
 ## Roadmap
 
-- [ ] Real OAuth integration (Google, SAML)
-- [ ] Production embedding model (multilingual-e5-large)
+- [x] Auth0 OAuth integration (SPA + API)
+- [x] Production embedding model (multilingual-e5-large, 1024-dim)
 - [ ] Nori analyzer for Korean text
 - [ ] Local agent for video playback
 - [ ] Cloud GPU worker for heavy compute

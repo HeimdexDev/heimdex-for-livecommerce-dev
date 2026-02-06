@@ -1,13 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.db.base import get_db_session
+from app.dependencies import get_auth_service
 from app.logging_config import get_logger
 from app.modules.auth.schemas import DevLoginRequest, DevLoginResponse
 from app.modules.auth.service import AuthService
 from app.modules.tenancy import OrgContext, get_current_org
-from app.modules.users.repository import UserRepository
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -17,7 +15,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def dev_login(
     request: DevLoginRequest,
     org_ctx: OrgContext = Depends(get_current_org),
-    db: AsyncSession = Depends(get_db_session),
+    auth_service: AuthService = Depends(get_auth_service),
 ):
     settings = get_settings()
     if settings.environment != "development":
@@ -26,8 +24,8 @@ async def dev_login(
             detail="Dev login only available in development environment",
         )
     
-    user_repo = UserRepository(db)
-    user = await user_repo.get_by_email(request.email, org_ctx.org_id)
+    # Use auth_service method instead of direct repository access
+    user = await auth_service.get_user_by_email(request.email, org_ctx.org_id)
     
     if not user:
         raise HTTPException(
@@ -35,7 +33,6 @@ async def dev_login(
             detail=f"User with email {request.email} not found in org {org_ctx.org_slug}",
         )
     
-    auth_service = AuthService(db)
     token = auth_service.create_access_token(
         user_id=user.id,
         org_id=org_ctx.org_id,

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db.base import get_db_session
 from app.logging_config import get_logger
+from app.modules.auth.oidc import validate_auth0_token, Auth0TokenPayload
 from app.modules.auth.schemas import TokenPayload
 from app.modules.tenancy import OrgContext, get_current_org
 from app.modules.users.models import User
@@ -22,6 +23,15 @@ class AuthService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.settings = get_settings()
+
+    async def get_user_by_email(self, email: str, org_id: UUID) -> User | None:
+        """Get user by email within an organization.
+        
+        This method provides a clean interface for auth operations to look up users
+        without directly accessing the UserRepository from other modules.
+        """
+        user_repo = UserRepository(self.session)
+        return await user_repo.get_by_email(email, org_id)
 
     def create_access_token(
         self,
@@ -70,8 +80,86 @@ async def get_current_user(
             detail="Authorization header missing",
         )
     
+    settings = get_settings()
+    token = credentials.credentials
+    user_repo = UserRepository(db)
+    
+    if settings.auth0_enabled:
+        return await _validate_auth0_user(token, org_ctx, user_repo)
+    else:
+        return await _validate_dev_user(token, org_ctx, user_repo, db)
+
+
+async def _validate_auth0_user(
+    token: str,
+    org_ctx: OrgContext,
+    user_repo: UserRepository,
+) -> User:
+    try:
+        auth0_payload = validate_auth0_token(token)
+    except ValueError as e:
+        logger.warning("auth0_validation_failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+        ) from e
+    
+    if auth0_payload.org_id and auth0_payload.org_id != str(org_ctx.org_id):
+        logger.warning(
+            "org_mismatch_in_auth0_token",
+            token_org=auth0_payload.org_id,
+            request_org=str(org_ctx.org_id),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Token organization does not match request",
+        )
+    
+    user = await user_repo.get_by_auth0_sub(auth0_payload.sub, org_ctx.org_id)
+    
+    # Auto-link by email ONLY if email is verified
+    # This prevents account takeover via unverified email registration
+    if not user and auth0_payload.email:
+        email_verified = auth0_payload.raw_claims.get("email_verified", False)
+        
+        if not email_verified:
+            logger.warning(
+                "auth0_email_not_verified",
+                email=auth0_payload.email,
+                sub=auth0_payload.sub,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Email not verified. Please verify your email before accessing this organization.",
+            )
+        
+        user = await user_repo.get_by_email(auth0_payload.email, org_ctx.org_id)
+        if user:
+            await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
+            logger.info(
+                "linked_auth0_sub_to_user",
+                user_id=str(user.id),
+                sub=auth0_payload.sub,
+                email_verified=True,
+            )
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found. Contact your organization admin.",
+        )
+    
+    return user
+
+
+async def _validate_dev_user(
+    token: str,
+    org_ctx: OrgContext,
+    user_repo: UserRepository,
+    db: AsyncSession,
+) -> User:
     auth_service = AuthService(db)
-    payload = auth_service.decode_token(credentials.credentials)
+    payload = auth_service.decode_token(token)
     
     if UUID(payload.org_id) != org_ctx.org_id:
         logger.warning(
@@ -84,7 +172,6 @@ async def get_current_user(
             detail="Token organization does not match request",
         )
     
-    user_repo = UserRepository(db)
     user = await user_repo.get_by_id(UUID(payload.user_id), org_ctx.org_id)
     
     if not user:

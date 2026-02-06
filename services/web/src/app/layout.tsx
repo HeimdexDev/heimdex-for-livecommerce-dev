@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import { Providers } from "./providers";
 import "./globals.css";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Heimdex - Video Search",
@@ -13,7 +16,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="bg-gray-50 text-gray-900 antialiased">{children}</body>
+      <body className="bg-gray-50 text-gray-900 antialiased">
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

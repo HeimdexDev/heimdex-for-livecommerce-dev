@@ -1,7 +1,6 @@
 "use client";
 
 import { Facets, SearchFilters } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 interface FilterPanelProps {
   facets: Facets | null;

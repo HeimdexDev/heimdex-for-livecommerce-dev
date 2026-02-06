@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from app.modules.search.schemas import SearchFilters
@@ -35,7 +35,7 @@ class TestSearchService:
         mock_opensearch_client.search_vector.return_value = []
         
         with patch.object(search_service.session, "execute") as mock_execute:
-            mock_result = AsyncMock()
+            mock_result = MagicMock()
             mock_result.scalars.return_value.all.return_value = []
             mock_execute.return_value = mock_result
             
@@ -63,7 +63,7 @@ class TestSearchService:
         ]
         
         with patch.object(search_service.session, "execute") as mock_execute:
-            mock_result = AsyncMock()
+            mock_result = MagicMock()
             mock_result.scalars.return_value.all.return_value = []
             mock_execute.return_value = mock_result
             
@@ -86,7 +86,7 @@ class TestSearchService:
         )
         
         with patch.object(search_service.session, "execute") as mock_execute:
-            mock_result = AsyncMock()
+            mock_result = MagicMock()
             mock_result.scalars.return_value.all.return_value = []
             mock_execute.return_value = mock_result
             

@@ -25,7 +25,17 @@ class Settings(BaseSettings):
     
     allowed_hosts: str = "*.app.heimdex.local,localhost"
     
-    embedding_dimension: int = 768
+    auth0_enabled: bool = False
+    auth0_domain: str = ""
+    auth0_audience: str = ""
+    auth0_algorithms: str = "RS256"
+    auth0_org_claim: str = "https://heimdex.io/org_id"
+    
+    # Embedding model configuration
+    embedding_model: str = "intfloat/multilingual-e5-large"
+    embedding_dimension: int = 1024  # multilingual-e5-large uses 1024 dimensions
+    embedding_device: str = "cpu"  # "cpu", "cuda", or "mps" for Apple Silicon
+    embedding_use_mock: bool = False  # Set to True to use mock embeddings for testing
     
     search_lexical_top_k: int = 200
     search_vector_top_k: int = 200

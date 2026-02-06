@@ -31,3 +31,16 @@ class UserRepository:
     async def list_by_org(self, org_id: UUID) -> list[User]:
         result = await self.session.execute(select(User).where(User.org_id == org_id))
         return list(result.scalars().all())
+
+    async def get_by_auth0_sub(self, auth0_sub: str, org_id: UUID) -> User | None:
+        result = await self.session.execute(
+            select(User).where(User.auth0_sub == auth0_sub, User.org_id == org_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def link_auth0_sub(self, user_id: UUID, auth0_sub: str) -> None:
+        result = await self.session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user:
+            user.auth0_sub = auth0_sub
+            await self.session.flush()
