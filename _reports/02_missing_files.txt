@@ -1,7 +1,0 @@
-=== Missing Files ===
-Started: Tue Jan 20 10:45:59 KST 2026
-
-
-=== Summary ===
-Total missing: 0 files
-OpenSearch entrypoint created: extracted/backend_ai/services/opensearch/docker-entrypoint.sh

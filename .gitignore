@@ -120,6 +120,5 @@ temp/
 # Local data directories
 .data/
 
-# Reports (generated, not source)
-# Uncomment if you don't want to track reports:
-# _reports/
+# Migration/setup reports (generated, not source)
+_reports/
