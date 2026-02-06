@@ -122,3 +122,6 @@ temp/
 
 # Migration/setup reports (generated, not source)
 _reports/
+
+# OpenCode (AI assistant state)
+.opencode/
