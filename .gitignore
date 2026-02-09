@@ -125,3 +125,8 @@ _reports/
 
 # OpenCode (AI assistant state)
 .opencode/
+
+# Face worker local artifacts
+artifacts/
+data/
+.insightface/
