@@ -133,6 +133,20 @@ services:
     depends_on:
       - api
 
+  face-worker:
+    build:
+      context: ./services/worker
+      dockerfile: Dockerfile
+    container_name: heimdex-face-worker
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./services/worker:/app
+      - ./data:/data
+      - ./artifacts/face:/app/artifacts
+      - ./.insightface:/root/.insightface
+    command: ["sleep", "infinity"]
+
 volumes:
   postgres_data:
   opensearch_data:
