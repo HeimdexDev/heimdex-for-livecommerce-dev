@@ -25,12 +25,22 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
 
 def get_opensearch_client(request: Request):
     """
-    OpenSearch client dependency.
+    OpenSearch client dependency (segments index).
     
     Client is created at app startup and stored in app.state.
     See main.py lifespan for initialization.
     """
     return request.app.state.opensearch_client
+
+
+def get_scene_opensearch_client(request: Request):
+    """
+    Scene OpenSearch client dependency (scenes index).
+    
+    Client is created at app startup and stored in app.state.
+    See main.py lifespan for initialization.
+    """
+    return request.app.state.scene_opensearch_client
 
 
 def get_embedding_service():

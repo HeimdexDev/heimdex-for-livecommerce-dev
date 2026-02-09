@@ -30,19 +30,26 @@ async def lifespan(app: FastAPI):
     - Closes OpenSearch client
     """
     from app.modules.search.client import OpenSearchClient
+    from app.modules.search.scene_client import SceneSearchClient
     
     logger.info("application_starting", environment=get_settings().environment)
     
     opensearch_client = OpenSearchClient()
     app.state.opensearch_client = opensearch_client
     
+    scene_opensearch_client = SceneSearchClient()
+    app.state.scene_opensearch_client = scene_opensearch_client
+    
     await _startup_search_checks(opensearch_client)
+    await _startup_scene_search_checks(scene_opensearch_client)
     
     yield
     
     logger.info("application_shutting_down")
     await opensearch_client.close()
+    await scene_opensearch_client.close()
     app.state.opensearch_client = None
+    app.state.scene_opensearch_client = None
 
 
 async def _startup_search_checks(client):
@@ -88,6 +95,38 @@ async def _startup_search_checks(client):
             "startup_search_check_failed",
             error=str(e),
             message="Search infrastructure check failed. Search may not work correctly.",
+        )
+
+
+async def _startup_scene_search_checks(client):
+    """
+    Run startup checks for the scene OpenSearch index.
+    
+    Creates the scene index if missing and warns on alias mismatch.
+    """
+    try:
+        result = await client.ensure_index_exists()
+        
+        if result.get("alias_mismatch_warning"):
+            logger.warning(
+                "startup_scene_alias_mismatch",
+                warning=result["alias_mismatch_warning"],
+                current_targets=result.get("alias_current_targets"),
+                intended_index=client.index_name,
+                action="Run promote_alias_to_current_version() to fix",
+            )
+        else:
+            logger.info(
+                "scene_search_infrastructure_ready",
+                index=client.index_name,
+                alias=client.alias_name,
+            )
+        
+    except Exception as e:
+        logger.error(
+            "startup_scene_search_check_failed",
+            error=str(e),
+            message="Scene search infrastructure check failed. Scene search may not work.",
         )
 
 
