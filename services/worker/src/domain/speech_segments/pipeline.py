@@ -1,0 +1,167 @@
+"""Speech Segments 파이프라인 - 전체 처리 흐름 관리"""
+import json
+import logging
+import time
+from pathlib import Path
+
+from .schemas import PipelineResult, RankedSegment, SpeechSegment
+from .stt import STTProcessor, convert_to_speech_segments
+from .tagger import SpeechTagger
+from .ranker import SegmentRanker
+
+logger = logging.getLogger(__name__)
+
+
+class SpeechSegmentsPipeline:
+    """음성 구간 추출 → 태깅 → 랭킹 파이프라인"""
+    
+    def __init__(
+        self,
+        stt_processor: STTProcessor | None = None,
+        tagger: SpeechTagger | None = None,
+        ranker: SegmentRanker | None = None,
+        whisper_model: str = "base",
+        language: str | None = None,
+    ):
+        """
+        Args:
+            stt_processor: STT 프로세서 (None이면 자동 생성)
+            tagger: 태거 (None이면 자동 생성)
+            ranker: 랭커 (None이면 자동 생성)
+            whisper_model: Whisper 모델 이름
+            language: 언어 코드 (예: "ko", "en")
+        """
+        self.stt = stt_processor or STTProcessor(
+            model_name=whisper_model,
+            language=language
+        )
+        self.tagger = tagger or SpeechTagger()
+        self.ranker = ranker or SegmentRanker()
+    
+    def run(
+        self,
+        video_path: str,
+        save_transcript: bool = True,
+        artifacts_dir: str | None = None
+    ) -> PipelineResult:
+        """
+        비디오 파일에 대해 전체 파이프라인 실행
+        
+        Args:
+            video_path: 비디오 파일 경로
+            save_transcript: transcript.json 저장 여부
+            artifacts_dir: 아티팩트 저장 디렉터리 (None이면 artifacts/<video_id>/)
+            
+        Returns:
+            PipelineResult 객체
+        """
+        start_time = time.time()
+        
+        # 파일 존재 확인
+        path = Path(video_path)
+        if not path.exists():
+            logger.error(f"File not found: {video_path}")
+            return PipelineResult(
+                video_path=video_path,
+                status="error",
+                error=f"File not found: {video_path}"
+            )
+        
+        # video_id 추출 (파일명에서 확장자 제거)
+        video_id = path.stem
+        
+        # artifacts 디렉터리 설정
+        if artifacts_dir:
+            output_dir = Path(artifacts_dir)
+        else:
+            output_dir = Path("artifacts") / video_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            logger.info(f"Starting pipeline for: {video_path}")
+            
+            # Step 1: STT - 음성을 텍스트로 변환
+            logger.info("Step 1: Running STT...")
+            transcript_segments = self.stt.process(video_path)
+            
+            if not transcript_segments:
+                logger.warning("No speech segments detected")
+                return PipelineResult(
+                    video_path=video_path,
+                    segments=[],
+                    total_duration=0.0,
+                    processing_time=time.time() - start_time,
+                    status="success",
+                    error="No speech detected in video"
+                )
+            
+            logger.info(f"STT complete: {len(transcript_segments)} segments")
+            
+            # transcript.json 저장
+            if save_transcript:
+                transcript_path = output_dir / "transcript.json"
+                STTProcessor.save_transcript(
+                    transcript_segments,
+                    transcript_path,
+                    video_path=video_path
+                )
+                logger.info(f"Transcript saved: {transcript_path}")
+            
+            # SpeechSegment로 변환
+            segments = convert_to_speech_segments(transcript_segments)
+            
+            # Step 2: Tagging - 태그 부여
+            logger.info("Step 2: Tagging segments...")
+            tagged_segments = self.tagger.tag(segments)
+            logger.info(f"Tagging complete: {len(tagged_segments)} segments")
+            
+            # Step 3: Ranking - 중요도 순위 부여
+            logger.info("Step 3: Ranking segments...")
+            ranked_segments = self.ranker.rank(tagged_segments)
+            logger.info(f"Ranking complete: {len(ranked_segments)} segments")
+            
+            processing_time = time.time() - start_time
+            total_duration = sum(s.duration for s in ranked_segments) if ranked_segments else 0.0
+            
+            logger.info(
+                f"Pipeline complete: {len(ranked_segments)} segments, "
+                f"{total_duration:.1f}s total, "
+                f"{processing_time:.1f}s processing time"
+            )
+            
+            return PipelineResult(
+                video_path=video_path,
+                segments=ranked_segments,
+                total_duration=total_duration,
+                processing_time=processing_time,
+                status="success"
+            )
+            
+        except FileNotFoundError as e:
+            error_msg = f"File not found: {e}"
+            logger.error(error_msg)
+            return PipelineResult(
+                video_path=video_path,
+                status="error",
+                error=error_msg,
+                processing_time=time.time() - start_time
+            )
+            
+        except Exception as e:
+            error_msg = f"Pipeline failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            
+            # 재시도 가이드
+            logger.error("=== Retry Guide ===")
+            logger.error("1. Check if ffmpeg is installed: ffmpeg -version")
+            logger.error("2. Check if whisper is installed: pip install openai-whisper")
+            logger.error("3. Check video file is valid: ffprobe <video_path>")
+            logger.error("4. Try with a smaller model: --model tiny")
+            logger.error("==================")
+            
+            return PipelineResult(
+                video_path=video_path,
+                status="error",
+                error=error_msg,
+                processing_time=time.time() - start_time
+            )

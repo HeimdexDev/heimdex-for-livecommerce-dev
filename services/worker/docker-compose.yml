@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      # 소스코드 마운트 (개발 시 실시간 반영)
+      - ./src:/app/src
+      # artifacts 출력 폴더
+      - ./src/domain/speech_segments/artifacts:/app/artifacts
+    working_dir: /app/src/domain/speech_segments
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src/domain

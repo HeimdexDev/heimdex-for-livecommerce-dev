@@ -1,0 +1,24 @@
+[project]
+name = "speech-segments-worker"
+version = "0.1.0"
+description = "Speech segments extraction, tagging, and ranking pipeline"
+requires-python = ">=3.11"
+dependencies = [
+    "openai-whisper>=20231117",
+    "torch>=2.0.0,<2.5.0",
+    "torchaudio>=2.0.0,<2.5.0",
+    "pyannote.audio>=3.1.0",
+    "huggingface_hub>=0.20.0,<0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src/domain"]
