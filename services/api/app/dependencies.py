@@ -98,6 +98,15 @@ async def get_scene_ingest_service(
     return SceneIngestService(db, scene_opensearch)
 
 
+async def get_video_service(
+    db: AsyncSession = Depends(get_db_session),
+    scene_opensearch=Depends(get_scene_opensearch_client),
+):
+    """Video service factory with injected dependencies."""
+    from app.modules.videos.service import VideoService
+    return VideoService(db, scene_opensearch)
+
+
 def get_auth_service(db: AsyncSession = Depends(get_db_session)):
     """Auth service factory."""
     from app.modules.auth.service import AuthService

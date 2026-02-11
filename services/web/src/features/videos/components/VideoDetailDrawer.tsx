@@ -1,0 +1,151 @@
+"use client";
+
+import { useEffect } from "react";
+import type { VideoSummary, VideoScene } from "@/lib/types";
+import { formatTimestamp } from "@/lib/api/utils";
+
+interface VideoDetailDrawerProps {
+  video: VideoSummary | null;
+  scenes: VideoScene[];
+  totalScenes: number;
+  isOpen: boolean;
+  isLoading: boolean;
+  onClose: () => void;
+}
+
+export function VideoDetailDrawer({
+  video,
+  scenes,
+  totalScenes,
+  isOpen,
+  isLoading,
+  onClose,
+}: VideoDetailDrawerProps) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [isOpen, onClose]);
+
+  if (!isOpen || !video) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div
+        className="absolute inset-0 bg-black/30"
+        onClick={onClose}
+        role="presentation"
+      />
+
+      <div className="relative w-full max-w-lg bg-white shadow-xl overflow-y-auto">
+        <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between z-10">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-gray-900 truncate" title={video.video_title || video.video_id}>
+              {video.video_title || video.video_id}
+            </h2>
+            <p className="text-xs text-gray-500">
+              {video.library_name || "Unknown library"}
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+            aria-label="Close"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="px-6 py-4 border-b border-gray-100">
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <span className="text-gray-500">Scenes</span>
+              <p className="font-medium text-gray-900">{video.scene_count}</p>
+            </div>
+            <div>
+              <span className="text-gray-500">Source</span>
+              <p className="font-medium text-gray-900">
+                {video.source_type === "gdrive" ? "Google Drive" : "Removable Disk"}
+              </p>
+            </div>
+            {video.people_count > 0 && (
+              <div>
+                <span className="text-gray-500">People</span>
+                <p className="font-medium text-gray-900">{video.people_count}</p>
+              </div>
+            )}
+            {video.latest_ingest_time && (
+              <div>
+                <span className="text-gray-500">Last ingested</span>
+                <p className="font-medium text-gray-900">
+                  {new Date(video.latest_ingest_time).toLocaleString()}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="px-6 py-4">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">
+            Scenes ({totalScenes})
+          </h3>
+
+          {isLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="animate-pulse">
+                  <div className="h-3 w-24 bg-gray-200 rounded" />
+                  <div className="h-3 w-full bg-gray-200 rounded mt-2" />
+                  <div className="h-3 w-2/3 bg-gray-200 rounded mt-1" />
+                </div>
+              ))}
+            </div>
+          ) : scenes.length === 0 ? (
+            <p className="text-sm text-gray-500">No scenes found.</p>
+          ) : (
+            <div className="space-y-3">
+              {scenes.map((scene) => (
+                <div
+                  key={scene.scene_id}
+                  className="p-3 rounded-lg border border-gray-100 hover:border-gray-200 transition-colors"
+                >
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span className="font-mono">
+                      {formatTimestamp(scene.start_ms)} - {formatTimestamp(scene.end_ms)}
+                    </span>
+                    {scene.speech_segment_count > 0 && (
+                      <span>{scene.speech_segment_count} segments</span>
+                    )}
+                  </div>
+                  {scene.transcript_raw && (
+                    <p className="mt-1 text-sm text-gray-700 line-clamp-2">
+                      {scene.transcript_raw.slice(0, 150)}
+                      {scene.transcript_raw.length > 150 ? "..." : ""}
+                    </p>
+                  )}
+                  {(scene.keyword_tags.length > 0 || scene.product_tags.length > 0) && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {[...scene.keyword_tags, ...scene.product_tags].slice(0, 5).map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-block px-1.5 py-0.5 text-xs bg-blue-50 text-blue-700 rounded"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -7,7 +7,6 @@ import { AlphaSlider } from "./AlphaSlider";
 import { FilterPanel } from "./FilterPanel";
 import { SearchResults } from "./SearchResults";
 import { AgentTroubleshooting } from "./AgentTroubleshooting";
-import { cn } from "@/lib/utils";
 
 export function SearchContainer() {
   const {
@@ -17,11 +16,6 @@ export function SearchContainer() {
     isLoading,
     error,
     showDebug,
-    orgSlug,
-    isAuthenticated,
-    authLoading,
-    user,
-    isAuth0Enabled,
     setAlpha,
     setShowDebug,
     handleSearch,
@@ -89,82 +83,6 @@ export function SearchContainer() {
 
   return (
     <div className="min-h-screen">
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-primary-600 rounded-lg flex items-center justify-center">
-                <svg
-                  className="w-6 h-6 text-white"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  />
-                </svg>
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-gray-900">Heimdex</h1>
-                <p className="text-xs text-gray-500">Video Search Platform</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-500">
-                Org: <span className="font-medium text-gray-700">{orgSlug || "..."}</span>
-              </span>
-              
-              <span className="flex items-center gap-1.5 text-xs text-gray-500">
-                <span
-                  className={cn(
-                    "w-2 h-2 rounded-full",
-                    agentAvailable ? "bg-green-500" : "bg-gray-300"
-                  )}
-                />
-                {agentAvailable ? "Agent connected" : "Agent offline"}
-              </span>
-
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={showDebug}
-                  onChange={(e) => setShowDebug(e.target.checked)}
-                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
-                Debug Mode
-              </label>
-
-              {authLoading ? (
-                <span className="text-sm text-gray-400">Loading...</span>
-              ) : isAuthenticated ? (
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-gray-600">
-                    {user?.email || "User"}
-                  </span>
-                  <button
-                    onClick={logout}
-                    className="px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
-                  >
-                    Logout
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={login}
-                  className="px-4 py-1.5 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-lg transition-colors"
-                >
-                  {isAuth0Enabled ? "Login" : "Dev Login"}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
-
       <main className="max-w-7xl mx-auto px-4 py-6">
         <div className="mb-6 space-y-4">
           <SearchBar onSearch={handleSearch} isLoading={isLoading} />
@@ -172,6 +90,16 @@ export function SearchContainer() {
           <div className="card p-4">
             <AlphaSlider value={alpha} onChange={setAlpha} />
           </div>
+
+          <label className="flex items-center gap-2 text-sm text-gray-600">
+            <input
+              type="checkbox"
+              checked={showDebug}
+              onChange={(e) => setShowDebug(e.target.checked)}
+              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            Debug Mode
+          </label>
         </div>
 
         {renderError()}

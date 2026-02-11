@@ -13,6 +13,7 @@ NOTE: Integration tests require running OpenSearch instance.
 Skip with: pytest tests/test_alias_migration.py -v -m "not integration"
 """
 import pytest
+import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -236,7 +237,7 @@ class TestAliasMigrationLive:
     Run with: pytest tests/test_alias_migration.py::TestAliasMigrationLive -v
     """
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def live_clients(self):
         """
         Create two OpenSearchClient instances simulating v2 and v3.

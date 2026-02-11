@@ -122,6 +122,7 @@ class TestSceneSearchClient:
         # Core scene fields
         assert props["scene_id"]["type"] == "keyword"
         assert props["video_id"]["type"] == "keyword"
+        assert props["video_title"]["type"] == "keyword"
         assert props["org_id"]["type"] == "keyword"
         assert props["library_id"]["type"] == "keyword"
         assert props["start_ms"]["type"] == "integer"

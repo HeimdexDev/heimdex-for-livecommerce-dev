@@ -182,6 +182,7 @@ class SceneSearchClient:
                 "org_id": {"type": "keyword"},
                 "library_id": {"type": "keyword"},
                 "video_id": {"type": "keyword"},
+                "video_title": {"type": "keyword"},
                 # Scene identity
                 "scene_id": {"type": "keyword"},
                 # Temporal
@@ -486,6 +487,234 @@ class SceneSearchClient:
             "libraries": response["aggregations"]["libraries"]["buckets"],
             "source_types": response["aggregations"]["source_types"]["buckets"],
             "people": response["aggregations"]["people"]["buckets"],
+        }
+
+    # ------------------------------------------------------------------
+    # Video aggregation (derived from scene documents)
+    # ------------------------------------------------------------------
+    async def aggregate_videos(
+        self,
+        org_id: str,
+        *,
+        library_id: str | None = None,
+        source_type: str | None = None,
+        sort: str = "latest",
+        page_size: int = 20,
+        after_key: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate unique videos from scene documents.
+
+        Uses composite aggregation on ``video_id`` with sub-aggregations
+        for scene count, time ranges, tags, and people.
+
+        Returns:
+            Dict with ``videos`` list, ``total`` (best-effort cardinality),
+            ``next_cursor`` (composite after_key or None), and ``facets``.
+        """
+        filter_clauses: list[dict[str, Any]] = [{"term": {"org_id": org_id}}]
+        if library_id:
+            filter_clauses.append({"term": {"library_id": library_id}})
+        if source_type:
+            filter_clauses.append({"term": {"source_type": source_type}})
+
+        # Composite aggregation on video_id
+        composite_sources: list[dict[str, Any]] = [
+            {"video_id": {"terms": {"field": "video_id", "order": "desc" if sort == "latest" else "asc"}}},
+        ]
+
+        aggs: dict[str, Any] = {
+            "videos": {
+                "composite": {
+                    "sources": composite_sources,
+                    "size": page_size,
+                },
+                "aggs": {
+                    "scene_count": {"value_count": {"field": "scene_id"}},
+                    "min_start_ms": {"min": {"field": "start_ms"}},
+                    "max_end_ms": {"max": {"field": "end_ms"}},
+                    "earliest_ingest": {"min": {"field": "ingest_time"}},
+                    "latest_ingest": {"max": {"field": "ingest_time"}},
+                    "library_id": {"terms": {"field": "library_id", "size": 1}},
+                    "video_title": {"terms": {"field": "video_title", "size": 1}},
+                    "source_type": {"terms": {"field": "source_type", "size": 1}},
+                    "required_drive_nickname": {"terms": {"field": "required_drive_nickname", "size": 1}},
+                    "keyword_tags": {"terms": {"field": "keyword_tags", "size": 10}},
+                    "product_tags": {"terms": {"field": "product_tags", "size": 10}},
+                    "people_count": {"cardinality": {"field": "people_cluster_ids"}},
+                },
+            },
+            "total_videos": {"cardinality": {"field": "video_id", "precision_threshold": 10000}},
+            "facet_libraries": {"terms": {"field": "library_id", "size": 100}},
+            "facet_source_types": {"terms": {"field": "source_type", "size": 10}},
+        }
+
+        if after_key:
+            aggs["videos"]["composite"]["after"] = after_key
+
+        body: dict[str, Any] = {
+            "query": {"bool": {"filter": filter_clauses}},
+            "size": 0,
+            "aggs": aggs,
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        agg_result = response["aggregations"]
+
+        videos = []
+        for bucket in agg_result["videos"]["buckets"]:
+            video_id = bucket["key"]["video_id"]
+            lib_buckets = bucket["library_id"]["buckets"]
+            title_buckets = bucket["video_title"]["buckets"]
+            src_buckets = bucket["source_type"]["buckets"]
+            drive_buckets = bucket["required_drive_nickname"]["buckets"]
+            kw_buckets = bucket["keyword_tags"]["buckets"]
+            pt_buckets = bucket["product_tags"]["buckets"]
+
+            videos.append({
+                "video_id": video_id,
+                "video_title": title_buckets[0]["key"] if title_buckets else None,
+                "library_id": lib_buckets[0]["key"] if lib_buckets else None,
+                "source_type": src_buckets[0]["key"] if src_buckets else None,
+                "scene_count": int(bucket["scene_count"]["value"]),
+                "first_scene_start_ms": int(bucket["min_start_ms"]["value"] or 0),
+                "last_scene_end_ms": int(bucket["max_end_ms"]["value"] or 0),
+                "earliest_ingest_time": bucket["earliest_ingest"]["value_as_string"] if bucket["earliest_ingest"]["value"] else None,
+                "latest_ingest_time": bucket["latest_ingest"]["value_as_string"] if bucket["latest_ingest"]["value"] else None,
+                "keyword_tags": [b["key"] for b in kw_buckets],
+                "product_tags": [b["key"] for b in pt_buckets],
+                "people_count": int(bucket["people_count"]["value"]),
+                "required_drive_nickname": drive_buckets[0]["key"] if drive_buckets else None,
+            })
+
+        # Sort by latest_ingest_time for the "latest" sort order
+        # (composite agg sorts by video_id; we re-sort by ingest time)
+        if sort == "latest":
+            videos.sort(key=lambda v: v["latest_ingest_time"] or "", reverse=True)
+        else:
+            videos.sort(key=lambda v: v["earliest_ingest_time"] or "")
+
+        after_key_result = agg_result["videos"].get("after_key")
+
+        return {
+            "videos": videos,
+            "total": int(agg_result["total_videos"]["value"]),
+            "next_cursor": after_key_result,
+            "facets": {
+                "libraries": agg_result["facet_libraries"]["buckets"],
+                "source_types": agg_result["facet_source_types"]["buckets"],
+            },
+        }
+
+    async def get_video_scenes(
+        self,
+        org_id: str,
+        video_id: str,
+        *,
+        page_size: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Get all scenes for a specific video, sorted by start_ms ascending.
+
+        Returns:
+            Dict with ``scenes`` list and ``total`` count.
+        """
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"video_id": video_id}},
+                    ],
+                }
+            },
+            "sort": [{"start_ms": "asc"}],
+            "from": offset,
+            "size": page_size,
+            "_source": [
+                "scene_id", "start_ms", "end_ms", "transcript_raw",
+                "transcript_char_count", "keyword_tags", "product_tags",
+                "product_entities", "speech_segment_count",
+                "people_cluster_ids", "ingest_time",
+            ],
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+
+        scenes = []
+        for hit in response["hits"]["hits"]:
+            src = hit["_source"]
+            scenes.append({
+                "scene_id": src.get("scene_id", hit["_id"]),
+                "start_ms": src.get("start_ms", 0),
+                "end_ms": src.get("end_ms", 0),
+                "transcript_raw": src.get("transcript_raw", ""),
+                "transcript_char_count": src.get("transcript_char_count", 0),
+                "keyword_tags": src.get("keyword_tags", []),
+                "product_tags": src.get("product_tags", []),
+                "product_entities": src.get("product_entities", []),
+                "speech_segment_count": src.get("speech_segment_count", 0),
+                "people_cluster_ids": src.get("people_cluster_ids", []),
+                "ingest_time": src.get("ingest_time"),
+            })
+
+        total = response["hits"]["total"]
+        total_count = total["value"] if isinstance(total, dict) else total
+
+        return {
+            "scenes": scenes,
+            "total": int(total_count),
+        }
+
+    async def get_video_stats(
+        self,
+        org_id: str,
+    ) -> dict[str, Any]:
+        """Get summary statistics for all ingested videos in an org.
+
+        Returns:
+            Dict with total_videos, total_scenes, source_breakdown,
+            latest_ingest_time, scenes_last_24h, scenes_last_7d.
+        """
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [{"term": {"org_id": org_id}}],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "total_videos": {"cardinality": {"field": "video_id", "precision_threshold": 10000}},
+                "total_libraries": {"cardinality": {"field": "library_id", "precision_threshold": 1000}},
+                "source_breakdown": {"terms": {"field": "source_type", "size": 10}},
+                "latest_ingest": {"max": {"field": "ingest_time"}},
+                "scenes_last_24h": {
+                    "filter": {"range": {"ingest_time": {"gte": "now-24h"}}},
+                },
+                "scenes_last_7d": {
+                    "filter": {"range": {"ingest_time": {"gte": "now-7d"}}},
+                },
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        aggs = response["aggregations"]
+
+        total_scenes = response["hits"]["total"]
+        total_scenes_count = total_scenes["value"] if isinstance(total_scenes, dict) else total_scenes
+
+        source_breakdown = {
+            bucket["key"]: bucket["doc_count"]
+            for bucket in aggs["source_breakdown"]["buckets"]
+        }
+
+        return {
+            "total_videos": int(aggs["total_videos"]["value"]),
+            "total_scenes": int(total_scenes_count),
+            "total_libraries": int(aggs["total_libraries"]["value"]),
+            "source_breakdown": source_breakdown,
+            "latest_ingest_time": aggs["latest_ingest"]["value_as_string"] if aggs["latest_ingest"]["value"] else None,
+            "scenes_last_24h": int(aggs["scenes_last_24h"]["doc_count"]),
+            "scenes_last_7d": int(aggs["scenes_last_7d"]["doc_count"]),
         }
 
     # ------------------------------------------------------------------

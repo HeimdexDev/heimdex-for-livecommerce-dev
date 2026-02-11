@@ -100,6 +100,11 @@ class IngestScenesRequest(BaseModel):
         min_length=1,
         description="Unique video identifier (hash or path-based ID from agent)",
     )
+    video_title: str = Field(
+        default="",
+        max_length=500,
+        description="Human-readable video title (filename without extension)",
+    )
     library_id: UUID = Field(
         ...,
         description="Library UUID that this video belongs to (validated against org)",

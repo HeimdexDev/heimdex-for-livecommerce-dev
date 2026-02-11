@@ -148,6 +148,7 @@ class TestIngestScenesSchemas:
             library_id=uuid4(),
             scenes=[],
         )
+        assert req.video_title == ""
         assert req.pipeline_version == ""
         assert req.model_version == ""
         assert req.total_duration_ms == 0
@@ -257,6 +258,7 @@ class TestSceneIngestService:
     def _make_request(
         self,
         video_id: str = "vid_abc",
+        video_title: str = "Sample Video",
         library_id: UUID | None = None,
         scenes: list[IngestSceneDocument] | None = None,
     ) -> IngestScenesRequest:
@@ -273,6 +275,7 @@ class TestSceneIngestService:
             ]
         return IngestScenesRequest(
             video_id=video_id,
+            video_title=video_title,
             library_id=library_id or uuid4(),
             pipeline_version="1.0",
             model_version="whisper-v3",
@@ -317,6 +320,7 @@ class TestSceneIngestService:
         assert doc["org_id"] == str(org_id)
         assert doc["library_id"] == str(lib_id)
         assert doc["video_id"] == "vid_abc"
+        assert doc["video_title"] == "Sample Video"
         assert doc["scene_id"] == "vid_abc_scene_0"
         assert doc["transcript_norm"] != ""  # Normalized
         assert "embedding_vector" in doc  # Has embedding for non-empty transcript

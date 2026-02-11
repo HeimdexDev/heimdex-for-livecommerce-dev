@@ -117,6 +117,7 @@ class SceneIngestService:
                 "org_id": org_id_str,
                 "library_id": str(request.library_id),
                 "video_id": request.video_id,
+                "video_title": request.video_title,
                 "scene_id": scene.scene_id,
                 "start_ms": scene.start_ms,
                 "end_ms": scene.end_ms,
