@@ -27,7 +27,7 @@ def _clean_tag_list(values: list[str] | None) -> list[str]:
 class SearchFilters(BaseModel):
     date_from: datetime | None = None
     date_to: datetime | None = None
-    source_types: list[Literal["gdrive", "removable_disk"]] | None = None
+    source_types: list[Literal["gdrive", "removable_disk", "local"]] | None = None
     library_ids: list[UUID] | None = None
     person_cluster_ids: list[str] | None = None
 
@@ -72,16 +72,18 @@ class DebugInfo(BaseModel):
 class SegmentResult(BaseModel):
     segment_id: str
     video_id: str
+    video_title: str | None = None
     library_id: UUID
     library_name: str
     start_ms: int
     end_ms: int
     snippet: str
     thumbnail_url: str | None
-    source_type: Literal["gdrive", "removable_disk"]
+    source_type: Literal["gdrive", "removable_disk", "local"]
     required_drive_nickname: str | None = None
     capture_time: datetime | None = None
     people_cluster_ids: list[str] = Field(default_factory=list)
+    keyframe_timestamp_ms: int = 0
     debug: DebugInfo
 
 
@@ -119,17 +121,19 @@ class SceneResult(BaseModel):
     """
     scene_id: str
     video_id: str
+    video_title: str | None = None
     library_id: UUID
     library_name: str
     start_ms: int
     end_ms: int
     snippet: str
     thumbnail_url: str | None
-    source_type: Literal["gdrive", "removable_disk"]
+    source_type: Literal["gdrive", "removable_disk", "local"]
     required_drive_nickname: str | None = None
     capture_time: datetime | None = None
     people_cluster_ids: list[str] = Field(default_factory=list)
     speech_segment_count: int = 0
+    keyframe_timestamp_ms: int = 0
     debug: DebugInfo
 
 

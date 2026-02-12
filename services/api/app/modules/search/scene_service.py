@@ -108,23 +108,25 @@ class SceneSearchService:
 
         results: list[SceneResult] = []
         for item in diversified:
-            src = item.source
-            results.append(
-                SceneResult(
-                    scene_id=src.get("scene_id", item.doc_id),
-                    video_id=src.get("video_id", ""),
-                    library_id=UUID(src.get("library_id", "00000000-0000-0000-0000-000000000000")),
-                    library_name=library_map.get(src.get("library_id", ""), "Unknown"),
-                    start_ms=src.get("start_ms", 0),
-                    end_ms=src.get("end_ms", 0),
-                    snippet=src.get("transcript_raw", "")[:500],
-                    thumbnail_url=src.get("thumbnail_url"),
-                    source_type=src.get("source_type", "gdrive"),
-                    required_drive_nickname=src.get("required_drive_nickname"),
-                    capture_time=src.get("capture_time"),
-                    people_cluster_ids=src.get("people_cluster_ids", []),
-                    speech_segment_count=src.get("speech_segment_count", 0),
-                    debug=DebugInfo(
+             src = item.source
+             results.append(
+                 SceneResult(
+                     scene_id=src.get("scene_id", item.doc_id),
+                     video_id=src.get("video_id", ""),
+                     video_title=src.get("video_title"),
+                     library_id=UUID(src.get("library_id", "00000000-0000-0000-0000-000000000000")),
+                     library_name=library_map.get(src.get("library_id", ""), "Unknown"),
+                     start_ms=src.get("start_ms", 0),
+                     end_ms=src.get("end_ms", 0),
+                     snippet=src.get("transcript_raw", "")[:500],
+                     thumbnail_url=src.get("thumbnail_url"),
+                     source_type=src.get("source_type", "gdrive"),
+                     required_drive_nickname=src.get("required_drive_nickname"),
+                     capture_time=src.get("capture_time"),
+                     people_cluster_ids=src.get("people_cluster_ids", []),
+                     speech_segment_count=src.get("speech_segment_count", 0),
+                     keyframe_timestamp_ms=src.get("keyframe_timestamp_ms", 0),
+                     debug=DebugInfo(
                         lexical_rank=item.lexical_rank,
                         lexical_score=item.lexical_score,
                         vector_rank=item.vector_rank,

@@ -1,12 +1,14 @@
 "use client";
 
 import { useVideos } from "../hooks/useVideos";
+import { useAgent } from "@/features/search/hooks/useAgent";
 import { StatsBar } from "./StatsBar";
 import { VideoFilterPanel } from "./VideoFilterPanel";
 import { VideoList } from "./VideoList";
 import { VideoDetailDrawer } from "./VideoDetailDrawer";
 
 export function VideosContainer() {
+  const { isAvailable: agentAvailable } = useAgent();
   const {
     videos,
     stats,
@@ -63,6 +65,7 @@ export function VideosContainer() {
               total={total}
               onSelect={selectVideo}
               onLoadMore={loadMore}
+              agentAvailable={agentAvailable}
             />
           </div>
         </div>
@@ -75,6 +78,7 @@ export function VideosContainer() {
         isOpen={selectedVideoId !== null}
         isLoading={isLoadingScenes}
         onClose={closeDrawer}
+        agentAvailable={agentAvailable}
       />
 
       <footer className="border-t border-gray-200 mt-12 py-6">

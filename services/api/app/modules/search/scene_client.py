@@ -215,6 +215,7 @@ class SceneSearchClient:
                 "product_entities": {"type": "keyword"},
                 # Scene metadata
                 "speech_segment_count": {"type": "integer"},
+                "keyframe_timestamp_ms": {"type": "integer"},
                 "thumbnail_url": {"type": "keyword", "index": False},
                 # Source metadata (denormalized for filtering)
                 "source_type": {"type": "keyword"},
@@ -534,6 +535,7 @@ class SceneSearchClient:
                     "max_end_ms": {"max": {"field": "end_ms"}},
                     "earliest_ingest": {"min": {"field": "ingest_time"}},
                     "latest_ingest": {"max": {"field": "ingest_time"}},
+                    "min_keyframe_ms": {"min": {"field": "keyframe_timestamp_ms"}},
                     "library_id": {"terms": {"field": "library_id", "size": 1}},
                     "video_title": {"terms": {"field": "video_title", "size": 1}},
                     "source_type": {"terms": {"field": "source_type", "size": 1}},
@@ -580,6 +582,7 @@ class SceneSearchClient:
                 "last_scene_end_ms": int(bucket["max_end_ms"]["value"] or 0),
                 "earliest_ingest_time": bucket["earliest_ingest"]["value_as_string"] if bucket["earliest_ingest"]["value"] else None,
                 "latest_ingest_time": bucket["latest_ingest"]["value_as_string"] if bucket["latest_ingest"]["value"] else None,
+                "first_scene_keyframe_ms": int(bucket["min_keyframe_ms"]["value"] or 0),
                 "keyword_tags": [b["key"] for b in kw_buckets],
                 "product_tags": [b["key"] for b in pt_buckets],
                 "people_count": int(bucket["people_count"]["value"]),
@@ -634,7 +637,7 @@ class SceneSearchClient:
                 "scene_id", "start_ms", "end_ms", "transcript_raw",
                 "transcript_char_count", "keyword_tags", "product_tags",
                 "product_entities", "speech_segment_count",
-                "people_cluster_ids", "ingest_time",
+                "people_cluster_ids", "ingest_time", "keyframe_timestamp_ms",
             ],
         }
 
@@ -655,6 +658,7 @@ class SceneSearchClient:
                 "speech_segment_count": src.get("speech_segment_count", 0),
                 "people_cluster_ids": src.get("people_cluster_ids", []),
                 "ingest_time": src.get("ingest_time"),
+                "keyframe_timestamp_ms": src.get("keyframe_timestamp_ms", 0),
             })
 
         total = response["hits"]["total"]

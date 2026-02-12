@@ -32,7 +32,7 @@ async def list_videos(
     user: User = Depends(get_current_user),
     video_service: VideoService = Depends(get_video_service),
     library_id: str | None = Query(None, description="Filter by library UUID"),
-    source_type: Literal["gdrive", "removable_disk"] | None = Query(None, description="Filter by source type"),
+    source_type: Literal["gdrive", "removable_disk", "local"] | None = Query(None, description="Filter by source type"),
     sort: Literal["latest", "oldest"] = Query("latest", description="Sort order by ingest time"),
     page_size: int = Query(20, ge=1, le=100, description="Page size"),
     after: str | None = Query(None, description="Cursor for next page"),

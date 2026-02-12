@@ -70,8 +70,8 @@ class IngestSceneDocument(BaseModel):
         default_factory=list,
         description="Specific product entity names found in speech",
     )
-    source_type: Literal["gdrive", "removable_disk"] = Field(
-        default="gdrive",
+    source_type: Literal["gdrive", "removable_disk", "local"] = Field(
+        default="local",
         description="Source type of the original video file",
     )
     required_drive_nickname: str | None = Field(

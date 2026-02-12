@@ -18,12 +18,13 @@ class VideoSummary(BaseModel):
     video_title: str | None = None
     library_id: str | None = None
     library_name: str | None = None
-    source_type: Literal["gdrive", "removable_disk"] | None = None
+    source_type: Literal["gdrive", "removable_disk", "local"] | None = None
     scene_count: int = 0
     first_scene_start_ms: int = 0
     last_scene_end_ms: int = 0
     earliest_ingest_time: str | None = None
     latest_ingest_time: str | None = None
+    first_scene_keyframe_ms: int = 0
     keyword_tags: list[str] = Field(default_factory=list)
     product_tags: list[str] = Field(default_factory=list)
     people_count: int = 0
@@ -65,6 +66,7 @@ class VideoScene(BaseModel):
     speech_segment_count: int = 0
     people_cluster_ids: list[str] = Field(default_factory=list)
     ingest_time: str | None = None
+    keyframe_timestamp_ms: int = 0
 
 
 class VideoScenesResponse(BaseModel):

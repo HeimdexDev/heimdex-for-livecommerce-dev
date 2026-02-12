@@ -11,6 +11,7 @@ interface VideoListProps {
   total: number;
   onSelect: (videoId: string) => void;
   onLoadMore: () => void;
+  agentAvailable: boolean;
 }
 
 function SkeletonCard() {
@@ -34,6 +35,7 @@ export function VideoList({
   total,
   onSelect,
   onLoadMore,
+  agentAvailable,
 }: VideoListProps) {
   if (isLoading) {
     return (
@@ -77,7 +79,7 @@ export function VideoList({
 
       <div className="space-y-3">
         {videos.map((video) => (
-          <VideoCard key={video.video_id} video={video} onSelect={onSelect} />
+          <VideoCard key={video.video_id} video={video} onSelect={onSelect} agentAvailable={agentAvailable} />
         ))}
       </div>
 

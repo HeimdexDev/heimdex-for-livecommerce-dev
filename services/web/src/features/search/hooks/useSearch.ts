@@ -62,7 +62,8 @@ export function useSearch(): UseSearchReturn {
   }, []);
 
   const handleSearch = useCallback(
-    async (query: string) => {
+    async (query: string, overrideFilters?: SearchFilters) => {
+      const activeFilters = overrideFilters ?? filters;
       setIsLoading(true);
       setError(null);
       setLastQuery(query);
@@ -71,17 +72,17 @@ export function useSearch(): UseSearchReturn {
         let result: AnySearchResponse;
         if (searchMode === "scenes") {
           try {
-            const sceneResult: SceneSearchResponse = await searchScenes({ q: query, alpha, filters });
+            const sceneResult: SceneSearchResponse = await searchScenes({ q: query, alpha, filters: activeFilters });
             result = sceneResult;
           } catch (err) {
             if (err instanceof ApiError && err.status === 404) {
-              result = await search({ q: query, alpha, filters });
+              result = await search({ q: query, alpha, filters: activeFilters });
             } else {
               throw err;
             }
           }
         } else {
-          result = await search({ q: query, alpha, filters });
+          result = await search({ q: query, alpha, filters: activeFilters });
         }
         setResponse(result);
       } catch (err) {
@@ -102,7 +103,7 @@ export function useSearch(): UseSearchReturn {
     (newFilters: SearchFilters) => {
       setFilters(newFilters);
       if (lastQuery) {
-        handleSearch(lastQuery);
+        handleSearch(lastQuery, newFilters);
       }
     },
     [lastQuery, handleSearch]

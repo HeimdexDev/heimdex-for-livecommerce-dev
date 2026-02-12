@@ -15,7 +15,7 @@ export function FilterPanel({
   filters,
   onFiltersChange,
 }: FilterPanelProps) {
-  const toggleSourceType = (type: "gdrive" | "removable_disk") => {
+  const toggleSourceType = (type: "gdrive" | "removable_disk" | "local") => {
     const current = filters.source_types || [];
     const updated = current.includes(type)
       ? current.filter((t) => t !== type)
@@ -84,15 +84,15 @@ export function FilterPanel({
                 <input
                   type="checkbox"
                   checked={filters.source_types?.includes(
-                    item.value as "gdrive" | "removable_disk"
+                    item.value as "gdrive" | "removable_disk" | "local"
                   )}
                   onChange={() =>
-                    toggleSourceType(item.value as "gdrive" | "removable_disk")
+                    toggleSourceType(item.value as "gdrive" | "removable_disk" | "local")
                   }
                   className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
                 <span className="text-sm text-gray-600">
-                  {item.value === "gdrive" ? "Google Drive" : "Removable Disk"}
+                  {item.value === "gdrive" ? "Google Drive" : item.value === "removable_disk" ? "Removable Disk" : "Local"}
                 </span>
                 <span className="text-xs text-gray-400">({item.count})</span>
               </label>

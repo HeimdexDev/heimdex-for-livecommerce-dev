@@ -68,23 +68,24 @@ class VideoService:
 
         videos = [
             VideoSummary(
-                video_id=v["video_id"],
-                video_title=v["video_title"],
-                library_id=v["library_id"],
-                library_name=library_map.get(v["library_id"] or "", "Unknown"),
-                source_type=v["source_type"],
-                scene_count=v["scene_count"],
-                first_scene_start_ms=v["first_scene_start_ms"],
-                last_scene_end_ms=v["last_scene_end_ms"],
-                earliest_ingest_time=v["earliest_ingest_time"],
-                latest_ingest_time=v["latest_ingest_time"],
-                keyword_tags=v["keyword_tags"],
-                product_tags=v["product_tags"],
-                people_count=v["people_count"],
-                required_drive_nickname=v["required_drive_nickname"],
-            )
-            for v in result["videos"]
-        ]
+                 video_id=v["video_id"],
+                 video_title=v["video_title"],
+                 library_id=v["library_id"],
+                 library_name=library_map.get(v["library_id"] or "", "Unknown"),
+                 source_type=v["source_type"],
+                 scene_count=v["scene_count"],
+                 first_scene_start_ms=v["first_scene_start_ms"],
+                 last_scene_end_ms=v["last_scene_end_ms"],
+                 earliest_ingest_time=v["earliest_ingest_time"],
+                 latest_ingest_time=v["latest_ingest_time"],
+                 first_scene_keyframe_ms=v["first_scene_keyframe_ms"],
+                 keyword_tags=v["keyword_tags"],
+                 product_tags=v["product_tags"],
+                 people_count=v["people_count"],
+                 required_drive_nickname=v["required_drive_nickname"],
+             )
+             for v in result["videos"]
+         ]
 
         # Encode next cursor
         next_cursor = None

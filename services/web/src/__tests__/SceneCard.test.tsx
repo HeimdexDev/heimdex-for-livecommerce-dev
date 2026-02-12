@@ -27,6 +27,7 @@ const baseDebug: DebugInfo = {
 const segmentResult: SegmentResult = {
   segment_id: "seg-1",
   video_id: "video-1",
+  video_title: "Quarterly Results Presentation",
   library_id: "lib-1",
   library_name: "Main Library",
   start_ms: 1000,
@@ -37,6 +38,7 @@ const segmentResult: SegmentResult = {
   required_drive_nickname: null,
   capture_time: null,
   people_cluster_ids: [],
+  keyframe_timestamp_ms: 0,
   debug: baseDebug,
 };
 
@@ -51,6 +53,7 @@ const segmentResponse: SearchResponse = {
 const sceneResult: SceneResult = {
   scene_id: "vid1_scene_0",
   video_id: "video-1",
+  video_title: "Live Commerce Highlight",
   library_id: "lib-1",
   library_name: "Scene Library",
   start_ms: 0,
@@ -62,6 +65,7 @@ const sceneResult: SceneResult = {
   capture_time: null,
   people_cluster_ids: [],
   speech_segment_count: 3,
+  keyframe_timestamp_ms: 0,
   debug: baseDebug,
 };
 
@@ -83,13 +87,13 @@ const emptyResponse: SearchResponse = {
 };
 
 describe("SearchResults with segment response", () => {
-  it("renders segment snippet and library name", () => {
+  it("renders segment snippet and video title", () => {
     render(
       <SearchResults response={segmentResponse} showDebug={false} agentAvailable={false} />
     );
 
     expect(screen.getByText("Segment snippet text")).toBeInTheDocument();
-    expect(screen.getByText("Main Library")).toBeInTheDocument();
+    expect(screen.getByText("Quarterly Results Presentation")).toBeInTheDocument();
   });
 
   it("renders disabled playback button for segments", () => {
@@ -113,14 +117,14 @@ describe("SearchResults with segment response", () => {
 });
 
 describe("SearchResults with scene response", () => {
-  it("renders scene snippet and library name", () => {
+  it("renders scene snippet and video title", () => {
     render(
       <SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />
     );
 
     expect(screen.getByText("Scene transcript text")).toBeInTheDocument();
-    const libraryNames = screen.getAllByText("Scene Library");
-    expect(libraryNames.length).toBeGreaterThanOrEqual(1);
+    const titles = screen.getAllByText("Live Commerce Highlight");
+    expect(titles.length).toBeGreaterThanOrEqual(1);
   });
 
   it("renders speech segment count badge", () => {
@@ -167,11 +171,12 @@ describe("SceneCard match signal indicator", () => {
     expect(screen.getByText("Hybrid match")).toBeInTheDocument();
   });
 
-  it("renders 'Keyword match' when lexical contribution dominates", () => {
-    const keywordScene: SceneResult = {
-      ...sceneResult,
-      debug: { ...baseDebug, lexical_contribution: 0.9, vector_contribution: 0.1 },
-    };
+   it("renders 'Keyword match' when lexical contribution dominates", () => {
+     const keywordScene: SceneResult = {
+       ...sceneResult,
+       keyframe_timestamp_ms: 0,
+       debug: { ...baseDebug, lexical_contribution: 0.9, vector_contribution: 0.1 },
+     };
     const resp: SceneSearchResponse = {
       ...sceneResponse,
       results: [keywordScene],
@@ -180,11 +185,12 @@ describe("SceneCard match signal indicator", () => {
     expect(screen.getByText("Keyword match")).toBeInTheDocument();
   });
 
-  it("renders 'Semantic match' when vector contribution dominates", () => {
-    const vectorScene: SceneResult = {
-      ...sceneResult,
-      debug: { ...baseDebug, lexical_contribution: 0.1, vector_contribution: 0.9 },
-    };
+   it("renders 'Semantic match' when vector contribution dominates", () => {
+     const vectorScene: SceneResult = {
+       ...sceneResult,
+       keyframe_timestamp_ms: 0,
+       debug: { ...baseDebug, lexical_contribution: 0.1, vector_contribution: 0.9 },
+     };
     const resp: SceneSearchResponse = {
       ...sceneResponse,
       results: [vectorScene],
@@ -231,12 +237,12 @@ describe("SceneCard context play buttons", () => {
 });
 
 describe("Video grouping", () => {
-  const multiVideoResponse: SceneSearchResponse = {
-    results: [
-      { ...sceneResult, scene_id: "s1", video_id: "v1", library_name: "Library A", start_ms: 1000 },
-      { ...sceneResult, scene_id: "s2", video_id: "v1", library_name: "Library A", start_ms: 5000 },
-      { ...sceneResult, scene_id: "s3", video_id: "v2", library_name: "Library B", start_ms: 0 },
-    ],
+   const multiVideoResponse: SceneSearchResponse = {
+     results: [
+       { ...sceneResult, scene_id: "s1", video_id: "v1", video_title: "Video Alpha", library_name: "Library A", start_ms: 1000, keyframe_timestamp_ms: 0 },
+       { ...sceneResult, scene_id: "s2", video_id: "v1", video_title: "Video Alpha", library_name: "Library A", start_ms: 5000, keyframe_timestamp_ms: 0 },
+       { ...sceneResult, scene_id: "s3", video_id: "v2", video_title: "Video Beta", library_name: "Library B", start_ms: 0, keyframe_timestamp_ms: 0 },
+     ],
     total_candidates: 3,
     facets: { libraries: [], source_types: [], people_cluster_ids: [] },
     query: "test",
@@ -244,14 +250,14 @@ describe("Video grouping", () => {
     result_type: "scene",
   };
 
-  it("groups scenes by video and shows group headers", () => {
+  it("groups scenes by video and shows group headers with video titles", () => {
     render(
       <SearchResults response={multiVideoResponse} showDebug={false} agentAvailable={false} />
     );
-    const libraryAs = screen.getAllByText("Library A");
-    expect(libraryAs.length).toBeGreaterThanOrEqual(1);
-    const libraryBs = screen.getAllByText("Library B");
-    expect(libraryBs.length).toBeGreaterThanOrEqual(1);
+    const videoAlphas = screen.getAllByText("Video Alpha");
+    expect(videoAlphas.length).toBeGreaterThanOrEqual(1);
+    const videoBetas = screen.getAllByText("Video Beta");
+    expect(videoBetas.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("2 scenes")).toBeInTheDocument();
     expect(screen.getByText("1 scene")).toBeInTheDocument();
   });
@@ -270,8 +276,8 @@ describe("Video grouping", () => {
       <SearchResults response={multiVideoResponse} showDebug={false} agentAvailable={false} />
     );
 
-    const libraryBHeader = screen.getByText("Library B").closest("button")!;
-    await user.click(libraryBHeader);
+    const videoBetaHeader = screen.getByText("Video Beta").closest("button")!;
+    await user.click(videoBetaHeader);
 
     const snippets = screen.getAllByText("Scene transcript text");
     expect(snippets).toHaveLength(3);

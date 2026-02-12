@@ -7,7 +7,7 @@ import {
   DebugInfo,
   formatDuration,
 } from "@/lib/api";
-import { getAgentPlaybackUrl } from "@/lib/agent";
+import { getAgentPlaybackUrl, getAgentThumbnailUrl } from "@/lib/agent";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
@@ -32,8 +32,9 @@ function getQualityColor(qf: number): string {
 
 interface VideoGroup {
   videoId: string;
+  videoTitle: string | null;
   libraryName: string;
-  sourceType: "gdrive" | "removable_disk";
+  sourceType: "gdrive" | "removable_disk" | "local";
   scenes: SceneResult[];
 }
 
@@ -44,6 +45,7 @@ function groupScenesByVideo(scenes: SceneResult[]): VideoGroup[] {
     if (!group) {
       group = {
         videoId: scene.video_id,
+        videoTitle: scene.video_title,
         libraryName: scene.library_name,
         sourceType: scene.source_type,
         scenes: [],
@@ -57,6 +59,55 @@ function groupScenesByVideo(scenes: SceneResult[]): VideoGroup[] {
     group.scenes.sort((a: SceneResult, b: SceneResult) => a.start_ms - b.start_ms);
   }
   return groups;
+}
+
+function sourceTypeLabel(sourceType: string): string {
+  return sourceType === "gdrive" ? "Drive" : sourceType === "removable_disk" ? "Disk" : "Local";
+}
+
+function sourceTypeBadgeClass(sourceType: string): string {
+  return sourceType === "gdrive"
+    ? "bg-blue-100 text-blue-700"
+    : sourceType === "removable_disk"
+    ? "bg-orange-100 text-orange-700"
+    : "bg-green-100 text-green-700";
+}
+
+function Breadcrumb({ libraryName, sourceType }: { libraryName: string; sourceType: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-gray-400">
+      <span
+        role="button"
+        tabIndex={0}
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setOpen(!open); } }}
+        className="hover:text-gray-600 transition-colors flex items-center gap-0.5 cursor-pointer"
+        title={open ? "Hide location" : `${libraryName} \u203A ${sourceTypeLabel(sourceType)}`}
+      >
+        <svg
+          className={cn("w-3 h-3 transition-transform", open && "rotate-90")}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+        </svg>
+      </span>
+      {open && (
+        <span className="text-gray-500">
+          {libraryName}
+          <span className="mx-1 text-gray-300">&rsaquo;</span>
+          <span className={cn("px-1.5 py-0 rounded text-[10px] font-medium", sourceTypeBadgeClass(sourceType))}>
+            {sourceTypeLabel(sourceType)}
+          </span>
+        </span>
+      )}
+    </span>
+  );
 }
 
 // ============================================================================
@@ -111,6 +162,7 @@ export function SearchResults({
               result={result}
               rank={index + 1}
               showDebug={showDebug}
+              agentAvailable={agentAvailable}
             />
           ))
         )}
@@ -160,30 +212,21 @@ function VideoGroupList({
               onClick={() => toggleVideo(group.videoId)}
               className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
             >
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0">
                 <svg
-                  className={cn("w-4 h-4 text-gray-500 transition-transform", isExpanded && "rotate-90")}
+                  className={cn("w-4 h-4 text-gray-500 transition-transform flex-shrink-0", isExpanded && "rotate-90")}
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
                 >
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                 </svg>
-                <span className="text-sm font-medium text-gray-900">
-                  {group.libraryName}
+                <span className="text-sm font-medium text-gray-900 truncate">
+                  {group.videoTitle || group.videoId}
                 </span>
-                <span
-                  className={cn(
-                    "px-2 py-0.5 rounded-full text-xs font-medium",
-                    group.sourceType === "gdrive"
-                      ? "bg-blue-100 text-blue-700"
-                      : "bg-orange-100 text-orange-700"
-                  )}
-                >
-                  {group.sourceType === "gdrive" ? "Drive" : "Local"}
-                </span>
+                <Breadcrumb libraryName={group.libraryName} sourceType={group.sourceType} />
               </div>
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
                 {group.scenes.length} scene{group.scenes.length !== 1 ? "s" : ""}
               </span>
             </button>
@@ -232,10 +275,10 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
       <div className="flex gap-4">
         <div className="flex-shrink-0 relative">
           <div className="w-32 h-20 bg-gray-200 rounded-lg overflow-hidden">
-            {result.thumbnail_url ? (
+            {agentAvailable ? (
               <img
-                src={result.thumbnail_url}
-                alt="Thumbnail"
+                src={getAgentThumbnailUrl(result.video_id, result.scene_id)}
+                alt=""
                 className="w-full h-full object-cover"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = "none";
@@ -268,18 +311,9 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
           <div className="flex items-start justify-between gap-2 mb-1">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm font-medium text-gray-900 truncate">
-                {result.library_name}
+                {result.video_title || result.video_id}
               </span>
-              <span
-                className={cn(
-                  "px-2 py-0.5 rounded-full text-xs font-medium",
-                  result.source_type === "gdrive"
-                    ? "bg-blue-100 text-blue-700"
-                    : "bg-orange-100 text-orange-700"
-                )}
-              >
-                {result.source_type === "gdrive" ? "Drive" : "Local"}
-              </span>
+              <Breadcrumb libraryName={result.library_name} sourceType={result.source_type} />
               <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
                 {result.speech_segment_count} segment{result.speech_segment_count !== 1 ? "s" : ""}
               </span>
@@ -347,7 +381,7 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
               </button>
               <button
                 className={cn(
-                  "text-xs px-2 py-1 rounded-r-md border border-l-0",
+                  "text-xs px-2 py-1 border border-l-0",
                   agentAvailable
                     ? "text-primary-600 hover:bg-primary-50 border-primary-200 cursor-pointer"
                     : "text-gray-400 border-gray-200 cursor-not-allowed"
@@ -364,6 +398,26 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
                 title={agentAvailable ? "Play with 5s context before scene" : "Playback requires the Heimdex agent"}
               >
                 -5s
+              </button>
+              <button
+                className={cn(
+                  "text-xs px-2 py-1 rounded-r-md border border-l-0",
+                  agentAvailable
+                    ? "text-primary-600 hover:bg-primary-50 border-primary-200 cursor-pointer"
+                    : "text-gray-400 border-gray-200 cursor-not-allowed"
+                )}
+                disabled={!agentAvailable}
+                onClick={() => {
+                  if (agentAvailable) {
+                    window.open(
+                      getAgentPlaybackUrl(result.video_id, result.start_ms + 5000),
+                      "_blank"
+                    );
+                  }
+                }}
+                title={agentAvailable ? "Play from 5s after scene start" : "Playback requires the Heimdex agent"}
+              >
+                +5s
               </button>
             </div>
 
@@ -432,9 +486,10 @@ interface ResultCardProps {
   result: SegmentResult;
   rank: number;
   showDebug: boolean;
+  agentAvailable: boolean;
 }
 
-function ResultCard({ result, rank, showDebug }: ResultCardProps) {
+function ResultCard({ result, rank, showDebug, agentAvailable }: ResultCardProps) {
   const [expanded, setExpanded] = useState(false);
   const isRemovable = result.source_type === "removable_disk";
 
@@ -443,10 +498,10 @@ function ResultCard({ result, rank, showDebug }: ResultCardProps) {
       <div className="flex gap-4">
         <div className="flex-shrink-0 relative">
           <div className="w-32 h-20 bg-gray-200 rounded-lg overflow-hidden">
-            {result.thumbnail_url ? (
+            {agentAvailable ? (
               <img
-                src={result.thumbnail_url}
-                alt="Thumbnail"
+                src={getAgentThumbnailUrl(result.video_id)}
+                alt=""
                 className="w-full h-full object-cover"
                 onError={(e) => {
                   (e.target as HTMLImageElement).style.display = "none";
@@ -479,18 +534,9 @@ function ResultCard({ result, rank, showDebug }: ResultCardProps) {
           <div className="flex items-start justify-between gap-2 mb-1">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-gray-900 truncate">
-                {result.library_name}
+                {result.video_title || result.video_id}
               </span>
-              <span
-                className={cn(
-                  "px-2 py-0.5 rounded-full text-xs font-medium",
-                  result.source_type === "gdrive"
-                    ? "bg-blue-100 text-blue-700"
-                    : "bg-orange-100 text-orange-700"
-                )}
-              >
-                {result.source_type === "gdrive" ? "Drive" : "Local"}
-              </span>
+              <Breadcrumb libraryName={result.library_name} sourceType={result.source_type} />
             </div>
             <span className="text-xs text-gray-500 whitespace-nowrap">
               {formatDuration(result.start_ms, result.end_ms)}
@@ -503,9 +549,19 @@ function ResultCard({ result, rank, showDebug }: ResultCardProps) {
 
           <div className="flex items-center gap-3">
             <button
-              className="text-sm text-gray-400 cursor-not-allowed flex items-center gap-1"
-              disabled
-              title="Playback requires the Heimdex agent running on this machine"
+              className={cn(
+                "text-sm flex items-center gap-1 px-2 py-1 rounded-md border",
+                agentAvailable
+                  ? "text-primary-600 hover:bg-primary-50 border-primary-200 cursor-pointer"
+                  : "text-gray-400 border-gray-200 cursor-not-allowed"
+              )}
+              disabled={!agentAvailable}
+              onClick={() => {
+                if (agentAvailable) {
+                  window.open(getAgentPlaybackUrl(result.video_id, result.start_ms), "_blank");
+                }
+              }}
+              title={agentAvailable ? "Play from segment start" : "Playback requires the Heimdex agent"}
             >
               <svg
                 className="w-4 h-4"
@@ -526,7 +582,7 @@ function ResultCard({ result, rank, showDebug }: ResultCardProps) {
                   d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              Play (Not available)
+              {agentAvailable ? "Play" : "Play (Not available)"}
             </button>
 
             {isRemovable && result.required_drive_nickname && (

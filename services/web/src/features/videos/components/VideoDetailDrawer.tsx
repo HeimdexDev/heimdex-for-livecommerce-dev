@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import type { VideoSummary, VideoScene } from "@/lib/types";
 import { formatTimestamp } from "@/lib/api/utils";
+import { getAgentThumbnailUrl } from "@/lib/agent";
 
 interface VideoDetailDrawerProps {
   video: VideoSummary | null;
@@ -11,6 +12,7 @@ interface VideoDetailDrawerProps {
   isOpen: boolean;
   isLoading: boolean;
   onClose: () => void;
+  agentAvailable: boolean;
 }
 
 export function VideoDetailDrawer({
@@ -20,6 +22,7 @@ export function VideoDetailDrawer({
   isOpen,
   isLoading,
   onClose,
+  agentAvailable,
 }: VideoDetailDrawerProps) {
   useEffect(() => {
     if (!isOpen) return;
@@ -61,6 +64,19 @@ export function VideoDetailDrawer({
           </button>
         </div>
 
+        {agentAvailable && (
+          <div className="px-6 pt-4">
+            <div className="w-full h-40 bg-gray-200 rounded-lg overflow-hidden">
+              <img
+                src={getAgentThumbnailUrl(video.video_id)}
+                alt=""
+                className="w-full h-full object-cover"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+              />
+            </div>
+          </div>
+        )}
+
         <div className="px-6 py-4 border-b border-gray-100">
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
@@ -70,7 +86,7 @@ export function VideoDetailDrawer({
             <div>
               <span className="text-gray-500">Source</span>
               <p className="font-medium text-gray-900">
-                {video.source_type === "gdrive" ? "Google Drive" : "Removable Disk"}
+                {video.source_type === "gdrive" ? "Google Drive" : video.source_type === "removable_disk" ? "Removable Disk" : "Local"}
               </p>
             </div>
             {video.people_count > 0 && (
@@ -114,32 +130,46 @@ export function VideoDetailDrawer({
                   key={scene.scene_id}
                   className="p-3 rounded-lg border border-gray-100 hover:border-gray-200 transition-colors"
                 >
-                  <div className="flex items-center justify-between text-xs text-gray-500">
-                    <span className="font-mono">
-                      {formatTimestamp(scene.start_ms)} - {formatTimestamp(scene.end_ms)}
-                    </span>
-                    {scene.speech_segment_count > 0 && (
-                      <span>{scene.speech_segment_count} segments</span>
+                  <div className="flex gap-3">
+                    {agentAvailable && video && (
+                      <div className="flex-shrink-0 w-20 h-14 bg-gray-200 rounded overflow-hidden">
+                        <img
+                          src={getAgentThumbnailUrl(video.video_id, scene.scene_id)}
+                          alt=""
+                          className="w-full h-full object-cover"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                        />
+                      </div>
                     )}
-                  </div>
-                  {scene.transcript_raw && (
-                    <p className="mt-1 text-sm text-gray-700 line-clamp-2">
-                      {scene.transcript_raw.slice(0, 150)}
-                      {scene.transcript_raw.length > 150 ? "..." : ""}
-                    </p>
-                  )}
-                  {(scene.keyword_tags.length > 0 || scene.product_tags.length > 0) && (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {[...scene.keyword_tags, ...scene.product_tags].slice(0, 5).map((tag) => (
-                        <span
-                          key={tag}
-                          className="inline-block px-1.5 py-0.5 text-xs bg-blue-50 text-blue-700 rounded"
-                        >
-                          {tag}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between text-xs text-gray-500">
+                        <span className="font-mono">
+                          {formatTimestamp(scene.start_ms)} - {formatTimestamp(scene.end_ms)}
                         </span>
-                      ))}
+                        {scene.speech_segment_count > 0 && (
+                          <span>{scene.speech_segment_count} segments</span>
+                        )}
+                      </div>
+                      {scene.transcript_raw && (
+                        <p className="mt-1 text-sm text-gray-700 line-clamp-2">
+                          {scene.transcript_raw.slice(0, 150)}
+                          {scene.transcript_raw.length > 150 ? "..." : ""}
+                        </p>
+                      )}
+                      {(scene.keyword_tags.length > 0 || scene.product_tags.length > 0) && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {[...scene.keyword_tags, ...scene.product_tags].slice(0, 5).map((tag) => (
+                            <span
+                              key={tag}
+                              className="inline-block px-1.5 py-0.5 text-xs bg-blue-50 text-blue-700 rounded"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
               ))}
             </div>

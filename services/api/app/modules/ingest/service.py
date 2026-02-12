@@ -133,6 +133,7 @@ class SceneIngestService:
                 "required_drive_nickname": scene.required_drive_nickname,
                 "capture_time": scene.capture_time.isoformat() if scene.capture_time else None,
                 "ingest_time": now.isoformat(),
+                "keyframe_timestamp_ms": scene.keyframe_timestamp_ms,
             }
 
             # Only add embedding if transcript is non-empty

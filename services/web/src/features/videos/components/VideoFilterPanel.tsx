@@ -14,7 +14,7 @@ export function VideoFilterPanel({ facets, filters, onChange }: VideoFilterPanel
     onChange({ ...filters, library_id: libraryId });
   };
 
-  const handleSourceChange = (sourceType: "gdrive" | "removable_disk" | undefined) => {
+  const handleSourceChange = (sourceType: "gdrive" | "removable_disk" | "local" | undefined) => {
     onChange({ ...filters, source_type: sourceType });
   };
 
@@ -97,7 +97,7 @@ export function VideoFilterPanel({ facets, filters, onChange }: VideoFilterPanel
               <button
                 key={src.id}
                 onClick={() =>
-                  handleSourceChange(src.id as "gdrive" | "removable_disk")
+                  handleSourceChange(src.id as "gdrive" | "removable_disk" | "local")
                 }
                 className={cn(
                   "block w-full text-left px-3 py-1.5 text-sm rounded-lg transition-colors",
@@ -106,7 +106,7 @@ export function VideoFilterPanel({ facets, filters, onChange }: VideoFilterPanel
                     : "text-gray-700 hover:bg-gray-100",
                 )}
               >
-                {src.id === "gdrive" ? "Google Drive" : "Removable Disk"}
+                {src.id === "gdrive" ? "Google Drive" : src.id === "removable_disk" ? "Removable Disk" : "Local"}
                 <span className="ml-1 text-xs opacity-70">({src.count})</span>
               </button>
             ))}

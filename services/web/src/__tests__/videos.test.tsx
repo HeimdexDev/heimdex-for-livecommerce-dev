@@ -29,6 +29,7 @@ const sampleVideo: VideoSummary = {
   product_tags: ["product-a"],
   people_count: 2,
   required_drive_nickname: null,
+  first_scene_keyframe_ms: 0,
 };
 
 const sampleStats: VideoStats = {
@@ -53,6 +54,7 @@ const sampleScene: VideoScene = {
   speech_segment_count: 3,
   people_cluster_ids: ["p1"],
   ingest_time: "2025-02-10T10:00:00Z",
+  keyframe_timestamp_ms: 0,
 };
 
 const sampleFacets: VideoFacets = {
@@ -98,23 +100,23 @@ describe("StatsBar", () => {
 // ---------------------------------------------------------------------------
 describe("VideoCard", () => {
   it("renders video id and library name", () => {
-    render(<VideoCard video={sampleVideo} onSelect={vi.fn()} />);
+    render(<VideoCard video={sampleVideo} onSelect={vi.fn()} agentAvailable={false} />);
     expect(screen.getByText("Spring Campaign")).toBeInTheDocument();
     expect(screen.getByText("Main Library")).toBeInTheDocument();
   });
 
   it("renders scene count", () => {
-    render(<VideoCard video={sampleVideo} onSelect={vi.fn()} />);
+    render(<VideoCard video={sampleVideo} onSelect={vi.fn()} agentAvailable={false} />);
     expect(screen.getByText("5 scenes")).toBeInTheDocument();
   });
 
   it("renders source type badge", () => {
-    render(<VideoCard video={sampleVideo} onSelect={vi.fn()} />);
+    render(<VideoCard video={sampleVideo} onSelect={vi.fn()} agentAvailable={false} />);
     expect(screen.getByText("Drive")).toBeInTheDocument();
   });
 
   it("renders keyword and product tags", () => {
-    render(<VideoCard video={sampleVideo} onSelect={vi.fn()} />);
+    render(<VideoCard video={sampleVideo} onSelect={vi.fn()} agentAvailable={false} />);
     expect(screen.getByText("fashion")).toBeInTheDocument();
     expect(screen.getByText("unboxing")).toBeInTheDocument();
     expect(screen.getByText("product-a")).toBeInTheDocument();
@@ -123,16 +125,16 @@ describe("VideoCard", () => {
   it("calls onSelect when clicked", async () => {
     const onSelect = vi.fn();
     const user = userEvent.setup();
-    render(<VideoCard video={sampleVideo} onSelect={onSelect} />);
+    render(<VideoCard video={sampleVideo} onSelect={onSelect} agentAvailable={false} />);
     await user.click(screen.getByText("Spring Campaign"));
     expect(onSelect).toHaveBeenCalledWith("video-abc-123");
   });
 
-  it("renders removable_disk source type", () => {
-    const diskVideo = { ...sampleVideo, source_type: "removable_disk" as const };
-    render(<VideoCard video={diskVideo} onSelect={vi.fn()} />);
-    expect(screen.getByText("Disk")).toBeInTheDocument();
-  });
+   it("renders removable_disk source type", () => {
+     const diskVideo = { ...sampleVideo, source_type: "removable_disk" as const, first_scene_keyframe_ms: 0 };
+     render(<VideoCard video={diskVideo} onSelect={vi.fn()} agentAvailable={false} />);
+     expect(screen.getByText("Disk")).toBeInTheDocument();
+   });
 });
 
 // ---------------------------------------------------------------------------
@@ -147,6 +149,7 @@ describe("VideoList", () => {
     total: 0,
     onSelect: vi.fn(),
     onLoadMore: vi.fn(),
+    agentAvailable: false,
   };
 
   it("shows empty state when no videos", () => {
@@ -160,16 +163,17 @@ describe("VideoList", () => {
     expect(pulseElements.length).toBe(5);
   });
 
-  it("renders multiple video cards", () => {
-    const videos = [
-      sampleVideo,
-      {
-        ...sampleVideo,
-        video_id: "video-def-456",
-        video_title: "Winter Campaign",
-        library_name: "Other Library",
-      },
-    ];
+   it("renders multiple video cards", () => {
+     const videos = [
+       sampleVideo,
+       {
+         ...sampleVideo,
+         video_id: "video-def-456",
+         video_title: "Winter Campaign",
+         library_name: "Other Library",
+         first_scene_keyframe_ms: 0,
+       },
+     ];
     render(<VideoList {...defaultProps} videos={videos} total={2} />);
     expect(screen.getByText("Spring Campaign")).toBeInTheDocument();
     expect(screen.getByText("Winter Campaign")).toBeInTheDocument();
@@ -269,6 +273,7 @@ describe("VideoDetailDrawer", () => {
     isOpen: true,
     isLoading: false,
     onClose: vi.fn(),
+    agentAvailable: false,
   };
 
   beforeEach(() => {

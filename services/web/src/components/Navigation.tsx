@@ -23,7 +23,7 @@ export function Navigation() {
   ];
 
   return (
-    <header className="bg-white border-b border-gray-200">
+    <header className="relative z-[60] bg-white border-b border-gray-200">
       <div className="max-w-7xl mx-auto px-4 py-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-6">

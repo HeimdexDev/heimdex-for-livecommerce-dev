@@ -61,6 +61,56 @@ ENGLISH_TRANSCRIPTS = [
     "Let's review the action items from yesterday's meeting.",
 ]
 
+# Human-readable video titles for seed data (simulates agent-derived filenames)
+KOREAN_VIDEO_TITLES = [
+    "2025년 1분기 전사 회의",
+    "신규 프로젝트 킥오프 미팅",
+    "마케팅 전략 수정 회의",
+    "고객 피드백 분석 결과 공유",
+    "제품 출시 최종 점검",
+    "팀 워크샵 아이디어 발표",
+    "클라우드 마이그레이션 완료 보고",
+    "AI 추천 시스템 기술 세미나",
+    "보안 취약점 패치 리뷰",
+    "UX 개선 A/B 테스트 결과",
+    "데이터베이스 최적화 성과 발표",
+    "모바일 앱 업데이트 데모",
+    "고객지원 프로세스 개선 회의",
+    "신규 파트너십 논의",
+    "분기별 실적 보고",
+]
+
+ENGLISH_VIDEO_TITLES = [
+    "Q1 2025 Quarterly Results Review",
+    "Product Roadmap Planning Session",
+    "Customer Satisfaction Deep Dive",
+    "Scalability Workshop Part 1",
+    "Feature Launch Retrospective",
+    "Team Collaboration Best Practices",
+    "Security Audit Findings Review",
+    "Platform Migration Status Update",
+    "User Engagement Analytics Demo",
+    "Sprint Planning - Week 12",
+    "Onboarding Training Session",
+    "API Integration Workshop",
+    "Performance Optimization Results",
+    "Cross-Team Sync Meeting",
+    "Year-End Review Presentation",
+]
+
+TRAINING_VIDEO_TITLES = [
+    "New Employee Onboarding Guide",
+    "Git Workflow Training",
+    "Cloud Infrastructure Basics",
+    "CI/CD Pipeline Setup Tutorial",
+    "Code Review Best Practices",
+    "Incident Response Playbook",
+    "Data Privacy Compliance Training",
+    "Agile Methodology Overview",
+    "Kubernetes Deployment Training",
+    "Monitoring and Alerting Setup",
+]
+
 
 async def seed_database():
     settings = get_settings()
@@ -160,7 +210,7 @@ async def seed_opensearch(org, libraries, profiles, people_clusters, drive_entri
                 video_id = str(uuid4())
                 is_korean_lib = lib_idx == 0
                 
-                source_type = random.choice(["gdrive", "removable_disk"])
+                source_type = random.choice(["gdrive", "removable_disk", "local"])
                 required_drive = None
                 if source_type == "removable_disk":
                     fingerprint = random.choice(list(drive_nicknames.keys()))
@@ -249,10 +299,18 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
             num_videos = random.randint(5, 10)
             is_korean_lib = lib_idx == 0
 
+            if lib_idx == 0:
+                title_pool = KOREAN_VIDEO_TITLES
+            elif lib_idx == 2:
+                title_pool = TRAINING_VIDEO_TITLES
+            else:
+                title_pool = ENGLISH_VIDEO_TITLES
+
             for video_idx in range(num_videos):
                 video_id = str(uuid4())
+                video_title = title_pool[video_idx % len(title_pool)]
 
-                source_type = random.choice(["gdrive", "removable_disk"])
+                source_type = random.choice(["gdrive", "removable_disk", "local"])
                 required_drive = None
                 if source_type == "removable_disk":
                     fingerprint = random.choice(list(drive_nicknames.keys()))
@@ -269,14 +327,11 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
                 for scene_idx in range(num_scenes):
                     scene_id = f"{video_id}_scene_{scene_idx:03d}"
 
-                    # Scenes are longer than segments (10-90s each)
                     duration_ms = random.randint(10000, 90000)
                     start_ms = current_ms
                     end_ms = current_ms + duration_ms
                     current_ms = end_ms
 
-                    # Aggregate 2-4 transcript pieces to simulate
-                    # multiple speech segments per scene
                     num_speech_segments = random.randint(2, 4)
                     transcript_pool = KOREAN_TRANSCRIPTS if (is_korean_lib or random.random() < 0.3) else ENGLISH_TRANSCRIPTS
                     transcript_parts = [
@@ -295,6 +350,7 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
                         "org_id": str(org.id),
                         "library_id": str(library.id),
                         "video_id": video_id,
+                        "video_title": video_title,
                         "scene_id": scene_id,
                         "start_ms": start_ms,
                         "end_ms": end_ms,
@@ -308,6 +364,7 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
                         "capture_time": capture_time.isoformat(),
                         "ingest_time": datetime.now(timezone.utc).isoformat(),
                         "thumbnail_url": f"https://placeholder.heimdex.local/thumb/{scene_id}.jpg",
+                        "keyframe_timestamp_ms": (start_ms + end_ms) // 2,
                         "embedding_vector": embedding,
                     }
 

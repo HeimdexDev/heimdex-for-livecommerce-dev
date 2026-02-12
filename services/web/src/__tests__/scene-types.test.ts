@@ -12,6 +12,7 @@ describe("Scene search types", () => {
     const scene: SceneResult = {
       scene_id: "vid123_scene_0",
       video_id: "vid123",
+      video_title: "Test Video",
       library_id: "lib1",
       library_name: "Test Library",
       start_ms: 0,
@@ -23,6 +24,7 @@ describe("Scene search types", () => {
       capture_time: null,
       people_cluster_ids: [],
       speech_segment_count: 3,
+      keyframe_timestamp_ms: 0,
       debug: {
         lexical_rank: 1,
         lexical_score: 10.5,
@@ -44,6 +46,7 @@ describe("Scene search types", () => {
     const segment: SegmentResult = {
       segment_id: "seg1",
       video_id: "vid1",
+      video_title: null,
       library_id: "lib1",
       library_name: "Test",
       start_ms: 0,
@@ -54,6 +57,7 @@ describe("Scene search types", () => {
       required_drive_nickname: null,
       capture_time: null,
       people_cluster_ids: [],
+      keyframe_timestamp_ms: 0,
       debug: {
         lexical_rank: null,
         lexical_score: null,
