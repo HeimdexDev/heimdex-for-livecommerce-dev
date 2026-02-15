@@ -62,6 +62,30 @@ class Settings(BaseSettings):
     # Maximum characters allowed in transcript_raw per scene (OOM protection).
     agent_ingest_max_transcript_chars: int = 50_000
 
+    # --- CORS ---
+    cors_allow_origin_regex: str = (
+        r"^https?://"
+        r"([a-z0-9][a-z0-9-]{0,}[a-z0-9]\.app\.heimdex\.(co|local)"
+        r"|localhost"
+        r"|127\.0\.0\.1)"
+        r"(:\d+)?$"
+    )
+    cors_extra_origins: str = ""
+
+    # --- Cookie safety (prep for future cookie-based auth) ---
+    auth_cookie_secure: bool = True
+    auth_cookie_samesite: str = "lax"
+    auth_cookie_domain: str = ""
+
+    # --- Replay protection ---
+    ingest_require_timestamp: bool = False
+    ingest_timestamp_skew_seconds: int = 300
+    ingest_require_idempotency: bool = False
+    ingest_idempotency_ttl_seconds: int = 600
+
+    # --- Dev token refresh ---
+    enable_dev_refresh: bool = True
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

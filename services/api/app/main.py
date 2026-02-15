@@ -142,12 +142,24 @@ app = FastAPI(
 
 app.add_middleware(TenancyMiddleware)
 
+_settings = get_settings()
+_extra = [o.strip() for o in _settings.cors_extra_origins.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://devorg.app.heimdex.local:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_extra or [],
+    allow_origin_regex=_settings.cors_allow_origin_regex,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Heimdex-Request-Id",
+        "X-Heimdex-Device-Id",
+        "X-Heimdex-Timestamp",
+        "X-Heimdex-Idempotency-Key",
+    ],
+    expose_headers=["X-Request-ID"],
 )
 
 
