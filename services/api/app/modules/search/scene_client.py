@@ -227,6 +227,7 @@ class SceneSearchClient:
                 # Source metadata (denormalized for filtering)
                 "source_type": {"type": "keyword"},
                 "required_drive_nickname": {"type": "keyword"},
+                "source_path": {"type": "keyword"},
                 "capture_time": {"type": "date"},
                 "ingest_time": {"type": "date"},
             }
@@ -590,6 +591,7 @@ class SceneSearchClient:
                     "video_title": {"terms": {"field": "video_title", "size": 1}},
                     "source_type": {"terms": {"field": "source_type", "size": 1}},
                     "required_drive_nickname": {"terms": {"field": "required_drive_nickname", "size": 1}},
+                    "source_path": {"terms": {"field": "source_path", "size": 1}},
                     "keyword_tags": {"terms": {"field": "keyword_tags", "size": 10}},
                     "product_tags": {"terms": {"field": "product_tags", "size": 10}},
                     "people_count": {"cardinality": {"field": "people_cluster_ids"}},
@@ -619,6 +621,7 @@ class SceneSearchClient:
             title_buckets = bucket["video_title"]["buckets"]
             src_buckets = bucket["source_type"]["buckets"]
             drive_buckets = bucket["required_drive_nickname"]["buckets"]
+            sp_buckets = bucket["source_path"]["buckets"]
             kw_buckets = bucket["keyword_tags"]["buckets"]
             pt_buckets = bucket["product_tags"]["buckets"]
             keyframe_agg = bucket.get("min_keyframe_ms", {})
@@ -639,6 +642,7 @@ class SceneSearchClient:
                 "product_tags": [b["key"] for b in pt_buckets],
                 "people_count": int(bucket["people_count"]["value"]),
                 "required_drive_nickname": drive_buckets[0]["key"] if drive_buckets else None,
+                "source_path": sp_buckets[0]["key"] if sp_buckets else None,
             })
 
         # Sort by latest_ingest_time for the "latest" sort order

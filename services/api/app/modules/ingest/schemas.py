@@ -132,6 +132,11 @@ class IngestScenesRequest(BaseModel):
         ge=0,
         description="Total video duration in milliseconds",
     )
+    source_path: str | None = Field(
+        default=None,
+        max_length=1000,
+        description="Library-relative path: {DriveNickname}/{relative/path/to/video}",
+    )
     scenes: list[IngestSceneDocument] = Field(
         ...,
         description="Scene documents to index",

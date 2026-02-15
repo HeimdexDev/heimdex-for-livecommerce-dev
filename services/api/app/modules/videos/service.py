@@ -100,13 +100,14 @@ class VideoService:
                  earliest_ingest_time=v["earliest_ingest_time"],
                  latest_ingest_time=v["latest_ingest_time"],
                  first_scene_keyframe_ms=v.get("first_scene_keyframe_ms", 0),
-                 keyword_tags=v["keyword_tags"],
-                 product_tags=v["product_tags"],
-                 people_count=v["people_count"],
-                 required_drive_nickname=v["required_drive_nickname"],
-             )
-             for v in result["videos"]
-         ]
+                  keyword_tags=v["keyword_tags"],
+                  product_tags=v["product_tags"],
+                  people_count=v["people_count"],
+                  required_drive_nickname=v["required_drive_nickname"],
+                  source_path=v.get("source_path"),
+              )
+              for v in result["videos"]
+          ]
 
         # Encode next cursor
         next_cursor = None

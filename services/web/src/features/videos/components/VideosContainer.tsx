@@ -2,6 +2,8 @@
 
 import { useVideos } from "../hooks/useVideos";
 import { useAgent } from "@/features/search/hooks/useAgent";
+import { useDevices } from "@/features/devices";
+import { AddFolderButton } from "@/features/folders";
 import { StatsBar } from "./StatsBar";
 import { VideoFilterPanel } from "./VideoFilterPanel";
 import { VideoList } from "./VideoList";
@@ -9,6 +11,7 @@ import { VideoDetailDrawer } from "./VideoDetailDrawer";
 
 export function VideosContainer() {
   const { isAvailable: agentAvailable } = useAgent();
+  const { devices } = useDevices();
   const {
     videos,
     stats,
@@ -36,7 +39,10 @@ export function VideosContainer() {
   return (
     <div className="min-h-screen">
       <main className="max-w-7xl mx-auto px-4 py-6">
-        <StatsBar stats={stats} isLoading={isLoading && !stats} />
+        <div className="flex items-start justify-between gap-4">
+          <StatsBar stats={stats} isLoading={isLoading && !stats} />
+          <AddFolderButton devices={devices} />
+        </div>
 
         {error && (
           <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">

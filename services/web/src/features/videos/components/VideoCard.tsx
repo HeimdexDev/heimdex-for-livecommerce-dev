@@ -60,6 +60,19 @@ export function VideoCard({ video, onSelect, agentAvailable }: VideoCardProps) {
               <p className="text-xs text-gray-500 mt-0.5">
                 {video.library_name || "Unknown library"}
               </p>
+              {video.source_path && (
+                <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1 min-w-0" title={video.source_path}>
+                  <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M3 7a2 2 0 012-2h5l2 2h7a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
+                    />
+                  </svg>
+                  <span className="truncate">{video.source_path}</span>
+                </p>
+              )}
             </div>
             <span className={cn(
               "inline-flex items-center px-2 py-0.5 text-xs font-medium rounded-full flex-shrink-0",

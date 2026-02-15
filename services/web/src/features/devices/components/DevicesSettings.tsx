@@ -2,6 +2,7 @@
 
 import { useDevices } from "../hooks/useDevices";
 import { PairingCodeModal } from "./PairingCodeModal";
+import { AddFolderButton } from "@/features/folders";
 
 export function DevicesSettings() {
   const {
@@ -23,14 +24,17 @@ export function DevicesSettings() {
             Manage registered agent devices and generate pairing codes.
           </p>
         </div>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={generatePairingCode}
-          disabled={isGenerating}
-        >
-          {isGenerating ? "Generating..." : "Generate Pairing Code"}
-        </button>
+        <div className="flex items-center gap-2">
+          <AddFolderButton devices={devices} />
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={generatePairingCode}
+            disabled={isGenerating}
+          >
+            {isGenerating ? "Generating..." : "Generate Pairing Code"}
+          </button>
+        </div>
       </div>
 
       {error && (

@@ -90,6 +90,14 @@ export function VideoDetailDrawer({
                 {video.source_type === "gdrive" ? "Google Drive" : video.source_type === "removable_disk" ? "Removable Disk" : "Local"}
               </p>
             </div>
+            {video.source_path && (
+              <div className="col-span-2">
+                <span className="text-gray-500">Library Path</span>
+                <p className="font-medium text-gray-900 truncate" title={video.source_path}>
+                  {video.source_path}
+                </p>
+              </div>
+            )}
             {video.people_count > 0 && (
               <div>
                 <span className="text-gray-500">People</span>

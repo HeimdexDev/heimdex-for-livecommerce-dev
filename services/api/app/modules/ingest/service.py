@@ -143,6 +143,7 @@ class SceneIngestService:
                 "capture_time": scene.capture_time.isoformat() if scene.capture_time else None,
                 "ingest_time": now.isoformat(),
                 "keyframe_timestamp_ms": scene.keyframe_timestamp_ms,
+                "source_path": request.source_path,
             }
 
             # Only add embedding if transcript is non-empty

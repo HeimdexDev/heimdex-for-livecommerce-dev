@@ -29,6 +29,7 @@ class VideoSummary(BaseModel):
     product_tags: list[str] = Field(default_factory=list)
     people_count: int = 0
     required_drive_nickname: str | None = None
+    source_path: str | None = None
 
 
 class VideoFacetItem(BaseModel):

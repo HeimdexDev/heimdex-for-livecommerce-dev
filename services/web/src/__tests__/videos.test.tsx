@@ -42,6 +42,7 @@ const sampleVideo: VideoSummary = {
   product_tags: ["product-a"],
   people_count: 2,
   required_drive_nickname: null,
+  source_path: null,
   first_scene_keyframe_ms: 0,
 };
 
