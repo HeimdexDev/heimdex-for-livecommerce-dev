@@ -35,7 +35,9 @@ async def lifespan(app: FastAPI):
     from app.modules.search.client import OpenSearchClient
     from app.modules.search.scene_client import SceneSearchClient
     
-    logger.info("application_starting", environment=get_settings().environment)
+    settings = get_settings()
+    logger.info("application_starting", environment=settings.environment)
+    settings.validate_production_guards()
     
     opensearch_client = OpenSearchClient()
     app.state.opensearch_client = opensearch_client
@@ -45,6 +47,17 @@ async def lifespan(app: FastAPI):
     
     await _startup_search_checks(opensearch_client)
     await _startup_scene_search_checks(scene_opensearch_client)
+
+    if settings.embedding_use_mock:
+        logger.warning(
+            "embedding_mock_mode_active",
+            message="EMBEDDING_USE_MOCK=true — semantic search is disabled. "
+                    "All embeddings are deterministic hashes. "
+                    "Search accuracy benchmarks will be INVALID.",
+            embedding_model=settings.embedding_model,
+            embedding_dimension=settings.embedding_dimension,
+            impact="search_accuracy_invalid",
+        )
     
     yield
     
@@ -165,13 +178,15 @@ async def add_request_context(request: Request, call_next):
 @app.get("/health")
 async def health(request: Request):
     from app.modules.tenancy.middleware import extract_org_slug
-    
+
+    settings = get_settings()
     host = request.headers.get("host", "")
     org_slug, tenancy_error = extract_org_slug(host)
-    
+
     return {
         "status": "ok",
-        "environment": get_settings().environment,
+        "environment": settings.environment,
+        "embedding_mode": "mock" if settings.embedding_use_mock else "real",
         "tenancy": {
             "host": host,
             "org_slug": org_slug,

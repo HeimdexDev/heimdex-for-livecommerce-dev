@@ -1,7 +1,20 @@
+import logging
 from functools import lru_cache
 from typing import Literal
 
 from pydantic_settings import BaseSettings
+
+# Known insecure dev defaults that must never be used in production/staging.
+_INSECURE_DEFAULTS = frozenset(
+    {
+        "dev-secret-key-change-in-production",
+        "dev-agent-key-change-in-production",
+    }
+)
+
+
+class ProductionGuardError(SystemExit):
+    """Raised when production/staging starts with insecure dev defaults."""
 
 
 class Settings(BaseSettings):
@@ -39,11 +52,20 @@ class Settings(BaseSettings):
     
     search_lexical_top_k: int = 200
     search_vector_top_k: int = 200
-    search_rrf_k: int = 60
+    search_rrf_k: int = 20
     search_max_scenes_per_video: int = 4
     search_page_size: int = 20
     ocr_search_enabled: bool = True
     ocr_bm25_boost: float = 0.6
+
+    search_title_boost_enabled: bool = False
+    search_title_boost: float = 3.0
+    search_tag_boost_enabled: bool = False
+    search_tag_boost: float = 2.0
+    
+    # OpenSearch bulk refresh policy: "true" (default, sync), "false" (async), or "wait_for".
+    # Set OPENSEARCH_BULK_REFRESH="false" for higher ingest throughput at the cost of search latency.
+    opensearch_bulk_refresh: str = "true"
     
     # Search mode: "segments" (default, backward-compatible) or "scenes"
     # Controls which index POST /api/search queries.
@@ -64,6 +86,41 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
+    def validate_production_guards(self) -> None:
+        if self.environment == "development":
+            return
+
+        errors: list[str] = []
+
+        if self.jwt_secret_key in _INSECURE_DEFAULTS:
+            errors.append(
+                "JWT_SECRET_KEY is using the insecure dev default. "
+                "Set a strong random value: JWT_SECRET_KEY=$(openssl rand -hex 32)"
+            )
+
+        if self.agent_api_key in _INSECURE_DEFAULTS:
+            errors.append(
+                "AGENT_API_KEY is using the insecure dev default. "
+                "Set a strong random value: AGENT_API_KEY=$(openssl rand -hex 32)"
+            )
+
+        if not self.auth0_enabled:
+            errors.append(
+                "AUTH0_ENABLED is false. "
+                "Production requires Auth0 (or equivalent OIDC provider): AUTH0_ENABLED=true"
+            )
+
+        if errors:
+            msg = (
+                f"\n{'='*60}\n"
+                f"FATAL: Refusing to start in '{self.environment}' mode.\n\n"
+                + "\n".join(f"  [{i+1}] {e}" for i, e in enumerate(errors))
+                + f"\n\nFix all {len(errors)} issue(s) above before starting.\n"
+                f"{'='*60}"
+            )
+            logging.critical(msg)
+            raise ProductionGuardError(msg)
 
 
 @lru_cache
