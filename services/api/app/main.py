@@ -11,6 +11,7 @@ from app.logging_config import setup_logging, get_logger
 from app.db import models  # noqa: F401 - Register all SQLAlchemy models
 from app.modules.tenancy import TenancyMiddleware
 from app.modules.auth.router import router as auth_router
+from app.modules.devices.router import router as devices_router
 from app.modules.ingest.router import router as ingest_router
 from app.modules.libraries.router import router as libraries_router
 from app.modules.search.router import router as search_router
@@ -203,6 +204,7 @@ async def ready():
 
 
 app.include_router(auth_router, prefix="/api")
+app.include_router(devices_router, prefix="/api")
 app.include_router(ingest_router, prefix="/api")
 app.include_router(libraries_router, prefix="/api")
 app.include_router(search_router, prefix="/api")

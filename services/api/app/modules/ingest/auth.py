@@ -1,18 +1,19 @@
 """
-Agent authentication dependency for the ingest endpoint.
+Agent authentication for the ingest endpoint.
 
-Validates a pre-shared API key (Bearer token) and resolves org context
-from the Host header. This is separate from user JWT authentication —
-agents do not need a user identity, only an org-scoped token.
+Supports three modes via agent_api_key_mode:
+- "global": single shared key (legacy default)
+- "per-org": per-org API key
+- "per-device": per-device secret with HMAC-SHA256 + server pepper
 
 Security:
-- Constant-time comparison via hmac.compare_digest to prevent timing attacks
-- Feature flag to disable ingestion entirely (agent_ingest_enabled)
-- Org context derived from Host header only (never from client params)
+- Constant-time comparison via hmac.compare_digest
+- Per-device mode rejects org API keys for ingest (prevents downgrade)
+- Device revocation checked on every request (no cache)
 """
 import hmac
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db.base import get_db_session
 from app.logging_config import get_logger
+from app.modules.devices.repository import DeviceRepository, verify_device_secret
 from app.modules.orgs.models import Org
 from app.modules.tenancy.context import OrgContext
 from app.modules.tenancy.middleware import get_current_org
@@ -33,21 +35,14 @@ async def verify_agent_token(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
     org_ctx: OrgContext = Depends(get_current_org),
     db: AsyncSession = Depends(get_db_session),
+    x_heimdex_device_id: str | None = Header(None, alias="X-Heimdex-Device-Id"),
 ) -> OrgContext:
     """
     Validate agent Bearer token and return resolved org context.
 
-    Checks:
-    1. agent_ingest_enabled feature flag is True
-    2. Bearer token matches the configured agent_api_key (constant-time)
-    3. Org resolved from Host header via TenancyMiddleware
-
-    Returns:
-        OrgContext with org_id and org_slug from the Host header.
-
-    Raises:
-        HTTPException 403: If ingestion is disabled.
-        HTTPException 401: If the token is invalid.
+    In per-device mode, validates HMAC-SHA256(token, pepper) against the
+    device's stored hash and checks revocation. Org API keys are rejected
+    to prevent downgrade attacks that would bypass device-level revocation.
     """
     settings = get_settings()
 
@@ -58,15 +53,77 @@ async def verify_agent_token(
             detail="Agent ingestion is disabled",
         )
 
+    token = credentials.credentials
+    mode = settings.agent_api_key_mode
+
+    if mode == "per-device":
+        if not x_heimdex_device_id:
+            logger.warning(
+                "agent_ingest_missing_device_id",
+                org_slug=org_ctx.org_slug,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="X-Heimdex-Device-Id header required in per-device mode",
+            )
+
+        repo = DeviceRepository(db)
+        device = await repo.get_by_org_and_public_id(
+            org_ctx.org_id, x_heimdex_device_id
+        )
+
+        if device is None:
+            logger.warning(
+                "agent_ingest_device_not_found",
+                org_slug=org_ctx.org_slug,
+                device_public_id=x_heimdex_device_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Device not registered",
+            )
+
+        if device.is_revoked:
+            logger.warning(
+                "agent_ingest_device_revoked",
+                org_slug=org_ctx.org_slug,
+                device_public_id=x_heimdex_device_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Device is revoked",
+            )
+
+        if not verify_device_secret(
+            token, device.device_secret_hash, settings.device_secret_pepper
+        ):
+            logger.warning(
+                "agent_ingest_invalid_device_secret",
+                org_slug=org_ctx.org_slug,
+                device_public_id=x_heimdex_device_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid device secret",
+            )
+
+        await repo.update_last_seen(device)
+
+        logger.debug(
+            "agent_device_token_verified",
+            org_id=str(org_ctx.org_id),
+            org_slug=org_ctx.org_slug,
+            device_public_id=x_heimdex_device_id,
+        )
+        return org_ctx
+
+    # --- global / per-org modes (existing behavior) ---
     org_api_key: str | None = None
     if hasattr(db, "execute"):
         result = await db.execute(select(Org).where(Org.id == org_ctx.org_id))
         org = result.scalar_one_or_none()
         if org is not None:
             org_api_key = org.agent_api_key
-
-    token = credentials.credentials
-    mode = settings.agent_api_key_mode
 
     if mode == "per-org":
         if not org_api_key or not hmac.compare_digest(token, org_api_key):
@@ -99,13 +156,6 @@ async def verify_agent_token(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid agent API key",
             )
-
-    if mode not in {"global", "per-org"}:
-        logger.warning(
-            "agent_ingest_invalid_mode",
-            mode=mode,
-            org_slug=org_ctx.org_slug,
-        )
 
     logger.debug(
         "agent_token_verified",

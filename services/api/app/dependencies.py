@@ -107,6 +107,12 @@ async def get_video_service(
     return VideoService(db, scene_opensearch)
 
 
+def get_device_repository(db: AsyncSession = Depends(get_db_session)):
+    """Device repository factory."""
+    from app.modules.devices.repository import DeviceRepository
+    return DeviceRepository(db)
+
+
 def get_auth_service(db: AsyncSession = Depends(get_db_session)):
     """Auth service factory."""
     from app.modules.auth.service import AuthService
