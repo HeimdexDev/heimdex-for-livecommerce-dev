@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     device_secret_pepper: str = "dev-device-pepper-change-in-production"
     pairing_code_ttl_minutes: int = 10
 
+    # --- Agent intents ---
+    agent_intents_enabled: bool = False
+    agent_intent_ttl_minutes: int = 10
+    agent_intent_max_per_org: int = 10
+    agent_intent_exchange_max_attempts: int = 5
+
     # --- CORS ---
     cors_allow_origin_regex: str = (
         r"^https?://"

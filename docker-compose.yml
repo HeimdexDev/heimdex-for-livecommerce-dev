@@ -89,6 +89,8 @@ services:
       - AUTH0_DOMAIN=your-tenant.auth0.com
       - AUTH0_AUDIENCE=https://api.heimdex.io
       - AUTH0_ORG_CLAIM=https://heimdex.io/org_id
+      # Agent intents feature flag
+      - AGENT_INTENTS_ENABLED=true
       # HuggingFace model cache directory (persists downloaded models)
       - HF_HOME=/root/.cache/huggingface
     ports:

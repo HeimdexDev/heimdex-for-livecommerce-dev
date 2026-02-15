@@ -2,6 +2,7 @@
 # This file must be imported early in the application lifecycle
 
 from app.db.base import Base  # noqa: F401
+from app.modules.agent_intents.models import AgentIntent  # noqa: F401
 from app.modules.devices.models import Device  # noqa: F401
 from app.modules.devices.pairing import PairingCode  # noqa: F401
 from app.modules.libraries.models import Library  # noqa: F401

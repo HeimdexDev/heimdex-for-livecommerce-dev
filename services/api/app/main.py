@@ -11,6 +11,8 @@ from app.logging_config import setup_logging, get_logger
 from app.db import models  # noqa: F401 - Register all SQLAlchemy models
 from app.modules.tenancy import TenancyMiddleware
 from app.modules.auth.router import router as auth_router
+from app.modules.agent_intents.router import router as agent_intents_router
+from app.modules.agent_intents.schema_check import startup_check_agent_intents_schema
 from app.modules.devices.router import router as devices_router
 from app.modules.ingest.router import router as ingest_router
 from app.modules.libraries.router import router as libraries_router
@@ -46,7 +48,14 @@ async def lifespan(app: FastAPI):
     
     await _startup_search_checks(opensearch_client)
     await _startup_scene_search_checks(scene_opensearch_client)
-    
+
+    from app.db.base import get_async_engine
+
+    settings = get_settings()
+    agent_intents_engine = get_async_engine()
+    await startup_check_agent_intents_schema(agent_intents_engine, settings.agent_intents_enabled)
+    await agent_intents_engine.dispose()
+
     yield
     
     logger.info("application_shutting_down")
@@ -205,6 +214,7 @@ async def ready():
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(devices_router, prefix="/api")
+app.include_router(agent_intents_router, prefix="/api")
 app.include_router(ingest_router, prefix="/api")
 app.include_router(libraries_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
