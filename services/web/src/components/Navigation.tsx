@@ -20,6 +20,7 @@ export function Navigation() {
   const tabs = [
     { label: "Search", href: "/" },
     { label: "Videos", href: "/videos" },
+    { label: "Settings", href: "/settings/devices" },
   ];
 
   return (

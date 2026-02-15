@@ -1,7 +1,7 @@
 import hmac
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +10,8 @@ from app.config import get_settings
 from app.db.base import get_db_session
 from app.logging_config import get_logger
 from app.modules.auth.dependencies import require_role
+from app.modules.devices.pairing import PairingCodeRepository
+from app.modules.devices.rate_limit import require_pairing_rate_limit
 from app.modules.devices.repository import (
     DeviceRepository,
     generate_device_secret,
@@ -25,6 +27,8 @@ from app.modules.devices.schemas import (
     DeviceRevokeResponse,
     DeviceRotateRequest,
     DeviceRotateResponse,
+    PairingCodeCreateResponse,
+    PairingCodeExchangeRequest,
 )
 from app.modules.orgs.models import Org
 from app.modules.tenancy.context import OrgContext
@@ -246,4 +250,127 @@ async def list_devices(
             )
             for d in devices
         ]
+    )
+
+
+@router.post(
+    "/pairing-code",
+    response_model=PairingCodeCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_pairing_code(
+    org_ctx: OrgContext = Depends(get_current_org),
+    db: AsyncSession = Depends(get_db_session),
+    _user=Depends(require_role(UserRole.ADMIN)),
+):
+    settings = get_settings()
+    repo = PairingCodeRepository(db)
+
+    pairing = await repo.create(
+        org_id=org_ctx.org_id,
+        ttl_minutes=settings.pairing_code_ttl_minutes,
+    )
+
+    logger.info(
+        "pairing_code_created",
+        org_slug=org_ctx.org_slug,
+        expires_at=pairing.expires_at.isoformat(),
+    )
+
+    return PairingCodeCreateResponse(
+        code=pairing.code,
+        expires_at=pairing.expires_at,
+    )
+
+
+@router.post(
+    "/pair",
+    response_model=DeviceRegisterResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def pair_device(
+    body: PairingCodeExchangeRequest,
+    request: Request,
+    org_ctx: OrgContext = Depends(get_current_org),
+    db: AsyncSession = Depends(get_db_session),
+    _rate_limit=Depends(require_pairing_rate_limit),
+):
+    settings = get_settings()
+    pairing_repo = PairingCodeRepository(db)
+    device_repo = DeviceRepository(db)
+
+    pairing = await pairing_repo.get_by_org_and_code_for_update(
+        org_ctx.org_id, body.code,
+    )
+
+    if pairing is None:
+        logger.warning(
+            "pairing_code_invalid",
+            org_slug=org_ctx.org_slug,
+            client_ip=request.client.host if request.client else "unknown",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid pairing code",
+        )
+
+    if pairing.expires_at < datetime.now(UTC):
+        logger.info(
+            "pairing_code_expired",
+            org_slug=org_ctx.org_slug,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Pairing code has expired",
+        )
+
+    if pairing.used:
+        logger.warning(
+            "pairing_code_reused",
+            org_slug=org_ctx.org_slug,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Pairing code has already been used",
+        )
+
+    existing = await device_repo.get_by_org_and_public_id(
+        org_ctx.org_id, body.device_public_id,
+    )
+    if existing is not None:
+        if existing.is_revoked:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Device is revoked.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Device already registered. Use POST /api/devices/rotate to get a new secret.",
+        )
+
+    raw_secret = generate_device_secret()
+    secret_hash = hash_device_secret(raw_secret, settings.device_secret_pepper)
+
+    device = await device_repo.create(
+        org_id=org_ctx.org_id,
+        device_name=body.device_name,
+        device_public_id=body.device_public_id,
+        device_secret_hash=secret_hash,
+    )
+
+    await pairing_repo.mark_used(pairing, device.id)
+
+    logger.info(
+        "device_paired",
+        org_slug=org_ctx.org_slug,
+        device_public_id=body.device_public_id,
+        device_name=body.device_name,
+    )
+
+    return DeviceRegisterResponse(
+        device_id=device.id,
+        device_public_id=device.device_public_id,
+        device_name=device.device_name,
+        device_secret=raw_secret,
+        created_at=device.created_at,
     )

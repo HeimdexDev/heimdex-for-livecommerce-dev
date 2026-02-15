@@ -58,3 +58,24 @@ class DeviceListItem(BaseModel):
 
 class DeviceListResponse(BaseModel):
     devices: list[DeviceListItem]
+
+
+# --- Pairing code schemas ---
+
+
+class PairingCodeCreateResponse(BaseModel):
+    code: str
+    expires_at: datetime
+
+
+class PairingCodeExchangeRequest(BaseModel):
+    code: str = Field(
+        ..., min_length=6, max_length=6, pattern=r"^\d{6}$",
+        description="6-digit pairing code",
+    )
+    device_public_id: str = Field(
+        ..., min_length=1, max_length=64, description="Client-generated device identifier"
+    )
+    device_name: str = Field(
+        ..., min_length=1, max_length=255, description="Human-readable device name"
+    )
