@@ -82,13 +82,18 @@ jobs:
               docker compose build web
             fi
 
-            # Run migrations (always, it's idempotent)
+            # Ensure all services are up before migrations
+            echo "--- ensuring services are up ---"
+            docker compose up -d
+            sleep 10
+
+            # Run migrations via a throwaway container (not exec, which needs running container)
             if [ "$API_CHANGED" = true ]; then
               echo "--- running migrations ---"
-              docker compose exec -T api alembic upgrade head
+              docker compose run --rm -T --no-deps api alembic upgrade head
             fi
 
-            # Restart changed services
+            # Restart changed services with new images
             if [ "$API_CHANGED" = true ]; then
               echo "--- restarting api ---"
               docker compose up -d --no-deps api
