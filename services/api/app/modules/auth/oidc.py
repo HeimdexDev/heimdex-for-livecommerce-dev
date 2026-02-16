@@ -132,6 +132,29 @@ def validate_auth0_token(token: str) -> Auth0TokenPayload:
     )
 
 
+def fetch_userinfo(token: str) -> dict[str, Any]:
+    """Fetch user profile from Auth0 /userinfo endpoint.
+
+    Auth0 access tokens do NOT include email/email_verified by default.
+    This endpoint returns the user's profile using the access token,
+    providing the email and verification status needed for auto-linking.
+    """
+    settings = get_settings()
+    userinfo_url = f"https://{settings.auth0_domain}/userinfo"
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(
+                userinfo_url,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        logger.warning("userinfo_fetch_failed", error=str(e))
+        return {}
+
+
 def clear_jwks_cache() -> None:
     global _jwks_cache
     _jwks_cache = None

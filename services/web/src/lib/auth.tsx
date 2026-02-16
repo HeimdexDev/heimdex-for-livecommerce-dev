@@ -219,16 +219,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const redirectUri =
     typeof window !== "undefined" ? `${window.location.origin}/auth/callback` : "";
 
+  const authParams = {
+    redirect_uri: redirectUri,
+    audience: AUTH0_AUDIENCE,
+    scope: "openid profile email",
+    ...(AUTH0_ORGANIZATION ? { organization: AUTH0_ORGANIZATION } : {}),
+  };
+
   return (
     <Auth0Provider
       domain={AUTH0_DOMAIN}
       clientId={AUTH0_CLIENT_ID}
-      authorizationParams={{
-        redirect_uri: redirectUri,
-        audience: AUTH0_AUDIENCE,
-        scope: "openid profile email",
-        ...(AUTH0_ORGANIZATION ? { organization: AUTH0_ORGANIZATION } : {}),
-      }}
+      authorizationParams={authParams}
       cacheLocation="memory" // More secure than localStorage
       useRefreshTokens={true}
       useRefreshTokensFallback={true}

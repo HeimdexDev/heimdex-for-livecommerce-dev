@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db.base import get_db_session
 from app.logging_config import get_logger
-from app.modules.auth.oidc import validate_auth0_token, Auth0TokenPayload
+from app.modules.auth.oidc import validate_auth0_token, fetch_userinfo, Auth0TokenPayload
 from app.modules.auth.schemas import TokenPayload
 from app.modules.tenancy import OrgContext, get_current_org
 from app.modules.users.models import User
@@ -75,6 +75,7 @@ async def get_current_user(
     db: AsyncSession = Depends(get_db_session),
 ) -> User:
     if not credentials:
+        logger.warning("auth_no_credentials", org_slug=org_ctx.org_slug)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authorization header missing",
@@ -82,6 +83,7 @@ async def get_current_user(
     
     settings = get_settings()
     token = credentials.credentials
+    logger.info("auth_credentials_received", org_slug=org_ctx.org_slug, token_prefix=token[:20] if token else "empty")
     user_repo = UserRepository(db)
     
     if settings.auth0_enabled:
@@ -152,31 +154,35 @@ async def _validate_auth0_user(
     
     user = await user_repo.get_by_auth0_sub(auth0_payload.sub, org_ctx.org_id)
     
-    # Auto-link by email ONLY if email is verified
-    # This prevents account takeover via unverified email registration
-    if not user and auth0_payload.email:
+    if not user:
+        email = auth0_payload.email
         email_verified = auth0_payload.raw_claims.get("email_verified", False)
         
-        if not email_verified:
-            logger.warning(
-                "auth0_email_not_verified",
-                email=auth0_payload.email,
-                sub=auth0_payload.sub,
-            )
+        # Auth0 access tokens don't include email by default.
+        # Fall back to /userinfo endpoint to get email + verification status.
+        if not email:
+            logger.info("auth0_email_missing_from_token", sub=auth0_payload.sub)
+            userinfo = fetch_userinfo(token)
+            email = userinfo.get("email")
+            email_verified = userinfo.get("email_verified", False)
+        
+        if email and not email_verified:
+            logger.warning("auth0_email_not_verified", email=email, sub=auth0_payload.sub)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Email not verified. Please verify your email before accessing this organization.",
             )
         
-        user = await user_repo.get_by_email(auth0_payload.email, org_ctx.org_id)
-        if user:
-            await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
-            logger.info(
-                "linked_auth0_sub_to_user",
-                user_id=str(user.id),
-                sub=auth0_payload.sub,
-                email_verified=True,
-            )
+        if email:
+            user = await user_repo.get_by_email(email, org_ctx.org_id)
+            if user:
+                await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
+                logger.info(
+                    "linked_auth0_sub_to_user",
+                    user_id=str(user.id),
+                    sub=auth0_payload.sub,
+                    email=email,
+                )
     
     if not user:
         raise HTTPException(
