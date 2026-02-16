@@ -553,6 +553,8 @@ class SceneSearchClient:
         *,
         library_id: str | None = None,
         source_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
         sort: str = "latest",
         page_size: int = 20,
         after_key: dict[str, Any] | None = None,
@@ -571,6 +573,13 @@ class SceneSearchClient:
             filter_clauses.append({"term": {"library_id": library_id}})
         if source_type:
             filter_clauses.append({"term": {"source_type": source_type}})
+        if date_from or date_to:
+            date_range: dict[str, str] = {}
+            if date_from:
+                date_range["gte"] = date_from
+            if date_to:
+                date_range["lte"] = date_to
+            filter_clauses.append({"range": {"ingest_time": date_range}})
 
         # Composite aggregation on video_id
         composite_sources: list[dict[str, Any]] = [
@@ -727,6 +736,49 @@ class SceneSearchClient:
             "scenes": scenes,
             "total": int(total_count),
         }
+
+    async def get_videos_by_person(
+        self,
+        org_id: str,
+        person_cluster_id: str,
+    ) -> list[dict[str, Any]]:
+        """Get videos containing a specific person, aggregated from scenes."""
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"people_cluster_ids": person_cluster_id}},
+                    ],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "by_video": {
+                    "terms": {"field": "video_id", "size": 200},
+                    "aggs": {
+                        "video_title": {"terms": {"field": "video_title", "size": 1}},
+                        "scene_count": {"value_count": {"field": "scene_id"}},
+                    },
+                },
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        buckets = response["aggregations"]["by_video"]["buckets"]
+
+        return [
+            {
+                "video_id": bucket["key"],
+                "video_title": (
+                    bucket["video_title"]["buckets"][0]["key"]
+                    if bucket["video_title"]["buckets"]
+                    else None
+                ),
+                "scene_count": int(bucket["scene_count"]["value"]),
+            }
+            for bucket in buckets
+        ]
 
     async def get_video_stats(
         self,

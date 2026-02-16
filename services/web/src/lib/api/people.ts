@@ -1,4 +1,9 @@
-import { ApiError, PeopleListResponse, RenamePersonResponse } from "@/lib/types";
+import {
+  ApiError,
+  PeopleListResponse,
+  PersonVideosResponse,
+  RenamePersonResponse,
+} from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL;
 
@@ -76,5 +81,16 @@ export async function renamePerson(
     "PATCH",
     getToken,
     { label },
+  );
+}
+
+export async function getPersonVideos(
+  personClusterId: string,
+  getToken?: TokenGetter,
+): Promise<PersonVideosResponse> {
+  return apiRequest<PersonVideosResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/videos`,
+    "GET",
+    getToken,
   );
 }

@@ -60,12 +60,13 @@ class VideoService:
         *,
         library_id: str | None = None,
         source_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
         sort: str = "latest",
         page_size: int = 20,
         after_cursor: str | None = None,
     ) -> VideoListResponse:
         """List ingested videos for an org via OpenSearch aggregation."""
-        # Decode cursor
         after_key = None
         if after_cursor:
             try:
@@ -77,6 +78,8 @@ class VideoService:
             str(org_id),
             library_id=library_id,
             source_type=source_type,
+            date_from=date_from,
+            date_to=date_to,
             sort=sort,
             page_size=page_size,
             after_key=after_key,

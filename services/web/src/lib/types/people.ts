@@ -14,3 +14,15 @@ export interface RenamePersonResponse {
   person_cluster_id: string;
   label: string | null;
 }
+
+export interface PersonVideoItem {
+  video_id: string;
+  video_title: string | null;
+  scene_count: number;
+}
+
+export interface PersonVideosResponse {
+  person_cluster_id: string;
+  videos: PersonVideoItem[];
+  total: number;
+}

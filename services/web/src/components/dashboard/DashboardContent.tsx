@@ -4,7 +4,8 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { getVideos, getVideoStats } from "@/lib/api/videos";
-import type { VideoSummary, VideoStats } from "@/lib/types";
+import { searchScenes } from "@/lib/api/search";
+import type { VideoSummary, VideoStats, SceneResult } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -584,11 +585,36 @@ function VideoCard({ video }: { video: VideoSummary }) {
   const title = video.video_title || "제목 없음";
   return (
     <div className="group cursor-pointer">
-      {/* Thumbnail placeholder */}
       <div className="aspect-video w-full rounded-lg bg-gray-200" />
       <p className="mt-2 truncate text-sm font-medium text-gray-800 group-hover:text-indigo-600">
         {title}
       </p>
+    </div>
+  );
+}
+
+function SceneCard({ scene }: { scene: SceneResult }) {
+  const title = scene.video_title || "제목 없음";
+  const startSec = Math.round(scene.start_ms / 1000);
+  const min = Math.floor(startSec / 60);
+  const sec = startSec % 60;
+  const timestamp = `${min}:${String(sec).padStart(2, "0")}`;
+
+  return (
+    <div className="group cursor-pointer">
+      <div className="relative aspect-video w-full rounded-lg bg-gray-200">
+        <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
+          {timestamp}
+        </span>
+      </div>
+      <p className="mt-2 truncate text-sm font-medium text-gray-800 group-hover:text-indigo-600">
+        {title}
+      </p>
+      {scene.snippet && (
+        <p className="mt-0.5 line-clamp-2 text-xs text-gray-500">
+          {scene.snippet}
+        </p>
+      )}
     </div>
   );
 }
@@ -614,12 +640,24 @@ export default function DashboardContent() {
   const [dateEnd, setDateEnd] = useState<Date | null>(() => new Date());
   const [showCalendar, setShowCalendar] = useState(false);
 
+  const [searchResults, setSearchResults] = useState<SceneResult[] | null>(null);
+  const [activeQuery, setActiveQuery] = useState("");
+  const isSearchMode = searchResults !== null;
+
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
       const tokenGetter = () => getAccessToken();
       const [videosRes, statsRes] = await Promise.all([
-        getVideos({ sort: sortBy, page_size: 200 }, tokenGetter),
+        getVideos(
+          {
+            sort: sortBy,
+            page_size: 200,
+            date_from: dateStart ? formatDateKr(dateStart) : undefined,
+            date_to: dateEnd ? formatDateKr(dateEnd) : undefined,
+          },
+          tokenGetter,
+        ),
         getVideoStats(tokenGetter),
       ]);
       setVideos(videosRes.videos);
@@ -631,31 +669,65 @@ export default function DashboardContent() {
     } finally {
       setIsLoading(false);
     }
-  }, [getAccessToken, sortBy]);
+  }, [getAccessToken, sortBy, dateStart, dateEnd]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (!isSearchMode) {
+      fetchData();
+    }
+  }, [fetchData, isSearchMode]);
 
-  const totalPages = Math.max(1, Math.ceil(totalVideos / PAGE_SIZE));
+  const totalPages = isSearchMode
+    ? Math.max(1, Math.ceil((searchResults?.length ?? 0) / PAGE_SIZE))
+    : Math.max(1, Math.ceil(totalVideos / PAGE_SIZE));
+
   const paginatedVideos = useMemo(() => {
     const start = (currentPage - 1) * PAGE_SIZE;
     return videos.slice(start, start + PAGE_SIZE);
   }, [videos, currentPage]);
+
+  const paginatedScenes = useMemo(() => {
+    if (!searchResults) return [];
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return searchResults.slice(start, start + PAGE_SIZE);
+  }, [searchResults, currentPage]);
 
   useEffect(() => {
     setCurrentPage(1);
   }, [sortBy]);
 
   const handleSearch = useCallback(
-    (e: React.FormEvent) => {
+    async (e: React.FormEvent) => {
       e.preventDefault();
-      if (query.trim()) {
-        setCurrentPage(1);
+      const q = query.trim();
+      if (!q) return;
+
+      setIsLoading(true);
+      setCurrentPage(1);
+      try {
+        const tokenGetter = () => getAccessToken();
+        const res = await searchScenes(
+          { q, alpha: 0.5, filters: {} },
+          tokenGetter,
+        );
+        setSearchResults(res.results);
+        setActiveQuery(q);
+      } catch {
+        setSearchResults([]);
+        setActiveQuery(q);
+      } finally {
+        setIsLoading(false);
       }
     },
-    [query],
+    [query, getAccessToken],
   );
+
+  const handleClearSearch = useCallback(() => {
+    setSearchResults(null);
+    setActiveQuery("");
+    setQuery("");
+    setCurrentPage(1);
+  }, []);
 
   const handleDateSelect = useCallback((start: Date, end: Date) => {
     setDateStart(start);
@@ -664,9 +736,11 @@ export default function DashboardContent() {
     setCurrentPage(1);
   }, []);
 
-  const videoCount = totalVideos;
+  const videoCount = isSearchMode ? (searchResults?.length ?? 0) : totalVideos;
   const libraryCount = stats?.total_libraries ?? 0;
-  const hasResults = videos.length > 0;
+  const hasResults = isSearchMode
+    ? (searchResults?.length ?? 0) > 0
+    : videos.length > 0;
 
   const dateLabel = useMemo(() => {
     if (!dateStart || !dateEnd) return "";
@@ -711,25 +785,40 @@ export default function DashboardContent() {
       <div className="mt-4 rounded-xl bg-white p-6 shadow-sm">
         {/* Title + date range */}
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold text-gray-900">검색된 영상</h2>
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setShowCalendar((v) => !v)}
-              className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition-colors hover:border-gray-300"
-            >
-              <CalendarIcon />
-              <span>{dateLabel}</span>
-            </button>
-            {showCalendar && (
-              <DateRangeCalendar
-                startDate={dateStart}
-                endDate={dateEnd}
-                onSelect={handleDateSelect}
-                onClose={() => setShowCalendar(false)}
-              />
+          <div className="flex items-center gap-3">
+            <h2 className="text-lg font-bold text-gray-900">
+              {isSearchMode ? `"${activeQuery}" 검색 결과` : "검색된 영상"}
+            </h2>
+            {isSearchMode && (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                className="rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-200"
+              >
+                초기화
+              </button>
             )}
           </div>
+          {!isSearchMode && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowCalendar((v) => !v)}
+                className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition-colors hover:border-gray-300"
+              >
+                <CalendarIcon />
+                <span>{dateLabel}</span>
+              </button>
+              {showCalendar && (
+                <DateRangeCalendar
+                  startDate={dateStart}
+                  endDate={dateEnd}
+                  onSelect={handleDateSelect}
+                  onClose={() => setShowCalendar(false)}
+                />
+              )}
+            </div>
+          )}
         </div>
 
         {/* Info banner */}
@@ -746,24 +835,34 @@ export default function DashboardContent() {
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-1.5 text-sm text-gray-600">
               <VideoIcon />
-              <span>{videoCount} videos</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-sm text-gray-600">
-              <FolderIcon />
-              <span>{libraryCount} folders</span>
-            </div>
-            <div className="flex items-center gap-1.5 text-sm text-gray-600">
-              <ClockIcon />
               <span>
-                {stats?.latest_ingest_time
-                  ? new Date(stats.latest_ingest_time).toLocaleDateString(
-                      "ko-KR",
-                    )
-                  : "N/A"}
+                {isSearchMode
+                  ? `${videoCount} scenes`
+                  : `${videoCount} videos`}
               </span>
             </div>
+            {!isSearchMode && (
+              <>
+                <div className="flex items-center gap-1.5 text-sm text-gray-600">
+                  <FolderIcon />
+                  <span>{libraryCount} folders</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-sm text-gray-600">
+                  <ClockIcon />
+                  <span>
+                    {stats?.latest_ingest_time
+                      ? new Date(
+                          stats.latest_ingest_time,
+                        ).toLocaleDateString("ko-KR")
+                      : "N/A"}
+                  </span>
+                </div>
+              </>
+            )}
           </div>
-          <SortDropdown value={sortBy} onChange={setSortBy} />
+          {!isSearchMode && (
+            <SortDropdown value={sortBy} onChange={setSortBy} />
+          )}
         </div>
 
         {/* Loading */}
@@ -778,28 +877,46 @@ export default function DashboardContent() {
           <div className="flex flex-col items-center py-20">
             <EmptyStateIcon />
             <h3 className="mt-6 text-lg font-bold text-gray-900">
-              검색할 영상이 없습니다.
+              {isSearchMode
+                ? "검색 결과가 없습니다."
+                : "검색할 영상이 없습니다."}
             </h3>
             <p className="mt-2 text-sm text-gray-500">
-              파일 동기화부터 진행해주세요.
+              {isSearchMode
+                ? "다른 검색어로 시도해주세요."
+                : "파일 동기화부터 진행해주세요."}
             </p>
-            <Link
-              href="/sync"
-              className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
-            >
-              파일 동기화로 이동
-              <ChevronRightIcon className="h-4 w-4" />
-            </Link>
+            {isSearchMode ? (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
+              >
+                전체 영상으로 돌아가기
+              </button>
+            ) : (
+              <Link
+                href="/sync"
+                className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
+              >
+                파일 동기화로 이동
+                <ChevronRightIcon className="h-4 w-4" />
+              </Link>
+            )}
           </div>
         )}
 
-        {/* Video grid */}
+        {/* Results grid */}
         {!isLoading && hasResults && (
           <>
             <div className="mt-6 grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4">
-              {paginatedVideos.map((video) => (
-                <VideoCard key={video.video_id} video={video} />
-              ))}
+              {isSearchMode
+                ? paginatedScenes.map((scene) => (
+                    <SceneCard key={scene.scene_id} scene={scene} />
+                  ))
+                : paginatedVideos.map((video) => (
+                    <VideoCard key={video.video_id} video={video} />
+                  ))}
             </div>
 
             <Pagination

@@ -1,5 +1,6 @@
 const AGENT_BASE = "http://127.0.0.1:8787";
 const HEALTH_TIMEOUT_MS = 500;
+const STATUS_TIMEOUT_MS = 2000;
 
 export interface AgentHealth {
   status: string;
@@ -8,11 +9,55 @@ export interface AgentHealth {
   device_id: string;
 }
 
+export type AgentJobStatus = "pending" | "running" | "completed" | "failed";
+export type AgentJobType = "scan" | "index" | "upload_scenes" | "generate_thumbnails";
+
+export interface AgentJob {
+  id: string;
+  type: AgentJobType;
+  status: AgentJobStatus;
+  source_id?: string;
+  file_id?: string;
+  progress: number;
+  error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type AgentState = "idle" | "indexing" | "paused" | "error";
+
+export interface AgentStatus {
+  state: AgentState;
+  last_error?: string;
+  sources_count: number;
+  files_count: number;
+  jobs_running: number;
+  active_job?: AgentJob;
+}
+
 export async function checkAgentHealth(): Promise<AgentHealth | null> {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
     const res = await fetch(`${AGENT_BASE}/health`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetches agent status including active job progress.
+ * Uses /local/status which requires LoopbackGuard only (no auth token).
+ * Returns null if agent is unreachable or CORS blocks the request.
+ */
+export async function getAgentStatus(): Promise<AgentStatus | null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+    const res = await fetch(`${AGENT_BASE}/local/status`, { signal: controller.signal });
     clearTimeout(timeout);
     if (!res.ok) return null;
     return res.json();

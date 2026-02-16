@@ -35,6 +35,8 @@ async def list_videos(
     video_service: VideoService = Depends(get_video_service),
     library_id: str | None = Query(None, description="Filter by library UUID"),
     source_type: Literal["gdrive", "removable_disk", "local"] | None = Query(None, description="Filter by source type"),
+    date_from: str | None = Query(None, description="Filter scenes ingested on or after this ISO-8601 date"),
+    date_to: str | None = Query(None, description="Filter scenes ingested on or before this ISO-8601 date"),
     sort: Literal["latest", "oldest"] = Query("latest", description="Sort order by ingest time"),
     page_size: int = Query(20, ge=1, le=100, description="Page size"),
     after: str | None = Query(None, description="Cursor for next page"),
@@ -46,6 +48,8 @@ async def list_videos(
         org_id=str(org_ctx.org_id),
         library_id=library_id,
         source_type=source_type,
+        date_from=date_from,
+        date_to=date_to,
         sort=sort,
     )
 
@@ -53,6 +57,8 @@ async def list_videos(
         org_ctx.org_id,
         library_id=library_id,
         source_type=source_type,
+        date_from=date_from,
+        date_to=date_to,
         sort=sort,
         page_size=page_size,
         after_cursor=after,

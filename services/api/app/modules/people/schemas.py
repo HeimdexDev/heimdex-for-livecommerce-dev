@@ -32,3 +32,15 @@ class RenamePersonRequest(BaseModel):
 class RenamePersonResponse(BaseModel):
     person_cluster_id: str
     label: str | None = None
+
+
+class PersonVideoItem(BaseModel):
+    video_id: str
+    video_title: str | None = None
+    scene_count: int = 0
+
+
+class PersonVideosResponse(BaseModel):
+    person_cluster_id: str
+    videos: list[PersonVideoItem]
+    total: int

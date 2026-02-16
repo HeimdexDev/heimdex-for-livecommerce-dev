@@ -3,7 +3,9 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { usePeople } from "../hooks/usePeople";
-import type { PersonSummary } from "@/lib/types";
+import { useAuth } from "@/lib/auth";
+import { getPersonVideos } from "@/lib/api/people";
+import type { PersonSummary, PersonVideoItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function PersonIcon({ className }: { className?: string }) {
@@ -100,13 +102,17 @@ function SelectedPersonCard({
   person,
   onRename,
   isRenaming,
+  getToken,
 }: {
   person: PersonSummary;
   onRename: (id: string, label: string | null) => Promise<void>;
   isRenaming: boolean;
+  getToken: () => Promise<string | null>;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(person.label ?? "");
+  const [videoFiles, setVideoFiles] = useState<PersonVideoItem[]>([]);
+  const [loadingVideos, setLoadingVideos] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -115,6 +121,24 @@ function SelectedPersonCard({
       inputRef.current.select();
     }
   }, [isEditing]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingVideos(true);
+    getPersonVideos(person.person_cluster_id, getToken)
+      .then((res) => {
+        if (!cancelled) setVideoFiles(res.videos);
+      })
+      .catch(() => {
+        if (!cancelled) setVideoFiles([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingVideos(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [person.person_cluster_id, getToken]);
 
   const handleSave = async () => {
     const trimmed = editValue.trim();
@@ -135,7 +159,6 @@ function SelectedPersonCard({
 
   const displayName = person.label || "이름 추가";
   const hasLabel = !!person.label;
-  const mockFiles = Array.from({ length: person.face_count }, (_, i) => `Title_${i + 1}.mp4`);
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4">
@@ -172,14 +195,24 @@ function SelectedPersonCard({
       </div>
 
       <div className="space-y-1">
-        {mockFiles.slice(0, 7).map((file, i) => (
-          <div key={i} className="flex items-center justify-between py-1">
-            <span className="text-sm text-gray-700">{file}</span>
-            <div className="flex h-5 w-5 items-center justify-center rounded bg-indigo-500">
-              <CheckIcon />
-            </div>
+        {loadingVideos ? (
+          <div className="flex items-center justify-center py-4">
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-500" />
           </div>
-        ))}
+        ) : videoFiles.length === 0 ? (
+          <p className="py-2 text-xs text-gray-400">연관된 영상이 없습니다.</p>
+        ) : (
+          videoFiles.slice(0, 7).map((video) => (
+            <div key={video.video_id} className="flex items-center justify-between py-1">
+              <span className="truncate text-sm text-gray-700">
+                {video.video_title || video.video_id}
+              </span>
+              <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded bg-indigo-500">
+                <CheckIcon />
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );
@@ -187,6 +220,7 @@ function SelectedPersonCard({
 
 export function PeopleSettings() {
   const { people, isLoading, error, renamePerson, isRenaming } = usePeople();
+  const { getAccessToken } = useAuth();
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -256,6 +290,7 @@ export function PeopleSettings() {
                       person={person}
                       onRename={renamePerson}
                       isRenaming={isRenaming}
+                      getToken={getAccessToken}
                     />
                   ))}
                 </div>

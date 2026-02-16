@@ -73,6 +73,8 @@ export interface VideoStats {
 export interface VideoFilters {
   library_id?: string;
   source_type?: "gdrive" | "removable_disk" | "local";
+  date_from?: string;
+  date_to?: string;
   sort?: "latest" | "oldest";
   page_size?: number;
   after?: string;

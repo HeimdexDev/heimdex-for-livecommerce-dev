@@ -2,11 +2,12 @@
 
 import { cn } from "@/lib/utils";
 
-type UploadState = "uploading" | "paused" | "complete" | "hidden";
+type UploadState = "uploading" | "paused" | "complete" | "error" | "hidden";
 
 interface UploadProgressProps {
   state: UploadState;
   progress: number;
+  statusText?: string;
   onStop: () => void;
   onPause: () => void;
   onResume: () => void;
@@ -55,6 +56,7 @@ function CloseIcon() {
 export function UploadProgress({
   state,
   progress,
+  statusText,
   onStop,
   onPause,
   onResume,
@@ -85,8 +87,27 @@ export function UploadProgress({
     );
   }
 
+  if (state === "error") {
+    return (
+      <div className="fixed right-8 top-20 z-50 w-[280px] rounded-xl bg-white p-5 shadow-lg ring-1 ring-red-200">
+        <div className="flex items-start justify-between">
+          <p className="text-sm font-medium text-red-600">
+            {statusText || "에이전트 연결 실패"}
+          </p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 transition-colors hover:text-gray-600"
+          >
+            <CloseIcon />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const isUploading = state === "uploading";
-  const statusText = isUploading ? "파일 업로드 중..." : "일시정지됨";
+  const label = statusText ?? (isUploading ? "파일 분석 중..." : "일시정지됨");
 
   return (
     <div className="fixed right-8 top-20 z-50 w-[280px] rounded-xl bg-white p-5 shadow-lg">
@@ -115,8 +136,7 @@ export function UploadProgress({
         </div>
       </div>
 
-      <p className="mt-1 text-sm font-medium text-gray-900">{statusText}</p>
-      <p className="text-sm text-gray-500">12h 24m</p>
+      <p className="mt-1 text-sm font-medium text-gray-900">{label}</p>
 
       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
         <div

@@ -13,6 +13,8 @@ from app.modules.people.repository import PeopleClusterLabelRepository
 from app.modules.people.schemas import (
     PeopleListResponse,
     PersonResponse,
+    PersonVideoItem,
+    PersonVideosResponse,
     RenamePersonRequest,
     RenamePersonResponse,
 )
@@ -112,4 +114,46 @@ async def rename_person(
     return RenamePersonResponse(
         person_cluster_id=updated.person_cluster_id,
         label=updated.label,
+    )
+
+
+@router.get("/{person_cluster_id}/videos", response_model=PersonVideosResponse)
+async def person_videos(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    logger.debug(
+        "person_videos_request",
+        user_id=str(user.id),
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+    )
+
+    result = await scene_opensearch.get_videos_by_person(
+        str(org_ctx.org_id),
+        person_cluster_id,
+    )
+
+    videos = [
+        PersonVideoItem(
+            video_id=v["video_id"],
+            video_title=v.get("video_title"),
+            scene_count=v.get("scene_count", 0),
+        )
+        for v in result
+    ]
+
+    return PersonVideosResponse(
+        person_cluster_id=person_cluster_id,
+        videos=videos,
+        total=len(videos),
     )
