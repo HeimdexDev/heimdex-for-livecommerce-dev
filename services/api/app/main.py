@@ -5,6 +5,8 @@ import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import get_settings
 from app.logging_config import setup_logging, get_logger
@@ -43,6 +45,14 @@ async def lifespan(app: FastAPI):
     logger.info("application_starting", environment=settings.environment)
     settings.validate_production_guards()
     
+    from app.db.base import get_async_engine
+
+    startup_engine = get_async_engine()
+    if settings.auth0_enabled:
+        await _verify_org_auth0_bindings(startup_engine)
+    await startup_check_agent_intents_schema(startup_engine, settings.agent_intents_enabled)
+    await startup_engine.dispose()
+
     opensearch_client = OpenSearchClient()
     app.state.opensearch_client = opensearch_client
     
@@ -51,12 +61,6 @@ async def lifespan(app: FastAPI):
     
     await _startup_search_checks(opensearch_client)
     await _startup_scene_search_checks(scene_opensearch_client)
-
-    from app.db.base import get_async_engine
-
-    agent_intents_engine = get_async_engine()
-    await startup_check_agent_intents_schema(agent_intents_engine, settings.agent_intents_enabled)
-    await agent_intents_engine.dispose()
 
     if settings.embedding_use_mock:
         logger.warning(
@@ -154,6 +158,35 @@ async def _startup_scene_search_checks(client):
             error=str(e),
             message="Scene search infrastructure check failed. Scene search may not work.",
         )
+
+
+async def _verify_org_auth0_bindings(engine) -> None:
+    """Fail-closed check: every org must have auth0_org_id when Auth0 is enabled.
+
+    Prevents the app from serving requests to orgs that cannot be
+    validated against Auth0 Organizations tokens.
+    """
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        result = await session.execute(
+            text("SELECT slug FROM orgs WHERE auth0_org_id IS NULL")
+        )
+        unbound = [row[0] for row in result.fetchall()]
+
+    if not unbound:
+        logger.info("org_auth0_bindings_verified")
+        return
+
+    msg = (
+        f"\n{'='*60}\n"
+        f"FATAL: AUTH0_ENABLED=true but {len(unbound)} org(s) have no auth0_org_id:\n\n"
+        + "\n".join(f"  - {slug}" for slug in unbound)
+        + "\n\nEvery org must be bound to an Auth0 Organization.\n"
+        f"Run: UPDATE orgs SET auth0_org_id = '<org_id>' WHERE slug = '<slug>';\n"
+        f"{'='*60}"
+    )
+    logger.critical("org_auth0_binding_missing", unbound_orgs=unbound)
+    raise SystemExit(msg)
 
 
 app = FastAPI(

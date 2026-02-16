@@ -125,7 +125,11 @@ async def seed_database():
         
         logger.info("seeding_database")
         
-        org = Org(slug="devorg", name="Development Organization")
+        org = Org(
+            slug="devorg",
+            name="Development Organization",
+            auth0_org_id="org_V0Y81197qiMgjFFX",
+        )
         session.add(org)
         await session.flush()
         logger.info("created_org", org_id=str(org.id), slug=org.slug)
