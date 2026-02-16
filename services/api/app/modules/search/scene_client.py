@@ -706,6 +706,8 @@ class SceneSearchClient:
                 "transcript_char_count", "keyword_tags", "product_tags",
                 "product_entities", "speech_segment_count",
                 "people_cluster_ids", "ingest_time", "keyframe_timestamp_ms",
+                "video_title", "source_type", "source_path", "capture_time",
+                "library_id",
             ],
         }
 
@@ -732,9 +734,22 @@ class SceneSearchClient:
         total = response["hits"]["total"]
         total_count = total["value"] if isinstance(total, dict) else total
 
+        video_meta: dict[str, Any] = {}
+        if response["hits"]["hits"]:
+            first_src = response["hits"]["hits"][0]["_source"]
+            video_meta = {
+                "video_title": first_src.get("video_title"),
+                "source_type": first_src.get("source_type"),
+                "source_path": first_src.get("source_path"),
+                "capture_time": first_src.get("capture_time"),
+                "library_id": first_src.get("library_id"),
+                "earliest_ingest_time": first_src.get("ingest_time"),
+            }
+
         return {
             "scenes": scenes,
             "total": int(total_count),
+            **video_meta,
         }
 
     async def get_videos_by_person(

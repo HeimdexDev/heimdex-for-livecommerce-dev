@@ -39,7 +39,7 @@ export type {
   VideoScenesResponse,
   VideoStats,
   VideoFilters,
-  PersonSummary,
+  PersonResponse,
   PeopleListResponse,
   RenamePersonResponse,
 } from "@/lib/types";

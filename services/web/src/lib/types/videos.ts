@@ -56,6 +56,12 @@ export interface VideoScene {
 
 export interface VideoScenesResponse {
   video_id: string;
+  video_title: string | null;
+  source_type: string | null;
+  source_path: string | null;
+  library_name: string | null;
+  capture_time: string | null;
+  earliest_ingest_time: string | null;
   scenes: VideoScene[];
   total: number;
 }

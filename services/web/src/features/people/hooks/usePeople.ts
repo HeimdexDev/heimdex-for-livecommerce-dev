@@ -3,11 +3,11 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/lib/auth";
 import { getPeople, renamePerson as renamePersionApi } from "@/lib/api/people";
-import type { PersonSummary } from "@/lib/types";
+import type { PersonResponse } from "@/lib/types";
 import { ApiError } from "@/lib/types";
 
 export interface UsePeopleReturn {
-  people: PersonSummary[];
+  people: PersonResponse[];
   isLoading: boolean;
   error: string | null;
   renamePerson: (personClusterId: string, label: string | null) => Promise<void>;
@@ -18,7 +18,7 @@ export interface UsePeopleReturn {
 export function usePeople(): UsePeopleReturn {
   const { getAccessToken } = useAuth();
 
-  const [people, setPeople] = useState<PersonSummary[]>([]);
+  const [people, setPeople] = useState<PersonResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);

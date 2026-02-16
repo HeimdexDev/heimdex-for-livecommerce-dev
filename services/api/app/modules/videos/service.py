@@ -170,8 +170,22 @@ class VideoService:
 
         scenes = [VideoScene(**s) for s in result["scenes"]]
 
+        library_name: str | None = None
+        lib_id = result.get("library_id")
+        if lib_id:
+            library_repo = LibraryRepository(self.session)
+            libraries = await library_repo.list_by_org(org_id)
+            library_map = {str(lib.id): lib.name for lib in libraries}
+            library_name = library_map.get(lib_id)
+
         return VideoScenesResponse(
             video_id=video_id,
+            video_title=result.get("video_title"),
+            source_type=result.get("source_type"),
+            source_path=result.get("source_path"),
+            library_name=library_name,
+            capture_time=result.get("capture_time"),
+            earliest_ingest_time=result.get("earliest_ingest_time"),
             scenes=scenes,
             total=result["total"],
         )

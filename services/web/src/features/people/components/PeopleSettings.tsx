@@ -6,7 +6,7 @@ import { usePeople } from "../hooks/usePeople";
 import { useAuth } from "@/lib/auth";
 import { getPersonVideos } from "@/lib/api/people";
 import { getAgentThumbnailUrl } from "@/lib/agent";
-import type { PersonSummary, PersonVideoItem } from "@/lib/types";
+import type { PersonResponse, PersonVideoItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function PersonIcon({ className }: { className?: string }) {
@@ -72,7 +72,7 @@ function PersonAvatar({
   isSelected,
   onToggle,
 }: {
-  person: PersonSummary;
+  person: PersonResponse;
   isSelected: boolean;
   onToggle: (id: string) => void;
 }) {
@@ -120,7 +120,7 @@ function SelectedPersonCard({
   isRenaming,
   getToken,
 }: {
-  person: PersonSummary;
+  person: PersonResponse;
   onRename: (id: string, label: string | null) => Promise<void>;
   isRenaming: boolean;
   getToken: () => Promise<string | null>;

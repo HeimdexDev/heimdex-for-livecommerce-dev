@@ -72,6 +72,12 @@ class VideoScene(BaseModel):
 
 class VideoScenesResponse(BaseModel):
     video_id: str
+    video_title: str | None = None
+    source_type: str | None = None
+    source_path: str | None = None
+    library_name: str | None = None
+    capture_time: str | None = None
+    earliest_ingest_time: str | None = None
     scenes: list[VideoScene]
     total: int
 

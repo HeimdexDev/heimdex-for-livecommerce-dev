@@ -585,12 +585,12 @@ function Pagination({
 function VideoCard({ video }: { video: VideoSummary }) {
   const title = video.video_title || "제목 없음";
   return (
-    <div className="group cursor-pointer">
+    <Link href={`/videos/${video.video_id}`} className="group cursor-pointer block">
       <div className="aspect-video w-full rounded-lg bg-gray-200" />
       <p className="mt-2 truncate text-sm font-medium text-gray-800 group-hover:text-indigo-600">
         {title}
       </p>
-    </div>
+    </Link>
   );
 }
 
@@ -602,7 +602,7 @@ function SceneCard({ scene }: { scene: SceneResult }) {
   const timestamp = `${min}:${String(sec).padStart(2, "0")}`;
 
   return (
-    <div className="group cursor-pointer">
+    <Link href={`/videos/${scene.video_id}`} className="group cursor-pointer block">
       <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-gray-200">
         <img
           src={getAgentThumbnailUrl(scene.video_id, scene.scene_id)}
@@ -624,7 +624,7 @@ function SceneCard({ scene }: { scene: SceneResult }) {
           {scene.snippet}
         </p>
       )}
-    </div>
+    </Link>
   );
 }
 
@@ -638,6 +638,8 @@ export default function DashboardContent() {
   const [totalVideos, setTotalVideos] = useState(0);
   const [stats, setStats] = useState<VideoStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortOption>("latest");
   const [currentPage, setCurrentPage] = useState(1);
@@ -655,13 +657,14 @@ export default function DashboardContent() {
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
+    setNextCursor(null);
     try {
       const tokenGetter = () => getAccessToken();
       const [videosRes, statsRes] = await Promise.all([
         getVideos(
           {
             sort: sortBy,
-            page_size: 200,
+            page_size: 20,
             date_from: dateStart ? formatDateKr(dateStart) : undefined,
             date_to: dateEnd ? formatDateKr(dateEnd) : undefined,
           },
@@ -671,14 +674,41 @@ export default function DashboardContent() {
       ]);
       setVideos(videosRes.videos);
       setTotalVideos(videosRes.total);
+      setNextCursor(videosRes.next_cursor);
       setStats(statsRes);
     } catch {
       setVideos([]);
       setTotalVideos(0);
+      setNextCursor(null);
     } finally {
       setIsLoading(false);
     }
   }, [getAccessToken, sortBy, dateStart, dateEnd]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || isLoadingMore) return;
+    setIsLoadingMore(true);
+    try {
+      const tokenGetter = () => getAccessToken();
+      const videosRes = await getVideos(
+        {
+          sort: sortBy,
+          page_size: 20,
+          date_from: dateStart ? formatDateKr(dateStart) : undefined,
+          date_to: dateEnd ? formatDateKr(dateEnd) : undefined,
+          after: nextCursor,
+        },
+        tokenGetter,
+      );
+      setVideos((prev) => [...prev, ...videosRes.videos]);
+      setTotalVideos(videosRes.total);
+      setNextCursor(videosRes.next_cursor);
+    } catch {
+      // Keep existing videos, just stop loading more
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [getAccessToken, nextCursor, isLoadingMore, sortBy, dateStart, dateEnd]);
 
   useEffect(() => {
     if (!isSearchMode) {
@@ -686,14 +716,9 @@ export default function DashboardContent() {
     }
   }, [fetchData, isSearchMode]);
 
-  const totalPages = isSearchMode
-    ? Math.max(1, Math.ceil((searchResults?.length ?? 0) / PAGE_SIZE))
-    : Math.max(1, Math.ceil(totalVideos / PAGE_SIZE));
+  const searchTotalPages = Math.max(1, Math.ceil((searchResults?.length ?? 0) / PAGE_SIZE));
 
-  const paginatedVideos = useMemo(() => {
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return videos.slice(start, start + PAGE_SIZE);
-  }, [videos, currentPage]);
+  const totalPages = isSearchMode ? searchTotalPages : 1;
 
   const paginatedScenes = useMemo(() => {
     if (!searchResults) return [];
@@ -831,11 +856,15 @@ export default function DashboardContent() {
         </div>
 
         {/* Info banner */}
-        {hasResults && (
+        {hasResults && !isSearchMode && (
           <p className="mt-2 text-sm text-gray-500">
-            <span className="cursor-pointer text-indigo-500 hover:text-indigo-600">
-              선택된 인물이 나오지 않는 구간이 포함된 영상만 표시 중입니다.
-            </span>
+            <Link
+              href="/settings/people"
+              className="text-indigo-500 underline-offset-2 hover:text-indigo-600 hover:underline"
+            >
+              인물 라벨 관리
+            </Link>
+            에서 특정 인물을 선택하여 검색 결과를 필터링할 수 있습니다.
           </p>
         )}
 
@@ -923,16 +952,41 @@ export default function DashboardContent() {
                 ? paginatedScenes.map((scene) => (
                     <SceneCard key={scene.scene_id} scene={scene} />
                   ))
-                : paginatedVideos.map((video) => (
+                : videos.map((video) => (
                     <VideoCard key={video.video_id} video={video} />
                   ))}
             </div>
 
-            <Pagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              onPageChange={setCurrentPage}
-            />
+            {isSearchMode ? (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+              />
+            ) : nextCursor ? (
+              <div className="mt-8 flex justify-center">
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  disabled={isLoadingMore}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-6 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isLoadingMore ? (
+                    <>
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-500" />
+                      불러오는 중...
+                    </>
+                  ) : (
+                    <>
+                      더 보기
+                      <span className="text-xs text-gray-400">
+                        ({videos.length} / {totalVideos})
+                      </span>
+                    </>
+                  )}
+                </button>
+              </div>
+            ) : null}
           </>
         )}
       </div>

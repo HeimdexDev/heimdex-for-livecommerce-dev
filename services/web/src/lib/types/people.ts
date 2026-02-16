@@ -1,4 +1,4 @@
-export interface PersonSummary {
+export interface PersonResponse {
   person_cluster_id: string;
   label: string | null;
   face_count: number;
@@ -8,7 +8,7 @@ export interface PersonSummary {
 }
 
 export interface PeopleListResponse {
-  people: PersonSummary[];
+  people: PersonResponse[];
   total: number;
 }
 
