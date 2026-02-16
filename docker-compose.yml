@@ -3,9 +3,9 @@ services:
     image: postgres:16-alpine
     container_name: heimdex-postgres
     environment:
-      POSTGRES_USER: heimdex
-      POSTGRES_PASSWORD: heimdex_dev_password
-      POSTGRES_DB: heimdex
+      POSTGRES_USER: ${POSTGRES_USER:-heimdex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heimdex_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-heimdex}
     ports:
       - "5432:5432"
     volumes:
@@ -49,8 +49,8 @@ services:
     image: minio/minio:latest
     container_name: heimdex-minio
     environment:
-      MINIO_ROOT_USER: heimdex
-      MINIO_ROOT_PASSWORD: heimdex_dev_password
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-heimdex}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-heimdex_dev_password}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -73,12 +73,17 @@ services:
       - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql://heimdex:heimdex_dev_password@postgres:5432/heimdex}
       - OPENSEARCH_URL=http://opensearch:9200
       - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=heimdex
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*.app.heimdex.local,localhost}
+      - AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE:-true}
+      - AUTH_COOKIE_SAMESITE=${AUTH_COOKIE_SAMESITE:-lax}
       # Embedding configuration - set EMBEDDING_USE_MOCK=false for real semantic search
       - EMBEDDING_MODEL=intfloat/multilingual-e5-large
       - EMBEDDING_DIMENSION=1024
@@ -90,8 +95,25 @@ services:
       - AUTH0_AUDIENCE=${AUTH0_AUDIENCE:-https://api.heimdex.io}
       - AUTH0_ORG_CLAIM=${AUTH0_ORG_CLAIM:-https://heimdex.io/org_id}
       - AUTH0_ALGORITHMS=${AUTH0_ALGORITHMS:-RS256}
-      # Agent intents feature flag
-      - AGENT_INTENTS_ENABLED=true
+      # Agent configuration
+      - AGENT_INGEST_ENABLED=${AGENT_INGEST_ENABLED:-true}
+      - AGENT_API_KEY=${AGENT_API_KEY:-dev-agent-key-change-in-production}
+      - AGENT_API_KEY_MODE=${AGENT_API_KEY_MODE:-global}
+      - AGENT_INGEST_MAX_SCENES=${AGENT_INGEST_MAX_SCENES:-500}
+      - AGENT_INGEST_MAX_TRANSCRIPT_CHARS=${AGENT_INGEST_MAX_TRANSCRIPT_CHARS:-50000}
+      - DEVICE_SECRET_PEPPER=${DEVICE_SECRET_PEPPER:-dev-device-pepper-change-in-production}
+      - PAIRING_CODE_TTL_MINUTES=${PAIRING_CODE_TTL_MINUTES:-10}
+      - AGENT_INTENTS_ENABLED=${AGENT_INTENTS_ENABLED:-true}
+      - AGENT_INTENT_TTL_MINUTES=${AGENT_INTENT_TTL_MINUTES:-10}
+      - AGENT_INTENT_MAX_PER_ORG=${AGENT_INTENT_MAX_PER_ORG:-10}
+      - AGENT_INTENT_EXCHANGE_MAX_ATTEMPTS=${AGENT_INTENT_EXCHANGE_MAX_ATTEMPTS:-5}
+      # Ingest safety
+      - INGEST_REQUIRE_TIMESTAMP=${INGEST_REQUIRE_TIMESTAMP:-false}
+      - INGEST_TIMESTAMP_SKEW_SECONDS=${INGEST_TIMESTAMP_SKEW_SECONDS:-300}
+      - INGEST_REQUIRE_IDEMPOTENCY=${INGEST_REQUIRE_IDEMPOTENCY:-false}
+      - INGEST_IDEMPOTENCY_TTL_SECONDS=${INGEST_IDEMPOTENCY_TTL_SECONDS:-600}
+      # Dev features
+      - ENABLE_DEV_REFRESH=${ENABLE_DEV_REFRESH:-true}
       # HuggingFace model cache directory (persists downloaded models)
       - HF_HOME=/root/.cache/huggingface
     ports:
