@@ -1,0 +1,126 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  APP_DIR: /opt/heimdex/dev-heimdex-for-livecommerce
+  CONTRACTS_DIR: /opt/heimdex/heimdex-media-contracts
+
+jobs:
+  deploy:
+    name: Deploy to staging EC2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ec2-user
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script_stop: true
+          command_timeout: 12m
+          script: |
+            set -euo pipefail
+
+            APP_DIR=/opt/heimdex/dev-heimdex-for-livecommerce
+            CONTRACTS_DIR=/opt/heimdex/heimdex-media-contracts
+            LOG=/opt/heimdex/logs/deploy-$(date +%Y%m%d-%H%M%S).log
+
+            exec > >(tee -a "$LOG") 2>&1
+            echo "=== Deploy started at $(date) ==="
+
+            # Pull latest code
+            echo "--- git pull (monorepo) ---"
+            cd "$APP_DIR" && git pull origin main
+
+            echo "--- git pull (contracts) ---"
+            cd "$CONTRACTS_DIR" && git pull origin main
+
+            cd "$APP_DIR"
+
+            # Detect what changed
+            PREV=$(git rev-parse HEAD~1 2>/dev/null || echo "")
+            CURR=$(git rev-parse HEAD)
+            API_CHANGED=false
+            WEB_CHANGED=false
+
+            if [ -n "$PREV" ]; then
+              if git diff --name-only "$PREV" "$CURR" | grep -q '^services/api/'; then
+                API_CHANGED=true
+              fi
+              if git diff --name-only "$PREV" "$CURR" | grep -q '^services/web/'; then
+                WEB_CHANGED=true
+              fi
+              # If docker-compose.yml or root config changed, rebuild both
+              if git diff --name-only "$PREV" "$CURR" | grep -qE '^(docker-compose\.yml|\.env\.example)'; then
+                API_CHANGED=true
+                WEB_CHANGED=true
+              fi
+            else
+              API_CHANGED=true
+              WEB_CHANGED=true
+            fi
+
+            echo "API changed: $API_CHANGED | Web changed: $WEB_CHANGED"
+
+            # Build changed services
+            if [ "$API_CHANGED" = true ]; then
+              echo "--- building api ---"
+              docker compose build api
+            fi
+
+            if [ "$WEB_CHANGED" = true ]; then
+              echo "--- building web ---"
+              docker compose build web
+            fi
+
+            # Run migrations (always, it's idempotent)
+            if [ "$API_CHANGED" = true ]; then
+              echo "--- running migrations ---"
+              docker compose exec -T api alembic upgrade head
+            fi
+
+            # Restart changed services
+            if [ "$API_CHANGED" = true ]; then
+              echo "--- restarting api ---"
+              docker compose up -d --no-deps api
+              sleep 10
+            fi
+
+            if [ "$WEB_CHANGED" = true ]; then
+              echo "--- restarting web ---"
+              docker compose up -d --no-deps web
+              sleep 5
+            fi
+
+            # Health checks
+            echo "--- health checks ---"
+            FAIL=0
+
+            API_STATUS=$(curl -sf http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','UNKNOWN'))" 2>/dev/null || echo "DOWN")
+            if [ "$API_STATUS" = "ok" ]; then
+              echo "API: OK"
+            else
+              echo "API: FAILED ($API_STATUS)"
+              FAIL=1
+            fi
+
+            WEB_CODE=$(curl -sf -o /dev/null -w '%{http_code}' --max-time 10 http://localhost:3000 || echo "000")
+            if [ "${WEB_CODE}" -ge 200 ] && [ "${WEB_CODE}" -lt 400 ]; then
+              echo "Web: OK (HTTP $WEB_CODE)"
+            else
+              echo "Web: FAILED (HTTP $WEB_CODE)"
+              FAIL=1
+            fi
+
+            echo "=== Deploy finished at $(date) | commit=$CURR | status=$([ $FAIL -eq 0 ] && echo 'SUCCESS' || echo 'DEGRADED') ==="
+
+            exit $FAIL
