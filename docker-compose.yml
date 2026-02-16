@@ -69,26 +69,27 @@ services:
       dockerfile: Dockerfile
     container_name: heimdex-api
     environment:
-      - DATABASE_URL=postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex
-      - DATABASE_URL_SYNC=postgresql://heimdex:heimdex_dev_password@postgres:5432/heimdex
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}
+      - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql://heimdex:heimdex_dev_password@postgres:5432/heimdex}
       - OPENSEARCH_URL=http://opensearch:9200
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=heimdex
-      - MINIO_SECRET_KEY=heimdex_dev_password
-      - JWT_SECRET_KEY=dev-secret-key-change-in-production
-      - ENVIRONMENT=development
-      - LOG_LEVEL=DEBUG
-      - ALLOWED_HOSTS=*.app.heimdex.local,localhost
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*.app.heimdex.local,localhost}
       # Embedding configuration - set EMBEDDING_USE_MOCK=false for real semantic search
       - EMBEDDING_MODEL=intfloat/multilingual-e5-large
       - EMBEDDING_DIMENSION=1024
       - EMBEDDING_DEVICE=cpu
-      - EMBEDDING_USE_MOCK=true
+      - EMBEDDING_USE_MOCK=${EMBEDDING_USE_MOCK:-true}
       # Auth0 configuration
-      - AUTH0_ENABLED=true
-      - AUTH0_DOMAIN=heimdex.jp.auth0.com
-      - AUTH0_AUDIENCE=https://api.staging.heimdexdemo.dev
-      - AUTH0_ALGORITHMS=RS256
+      - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
+      - AUTH0_DOMAIN=${AUTH0_DOMAIN:-your-tenant.auth0.com}
+      - AUTH0_AUDIENCE=${AUTH0_AUDIENCE:-https://api.heimdex.io}
+      - AUTH0_ORG_CLAIM=${AUTH0_ORG_CLAIM:-https://heimdex.io/org_id}
+      - AUTH0_ALGORITHMS=${AUTH0_ALGORITHMS:-RS256}
       # Agent intents feature flag
       - AGENT_INTENTS_ENABLED=true
       # HuggingFace model cache directory (persists downloaded models)
@@ -124,12 +125,11 @@ services:
       dockerfile: Dockerfile
     container_name: heimdex-web
     environment:
-      - NEXT_PUBLIC_API_URL=http://devorg.app.heimdex.local:8000
-      # Auth0 configuration
-      - NEXT_PUBLIC_AUTH0_ENABLED=true
-      - NEXT_PUBLIC_AUTH0_DOMAIN=heimdex.jp.auth0.com
-      - NEXT_PUBLIC_AUTH0_CLIENT_ID=lV29S1ZDd6WKyC68tnFPdrQX31iUfvWC
-      - NEXT_PUBLIC_AUTH0_AUDIENCE=https://api.staging.heimdexdemo.dev
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://devorg.app.heimdex.local:8000}
+      - NEXT_PUBLIC_AUTH0_ENABLED=${NEXT_PUBLIC_AUTH0_ENABLED:-false}
+      - NEXT_PUBLIC_AUTH0_DOMAIN=${NEXT_PUBLIC_AUTH0_DOMAIN:-your-tenant.auth0.com}
+      - NEXT_PUBLIC_AUTH0_CLIENT_ID=${NEXT_PUBLIC_AUTH0_CLIENT_ID:-your-client-id}
+      - NEXT_PUBLIC_AUTH0_AUDIENCE=${NEXT_PUBLIC_AUTH0_AUDIENCE:-https://api.heimdex.io}
     ports:
       - "3000:3000"
     volumes:
