@@ -83,7 +83,7 @@ async def get_current_user(
     
     settings = get_settings()
     token = credentials.credentials
-    logger.info("auth_credentials_received", org_slug=org_ctx.org_slug, token_prefix=token[:20] if token else "empty")
+    logger.debug("auth_credentials_received", org_slug=org_ctx.org_slug)
     user_repo = UserRepository(db)
     
     if settings.auth0_enabled:
@@ -105,11 +105,7 @@ def _enforce_org_binding(auth0_payload: Auth0TokenPayload, org_ctx: OrgContext) 
     token_org_id = auth0_payload.org_id
 
     if not token_org_id:
-        logger.info(
-            "org_binding_skip_no_token_org",
-            org_slug=org_ctx.org_slug,
-            sub=auth0_payload.sub,
-        )
+        logger.debug("org_binding_skip_no_token_org", org_slug=org_ctx.org_slug)
         return
 
     expected = org_ctx.auth0_org_id or str(org_ctx.org_id)
