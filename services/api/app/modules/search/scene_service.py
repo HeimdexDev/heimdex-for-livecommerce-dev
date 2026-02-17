@@ -8,6 +8,7 @@ Scenes are pre-computed atomic search units — this service does NOT
 aggregate segments into scenes. It treats each scene document as an
 independent candidate.
 """
+import asyncio
 import html
 from uuid import UUID
 
@@ -76,36 +77,48 @@ class SceneSearchService:
             "product_entities_not_in": filters.product_entities_not_in,
         }
 
+        # Step 1: Generate query embedding (CPU-bound, ~800-1500ms on CPU).
+        # Must complete before vector search can start.
         query_embedding = await get_query_embedding(query)
 
-        lexical_results = await self.scene_opensearch.search_lexical(
-            query=query,
-            org_id=str(org_id),
-            filters=filter_dict,
-            size=self.settings.search_lexical_top_k,
-            include_ocr=include_ocr,
-        )
+        # Step 2: Run all I/O-bound queries in parallel.
+        # - Lexical search (OpenSearch BM25)
+        # - Vector search (OpenSearch kNN, needs embedding from step 1)
+        # - Facets aggregation (OpenSearch)
+        # - Library names (Postgres)
+        # - People labels (Postgres)
+        org_id_str = str(org_id)
 
-        vector_results = await self.scene_opensearch.search_vector(
-            embedding=query_embedding,
-            org_id=str(org_id),
-            filters=filter_dict,
-            size=self.settings.search_vector_top_k,
-        )
-
-        # Reuse the exact same RRF fusion math as segment search
-        ranked_items = compute_weighted_rrf(lexical_results, vector_results, alpha)
-
-        diversified = diversify_results(
-            ranked_items,
-            max_per_video=self.settings.search_max_scenes_per_video,
-            target_count=self.settings.search_page_size,
-        )
-
-        # Enrich with library names and people labels
         library_repo = LibraryRepository(self.session)
-        libraries = await library_repo.list_by_org(org_id)
+        people_repo = PeopleClusterLabelRepository(self.session)
+
+        (
+            lexical_results,
+            vector_results,
+            facet_data,
+            libraries,
+            people_labels,
+        ) = await asyncio.gather(
+            self.scene_opensearch.search_lexical(
+                query=query,
+                org_id=org_id_str,
+                filters=filter_dict,
+                size=self.settings.search_lexical_top_k,
+                include_ocr=include_ocr,
+            ),
+            self.scene_opensearch.search_vector(
+                embedding=query_embedding,
+                org_id=org_id_str,
+                filters=filter_dict,
+                size=self.settings.search_vector_top_k,
+            ),
+            self.scene_opensearch.get_facets(org_id_str, filter_dict),
+            library_repo.list_by_org(org_id),
+            people_repo.list_by_org(org_id),
+        )
+
         library_map = {str(lib.id): lib.name for lib in libraries}
+        people_label_map = {p.person_cluster_id: p.label for p in people_labels}
 
         if filters.library_ids:
             requested = {str(lid) for lid in filters.library_ids}
@@ -116,9 +129,14 @@ class SceneSearchService:
                     detail=f"Unknown library_ids: {sorted(unknown)}",
                 )
 
-        people_repo = PeopleClusterLabelRepository(self.session)
-        people_labels = await people_repo.list_by_org(org_id)
-        people_label_map = {p.person_cluster_id: p.label for p in people_labels}
+        # Step 3: RRF fusion + diversification (CPU, <5ms)
+        ranked_items = compute_weighted_rrf(lexical_results, vector_results, alpha)
+
+        diversified = diversify_results(
+            ranked_items,
+            max_per_video=self.settings.search_max_scenes_per_video,
+            target_count=self.settings.search_page_size,
+        )
 
         results: list[SceneResult] = []
         for item in diversified:
@@ -159,8 +177,6 @@ class SceneSearchService:
                     ),
                 )
             )
-
-        facet_data = await self.scene_opensearch.get_facets(str(org_id), filter_dict)
 
         facets = Facets(
             libraries=[
