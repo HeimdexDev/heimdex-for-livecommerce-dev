@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePeople } from "../hooks/usePeople";
 import { useAuth } from "@/lib/auth";
 import { getPersonVideos } from "@/lib/api/people";
-import { getCloudThumbnailUrl } from "@/lib/agent";
+import { getCloudThumbnailUrl, getFaceThumbnailUrl } from "@/lib/agent";
 import type { PersonResponse, PersonVideoItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -77,10 +77,13 @@ function PersonAvatar({
   onToggle: (id: string) => void;
 }) {
   const [imgError, setImgError] = useState(false);
-  const thumbnailUrl =
+  const faceThumbnailUrl = getFaceThumbnailUrl(person.person_cluster_id);
+  const sceneThumbnailUrl =
     person.representative_video_id && person.representative_scene_id
       ? getCloudThumbnailUrl(person.representative_video_id, person.representative_scene_id)
       : null;
+  const [useFallback, setUseFallback] = useState(false);
+  const thumbnailUrl = !useFallback ? faceThumbnailUrl : sceneThumbnailUrl;
 
   return (
     <button
@@ -90,7 +93,7 @@ function PersonAvatar({
     >
       <div
         className={cn(
-          "flex h-20 w-20 items-center justify-center overflow-hidden rounded-lg bg-gray-100 transition-all",
+          "flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-gray-100 transition-all",
           isSelected ? "ring-2 ring-indigo-500 ring-offset-2" : "hover:bg-gray-200",
         )}
       >
@@ -99,7 +102,13 @@ function PersonAvatar({
             src={thumbnailUrl}
             alt={person.label ?? "인물"}
             className="h-full w-full object-cover"
-            onError={() => setImgError(true)}
+            onError={() => {
+              if (!useFallback && sceneThumbnailUrl) {
+                setUseFallback(true);
+              } else {
+                setImgError(true);
+              }
+            }}
           />
         ) : (
           <PersonIcon className="h-10 w-10 text-gray-400" />
@@ -130,11 +139,14 @@ function SelectedPersonCard({
   const [videoFiles, setVideoFiles] = useState<PersonVideoItem[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(true);
   const [headerImgError, setHeaderImgError] = useState(false);
+  const [headerUseFallback, setHeaderUseFallback] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  const headerThumbnailUrl =
+  const headerFaceUrl = getFaceThumbnailUrl(person.person_cluster_id);
+  const headerSceneUrl =
     person.representative_video_id && person.representative_scene_id
       ? getCloudThumbnailUrl(person.representative_video_id, person.representative_scene_id)
       : null;
+  const headerThumbnailUrl = !headerUseFallback ? headerFaceUrl : headerSceneUrl;
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -188,8 +200,14 @@ function SelectedPersonCard({
           <img
             src={headerThumbnailUrl}
             alt={person.label ?? "인물"}
-            className="h-8 w-8 flex-shrink-0 rounded object-cover"
-            onError={() => setHeaderImgError(true)}
+            className="h-8 w-8 flex-shrink-0 rounded-full object-cover"
+            onError={() => {
+              if (!headerUseFallback && headerSceneUrl) {
+                setHeaderUseFallback(true);
+              } else {
+                setHeaderImgError(true);
+              }
+            }}
           />
         ) : (
           <PersonIcon className="h-5 w-5 text-gray-400" />

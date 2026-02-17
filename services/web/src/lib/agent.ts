@@ -85,3 +85,7 @@ export function getAgentThumbnailUrl(videoId: string, sceneId?: string): string 
 export function getCloudThumbnailUrl(videoId: string, sceneId: string): string {
   return `/api/thumbnails/${encodeURIComponent(videoId)}/${encodeURIComponent(sceneId)}`;
 }
+
+export function getFaceThumbnailUrl(personClusterId: string): string {
+  return `/api/thumbnails/faces/${encodeURIComponent(personClusterId)}`;
+}
