@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     agent_ingest_max_scenes: int = 500
     # Maximum characters allowed in transcript_raw per scene (OOM protection).
     agent_ingest_max_transcript_chars: int = 50_000
+    thumbnail_storage_dir: str = "/data/thumbnails"
 
     # --- Device registration ---
     device_secret_pepper: str = "dev-device-pepper-change-in-production"

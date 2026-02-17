@@ -18,9 +18,13 @@ def _startup_patches():
     scene_client = MagicMock()
     scene_client.close = AsyncMock()
 
+    startup_engine = MagicMock()
+    startup_engine.dispose = AsyncMock()
+
     return [
         patch("app.modules.search.client.OpenSearchClient", return_value=segment_client),
         patch("app.modules.search.scene_client.SceneSearchClient", return_value=scene_client),
+        patch("app.db.base.get_async_engine", return_value=startup_engine),
         patch("app.main._startup_search_checks", new=AsyncMock()),
         patch("app.main._startup_scene_search_checks", new=AsyncMock()),
     ]
@@ -30,7 +34,7 @@ def test_health_reports_mock_mode():
     mock_settings = Settings(embedding_use_mock=True)
 
     startup_patchers = _startup_patches()
-    with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3]:
+    with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3], startup_patchers[4]:
         with patch("app.main.get_settings", return_value=mock_settings), patch("app.main.logger.warning") as mock_warning:
             with TestClient(app) as client:
                 response = client.get("/health", headers={"host": "devorg.app.heimdex.local"})
@@ -48,7 +52,7 @@ def test_health_reports_real_mode():
     mock_settings = Settings(embedding_use_mock=False)
 
     startup_patchers = _startup_patches()
-    with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3]:
+    with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3], startup_patchers[4]:
         with patch("app.main.get_settings", return_value=mock_settings), patch("app.main.logger.warning") as mock_warning:
             with TestClient(app) as client:
                 response = client.get("/health", headers={"host": "devorg.app.heimdex.local"})
@@ -97,7 +101,7 @@ def test_search_returns_results_in_mock_mode():
 
     startup_patchers = _startup_patches()
     try:
-        with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3]:
+        with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3], startup_patchers[4]:
             with patch("app.main.get_settings", return_value=mock_settings):
                 with TestClient(app) as client:
                     response = client.post(

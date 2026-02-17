@@ -13,6 +13,7 @@ NOTE: Requires running OpenSearch instance. Skip with:
 """
 import math
 import pytest
+import pytest_asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 from uuid import uuid4
 
@@ -199,7 +200,7 @@ class TestKnnIntegrationLive:
     2. Run: pytest tests/test_opensearch_knn.py -m integration -v
     """
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def live_client(self):
         """
         Create a real OpenSearch client for integration tests.

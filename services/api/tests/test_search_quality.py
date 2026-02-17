@@ -13,6 +13,7 @@ NOTE: These tests require:
 Skip with: pytest tests/test_search_quality.py -v -m "not quality"
 """
 import pytest
+import pytest_asyncio
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4, UUID
@@ -291,7 +292,7 @@ class TestGoldenQueryQuality:
     Run after seeding test data with known segment IDs.
     """
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def search_service(self):
         """Create SearchService with live connections."""
         from app.modules.search.client import OpenSearchClient
@@ -313,7 +314,7 @@ class TestGoldenQueryQuality:
         
         org_id = uuid4()  # Should match test data
         
-        for alpha in golden.test_alphas:
+        for alpha in golden.test_alphas or []:
             response = await search_service.search(
                 query=golden.query,
                 org_id=org_id,
@@ -370,6 +371,8 @@ class TestPropertyBasedQuality:
         """Verify: With sufficient video diversity, per-video limit is respected."""
         fixture = load_golden_queries_yaml()
         config = fixture.get("config", {})
+        if not isinstance(config, dict):
+            config = {}
         max_per_video = config.get("default_max_per_video", 4)
         
         ranked = []
@@ -396,6 +399,8 @@ class TestPropertyBasedQuality:
         """Verify: Quality factor never drops below floor."""
         fixture = load_golden_queries_yaml()
         config = fixture.get("config", {})
+        if not isinstance(config, dict):
+            config = {}
         quality_floor = config.get("quality_floor", 0.7)
         
         from app.modules.search.fusion import compute_quality_factor

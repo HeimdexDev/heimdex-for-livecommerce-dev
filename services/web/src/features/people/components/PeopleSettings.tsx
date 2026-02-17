@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePeople } from "../hooks/usePeople";
 import { useAuth } from "@/lib/auth";
 import { getPersonVideos } from "@/lib/api/people";
-import { getAgentThumbnailUrl } from "@/lib/agent";
+import { getCloudThumbnailUrl } from "@/lib/agent";
 import type { PersonResponse, PersonVideoItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -79,7 +79,7 @@ function PersonAvatar({
   const [imgError, setImgError] = useState(false);
   const thumbnailUrl =
     person.representative_video_id && person.representative_scene_id
-      ? getAgentThumbnailUrl(person.representative_video_id, person.representative_scene_id)
+      ? getCloudThumbnailUrl(person.representative_video_id, person.representative_scene_id)
       : null;
 
   return (
@@ -133,7 +133,7 @@ function SelectedPersonCard({
   const inputRef = useRef<HTMLInputElement>(null);
   const headerThumbnailUrl =
     person.representative_video_id && person.representative_scene_id
-      ? getAgentThumbnailUrl(person.representative_video_id, person.representative_scene_id)
+      ? getCloudThumbnailUrl(person.representative_video_id, person.representative_scene_id)
       : null;
 
   useEffect(() => {

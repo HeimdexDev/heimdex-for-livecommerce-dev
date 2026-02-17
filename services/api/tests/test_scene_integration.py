@@ -19,6 +19,7 @@ Tests verify:
 Each test run creates a unique index prefix to avoid collisions.
 """
 import pytest
+import pytest_asyncio
 from uuid import uuid4
 from unittest.mock import patch, MagicMock
 
@@ -29,7 +30,7 @@ def unique_prefix():
     return f"test_{uuid4().hex[:8]}"
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def scene_client(unique_prefix):
     """Create a SceneSearchClient with a unique test prefix, tear down after."""
     with patch("app.modules.search.scene_client.get_settings") as mock_settings:
@@ -45,7 +46,7 @@ async def scene_client(unique_prefix):
 
         # Cleanup: delete test index
         try:
-            await client.client.indices.delete(index=client.index_name, ignore=[404])
+            await client.client.indices.delete(index=client.index_name)
         except Exception:
             pass
         await client.close()
