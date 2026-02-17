@@ -10,6 +10,7 @@ const navItems = [
   { label: "파일 동기화", href: "/sync" },
   { label: "인물 라벨 관리", href: "/settings/people" },
   { label: "저장된 숏츠", href: "/videos" },
+  { label: "에이전트", href: "/agent" },
 ];
 
 export function Sidebar() {
