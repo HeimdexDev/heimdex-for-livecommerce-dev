@@ -7,7 +7,8 @@ import {
   DebugInfo,
   formatDuration,
 } from "@/lib/api";
-import { getAgentPlaybackUrl, getAgentThumbnailUrl } from "@/lib/agent";
+import { getAgentPlaybackUrl } from "@/lib/agent";
+import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
@@ -279,34 +280,12 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
     <div className="p-4 hover:bg-gray-50 transition-colors">
       <div className="flex gap-4">
         <div className="flex-shrink-0 relative">
-          <div className="w-32 h-20 bg-gray-200 rounded-lg overflow-hidden">
-            {agentAvailable ? (
-              <img
-                src={getAgentThumbnailUrl(result.video_id, result.scene_id)}
-                alt=""
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                }}
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-400">
-                <svg
-                  className="w-8 h-8"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
-                  />
-                </svg>
-              </div>
-            )}
-          </div>
+          <SceneThumbnail
+            videoId={result.video_id}
+            sceneId={result.scene_id}
+            agentAvailable={agentAvailable}
+            className="w-32 h-20 rounded-lg"
+          />
           <span className="absolute -top-2 -left-2 bg-primary-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
             {rank}
           </span>
@@ -508,34 +487,11 @@ function ResultCard({ result, rank, showDebug, agentAvailable }: ResultCardProps
     <div className="card p-4 hover:shadow-md transition-shadow">
       <div className="flex gap-4">
         <div className="flex-shrink-0 relative">
-          <div className="w-32 h-20 bg-gray-200 rounded-lg overflow-hidden">
-            {agentAvailable ? (
-              <img
-                src={getAgentThumbnailUrl(result.video_id)}
-                alt=""
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = "none";
-                }}
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-400">
-                <svg
-                  className="w-8 h-8"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
-                  />
-                </svg>
-              </div>
-            )}
-          </div>
+          <SceneThumbnail
+            videoId={result.video_id}
+            agentAvailable={agentAvailable}
+            className="w-32 h-20 rounded-lg"
+          />
           <span className="absolute -top-2 -left-2 bg-primary-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
             {rank}
           </span>

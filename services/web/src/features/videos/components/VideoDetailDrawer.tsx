@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import type { VideoSummary, VideoScene } from "@/lib/types";
 import { formatTimestamp } from "@/lib/api/utils";
-import { getAgentThumbnailUrl } from "@/lib/agent";
+import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { ShortsPlanPanel } from "./ShortsPlanPanel";
 
 interface VideoDetailDrawerProps {
@@ -65,18 +65,13 @@ export function VideoDetailDrawer({
           </button>
         </div>
 
-        {agentAvailable && (
-          <div className="px-6 pt-4">
-            <div className="w-full h-40 bg-gray-200 rounded-lg overflow-hidden">
-              <img
-                src={getAgentThumbnailUrl(video.video_id)}
-                alt=""
-                className="w-full h-full object-cover"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-              />
-            </div>
-          </div>
-        )}
+        <div className="px-6 pt-4">
+          <SceneThumbnail
+            videoId={video.video_id}
+            agentAvailable={agentAvailable}
+            className="w-full h-40 rounded-lg"
+          />
+        </div>
 
         <div className="px-6 py-4 border-b border-gray-100">
           <div className="grid grid-cols-2 gap-3 text-sm">
@@ -140,15 +135,13 @@ export function VideoDetailDrawer({
                   className="p-3 rounded-lg border border-gray-100 hover:border-gray-200 transition-colors"
                 >
                   <div className="flex gap-3">
-                    {agentAvailable && video && (
-                      <div className="flex-shrink-0 w-20 h-14 bg-gray-200 rounded overflow-hidden">
-                        <img
-                          src={getAgentThumbnailUrl(video.video_id, scene.scene_id)}
-                          alt=""
-                          className="w-full h-full object-cover"
-                          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                        />
-                      </div>
+                    {video && (
+                      <SceneThumbnail
+                        videoId={video.video_id}
+                        sceneId={scene.scene_id}
+                        agentAvailable={agentAvailable}
+                        className="flex-shrink-0 w-20 h-14 rounded"
+                      />
                     )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between text-xs text-gray-500">

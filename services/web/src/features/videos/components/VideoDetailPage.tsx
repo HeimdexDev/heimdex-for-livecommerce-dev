@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { getVideoScenes } from "@/lib/api/videos";
 import { getAgentPlaybackUrl, getAgentThumbnailUrl } from "@/lib/agent";
+import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { formatTimestamp } from "@/lib/api/utils";
 import type { VideoScene, VideoScenesResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -343,14 +344,12 @@ function SceneCard({
     >
       <div className="flex gap-0">
         <div className="w-[200px] flex-shrink-0">
-          <div className="aspect-video w-full overflow-hidden rounded-tl-xl bg-gray-200">
-            <img
-              src={getAgentThumbnailUrl(videoId, scene.scene_id)}
-              alt=""
-              className="h-full w-full object-cover"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-            />
-          </div>
+          <SceneThumbnail
+            videoId={videoId}
+            sceneId={scene.scene_id}
+            agentAvailable={true}
+            className="aspect-video w-full rounded-tl-xl"
+          />
           <div className="px-3 py-2">
             <span className="mr-2 inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
               검색 정확도 00%

@@ -2,7 +2,7 @@
 
 import type { VideoSummary } from "@/lib/types";
 import { formatTimestamp } from "@/lib/api/utils";
-import { getAgentThumbnailUrl } from "@/lib/agent";
+import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { cn } from "@/lib/utils";
 
 interface VideoCardProps {
@@ -34,22 +34,11 @@ export function VideoCard({ video, onSelect, agentAvailable }: VideoCardProps) {
       className="card p-4 w-full text-left hover:shadow-md transition-shadow"
     >
       <div className="flex gap-3">
-        <div className="flex-shrink-0 w-28 h-20 bg-gray-200 rounded-lg overflow-hidden">
-          {agentAvailable ? (
-            <img
-              src={getAgentThumbnailUrl(video.video_id)}
-              alt=""
-              className="w-full h-full object-cover"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-gray-400">
-              <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-            </div>
-          )}
-        </div>
+        <SceneThumbnail
+          videoId={video.video_id}
+          agentAvailable={agentAvailable}
+          className="flex-shrink-0 w-28 h-20 rounded-lg"
+        />
 
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-3">

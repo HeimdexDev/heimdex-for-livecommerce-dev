@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { getVideos, getVideoStats } from "@/lib/api/videos";
 import { searchScenes } from "@/lib/api/search";
-import { getAgentThumbnailUrl } from "@/lib/agent";
+import { SceneThumbnail } from "@/components/SceneThumbnail";
 import type { VideoSummary, VideoStats, SceneResult } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -586,7 +586,11 @@ function VideoCard({ video }: { video: VideoSummary }) {
   const title = video.video_title || "제목 없음";
   return (
     <Link href={`/videos/${video.video_id}`} className="group cursor-pointer block">
-      <div className="aspect-video w-full rounded-lg bg-gray-200" />
+      <SceneThumbnail
+        videoId={video.video_id}
+        agentAvailable={true}
+        className="aspect-video w-full rounded-lg"
+      />
       <p className="mt-2 truncate text-sm font-medium text-gray-800 group-hover:text-indigo-600">
         {title}
       </p>
@@ -603,14 +607,12 @@ function SceneCard({ scene }: { scene: SceneResult }) {
 
   return (
     <Link href={`/videos/${scene.video_id}`} className="group cursor-pointer block">
-      <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-gray-200">
-        <img
-          src={getAgentThumbnailUrl(scene.video_id, scene.scene_id)}
-          alt=""
-          className="h-full w-full object-cover"
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = "none";
-          }}
+      <div className="relative aspect-video w-full overflow-hidden rounded-lg">
+        <SceneThumbnail
+          videoId={scene.video_id}
+          sceneId={scene.scene_id}
+          agentAvailable={true}
+          className="w-full h-full"
         />
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
           {timestamp}
