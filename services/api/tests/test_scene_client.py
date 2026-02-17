@@ -125,6 +125,7 @@ class TestSceneSearchClient:
         assert props["scene_id"]["type"] == "keyword"
         assert props["video_id"]["type"] == "keyword"
         assert props["video_title"]["type"] == "keyword"
+        assert props["video_title"]["fields"]["nori"]["type"] == "text"
         assert props["org_id"]["type"] == "keyword"
         assert props["library_id"]["type"] == "keyword"
         assert props["start_ms"]["type"] == "integer"
@@ -498,8 +499,12 @@ class TestSceneSearchClient:
         call_body = mock_async.search.call_args.kwargs["body"]
         query = call_body["query"]["bool"]
         assert "should" in query
-        assert len(query["should"]) == 1
-        assert query["should"][0]["match"]["ocr_text_norm"]["boost"] == 0.6
+        assert len(query["should"]) == 2
+        title_clauses = [c for c in query["should"] if "match" in c and "video_title.nori" in c["match"]]
+        ocr_clauses = [c for c in query["should"] if "match" in c and "ocr_text_norm" in c["match"]]
+        assert len(title_clauses) == 1
+        assert len(ocr_clauses) == 1
+        assert ocr_clauses[0]["match"]["ocr_text_norm"]["boost"] == 0.6
 
     @pytest.mark.asyncio
     async def test_search_lexical_ocr_disabled(self, mock_scene_client):

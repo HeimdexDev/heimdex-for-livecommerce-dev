@@ -182,7 +182,16 @@ class SceneSearchClient:
                 "org_id": {"type": "keyword"},
                 "library_id": {"type": "keyword"},
                 "video_id": {"type": "keyword"},
-                "video_title": {"type": "keyword"},
+                "video_title": {
+                    "type": "keyword",
+                    "fields": {
+                        "nori": {
+                            "type": "text",
+                            "analyzer": transcript_analyzer,
+                            "search_analyzer": transcript_analyzer,
+                        }
+                    },
+                },
                 # Scene identity
                 "scene_id": {"type": "keyword"},
                 # Temporal
@@ -399,6 +408,9 @@ class SceneSearchClient:
 
         query_word_count = len(query.split())
 
+        # Video title boost (lower than transcript, higher than OCR)
+        title_bm25_boost = 1.5
+
         if query_word_count <= 3:
             should_clauses: list[dict[str, Any]] = [
                 match_query,
@@ -407,6 +419,25 @@ class SceneSearchClient:
                         "transcript_norm": {
                             "query": query,
                             "boost": 2.0,
+                            "slop": 1,
+                        }
+                    }
+                },
+                {
+                    "match": {
+                        "video_title.nori": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": title_bm25_boost,
+                        }
+                    }
+                },
+                {
+                    "match_phrase": {
+                        "video_title.nori": {
+                            "query": query,
+                            "boost": title_bm25_boost * 2,
                             "slop": 1,
                         }
                     }
@@ -455,8 +486,21 @@ class SceneSearchClient:
                     "filter": filter_clauses,
                 }
             }
+            # Video title and OCR as optional boosters for long queries
+            optional_should: list[dict[str, Any]] = [
+                {
+                    "match": {
+                        "video_title.nori": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": title_bm25_boost,
+                        }
+                    }
+                },
+            ]
             if ocr_enabled:
-                search_query["bool"]["should"] = [
+                optional_should.append(
                     {
                         "match": {
                             "ocr_text_norm": {
@@ -467,7 +511,8 @@ class SceneSearchClient:
                             }
                         }
                     }
-                ]
+                )
+            search_query["bool"]["should"] = optional_should
 
         if must_not_clauses:
             search_query["bool"]["must_not"] = must_not_clauses
