@@ -1,8 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth";
-import { getPeople, renamePerson as renamePersionApi } from "@/lib/api/people";
+import {
+  getPeople,
+  renamePerson as renamePersionApi,
+  getExcludePreferences,
+  saveExcludePreferences,
+} from "@/lib/api/people";
 import type { PersonResponse } from "@/lib/types";
 import { ApiError } from "@/lib/types";
 
@@ -13,6 +18,9 @@ export interface UsePeopleReturn {
   renamePerson: (personClusterId: string, label: string | null) => Promise<void>;
   isRenaming: boolean;
   fetchPeople: () => Promise<void>;
+  excludedIds: Set<string>;
+  toggleExclude: (personClusterId: string) => void;
+  isSavingExcludes: boolean;
 }
 
 export function usePeople(): UsePeopleReturn {
@@ -22,13 +30,23 @@ export function usePeople(): UsePeopleReturn {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isRenaming, setIsRenaming] = useState(false);
+  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+  const [isSavingExcludes, setIsSavingExcludes] = useState(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestExcludedRef = useRef<Set<string>>(new Set());
 
   const fetchPeopleList = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await getPeople(getAccessToken);
-      setPeople(response.people);
+      const [peopleRes, excludeRes] = await Promise.all([
+        getPeople(getAccessToken),
+        getExcludePreferences(getAccessToken),
+      ]);
+      setPeople(peopleRes.people);
+      const excluded = new Set(excludeRes.excluded_person_cluster_ids);
+      setExcludedIds(excluded);
+      latestExcludedRef.current = excluded;
     } catch (err) {
       const msg =
         err instanceof ApiError ? err.detail : "Failed to load people";
@@ -38,13 +56,54 @@ export function usePeople(): UsePeopleReturn {
     }
   }, [getAccessToken]);
 
+  const persistExcludes = useCallback(
+    async (ids: Set<string>) => {
+      setIsSavingExcludes(true);
+      try {
+        await saveExcludePreferences(Array.from(ids), getAccessToken);
+      } catch (err) {
+        const msg =
+          err instanceof ApiError
+            ? err.detail
+            : "Failed to save exclude preferences";
+        setError(msg);
+      } finally {
+        setIsSavingExcludes(false);
+      }
+    },
+    [getAccessToken],
+  );
+
+  const toggleExclude = useCallback(
+    (personClusterId: string) => {
+      setExcludedIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(personClusterId)) {
+          next.delete(personClusterId);
+        } else {
+          next.add(personClusterId);
+        }
+        latestExcludedRef.current = next;
+
+        if (saveTimerRef.current) {
+          clearTimeout(saveTimerRef.current);
+        }
+        saveTimerRef.current = setTimeout(() => {
+          persistExcludes(latestExcludedRef.current);
+        }, 500);
+
+        return next;
+      });
+    },
+    [persistExcludes],
+  );
+
   const rename = useCallback(
     async (personClusterId: string, label: string | null) => {
       setIsRenaming(true);
       setError(null);
       try {
         await renamePersionApi(personClusterId, label, getAccessToken);
-        // Optimistic update
         setPeople((prev) =>
           prev.map((p) =>
             p.person_cluster_id === personClusterId ? { ...p, label } : p,
@@ -63,6 +122,11 @@ export function usePeople(): UsePeopleReturn {
 
   useEffect(() => {
     fetchPeopleList();
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+      }
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
@@ -72,5 +136,8 @@ export function usePeople(): UsePeopleReturn {
     renamePerson: rename,
     isRenaming,
     fetchPeople: fetchPeopleList,
+    excludedIds,
+    toggleExclude,
+    isSavingExcludes,
   };
 }

@@ -140,6 +140,7 @@ function SelectedPersonCard({
   const [loadingVideos, setLoadingVideos] = useState(true);
   const [headerImgError, setHeaderImgError] = useState(false);
   const [headerUseFallback, setHeaderUseFallback] = useState(false);
+  const [checkedVideos, setCheckedVideos] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const headerFaceUrl = getFaceThumbnailUrl(person.person_cluster_id);
   const headerSceneUrl =
@@ -160,7 +161,10 @@ function SelectedPersonCard({
     setLoadingVideos(true);
     getPersonVideos(person.person_cluster_id, getToken)
       .then((res) => {
-        if (!cancelled) setVideoFiles(res.videos);
+        if (!cancelled) {
+          setVideoFiles(res.videos);
+          setCheckedVideos(new Set(res.videos.map((v) => v.video_id)));
+        }
       })
       .catch(() => {
         if (!cancelled) setVideoFiles([]);
@@ -172,6 +176,15 @@ function SelectedPersonCard({
       cancelled = true;
     };
   }, [person.person_cluster_id, getToken]);
+
+  const toggleVideo = useCallback((videoId: string) => {
+    setCheckedVideos((prev) => {
+      const next = new Set(prev);
+      if (next.has(videoId)) next.delete(videoId);
+      else next.add(videoId);
+      return next;
+    });
+  }, []);
 
   const handleSave = async () => {
     const trimmed = editValue.trim();
@@ -250,16 +263,31 @@ function SelectedPersonCard({
         ) : videoFiles.length === 0 ? (
           <p className="py-2 text-xs text-gray-400">연관된 영상이 없습니다.</p>
         ) : (
-          videoFiles.slice(0, 7).map((video) => (
-            <div key={video.video_id} className="flex items-center justify-between py-1">
-              <span className="truncate text-sm text-gray-700">
-                {video.video_title || video.video_id}
-              </span>
-              <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded bg-indigo-500">
-                <CheckIcon />
-              </div>
-            </div>
-          ))
+          videoFiles.slice(0, 7).map((video) => {
+            const isChecked = checkedVideos.has(video.video_id);
+            return (
+              <button
+                key={video.video_id}
+                type="button"
+                onClick={() => toggleVideo(video.video_id)}
+                className="flex w-full items-center justify-between rounded px-1 py-1 hover:bg-gray-50"
+              >
+                <span className="truncate text-sm text-gray-700">
+                  {video.video_title || video.video_id}
+                </span>
+                <div
+                  className={cn(
+                    "flex h-5 w-5 flex-shrink-0 items-center justify-center rounded transition-colors",
+                    isChecked
+                      ? "bg-indigo-500"
+                      : "border border-gray-300 bg-white",
+                  )}
+                >
+                  {isChecked && <CheckIcon />}
+                </div>
+              </button>
+            );
+          })
         )}
       </div>
     </div>
@@ -267,19 +295,18 @@ function SelectedPersonCard({
 }
 
 export function PeopleSettings() {
-  const { people, isLoading, error, renamePerson, isRenaming } = usePeople();
+  const {
+    people,
+    isLoading,
+    error,
+    renamePerson,
+    isRenaming,
+    excludedIds,
+    toggleExclude,
+    isSavingExcludes,
+  } = usePeople();
   const { getAccessToken } = useAuth();
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
-
-  const toggleSelection = useCallback((id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
 
   const filteredPeople = useMemo(() => {
     if (!searchQuery.trim()) return people;
@@ -292,8 +319,8 @@ export function PeopleSettings() {
   }, [people, searchQuery]);
 
   const selectedPeople = useMemo(
-    () => people.filter((p) => selectedIds.has(p.person_cluster_id)),
-    [people, selectedIds],
+    () => people.filter((p) => excludedIds.has(p.person_cluster_id)),
+    [people, excludedIds],
   );
 
   const hasPeople = people.length > 0;
@@ -350,7 +377,10 @@ export function PeopleSettings() {
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900">인물 검색</h2>
               <span className="text-sm text-gray-500">
-                {selectedIds.size}명 선택됨
+                {excludedIds.size}명 선택됨
+                {isSavingExcludes && (
+                  <span className="ml-2 inline-block h-3 w-3 animate-spin rounded-full border border-gray-300 border-t-indigo-500" />
+                )}
               </span>
             </div>
 
@@ -412,8 +442,8 @@ export function PeopleSettings() {
                     <PersonAvatar
                       key={person.person_cluster_id}
                       person={person}
-                      isSelected={selectedIds.has(person.person_cluster_id)}
-                      onToggle={toggleSelection}
+                      isSelected={excludedIds.has(person.person_cluster_id)}
+                      onToggle={toggleExclude}
                     />
                   ))}
                 </div>
