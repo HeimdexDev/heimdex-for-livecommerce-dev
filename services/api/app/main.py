@@ -20,6 +20,7 @@ from app.modules.ingest.router import router as ingest_router
 from app.modules.libraries.router import router as libraries_router
 from app.modules.people.router import router as people_router
 from app.modules.search.router import router as search_router
+from app.modules.shorts.router import router as shorts_router
 from app.modules.thumbnails.router import public_router as thumbnails_public_router
 from app.modules.thumbnails.router import upload_router as thumbnails_upload_router
 from app.modules.videos.router import router as videos_router
@@ -274,6 +275,7 @@ app.include_router(thumbnails_upload_router, prefix="/api")
 app.include_router(libraries_router, prefix="/api")
 app.include_router(people_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
+app.include_router(shorts_router, prefix="/api")
 app.include_router(thumbnails_public_router, prefix="/api")
 app.include_router(videos_router, prefix="/api")
 

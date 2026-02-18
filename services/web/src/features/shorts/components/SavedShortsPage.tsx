@@ -1,14 +1,18 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 interface SavedShort {
   id: string;
-  title: string;
-  thumbnailUrl: string | null;
-  createdAt: string;
+  video_id: string;
+  scene_ids: string[];
+  title: string | null;
+  start_ms: number | null;
+  end_ms: number | null;
+  created_at: string;
 }
 
 type SortKey = "newest" | "oldest";
@@ -79,19 +83,42 @@ function CheckIcon({ checked }: { checked: boolean }) {
 const ITEMS_PER_PAGE = 12;
 
 export function SavedShortsPage() {
+  const { getAccessToken } = useAuth();
+  const [items, setItems] = useState<SavedShort[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("newest");
   const [currentPage, setCurrentPage] = useState(1);
   const [showSort, setShowSort] = useState(false);
 
-  // TODO: Replace with API call when backend supports saved shorts
-  const items: SavedShort[] = [];
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+
+    (async () => {
+      try {
+        const token = await getAccessToken();
+        const res = await fetch("/api/shorts", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) throw new Error("fetch failed");
+        const data = await res.json();
+        if (!cancelled) setItems(data.shorts ?? []);
+      } catch {
+        if (!cancelled) setItems([]);
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [getAccessToken]);
 
   const sorted = useMemo(() => {
     const copy = [...items];
     copy.sort((a, b) => {
-      const da = new Date(a.createdAt).getTime();
-      const db = new Date(b.createdAt).getTime();
+      const da = new Date(a.created_at).getTime();
+      const db = new Date(b.created_at).getTime();
       return sortKey === "newest" ? db - da : da - db;
     });
     return copy;
@@ -112,6 +139,24 @@ export function SavedShortsPage() {
     });
   };
 
+  const handleDelete = async (id: string) => {
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(`/api/shorts/${id}`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok || res.status === 204) {
+        setItems((prev) => prev.filter((s) => s.id !== id));
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    } catch {}
+  };
+
   const today = new Date();
   const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   const btnBase = "inline-flex h-8 w-8 items-center justify-center rounded text-sm transition-colors";
@@ -130,7 +175,7 @@ export function SavedShortsPage() {
           <h1 className="text-xl font-bold text-gray-900">저장된 숏츠 영상</h1>
           <button
             type="button"
-            disabled={selectedIds.size === 0 && items.length === 0}
+            disabled={selectedIds.size === 0}
             className={cn(
               "inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors",
               selectedIds.size > 0
@@ -163,21 +208,37 @@ export function SavedShortsPage() {
           </div>
         </div>
 
-        {paged.length > 0 ? (
+        {isLoading ? (
+          <div className="mt-12 flex items-center justify-center py-16">
+            <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-500" />
+          </div>
+        ) : paged.length > 0 ? (
           <div className="mt-6 grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {paged.map((short) => (
               <div key={short.id} className="group">
-                <div className="relative aspect-[4/3] w-full overflow-hidden rounded-lg bg-gray-200">
-                  {short.thumbnailUrl ? (
-                    <img src={short.thumbnailUrl} alt={short.title} className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-gray-400"><VideoFileIcon /></div>
-                  )}
-                  <button type="button" onClick={() => toggleSelect(short.id)} className="absolute right-2 top-2">
+                <Link
+                  href={`/shorts/create?videoId=${short.video_id}&sceneIds=${short.scene_ids.join(",")}`}
+                  className="relative block aspect-[4/3] w-full overflow-hidden rounded-lg bg-gray-200"
+                >
+                  <div className="flex h-full w-full items-center justify-center text-gray-400"><VideoFileIcon /></div>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.preventDefault(); toggleSelect(short.id); }}
+                    className="absolute right-2 top-2"
+                  >
                     <CheckIcon checked={selectedIds.has(short.id)} />
                   </button>
+                </Link>
+                <div className="mt-2 flex items-center justify-between">
+                  <p className="truncate text-sm text-gray-900">{short.title ?? `숏츠 ${short.scene_ids.length}장면`}</p>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(short.id)}
+                    className="ml-2 flex-shrink-0 text-xs text-gray-400 hover:text-red-500 transition-colors"
+                  >
+                    삭제
+                  </button>
                 </div>
-                <p className="mt-2 truncate text-sm text-gray-900">{short.title}</p>
               </div>
             ))}
           </div>

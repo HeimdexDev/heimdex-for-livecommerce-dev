@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { getVideoScenes } from "@/lib/api/videos";
 import { getAgentPlaybackUrl } from "@/lib/agent";
@@ -119,10 +119,14 @@ export function ShortsCreatePage() {
     [sceneIdsParam],
   );
 
+  const router = useRouter();
+
   const [meta, setMeta] = useState<VideoScenesResponse | null>(null);
   const [allScenes, setAllScenes] = useState<VideoScene[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!videoId) {
@@ -179,6 +183,45 @@ export function ShortsCreatePage() {
     }
   };
 
+  const handleSave = useCallback(async () => {
+    if (selectedScenes.length === 0 || isSaving) return;
+
+    setIsSaving(true);
+    setSaveError(null);
+
+    const startMs = Math.min(...selectedScenes.map((s) => s.start_ms));
+    const endMs = Math.max(...selectedScenes.map((s) => s.end_ms));
+
+    try {
+      const token = await getAccessToken();
+      const res = await fetch("/api/shorts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          video_id: videoId,
+          scene_ids: selectedScenes.map((s) => s.scene_id),
+          title: meta?.video_title ?? null,
+          start_ms: startMs,
+          end_ms: endMs,
+        }),
+      });
+
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null);
+        throw new Error(detail?.detail ?? `저장 실패 (${res.status})`);
+      }
+
+      router.push("/shorts");
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "저장 중 오류가 발생했습니다.");
+    } finally {
+      setIsSaving(false);
+    }
+  }, [selectedScenes, isSaving, videoId, meta, getAccessToken, router]);
+
   const videoTitle = meta?.video_title || videoId;
 
   if (!videoId) {
@@ -217,12 +260,26 @@ export function ShortsCreatePage() {
               <h2 className="text-lg font-bold text-gray-900">미리보기</h2>
               <button
                 type="button"
-                className="inline-flex items-center gap-2 rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
+                onClick={handleSave}
+                disabled={selectedScenes.length === 0 || isSaving}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+                  selectedScenes.length === 0 || isSaving
+                    ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                    : "bg-indigo-500 text-white hover:bg-indigo-600",
+                )}
               >
-                <DownloadIcon />
-                저장하기
+                {isSaving ? (
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                ) : (
+                  <DownloadIcon />
+                )}
+                {isSaving ? "저장 중..." : "저장하기"}
               </button>
             </div>
+            {saveError && (
+              <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{saveError}</p>
+            )}
             <div className="aspect-[9/16] w-full overflow-hidden rounded-lg bg-black">
               <video
                 src={getAgentPlaybackUrl(videoId)}
