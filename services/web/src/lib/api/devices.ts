@@ -51,7 +51,7 @@ async function apiRequest<T>(
 export async function getDevices(
   getToken?: TokenGetter,
 ): Promise<DeviceListResponse> {
-  return apiRequest<DeviceListResponse>("/api/devices", "GET", getToken);
+  return apiRequest<DeviceListResponse>("/api/devices/", "GET", getToken);
 }
 
 export async function createPairingCode(

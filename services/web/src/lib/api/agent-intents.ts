@@ -56,7 +56,7 @@ export async function createFolderIntent(
   deviceId: string,
 ): Promise<AgentIntentResponse> {
   return apiRequest<AgentIntentResponse>(
-    "/api/agent-intents",
+    "/api/agent-intents/",
     "POST",
     getToken,
     { type: "folder_add", device_id: deviceId },
