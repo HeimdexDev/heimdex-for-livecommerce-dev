@@ -71,6 +71,12 @@ def get_people_cluster_label_repository(db: AsyncSession = Depends(get_db_sessio
     return PeopleClusterLabelRepository(db)
 
 
+def get_people_exclude_preference_repository(db: AsyncSession = Depends(get_db_session)):
+    """People exclude preference repository factory."""
+    from app.modules.people.repository import PeopleExcludePreferenceRepository
+    return PeopleExcludePreferenceRepository(db)
+
+
 async def get_search_service(
     db: AsyncSession = Depends(get_db_session),
     opensearch=Depends(get_opensearch_client),

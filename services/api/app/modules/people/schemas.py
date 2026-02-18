@@ -10,6 +10,7 @@ class PersonResponse(BaseModel):
     last_seen_scene_time: str | None = None
     representative_video_id: str | None = None
     representative_scene_id: str | None = None
+    is_excluded: bool = False
 
 
 class PeopleListResponse(BaseModel):
@@ -46,3 +47,11 @@ class PersonVideosResponse(BaseModel):
     person_cluster_id: str
     videos: list[PersonVideoItem]
     total: int
+
+
+class ExcludePreferencesResponse(BaseModel):
+    excluded_person_cluster_ids: list[str]
+
+
+class SetExcludePreferencesRequest(BaseModel):
+    person_cluster_ids: list[str] = Field(default_factory=list, max_length=500)

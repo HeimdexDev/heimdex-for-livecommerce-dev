@@ -1,10 +1,14 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.people.models import DriveNicknameRegistry, PeopleClusterLabel
+from app.modules.people.models import (
+    DriveNicknameRegistry,
+    PeopleClusterLabel,
+    PeopleExcludePreference,
+)
 
 
 class DriveNicknameRepository:
@@ -91,3 +95,37 @@ class PeopleClusterLabelRepository:
             )
         )
         return list(result.scalars().all())
+
+
+class PeopleExcludePreferenceRepository:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def list_by_user(self, org_id: UUID, user_id: UUID) -> list[str]:
+        result = await self.session.execute(
+            select(PeopleExcludePreference.person_cluster_id).where(
+                PeopleExcludePreference.org_id == org_id,
+                PeopleExcludePreference.user_id == user_id,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def replace_all(
+        self, org_id: UUID, user_id: UUID, person_cluster_ids: list[str]
+    ) -> list[str]:
+        await self.session.execute(
+            delete(PeopleExcludePreference).where(
+                PeopleExcludePreference.org_id == org_id,
+                PeopleExcludePreference.user_id == user_id,
+            )
+        )
+        for cluster_id in person_cluster_ids:
+            self.session.add(
+                PeopleExcludePreference(
+                    org_id=org_id,
+                    user_id=user_id,
+                    person_cluster_id=cluster_id,
+                )
+            )
+        await self.session.flush()
+        return person_cluster_ids
