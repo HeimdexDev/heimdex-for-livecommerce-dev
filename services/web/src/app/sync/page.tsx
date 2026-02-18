@@ -3,8 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth";
 import { getDevices } from "@/lib/api/devices";
-import { createFolderIntent } from "@/lib/api/agent-intents";
-import { getAgentStatus } from "@/lib/agent";
+import { getAgentStatus, pickFolder } from "@/lib/agent";
 import type { AgentState } from "@/lib/agent";
 import { AuthGuard } from "@/components/AuthGuard";
 import { SyncSourceCard } from "@/components/sync/SyncSourceCard";
@@ -191,27 +190,29 @@ function SyncContent() {
     if (uploadState !== "hidden") return;
     setError(null);
 
-    if (devices.length === 0) {
-      setError("등록된 디바이스가 없습니다. 설정 > 디바이스에서 먼저 디바이스를 등록해주세요.");
-      return;
-    }
-
     try {
-      const device = devices[0];
-      const intent = await createFolderIntent(getAccessToken, device.device_id);
-
-      window.open(intent.deep_link_url, "_blank");
-
       setProgress(0);
-      setStatusText(undefined);
+      setStatusText("폴더 선택 중...");
       setUploadState("uploading");
+
+      const result = await pickFolder();
+
+      if (!result) {
+        setUploadState("hidden");
+        setStatusText(undefined);
+        return;
+      }
+
+      setStatusText(undefined);
       startPolling();
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "인텐트 생성에 실패했습니다.";
+        err instanceof Error ? err.message : "폴더 추가에 실패했습니다.";
       setError(message);
+      setUploadState("hidden");
+      setStatusText(undefined);
     }
-  }, [uploadState, devices, getAccessToken, startPolling]);
+  }, [uploadState, startPolling]);
 
   const handlePause = useCallback(() => setUploadState("paused"), []);
   const handleResume = useCallback(() => setUploadState("uploading"), []);

@@ -97,3 +97,44 @@ export function getCloudThumbnailUrl(videoId: string, sceneId: string): string {
 export function getFaceThumbnailUrl(personClusterId: string): string {
   return `/api/thumbnails/faces/${encodeURIComponent(personClusterId)}`;
 }
+
+export interface PickFolderResult {
+  source_id: string;
+  path: string;
+  display_name: string;
+}
+
+const PICK_FOLDER_TIMEOUT_MS = 120_000;
+
+/**
+ * Asks the agent to open a native folder picker dialog.
+ * Returns the added source on success, null if the user cancelled.
+ * Throws on network / agent errors.
+ */
+export async function pickFolder(): Promise<PickFolderResult | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PICK_FOLDER_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${AGENT_BASE}/local/pick-folder`, {
+      method: "POST",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (res.status === 204) return null;
+    if (res.status === 409) throw new Error("폴더 선택 창이 이미 열려있습니다.");
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new Error(body?.error ?? `Agent error (${res.status})`);
+    }
+
+    return res.json();
+  } catch (error) {
+    clearTimeout(timeout);
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("폴더 선택 요청 시간이 초과되었습니다.");
+    }
+    throw error;
+  }
+}
