@@ -5,6 +5,7 @@ export interface PersonResponse {
   last_seen_scene_time: string | null;
   representative_video_id: string | null;
   representative_scene_id: string | null;
+  is_excluded: boolean;
 }
 
 export interface PeopleListResponse {
@@ -27,4 +28,8 @@ export interface PersonVideosResponse {
   person_cluster_id: string;
   videos: PersonVideoItem[];
   total: number;
+}
+
+export interface ExcludePreferencesResponse {
+  excluded_person_cluster_ids: string[];
 }

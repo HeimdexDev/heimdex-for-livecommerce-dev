@@ -1,5 +1,6 @@
 import {
   ApiError,
+  ExcludePreferencesResponse,
   PeopleListResponse,
   PersonVideosResponse,
   RenamePersonResponse,
@@ -83,5 +84,27 @@ export async function getPersonVideos(
     `/api/people/${encodeURIComponent(personClusterId)}/videos`,
     "GET",
     getToken,
+  );
+}
+
+export async function getExcludePreferences(
+  getToken?: TokenGetter,
+): Promise<ExcludePreferencesResponse> {
+  return apiRequest<ExcludePreferencesResponse>(
+    "/api/people/exclude-preferences",
+    "GET",
+    getToken,
+  );
+}
+
+export async function saveExcludePreferences(
+  personClusterIds: string[],
+  getToken?: TokenGetter,
+): Promise<ExcludePreferencesResponse> {
+  return apiRequest<ExcludePreferencesResponse>(
+    "/api/people/exclude-preferences",
+    "PUT",
+    getToken,
+    { person_cluster_ids: personClusterIds },
   );
 }
