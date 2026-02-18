@@ -35,36 +35,53 @@ function ChevronRightIcon() {
   );
 }
 
-function SparkleIcon() {
-  return (
-    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-    </svg>
-  );
-}
-
-function SelectedSceneCard({
+function SceneCard({
   scene,
   index,
   videoId,
+  selected,
+  onToggle,
 }: {
   scene: VideoScene;
   index: number;
   videoId: string;
+  selected: boolean;
+  onToggle: () => void;
 }) {
   const durationSec = Math.round((scene.end_ms - scene.start_ms) / 1000);
   const timeRange = `${formatTimestamp(scene.start_ms)} - ${formatTimestamp(scene.end_ms)}`;
   const tags = [...scene.keyword_tags, ...scene.product_tags].slice(0, 2);
 
   return (
-    <div className="flex gap-0 rounded-xl border border-gray-200 bg-white overflow-hidden">
-      <div className="w-[140px] flex-shrink-0">
+    <button
+      type="button"
+      onClick={onToggle}
+      className={cn(
+        "flex w-full gap-0 rounded-xl border overflow-hidden text-left transition-colors",
+        selected
+          ? "border-indigo-400 bg-indigo-50/40 ring-1 ring-indigo-400"
+          : "border-gray-200 bg-white hover:border-gray-300",
+      )}
+    >
+      <div className="w-[140px] flex-shrink-0 relative">
         <SceneThumbnail
           videoId={videoId}
           sceneId={scene.scene_id}
           agentAvailable={true}
           className="aspect-video w-full"
         />
+        <div className={cn(
+          "absolute top-2 left-2 flex h-5 w-5 items-center justify-center rounded border-2 transition-colors",
+          selected
+            ? "border-indigo-500 bg-indigo-500"
+            : "border-gray-300 bg-white",
+        )}>
+          {selected && (
+            <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+            </svg>
+          )}
+        </div>
       </div>
       <div className="flex-1 min-w-0 p-3">
         <div className="flex items-center justify-between">
@@ -87,7 +104,7 @@ function SelectedSceneCard({
           </div>
         )}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -105,7 +122,7 @@ export function ShortsCreatePage() {
   const [meta, setMeta] = useState<VideoScenesResponse | null>(null);
   const [allScenes, setAllScenes] = useState<VideoScene[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [subtitlePrompt, setSubtitlePrompt] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!videoId) {
@@ -134,10 +151,33 @@ export function ShortsCreatePage() {
     return () => { cancelled = true; };
   }, [videoId, getAccessToken]);
 
-  const selectedScenes = useMemo(() => {
-    if (requestedSceneIds.size === 0) return allScenes;
-    return allScenes.filter((s) => requestedSceneIds.has(s.scene_id));
+  useEffect(() => {
+    if (requestedSceneIds.size > 0 && allScenes.length > 0) {
+      setSelectedIds(new Set(allScenes.filter((s) => requestedSceneIds.has(s.scene_id)).map((s) => s.scene_id)));
+    }
   }, [allScenes, requestedSceneIds]);
+
+  const selectedScenes = useMemo(
+    () => allScenes.filter((s) => selectedIds.has(s.scene_id)),
+    [allScenes, selectedIds],
+  );
+
+  const toggleScene = (sceneId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(sceneId)) next.delete(sceneId);
+      else next.add(sceneId);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selectedIds.size === allScenes.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(allScenes.map((s) => s.scene_id)));
+    }
+  };
 
   const videoTitle = meta?.video_title || videoId;
 
@@ -192,49 +232,69 @@ export function ShortsCreatePage() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-6">
-            <h2 className="text-lg font-bold text-gray-900 mb-3">자막 생성 프롬프트</h2>
-            <div className="relative">
-              <textarea
-                value={subtitlePrompt}
-                onChange={(e) => setSubtitlePrompt(e.target.value)}
-                placeholder="프롬프트를 작성해주세요."
-                className="w-full min-h-[120px] resize-none rounded-xl border border-gray-200 p-4 text-sm placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-              />
-              <button
-                type="button"
-                className="absolute bottom-3 right-3 rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
-              >
-                <SparkleIcon />
-              </button>
+          {selectedScenes.length > 0 && (
+            <div className="rounded-xl border border-gray-200 bg-white p-6">
+              <h2 className="text-lg font-bold text-gray-900 mb-3">
+                선택된 장면 ({selectedScenes.length})
+              </h2>
+              <div className="space-y-2">
+                {selectedScenes.map((scene, i) => (
+                  <div key={scene.scene_id} className="flex items-center gap-2 text-sm text-gray-600">
+                    <span className="font-medium text-gray-900">장면{allScenes.indexOf(scene) + 1}</span>
+                    <span className="text-xs text-gray-400">
+                      {formatTimestamp(scene.start_ms)} - {formatTimestamp(scene.end_ms)}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         <div className="flex-1 min-w-0">
           <div className="rounded-xl border border-gray-200 bg-white p-6">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold text-gray-900">선택된 장면</h2>
-              <Link
-                href={`/videos/${videoId}`}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
-              >
-                원본 영상으로 이동
-                <ChevronRightIcon />
-              </Link>
+              <div className="flex items-center gap-3">
+                <h2 className="text-lg font-bold text-gray-900">장면 목록</h2>
+                {allScenes.length > 0 && (
+                  <span className="text-sm text-gray-500">
+                    {selectedIds.size}/{allScenes.length} 선택
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {allScenes.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={toggleAll}
+                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
+                  >
+                    {selectedIds.size === allScenes.length ? "전체 해제" : "전체 선택"}
+                  </button>
+                )}
+                <Link
+                  href={`/videos/${videoId}`}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
+                >
+                  원본 영상으로 이동
+                  <ChevronRightIcon />
+                </Link>
+              </div>
             </div>
 
             <div className="space-y-3 max-h-[calc(100vh-220px)] overflow-y-auto">
-              {selectedScenes.map((scene, i) => (
-                <SelectedSceneCard
+              {allScenes.map((scene, i) => (
+                <SceneCard
                   key={scene.scene_id}
                   scene={scene}
                   index={i}
                   videoId={videoId}
+                  selected={selectedIds.has(scene.scene_id)}
+                  onToggle={() => toggleScene(scene.scene_id)}
                 />
               ))}
-              {selectedScenes.length === 0 && (
-                <p className="py-8 text-center text-sm text-gray-400">선택된 장면이 없습니다.</p>
+              {allScenes.length === 0 && (
+                <p className="py-8 text-center text-sm text-gray-400">장면이 없습니다.</p>
               )}
             </div>
           </div>
