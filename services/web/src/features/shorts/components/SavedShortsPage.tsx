@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { exportToPremiere } from "@/lib/agent-export";
+import { ExportDialog } from "@/features/videos/components/ExportDialog";
+import type { ExportClipInput } from "@/lib/types";
 
 interface SavedShort {
   id: string;
@@ -65,6 +68,14 @@ function ChevronDownIcon() {
   );
 }
 
+function FilmIcon() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h1.5C5.496 19.5 6 18.996 6 18.375m-2.625 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-1.5A1.125 1.125 0 0118 18.375M20.625 4.5H3.375m17.25 0c.621 0 1.125.504 1.125 1.125M20.625 4.5h-1.5C18.504 4.5 18 5.004 18 5.625m3.75 0v1.5c0 .621-.504 1.125-1.125 1.125M3.375 4.5c-.621 0-1.125.504-1.125 1.125M3.375 4.5h1.5C5.496 4.5 6 5.004 6 5.625m-2.625 0v1.5c0 .621.504 1.125 1.125 1.125m0 0h1.5m-1.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m1.5-3.75C5.496 8.25 6 7.746 6 7.125v-1.5M4.875 8.25C5.496 8.25 6 8.754 6 9.375v1.5c0 .621-.504 1.125-1.125 1.125m1.5 0h12m-12 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m12-3.75c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h1.5c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 0h-1.5m1.5 0c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-1.5-3.75c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m-12 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m12-3.75c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h1.5c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125" />
+    </svg>
+  );
+}
+
 function CheckIcon({ checked }: { checked: boolean }) {
   if (checked) {
     return (
@@ -90,6 +101,12 @@ export function SavedShortsPage() {
   const [sortKey, setSortKey] = useState<SortKey>("newest");
   const [currentPage, setCurrentPage] = useState(1);
   const [showSort, setShowSort] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportResult, setExportResult] = useState<{ output_path: string; clip_count: number } | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -113,6 +130,66 @@ export function SavedShortsPage() {
 
     return () => { cancelled = true; };
   }, [getAccessToken]);
+
+  useEffect(() => {
+    if (!showExportMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showExportMenu]);
+
+  const selectedShorts = useMemo(
+    () => items.filter((s) => selectedIds.has(s.id)),
+    [items, selectedIds],
+  );
+
+  const handleClipDownload = useCallback(() => {
+    setShowExportMenu(false);
+    for (const short of selectedShorts) {
+      const url = `http://127.0.0.1:8787/playback/file?file_id=${short.video_id}`;
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = short.title ?? `shorts_${short.video_id}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+  }, [selectedShorts]);
+
+  const handlePremiereExport = useCallback(
+    async (config: { projectName: string; outputDir: string; frameRate: number }) => {
+      setShowExportDialog(false);
+      setIsExporting(true);
+      setExportError(null);
+      setExportResult(null);
+      try {
+        const clips: ExportClipInput[] = selectedShorts.map((s) => ({
+          video_id: s.video_id,
+          scene_id: s.scene_ids[0] ?? s.video_id,
+          clip_name: s.title ?? `shorts_${s.scene_ids.length}_scenes`,
+          start_ms: s.start_ms ?? 0,
+          end_ms: s.end_ms ?? 0,
+        }));
+        const result = await exportToPremiere({
+          project_name: config.projectName,
+          format: "edl",
+          frame_rate: config.frameRate,
+          output_dir: config.outputDir,
+          clips,
+        });
+        setExportResult({ output_path: result.output_path, clip_count: result.clip_count });
+      } catch (err) {
+        setExportError(err instanceof Error ? err.message : "내보내기에 실패했습니다");
+      } finally {
+        setIsExporting(false);
+      }
+    },
+    [selectedShorts],
+  );
 
   const sorted = useMemo(() => {
     const copy = [...items];
@@ -173,19 +250,47 @@ export function SavedShortsPage() {
       <div className="rounded-xl border border-gray-200 bg-white p-6">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold text-gray-900">저장된 숏츠 영상</h1>
-          <button
-            type="button"
-            disabled={selectedIds.size === 0}
-            className={cn(
-              "inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors",
-              selectedIds.size > 0
-                ? "bg-indigo-500 text-white hover:bg-indigo-600"
-                : "bg-gray-200 text-gray-400 cursor-not-allowed",
+          <div className="relative" ref={exportMenuRef}>
+            <button
+              type="button"
+              disabled={selectedIds.size === 0 || isExporting}
+              onClick={() => setShowExportMenu((v) => !v)}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-colors",
+                selectedIds.size > 0 && !isExporting
+                  ? "bg-indigo-500 text-white hover:bg-indigo-600"
+                  : "bg-gray-200 text-gray-400 cursor-not-allowed",
+              )}
+            >
+              {isExporting ? (
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              ) : (
+                <DownloadIcon />
+              )}
+              {isExporting ? "내보내는 중..." : "내보내기"}
+              {!isExporting && <ChevronDownIcon />}
+            </button>
+            {showExportMenu && (
+              <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                <button
+                  type="button"
+                  onClick={handleClipDownload}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <DownloadIcon />
+                  클립 다운로드
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowExportMenu(false); setShowExportDialog(true); }}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <FilmIcon />
+                  Premiere Pro 내보내기
+                </button>
+              </div>
             )}
-          >
-            <DownloadIcon />
-            내보내기
-          </button>
+          </div>
         </div>
 
         <div className="mt-5 flex items-center justify-between">
@@ -247,6 +352,33 @@ export function SavedShortsPage() {
             <VideoFileIcon />
             <p className="mt-3 text-sm">저장된 숏츠 영상이 없습니다.</p>
             <p className="mt-1 text-xs text-gray-400">영상 장면 분석에서 숏츠를 제작하고 저장해 보세요.</p>
+          </div>
+        )}
+
+        {showExportDialog && (
+          <ExportDialog
+            isOpen={showExportDialog}
+            onClose={() => setShowExportDialog(false)}
+            onExport={(config) => void handlePremiereExport(config)}
+            selectedCount={selectedIds.size}
+            isExporting={isExporting}
+            defaultProjectName={selectedShorts[0]?.title ?? "Heimdex Export"}
+          />
+        )}
+
+        {exportResult && (
+          <div className="fixed bottom-6 right-6 z-50 max-w-sm rounded-lg border border-green-200 bg-green-50 p-4 shadow-lg">
+            <p className="text-sm font-medium text-green-800">내보내기 완료</p>
+            <p className="mt-1 truncate text-xs text-green-600">{exportResult.output_path} ({exportResult.clip_count}개 클립)</p>
+            <button type="button" onClick={() => setExportResult(null)} className="mt-2 text-xs text-green-700 underline">닫기</button>
+          </div>
+        )}
+
+        {exportError && (
+          <div className="fixed bottom-6 right-6 z-50 max-w-sm rounded-lg border border-red-200 bg-red-50 p-4 shadow-lg">
+            <p className="text-sm font-medium text-red-800">내보내기 실패</p>
+            <p className="mt-1 text-xs text-red-600">{exportError}</p>
+            <button type="button" onClick={() => setExportError(null)} className="mt-2 text-xs text-red-700 underline">닫기</button>
           </div>
         )}
 
