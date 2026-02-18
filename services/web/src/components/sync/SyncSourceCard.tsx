@@ -8,8 +8,10 @@ export type ProcessingStatus = "complete" | "processing" | "error" | "unknown";
 interface SyncSourceCardProps {
   title: string;
   onUpdate: () => void;
+  onCardClick?: () => void;
   isUploading?: boolean;
   disabled?: boolean;
+  selected?: boolean;
   connectionStatus?: ConnectionStatus;
   processingStatus?: ProcessingStatus;
   lastAnalyzedAt?: string | null;
@@ -71,8 +73,10 @@ const PROCESSING_CONFIG: Record<
 export function SyncSourceCard({
   title,
   onUpdate,
+  onCardClick,
   isUploading = false,
   disabled = false,
+  selected = false,
   connectionStatus = "unknown",
   processingStatus = "unknown",
   lastAnalyzedAt,
@@ -89,9 +93,12 @@ export function SyncSourceCard({
 
   return (
     <div
+      onClick={!disabled ? onCardClick : undefined}
       className={cn(
-        "flex flex-col justify-between rounded-xl bg-white p-6 shadow-sm",
+        "flex flex-col justify-between rounded-xl bg-white p-6 shadow-sm transition-all",
         disabled && "opacity-60",
+        !disabled && "cursor-pointer hover:shadow-md",
+        selected && "ring-2 ring-indigo-500",
       )}
     >
       <div>

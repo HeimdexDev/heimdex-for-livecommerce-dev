@@ -3,11 +3,18 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth";
 import { getDevices } from "@/lib/api/devices";
-import { getAgentStatus, pickFolder } from "@/lib/agent";
-import type { AgentState } from "@/lib/agent";
+import {
+  getAgentStatus,
+  getAgentSources,
+  deleteAgentSource,
+  renameAgentSource,
+  pickFolder,
+} from "@/lib/agent";
+import type { AgentState, AgentSource } from "@/lib/agent";
 import { AuthGuard } from "@/components/AuthGuard";
 import { SyncSourceCard } from "@/components/sync/SyncSourceCard";
 import type { ConnectionStatus, ProcessingStatus } from "@/components/sync/SyncSourceCard";
+import { SyncedFolderList } from "@/components/sync/SyncedFolderList";
 import { UploadProgress } from "@/components/sync/UploadProgress";
 import { StopConfirmDialog } from "@/components/sync/StopConfirmDialog";
 import type { DeviceListItem } from "@/lib/types";
@@ -88,6 +95,8 @@ function SyncContent() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("unknown");
   const [processingStatus, setProcessingStatus] = useState<ProcessingStatus>("unknown");
   const [lastSeenAt, setLastSeenAt] = useState<string | null>(null);
+  const [sources, setSources] = useState<AgentSource[]>([]);
+  const [showFolders, setShowFolders] = useState(false);
   const pollingRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unreachableCountRef = useRef(0);
@@ -106,13 +115,18 @@ function SyncContent() {
     }
   }, [getAccessToken]);
 
+  const loadSources = useCallback(async () => {
+    const list = await getAgentSources();
+    setSources(list);
+  }, []);
+
   useEffect(() => {
     loadDevices();
-    const id = setInterval(loadDevices, DEVICE_POLL_INTERVAL_MS);
+    loadSources();
+    const id = setInterval(() => { loadDevices(); loadSources(); }, DEVICE_POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [loadDevices]);
+  }, [loadDevices, loadSources]);
 
-  // Poll agent local status for processing state
   useEffect(() => {
     let mounted = true;
     async function pollProcessing() {
@@ -204,6 +218,7 @@ function SyncContent() {
       }
 
       setStatusText(undefined);
+      loadSources();
       startPolling();
     } catch (err) {
       const message =
@@ -212,7 +227,7 @@ function SyncContent() {
       setUploadState("hidden");
       setStatusText(undefined);
     }
-  }, [uploadState, startPolling]);
+  }, [uploadState, startPolling, loadSources]);
 
   const handlePause = useCallback(() => setUploadState("paused"), []);
   const handleResume = useCallback(() => setUploadState("uploading"), []);
@@ -234,6 +249,22 @@ function SyncContent() {
   }, []);
 
   const isUploading = uploadState !== "hidden" && uploadState !== "complete" && uploadState !== "error";
+
+  const handleCardClick = useCallback((title: string) => {
+    if (title === "로컬 파일") {
+      setShowFolders((prev) => !prev);
+    }
+  }, []);
+
+  const handleDeleteSource = useCallback(async (id: string) => {
+    const ok = await deleteAgentSource(id);
+    if (ok) loadSources();
+  }, [loadSources]);
+
+  const handleRenameSource = useCallback(async (id: string, name: string) => {
+    const ok = await renameAgentSource(id, name);
+    if (ok) loadSources();
+  }, [loadSources]);
 
   return (
     <div className="mx-auto max-w-5xl pt-12">
@@ -257,9 +288,11 @@ function SyncContent() {
           <SyncSourceCard
             key={source.title}
             title={source.title}
-            onUpdate={handleStartUpload}
+            onUpdate={source.title === "로컬 파일" ? handleStartUpload : () => {}}
+            onCardClick={() => handleCardClick(source.title)}
             isUploading={isUploading}
             disabled={source.disabled}
+            selected={source.title === "로컬 파일" && showFolders}
             {...(!source.disabled && {
               connectionStatus,
               processingStatus,
@@ -268,6 +301,15 @@ function SyncContent() {
           />
         ))}
       </div>
+
+      {showFolders && (
+        <SyncedFolderList
+          sources={sources}
+          onAddFolder={handleStartUpload}
+          onDelete={handleDeleteSource}
+          onRename={handleRenameSource}
+        />
+      )}
 
       <UploadProgress
         state={uploadState}

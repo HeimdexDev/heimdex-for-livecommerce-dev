@@ -98,6 +98,55 @@ export function getFaceThumbnailUrl(personClusterId: string): string {
   return `/api/thumbnails/faces/${encodeURIComponent(personClusterId)}`;
 }
 
+export interface AgentSource {
+  id: string;
+  type: string;
+  path: string;
+  display_name: string;
+  drive_nickname?: string;
+  present: boolean;
+  files_count: number;
+  created_at: string;
+}
+
+export async function getAgentSources(): Promise<AgentSource[]> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+    const res = await fetch(`${AGENT_BASE}/local/sources`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.sources ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteAgentSource(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${AGENT_BASE}/local/sources/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    return res.status === 204;
+  } catch {
+    return false;
+  }
+}
+
+export async function renameAgentSource(id: string, displayName: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${AGENT_BASE}/local/sources/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: displayName }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export interface PickFolderResult {
   source_id: string;
   path: string;
