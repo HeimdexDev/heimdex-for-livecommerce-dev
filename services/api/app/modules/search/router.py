@@ -1,3 +1,6 @@
+from typing import cast
+from uuid import UUID
+
 from fastapi import APIRouter, Depends
 
 from app.config import get_settings
@@ -40,6 +43,8 @@ async def search(
         mode=settings.search_default_mode,
     )
 
+    user_id = cast(UUID, user.id)
+
     if settings.search_default_mode == "scenes":
         return await scene_search_service.search(
             query=request.q,
@@ -47,6 +52,7 @@ async def search(
             alpha=request.alpha,
             filters=request.filters,
             include_ocr=request.include_ocr,
+            user_id=user_id,
         )
 
     return await search_service.search(
@@ -54,6 +60,7 @@ async def search(
         org_id=org_ctx.org_id,
         alpha=request.alpha,
         filters=request.filters,
+        user_id=user_id,
     )
 
 
@@ -73,10 +80,12 @@ async def search_scenes(
         user_id=str(user.id),
         org_id=str(org_ctx.org_id),
     )
+    user_id = cast(UUID, user.id)
     return await scene_search_service.search(
         query=request.q,
         org_id=org_ctx.org_id,
         alpha=request.alpha,
         filters=request.filters,
         include_ocr=request.include_ocr,
+        user_id=user_id,
     )

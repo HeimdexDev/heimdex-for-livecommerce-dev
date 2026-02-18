@@ -18,7 +18,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.logging_config import get_logger
 from app.modules.libraries.repository import LibraryRepository
-from app.modules.people.repository import PeopleClusterLabelRepository
+from app.modules.people.repository import (
+    PeopleClusterLabelRepository,
+    PeopleExcludePreferenceRepository,
+)
 from app.modules.search.embedding import get_query_embedding
 from app.modules.search.fusion import compute_weighted_rrf, diversify_results
 from app.modules.search.scene_client import SceneSearchClient
@@ -54,6 +57,7 @@ class SceneSearchService:
         alpha: float,
         filters: SearchFilters,
         include_ocr: bool | None = None,
+        user_id: UUID | None = None,
     ) -> SceneSearchResponse:
         logger.info(
             "scene_search_started",
@@ -62,10 +66,16 @@ class SceneSearchService:
             alpha=alpha,
         )
 
-        # AsyncSession: must complete DB queries before the OpenSearch gather.
         people_repo = PeopleClusterLabelRepository(self.session)
         people_labels = await people_repo.list_by_org(org_id)
         people_label_map = {p.person_cluster_id: p.label for p in people_labels}
+
+        exclude_ids_not_in = list(filters.person_cluster_ids_not_in or [])
+        if user_id is not None:
+            exclude_repo = PeopleExcludePreferenceRepository(self.session)
+            user_excludes = await exclude_repo.list_by_user(org_id, user_id)
+            if user_excludes:
+                exclude_ids_not_in = list(set(exclude_ids_not_in + user_excludes))
 
         matched_person_cluster_ids: list[str] = []
         for p in people_labels:
@@ -88,7 +98,7 @@ class SceneSearchService:
             "source_types": filters.source_types,
             "library_ids": filters.library_ids,
             "person_cluster_ids": effective_person_ids or None,
-            "person_cluster_ids_not_in": filters.person_cluster_ids_not_in,
+            "person_cluster_ids_not_in": exclude_ids_not_in or None,
             "keyword_tags_in": filters.keyword_tags_in,
             "keyword_tags_not_in": filters.keyword_tags_not_in,
             "product_tags_in": filters.product_tags_in,
