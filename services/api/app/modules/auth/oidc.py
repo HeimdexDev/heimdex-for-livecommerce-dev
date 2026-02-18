@@ -18,6 +18,7 @@ from app.logging_config import get_logger
 logger = get_logger(__name__)
 
 JWKS_CACHE_TTL_SECONDS = 3600
+USERINFO_CACHE_TTL_SECONDS = 300
 
 
 @dataclass
@@ -26,7 +27,14 @@ class JWKSCache:
     fetched_at: float
 
 
+@dataclass
+class _UserinfoEntry:
+    data: dict[str, Any]
+    fetched_at: float
+
+
 _jwks_cache: JWKSCache | None = None
+_userinfo_cache: dict[str, _UserinfoEntry] = {}
 
 
 def _get_jwks_uri() -> str:
@@ -138,7 +146,22 @@ def fetch_userinfo(token: str) -> dict[str, Any]:
     Auth0 access tokens do NOT include email/email_verified by default.
     This endpoint returns the user's profile using the access token,
     providing the email and verification status needed for auto-linking.
+
+    Results are cached per auth0 sub for USERINFO_CACHE_TTL_SECONDS to
+    avoid hitting Auth0 rate limits when the frontend fires parallel requests.
     """
+    try:
+        unverified = jwt.get_unverified_claims(token)
+        sub = unverified.get("sub", "")
+    except JWTError:
+        sub = ""
+
+    now = time.time()
+    if sub and sub in _userinfo_cache:
+        entry = _userinfo_cache[sub]
+        if (now - entry.fetched_at) < USERINFO_CACHE_TTL_SECONDS:
+            return entry.data
+
     settings = get_settings()
     userinfo_url = f"https://{settings.auth0_domain}/userinfo"
 
@@ -149,9 +172,14 @@ def fetch_userinfo(token: str) -> dict[str, Any]:
                 headers={"Authorization": f"Bearer {token}"},
             )
             response.raise_for_status()
-            return response.json()
+            data = response.json()
+            if sub:
+                _userinfo_cache[sub] = _UserinfoEntry(data=data, fetched_at=now)
+            return data
     except httpx.HTTPError as e:
         logger.warning("userinfo_fetch_failed", error=str(e))
+        if sub and sub in _userinfo_cache:
+            return _userinfo_cache[sub].data
         return {}
 
 

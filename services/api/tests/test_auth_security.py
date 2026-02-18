@@ -1,23 +1,26 @@
-"""
-Security tests for Auth0 OIDC and tenancy enforcement.
-
-These tests verify:
-1. Token org_id must match Host-derived org_id (403 on mismatch)
-2. Auto-linking requires email_verified=true
-3. Tenancy is derived ONLY from Host header, never from token
-
-Run with: pytest tests/test_auth_security.py -v
-"""
 import pytest
+from contextlib import asynccontextmanager
 from unittest.mock import patch, MagicMock, AsyncMock
 from uuid import uuid4
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 
 from app.modules.auth.service import _validate_auth0_user, _validate_dev_user, _enforce_org_binding, AuthService
 from app.modules.auth.oidc import Auth0TokenPayload
 from app.modules.auth.schemas import TokenPayload
 from app.modules.tenancy.context import OrgContext
+
+
+@asynccontextmanager
+async def _noop_savepoint():
+    yield
+
+
+@asynccontextmanager
+async def _failing_savepoint():
+    raise IntegrityError("duplicate key", params=None, orig=Exception())
+    yield  # noqa: unreachable
 
 
 class TestOrgMismatchDenial:
@@ -435,7 +438,11 @@ class TestAutoProvisioning:
         created_user = MagicMock()
         created_user.id = uuid4()
 
+        mock_session = MagicMock()
+        mock_session.begin_nested = MagicMock(return_value=_noop_savepoint())
+
         user_repo = MagicMock()
+        user_repo.session = mock_session
         user_repo.get_by_auth0_sub = AsyncMock(return_value=None)
         user_repo.get_by_email = AsyncMock(return_value=None)
         user_repo.create = AsyncMock(return_value=created_user)
@@ -501,6 +508,41 @@ class TestAutoProvisioning:
             user_repo.create.assert_not_called()
             user_repo.link_auth0_sub.assert_called_once_with(
                 existing_user.id, "auth0|returning"
+            )
+
+    @pytest.mark.asyncio
+    async def test_race_condition_falls_back_to_existing_user(self):
+        org_id = uuid4()
+        org_ctx = OrgContext(org_id=org_id, org_slug="test-org")
+
+        auth0_payload = Auth0TokenPayload(
+            sub="auth0|racer",
+            org_id=None,
+            email="racer@company.com",
+            permissions=[],
+            raw_claims={"email_verified": True},
+        )
+
+        existing_user = MagicMock()
+        existing_user.id = uuid4()
+
+        mock_session = MagicMock()
+        mock_session.begin_nested = MagicMock(return_value=_failing_savepoint())
+
+        user_repo = MagicMock()
+        user_repo.session = mock_session
+        user_repo.get_by_auth0_sub = AsyncMock(return_value=None)
+        user_repo.get_by_email = AsyncMock(side_effect=[None, existing_user])
+        user_repo.create = AsyncMock()
+        user_repo.link_auth0_sub = AsyncMock()
+
+        with patch("app.modules.auth.service.validate_auth0_token", return_value=auth0_payload):
+            result = await _validate_auth0_user("fake_token", org_ctx, user_repo)
+
+            assert result == existing_user
+            user_repo.create.assert_not_called()
+            user_repo.link_auth0_sub.assert_called_once_with(
+                existing_user.id, "auth0|racer"
             )
 
     @pytest.mark.asyncio

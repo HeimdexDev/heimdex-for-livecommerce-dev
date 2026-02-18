@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -173,15 +174,28 @@ async def _validate_auth0_user(
                 # Auto-provision: Auth0 org membership + verified email = trusted user.
                 # Admin adds users to the Auth0 organization; on first login we
                 # create their DB row automatically so no manual SQL is needed.
-                user = await user_repo.create(org_ctx.org_id, email)
-                await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
-                logger.info(
-                    "auto_provisioned_user",
-                    user_id=str(user.id),
-                    sub=auth0_payload.sub,
-                    email=email,
-                    org_id=str(org_ctx.org_id),
-                )
+                # SAVEPOINT handles the race where parallel requests both try to INSERT.
+                try:
+                    async with user_repo.session.begin_nested():
+                        user = await user_repo.create(org_ctx.org_id, email)
+                    await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
+                    logger.info(
+                        "auto_provisioned_user",
+                        user_id=str(user.id),
+                        sub=auth0_payload.sub,
+                        email=email,
+                        org_id=str(org_ctx.org_id),
+                    )
+                except IntegrityError:
+                    user = await user_repo.get_by_email(email, org_ctx.org_id)
+                    if user:
+                        await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
+                        logger.info(
+                            "linked_auth0_sub_after_race",
+                            user_id=str(user.id),
+                            sub=auth0_payload.sub,
+                            email=email,
+                        )
     
     if not user:
         raise HTTPException(
