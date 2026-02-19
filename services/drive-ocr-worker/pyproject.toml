@@ -13,6 +13,8 @@ dependencies = [
     "requests>=2.31",
     "paddleocr>=2.8.0",
     "paddlepaddle>=2.6.1",
+    "heimdex-media-contracts>=0.5.0",
+    "heimdex-media-pipelines>=0.6.0",
 ]
 
 [build-system]

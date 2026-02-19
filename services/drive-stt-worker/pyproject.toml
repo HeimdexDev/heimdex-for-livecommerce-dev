@@ -12,6 +12,8 @@ dependencies = [
     "structlog>=23.0",
     "requests>=2.31",
     "faster-whisper>=1.0",
+    "heimdex-media-contracts>=0.5.0",
+    "heimdex-media-pipelines>=0.6.0",
 ]
 
 [build-system]
