@@ -3,9 +3,9 @@ Pydantic schemas for the video visibility endpoints.
 
 All data is derived from OpenSearch scene aggregations — no Postgres table.
 """
-from typing import Literal
-
 from pydantic import BaseModel, Field
+
+from heimdex_media_contracts.ingest import SourceType
 
 
 # ---------------------------------------------------------------------------
@@ -18,7 +18,7 @@ class VideoSummary(BaseModel):
     video_title: str | None = None
     library_id: str | None = None
     library_name: str | None = None
-    source_type: Literal["gdrive", "removable_disk", "local"] | None = None
+    source_type: SourceType | None = None
     scene_count: int = 0
     first_scene_start_ms: int = 0
     last_scene_end_ms: int = 0

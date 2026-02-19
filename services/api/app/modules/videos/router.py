@@ -23,6 +23,7 @@ from app.modules.videos.schemas import (
     VideoStats,
 )
 from app.modules.videos.service import VideoService
+from heimdex_media_contracts.ingest import SourceType
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/videos", tags=["videos"])
@@ -34,7 +35,7 @@ async def list_videos(
     user: User = Depends(get_current_user),
     video_service: VideoService = Depends(get_video_service),
     library_id: str | None = Query(None, description="Filter by library UUID"),
-    source_type: Literal["gdrive", "removable_disk", "local"] | None = Query(None, description="Filter by source type"),
+    source_type: SourceType | None = Query(None, description="Filter by source type"),
     date_from: str | None = Query(None, description="Filter scenes ingested on or after this ISO-8601 date"),
     date_to: str | None = Query(None, description="Filter scenes ingested on or before this ISO-8601 date"),
     sort: Literal["latest", "oldest"] = Query("latest", description="Sort order by ingest time"),

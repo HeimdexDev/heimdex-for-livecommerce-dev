@@ -13,10 +13,11 @@ Design decisions:
 """
 import re
 from datetime import datetime
-from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
+
+from heimdex_media_contracts.ingest import SourceType
 
 # Scene ID must match "{video_id}_scene_{index}" pattern.
 # video_id is any non-empty string; index is one or more digits.
@@ -80,7 +81,7 @@ class IngestSceneDocument(BaseModel):
         ge=0,
         description="Character count of OCR text",
     )
-    source_type: Literal["gdrive", "removable_disk", "local"] = Field(
+    source_type: SourceType = Field(
         default="gdrive",
         description="Source type of the original video file",
     )

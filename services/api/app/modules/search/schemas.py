@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
+from heimdex_media_contracts.ingest import SourceType
+
 
 # ---------------------------------------------------------------------------
 # Reusable constraints
@@ -27,7 +29,7 @@ def _clean_tag_list(values: list[str] | None) -> list[str]:
 class SearchFilters(BaseModel):
     date_from: datetime | None = None
     date_to: datetime | None = None
-    source_types: list[Literal["gdrive", "removable_disk", "local"]] | None = None
+    source_types: list[SourceType] | None = None
     library_ids: list[UUID] | None = None
     person_cluster_ids: list[str] | None = None
     person_cluster_ids_not_in: list[str] | None = None
@@ -85,7 +87,7 @@ class SegmentResult(BaseModel):
     end_ms: int
     snippet: str
     thumbnail_url: str | None
-    source_type: Literal["gdrive", "removable_disk", "local"]
+    source_type: SourceType
     required_drive_nickname: str | None = None
     capture_time: datetime | None = None
     people_cluster_ids: list[str] = Field(default_factory=list)
@@ -135,7 +137,7 @@ class SceneResult(BaseModel):
     snippet: str
     ocr_snippet: str = ""
     thumbnail_url: str | None
-    source_type: Literal["gdrive", "removable_disk", "local"]
+    source_type: SourceType
     required_drive_nickname: str | None = None
     capture_time: datetime | None = None
     people_cluster_ids: list[str] = Field(default_factory=list)
