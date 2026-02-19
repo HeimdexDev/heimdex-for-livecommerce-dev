@@ -20,6 +20,7 @@ async def process_pending_files(
     acquire_slot: Callable,
     release_slot: Callable,
 ) -> None:
+    import app.db.models  # noqa: F401 — register all SQLAlchemy models for FK resolution
     from app.modules.drive.models import DriveConnection, DriveFile, DriveSecret
     from app.modules.drive.repository import DriveConnectionRepository, DriveFileRepository
 

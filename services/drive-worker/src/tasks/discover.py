@@ -24,6 +24,7 @@ def _parse_google_time(ts: str | None) -> datetime | None:
 
 
 async def discover_new_files(session: AsyncSession, settings: Any) -> int:
+    import app.db.models  # noqa: F401 — register all SQLAlchemy models for FK resolution
     from app.modules.drive.google_client import DriveClient
     from app.modules.drive.keys import drive_video_id
     from app.modules.drive.models import DriveFile
@@ -32,8 +33,6 @@ async def discover_new_files(session: AsyncSession, settings: Any) -> int:
         DriveFileRepository,
         DriveSecretRepository,
     )
-    import app.modules.orgs.models  # noqa: F401 — register Org FK target
-    import app.modules.libraries.models  # noqa: F401 — register Library FK target
 
     conn_repo = DriveConnectionRepository(session)
     file_repo = DriveFileRepository(session)
