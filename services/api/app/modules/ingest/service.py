@@ -34,7 +34,13 @@ logger = get_logger(__name__)
 
 
 class SceneIngestService:
-    """Service that processes and indexes agent-submitted scene documents."""
+    """Shared scene ingest pipeline for all sources (agent, Drive, etc.).
+
+    Normalizes transcripts, generates E5 embeddings, and bulk-indexes
+    into the scenes OpenSearch index.  Source-specific logic (download,
+    transcode, scene detection) happens upstream — this service receives
+    finished scene data regardless of origin.
+    """
 
     def __init__(
         self,

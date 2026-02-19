@@ -1,0 +1,13 @@
+# Spike experiment dependencies
+# Install: pip install -r requirements.txt
+
+# Google Drive API
+google-api-python-client>=2.100.0
+google-auth>=2.25.0
+google-auth-httplib2>=0.2.0
+
+# Manual HTTP requests (for Range header downloads)
+requests>=2.31.0
+
+# System metrics (CPU, memory, disk)
+psutil>=5.9.0

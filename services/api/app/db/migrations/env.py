@@ -9,6 +9,7 @@ from app.modules.orgs.models import Org
 from app.modules.users.models import User
 from app.modules.libraries.models import Library
 from app.modules.profiles.models import LibraryProfile
+from app.modules.drive.models import DriveConnection, DriveFile, DriveSecret
 from app.modules.people.models import DriveNicknameRegistry, PeopleClusterLabel
 
 config = context.config

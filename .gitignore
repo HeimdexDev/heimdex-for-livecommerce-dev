@@ -100,6 +100,10 @@ yarn-error.log*
 *.key
 secrets/
 credentials.json
+sa-key*.json
+spike/drive/sa-key*.json
+spike/drive/tmp/
+spike/drive/logs/
 
 # =============================================================================
 # Logs & Temporary Files

@@ -93,11 +93,31 @@ async def get_thumbnail(
 ):
     settings = get_settings()
     thumbnail_path = Path(settings.thumbnail_storage_dir) / str(org_ctx.org_id) / video_id / f"{scene_id}.jpg"
-    if not thumbnail_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found")
+    if thumbnail_path.exists():
+        return FileResponse(
+            path=thumbnail_path,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
-    return FileResponse(
-        path=thumbnail_path,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
+    if video_id.startswith("gd_") and settings.drive_connector_enabled:
+        return _get_s3_thumbnail(str(org_ctx.org_id), video_id, scene_id)
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found")
+
+
+def _get_s3_thumbnail(org_id: str, video_id: str, scene_id: str):
+    from fastapi.responses import Response
+
+    from app.config import get_settings as _get_settings
+    from app.storage.s3 import S3Client
+
+    s3 = S3Client(bucket=_get_settings().drive_s3_bucket)
+    data = s3.get_object_bytes(f"{org_id}/drive/thumbs/{video_id}/{scene_id}.jpg")
+    if data:
+        return Response(
+            content=data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found")

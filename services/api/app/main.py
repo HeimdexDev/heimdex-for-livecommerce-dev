@@ -279,6 +279,13 @@ app.include_router(shorts_router, prefix="/api")
 app.include_router(thumbnails_public_router, prefix="/api")
 app.include_router(videos_router, prefix="/api")
 
+if get_settings().drive_connector_enabled:
+    from app.modules.drive.router import router as drive_router
+    app.include_router(drive_router, prefix="/api")
+
+    from app.modules.ingest.internal_router import router as internal_ingest_router
+    app.include_router(internal_ingest_router)
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

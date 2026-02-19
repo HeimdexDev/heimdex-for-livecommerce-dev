@@ -98,6 +98,26 @@ class Settings(BaseSettings):
 
     people_enabled: bool = True
 
+    # --- Google Drive connector ---
+    drive_connector_enabled: bool = False
+    drive_sa_encryption_key: str = ""  # AES-256 key (hex) for encrypting SA keys in drive_secrets
+    drive_worker_poll_interval_seconds: int = 30
+    drive_worker_global_concurrency: int = 2
+    drive_worker_per_org_concurrency: int = 1
+    drive_temp_disk_budget_gb: float = 50.0
+    drive_temp_dir: str = "/data/drive-tmp"
+    drive_proxy_max_height: int = 720
+    drive_proxy_crf: int = 23
+    drive_proxy_preset: str = "fast"
+    drive_proxy_audio_bitrate: str = "128k"
+    drive_proxy_max_bitrate: str = "2500k"
+    drive_proxy_bufsize: str = "5000k"
+    drive_download_chunk_size: int = 10 * 1024 * 1024
+    drive_download_max_retries: int = 3
+    drive_s3_bucket: str = "heimdex-drive"
+    drive_internal_api_key: str = ""  # Pre-shared key for drive-worker → API internal ingest
+    drive_api_base_url: str = "http://api:8000"  # API base URL for drive-worker HTTP calls
+
     # --- CORS ---
     cors_allow_origin_regex: str = (
         r"^https?://"
