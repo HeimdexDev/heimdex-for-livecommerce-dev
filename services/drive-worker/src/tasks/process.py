@@ -64,7 +64,7 @@ async def _process_single_file(
     file_repo: Any,
 ) -> None:
     from app.modules.drive.google_client import DriveClient
-    from app.modules.drive.keys import proxy_s3_key, thumbnail_s3_prefix
+    from app.modules.drive.keys import proxy_s3_key, thumbnail_s3_key, thumbnail_s3_prefix
     from app.modules.drive.models import DriveSecret
     from app.modules.drive.repository import DriveSecretRepository
     from app.modules.drive.transcode import make_transcode_decision, probe_video, transcode_to_proxy
@@ -120,7 +120,7 @@ async def _process_single_file(
             proxy_s3_key=s3_key,
             proxy_size_bytes=proxy_size,
             proxy_duration_ms=proxy_probe.duration_ms,
-            thumbnail_s3_prefix=thumbnail_s3_prefix(org_id_str, connection.drive_id, drive_file.google_file_id),
+            thumbnail_s3_prefix=thumbnail_s3_prefix(org_id_str, drive_file.video_id),
         )
 
         ingest_result = _post_scenes_to_api(

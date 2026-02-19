@@ -110,10 +110,11 @@ def _get_s3_thumbnail(org_id: str, video_id: str, scene_id: str):
     from fastapi.responses import Response
 
     from app.config import get_settings as _get_settings
+    from app.modules.drive.keys import thumbnail_s3_key
     from app.storage.s3 import S3Client
 
     s3 = S3Client(bucket=_get_settings().drive_s3_bucket)
-    data = s3.get_object_bytes(f"{org_id}/drive/thumbs/{video_id}/{scene_id}.jpg")
+    data = s3.get_object_bytes(thumbnail_s3_key(org_id, video_id, scene_id))
     if data:
         return Response(
             content=data,

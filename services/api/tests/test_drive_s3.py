@@ -41,12 +41,19 @@ class TestS3KeyGeneration:
         assert key == "org-123/drive/drive-456/file-789/proxy.mp4"
 
     def test_thumbnail_key_format(self):
-        key = thumbnail_s3_key("org-123", "drive-456", "file-789", "gd_abc123_scene_001")
-        assert key == "org-123/drive/drive-456/file-789/thumbs/gd_abc123_scene_001.jpg"
+        key = thumbnail_s3_key("org-123", "gd_abc123def456ab", "gd_abc123def456ab_scene_001")
+        assert key == "org-123/drive/thumbs/gd_abc123def456ab/gd_abc123def456ab_scene_001.jpg"
 
     def test_thumbnail_prefix_format(self):
-        prefix = thumbnail_s3_prefix("org-123", "drive-456", "file-789")
-        assert prefix == "org-123/drive/drive-456/file-789/thumbs/"
+        prefix = thumbnail_s3_prefix("org-123", "gd_abc123def456ab")
+        assert prefix == "org-123/drive/thumbs/gd_abc123def456ab/"
+
+    def test_thumbnail_key_matches_router_read_pattern(self):
+        org_id = "4d20264c-c440-4d69-8613-7d7558ea386b"
+        video_id = drive_video_id(org_id, "1a2b3cGoogleFileId")
+        scene_id = f"{video_id}_scene_0"
+        key = thumbnail_s3_key(org_id, video_id, scene_id)
+        assert key == f"{org_id}/drive/thumbs/{video_id}/{scene_id}.jpg"
 
     def test_key_contains_all_components(self):
         key = proxy_s3_key("my-org", "my-drive", "my-file")
