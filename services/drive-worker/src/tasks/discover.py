@@ -32,6 +32,8 @@ async def discover_new_files(session: AsyncSession, settings: Any) -> int:
         DriveFileRepository,
         DriveSecretRepository,
     )
+    import app.modules.orgs.models  # noqa: F401 — register Org FK target
+    import app.modules.libraries.models  # noqa: F401 — register Library FK target
 
     conn_repo = DriveConnectionRepository(session)
     file_repo = DriveFileRepository(session)
