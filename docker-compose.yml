@@ -233,6 +233,45 @@ services:
              pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
              python -m src.worker"
 
+  drive-ocr-worker:
+    build:
+      context: ./services/drive-ocr-worker
+      dockerfile: Dockerfile
+    container_name: heimdex-drive-ocr-worker
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-api
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}
+      - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql://heimdex:heimdex_dev_password@postgres:5432/heimdex}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - DRIVE_OCR_ENABLED=${DRIVE_OCR_ENABLED:-false}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - DRIVE_OCR_POLL_INTERVAL_SECONDS=${DRIVE_OCR_POLL_INTERVAL_SECONDS:-30}
+      - DRIVE_OCR_CONCURRENCY=${DRIVE_OCR_CONCURRENCY:-1}
+      - DRIVE_OCR_MAX_FRAMES_PER_SCENE=${DRIVE_OCR_MAX_FRAMES_PER_SCENE:-10}
+      - DRIVE_OCR_MAX_FRAMES_PER_VIDEO=${DRIVE_OCR_MAX_FRAMES_PER_VIDEO:-300}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./services/drive-ocr-worker:/app
+      - ./services/api:/opt/heimdex-api:ro
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             python -m src.worker"
+
 volumes:
   postgres_data:
   opensearch_data:
