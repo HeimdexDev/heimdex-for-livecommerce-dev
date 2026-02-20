@@ -217,6 +217,7 @@ async def _process_single_file(
             library_id=connection.library_id,
             duration_ms=proxy_probe.duration_ms,
             scenes=scene_dicts,
+            source_path=drive_file.drive_path,
         )
 
         await file_repo.update_status(
@@ -405,16 +406,19 @@ def _post_scenes_to_api(
     library_id: UUID,
     duration_ms: int,
     scenes: List[dict[str, Any]],
+    source_path: Optional[str] = None,
 ) -> dict[str, Any]:
     import requests
 
-    payload = {
+    payload: dict[str, Any] = {
         "video_id": video_id,
         "video_title": video_title,
         "library_id": str(library_id),
         "total_duration_ms": duration_ms,
         "scenes": scenes,
     }
+    if source_path is not None:
+        payload["source_path"] = source_path
 
     api_base = settings.drive_api_base_url.rstrip("/")
     url = f"{api_base}/internal/ingest/scenes"

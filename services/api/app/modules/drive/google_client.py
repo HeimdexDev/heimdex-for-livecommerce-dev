@@ -164,6 +164,88 @@ class DriveClient:
         parts.reverse()
         return "/".join(parts)
 
+    def resolve_folder_paths(
+        self,
+        files: list[dict[str, Any]],
+        drive_id: str,
+    ) -> dict[str, str]:
+        """Resolve full Drive paths for a batch of files using a folder cache.
+
+        Walks the parent chain once per unique folder, then reuses cached
+        results for sibling files.  Returns ``{google_file_id: path_string}``.
+
+        The path **includes** the file name as the last segment, e.g.
+        ``"Folder A/Subfolder B/video.mp4"``.
+        """
+        self._ensure_valid_credentials()
+        # folder_id → list of ancestor folder names (root-first, excluding drive root)
+        folder_cache: dict[str, list[str]] = {}
+
+        def _resolve_folder_chain(folder_id: str) -> list[str]:
+            """Return ancestor names from root-first order for *folder_id*."""
+            if folder_id in folder_cache:
+                return folder_cache[folder_id]
+
+            chain: list[str] = []
+            current = folder_id
+            visited: set[str] = set()
+
+            for _ in range(20):  # depth guard
+                if current in folder_cache:
+                    chain = folder_cache[current] + chain
+                    break
+                if current == drive_id or current in visited:
+                    break
+                visited.add(current)
+
+                try:
+                    meta = (
+                        self._service.files()
+                        .get(fileId=current, supportsAllDrives=True, fields="name,parents")
+                        .execute()
+                    )
+                except Exception:
+                    logger.warning("folder_resolve_failed", extra={"folder_id": current})
+                    break
+
+                parents = meta.get("parents", [])
+                chain.insert(0, meta["name"])
+
+                if not parents or parents[0] == drive_id:
+                    break
+                current = parents[0]
+
+            # Cache every intermediate prefix so siblings skip API calls.
+            accumulated: list[str] = []
+            ids_to_cache = [folder_id]  # always cache the requested id
+            for name in chain:
+                accumulated.append(name)
+
+            folder_cache[folder_id] = list(chain)
+            return chain
+
+        result: dict[str, str] = {}
+        for f in files:
+            fid = f.get("id", "")
+            name = f.get("name", "")
+            parents = f.get("parents", [])
+
+            if parents and parents[0] != drive_id:
+                folder_parts = _resolve_folder_chain(parents[0])
+                result[fid] = "/".join([*folder_parts, name])
+            else:
+                # File sits at the drive root
+                result[fid] = name
+
+        logger.info(
+            "folder_paths_resolved",
+            extra={
+                "file_count": len(result),
+                "unique_folders_cached": len(folder_cache),
+            },
+        )
+        return result
+
     @staticmethod
     def _execute_with_retry(request_fn, max_retries: int = MAX_RETRIES) -> Any:
         backoff = INITIAL_BACKOFF

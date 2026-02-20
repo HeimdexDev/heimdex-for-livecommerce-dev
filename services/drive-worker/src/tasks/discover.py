@@ -74,14 +74,33 @@ async def discover_new_files(session: AsyncSession, settings: Any) -> int:
                 )
                 files = response.get("files", [])
 
+                # Filter to genuinely new files before resolving paths.
+                new_files: list[dict[str, Any]] = []
                 for file in files:
                     google_file_id = file.get("id")
                     if not google_file_id:
                         continue
-
                     existing = await file_repo.get_by_google_file_id(org_id, google_file_id)
                     if existing:
                         continue
+                    new_files.append(file)
+
+                # Batch-resolve Drive folder paths (cached, efficient).
+                path_map: dict[str, str] = {}
+                if new_files:
+                    try:
+                        path_map = drive_client.resolve_folder_paths(
+                            new_files, connection.drive_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "discover_path_resolve_failed",
+                            extra={"org_id": org_id_str, "file_count": len(new_files)},
+                            exc_info=True,
+                        )
+
+                for file in new_files:
+                    google_file_id = file["id"]
 
                     raw_size = file.get("size", 0)
                     try:
@@ -99,6 +118,7 @@ async def discover_new_files(session: AsyncSession, settings: Any) -> int:
                         md5_checksum=file.get("md5Checksum"),
                         google_modified_time=_parse_google_time(file.get("modifiedTime")),
                         google_created_time=_parse_google_time(file.get("createdTime")),
+                        drive_path=path_map.get(google_file_id),
                         video_id=drive_video_id(org_id_str, google_file_id),
                         processing_status="pending",
                         enrichment_state="pending",
