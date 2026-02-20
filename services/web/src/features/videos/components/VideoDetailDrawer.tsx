@@ -100,11 +100,11 @@ export function VideoDetailDrawer({
                 <p className="font-medium text-gray-900">{video.people_count}</p>
               </div>
             )}
-            {video.latest_ingest_time && (
+            {(video.capture_time || video.latest_ingest_time) && (
               <div>
-                <span className="text-gray-500">Last ingested</span>
+                <span className="text-gray-500">{video.capture_time ? "촬영일" : "등록일"}</span>
                 <p className="font-medium text-gray-900">
-                  {new Date(video.latest_ingest_time).toLocaleString()}
+                  {new Date(video.capture_time || video.latest_ingest_time!).toLocaleString("ko-KR")}
                 </p>
               </div>
             )}

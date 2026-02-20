@@ -99,9 +99,11 @@ export function VideoCard({ video, onSelect, agentAvailable }: VideoCardProps) {
             </div>
           )}
 
-          {video.latest_ingest_time && (
+          {(video.capture_time || video.latest_ingest_time) && (
             <p className="mt-1.5 text-xs text-gray-400">
-              Ingested {formatRelativeTime(video.latest_ingest_time)}
+              {video.capture_time
+                ? formatRelativeTime(video.capture_time)
+                : `Ingested ${formatRelativeTime(video.latest_ingest_time!)}`}
             </p>
           )}
         </div>

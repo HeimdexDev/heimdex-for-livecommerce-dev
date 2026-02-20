@@ -648,7 +648,10 @@ class SceneSearchClient:
                 date_range["gte"] = date_from
             if date_to:
                 date_range["lte"] = date_to
-            filter_clauses.append({"range": {"ingest_time": date_range}})
+            filter_clauses.append({"bool": {"should": [
+                {"range": {"capture_time": date_range}},
+                {"bool": {"must_not": {"exists": {"field": "capture_time"}}, "filter": {"range": {"ingest_time": date_range}}}},
+            ], "minimum_should_match": 1}})
 
         # Composite aggregation on video_id
         composite_sources: list[dict[str, Any]] = [
@@ -676,6 +679,7 @@ class SceneSearchClient:
                     "keyword_tags": {"terms": {"field": "keyword_tags", "size": 10}},
                     "product_tags": {"terms": {"field": "product_tags", "size": 10}},
                     "people_count": {"cardinality": {"field": "people_cluster_ids"}},
+                    "earliest_capture": {"min": {"field": "capture_time"}},
                 },
             },
             "total_videos": {"cardinality": {"field": "video_id", "precision_threshold": 10000}},
@@ -724,14 +728,13 @@ class SceneSearchClient:
                 "people_count": int(bucket["people_count"]["value"]),
                 "required_drive_nickname": drive_buckets[0]["key"] if drive_buckets else None,
                 "source_path": sp_buckets[0]["key"] if sp_buckets else None,
+                "capture_time": bucket["earliest_capture"]["value_as_string"] if bucket["earliest_capture"]["value"] else None,
             })
 
-        # Sort by latest_ingest_time for the "latest" sort order
-        # (composite agg sorts by video_id; we re-sort by ingest time)
         if sort == "latest":
-            videos.sort(key=lambda v: v["latest_ingest_time"] or "", reverse=True)
+            videos.sort(key=lambda v: v["capture_time"] or v["latest_ingest_time"] or "", reverse=True)
         else:
-            videos.sort(key=lambda v: v["earliest_ingest_time"] or "")
+            videos.sort(key=lambda v: v["capture_time"] or v["earliest_ingest_time"] or "")
 
         after_key_result = agg_result["videos"].get("after_key")
 
@@ -935,6 +938,7 @@ class SceneSearchClient:
                 "total_libraries": {"cardinality": {"field": "library_id", "precision_threshold": 1000}},
                 "source_breakdown": {"terms": {"field": "source_type", "size": 10}},
                 "latest_ingest": {"max": {"field": "ingest_time"}},
+                "latest_capture": {"max": {"field": "capture_time"}},
                 "scenes_last_24h": {
                     "filter": {"range": {"ingest_time": {"gte": "now-24h"}}},
                 },
@@ -961,6 +965,7 @@ class SceneSearchClient:
             "total_libraries": int(aggs["total_libraries"]["value"]),
             "source_breakdown": source_breakdown,
             "latest_ingest_time": aggs["latest_ingest"]["value_as_string"] if aggs["latest_ingest"]["value"] else None,
+            "latest_capture_time": aggs["latest_capture"]["value_as_string"] if aggs["latest_capture"]["value"] else None,
             "scenes_last_24h": int(aggs["scenes_last_24h"]["doc_count"]),
             "scenes_last_7d": int(aggs["scenes_last_7d"]["doc_count"]),
         }

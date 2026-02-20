@@ -891,9 +891,9 @@ export default function DashboardContent() {
                 <div className="flex items-center gap-1.5 text-sm text-gray-600">
                   <ClockIcon />
                   <span>
-                    {stats?.latest_ingest_time
+                    {(stats?.latest_capture_time || stats?.latest_ingest_time)
                       ? new Date(
-                          stats.latest_ingest_time,
+                          stats.latest_capture_time || stats.latest_ingest_time!,
                         ).toLocaleDateString("ko-KR")
                       : "N/A"}
                   </span>

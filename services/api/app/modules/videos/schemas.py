@@ -24,6 +24,7 @@ class VideoSummary(BaseModel):
     last_scene_end_ms: int = 0
     earliest_ingest_time: str | None = None
     latest_ingest_time: str | None = None
+    capture_time: str | None = None
     first_scene_keyframe_ms: int = 0
     keyword_tags: list[str] = Field(default_factory=list)
     product_tags: list[str] = Field(default_factory=list)
@@ -92,6 +93,7 @@ class VideoStats(BaseModel):
     total_libraries: int = 0
     source_breakdown: dict[str, int] = Field(default_factory=dict)
     latest_ingest_time: str | None = None
+    latest_capture_time: str | None = None
     scenes_last_24h: int = 0
     scenes_last_7d: int = 0
 

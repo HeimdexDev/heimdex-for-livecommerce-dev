@@ -13,6 +13,7 @@ export interface VideoSummary {
   last_scene_end_ms: number;
   earliest_ingest_time: string | null;
   latest_ingest_time: string | null;
+  capture_time: string | null;
   keyword_tags: string[];
   product_tags: string[];
   people_count: number;
@@ -72,6 +73,7 @@ export interface VideoStats {
   total_libraries: number;
   source_breakdown: Record<string, number>;
   latest_ingest_time: string | null;
+  latest_capture_time: string | null;
   scenes_last_24h: number;
   scenes_last_7d: number;
 }

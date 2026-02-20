@@ -102,6 +102,7 @@ class VideoService:
                  last_scene_end_ms=v["last_scene_end_ms"],
                  earliest_ingest_time=v["earliest_ingest_time"],
                  latest_ingest_time=v["latest_ingest_time"],
+                 capture_time=v.get("capture_time"),
                  first_scene_keyframe_ms=v.get("first_scene_keyframe_ms", 0),
                   keyword_tags=v["keyword_tags"],
                   product_tags=v["product_tags"],
