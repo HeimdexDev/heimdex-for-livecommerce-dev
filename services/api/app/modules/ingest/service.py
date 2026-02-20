@@ -22,9 +22,9 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from heimdex_media_contracts.ingest import IngestScenesRequest
 
 from app.logging_config import get_logger
-from app.modules.ingest.schemas import IngestSceneDocument, IngestScenesRequest
 from app.modules.libraries.repository import LibraryRepository
 from app.modules.search.embedding import get_passage_embedding, get_passage_embeddings_batch
 from app.modules.search.normalize import normalize_transcript
@@ -92,15 +92,16 @@ class SceneIngestService:
         now = datetime.now(timezone.utc)
         org_id_str = str(org_id)
 
-        normalized: list[tuple[str, str, int]] = []
+        normalized: list[tuple[str, str, int, str]] = []
         for scene in request.scenes:
             transcript_norm = normalize_transcript(scene.transcript_raw)
             ocr_norm = normalize_transcript(scene.ocr_text_raw) if scene.ocr_text_raw else ""
             ocr_char_count = len(ocr_norm)
-            normalized.append((transcript_norm, ocr_norm, ocr_char_count))
+            caption_norm = normalize_transcript(scene.scene_caption) if scene.scene_caption else ""
+            normalized.append((transcript_norm, ocr_norm, ocr_char_count, caption_norm))
 
         transcripts_to_embed: list[tuple[int, str]] = []
-        for idx, (transcript_norm, ocr_norm, _) in enumerate(normalized):
+        for idx, (transcript_norm, ocr_norm, _, _caption_norm) in enumerate(normalized):
             embedding_text = transcript_norm
             if ocr_norm:
                 embedding_text = (
@@ -122,7 +123,7 @@ class SceneIngestService:
         # 4. Build bulk index payload (reuse cached normalized transcripts)
         documents: list[tuple[str, dict[str, Any]]] = []
         for idx, scene in enumerate(request.scenes):
-            transcript_norm, ocr_norm, ocr_char_count = normalized[idx]
+            transcript_norm, ocr_norm, ocr_char_count, caption_norm = normalized[idx]
             char_count = len(transcript_norm)
 
             doc: dict[str, Any] = {
@@ -144,6 +145,7 @@ class SceneIngestService:
                 "ocr_text_raw": scene.ocr_text_raw,
                 "ocr_text_norm": ocr_norm,
                 "ocr_char_count": ocr_char_count,
+                "scene_caption": caption_norm,
                 "source_type": scene.source_type,
                 "required_drive_nickname": scene.required_drive_nickname,
                 "capture_time": scene.capture_time.isoformat() if scene.capture_time else None,

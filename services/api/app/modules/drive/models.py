@@ -130,6 +130,12 @@ class DriveFile(Base, UUIDMixin, TimestampMixin):
         DateTime(timezone=True), nullable=True
     )
 
+    # --- Caption enrichment ---
+    caption_status: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True
+    )  # pending | running | done | failed
+    caption_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     is_deleted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"
     )

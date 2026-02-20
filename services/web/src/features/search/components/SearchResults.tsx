@@ -326,6 +326,12 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
             </p>
           )}
 
+          {result.scene_caption && result.scene_caption.trim() && (
+            <p className="text-sm text-gray-500 mt-0.5 mb-2 line-clamp-1">
+              <span className="text-gray-400">AI 캡션</span> {result.scene_caption}
+            </p>
+          )}
+
           <div className="flex items-center gap-2 mb-2">
             <span className="text-xs text-gray-500">Quality:</span>
             <div className="flex-1 max-w-[120px] h-1.5 bg-gray-200 rounded-full overflow-hidden">

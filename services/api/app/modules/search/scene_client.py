@@ -212,6 +212,11 @@ class SceneSearchClient:
                     "search_analyzer": transcript_analyzer,
                 },
                 "ocr_char_count": {"type": "integer"},
+                "scene_caption": {
+                    "type": "text",
+                    "analyzer": transcript_analyzer,
+                    "search_analyzer": transcript_analyzer,
+                },
                 # Embedding
                 "embedding_vector": {
                     "type": "knn_vector",
@@ -478,6 +483,31 @@ class SceneSearchClient:
                     ]
                 )
 
+            # Scene caption boost (between title and OCR)
+            should_clauses.extend(
+                [
+                    {
+                        "match": {
+                            "scene_caption": {
+                                "query": query,
+                                "operator": "or",
+                                "minimum_should_match": "50%",
+                                "boost": 1.0,
+                            }
+                        }
+                    },
+                    {
+                        "match_phrase": {
+                            "scene_caption": {
+                                "query": query,
+                                "boost": 2.0,
+                                "slop": 1,
+                            }
+                        }
+                    },
+                ]
+            )
+
             if person_should:
                 should_clauses.append(person_should)
 
@@ -515,6 +545,19 @@ class SceneSearchClient:
                         }
                     }
                 )
+
+            optional_should.append(
+                {
+                    "match": {
+                        "scene_caption": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": 1.0,
+                        }
+                    }
+                }
+            )
 
             if person_should:
                 all_should = [match_query, person_should] + optional_should
@@ -728,7 +771,7 @@ class SceneSearchClient:
                 "people_count": int(bucket["people_count"]["value"]),
                 "required_drive_nickname": drive_buckets[0]["key"] if drive_buckets else None,
                 "source_path": sp_buckets[0]["key"] if sp_buckets else None,
-                "capture_time": bucket["earliest_capture"]["value_as_string"] if bucket["earliest_capture"]["value"] else None,
+                "capture_time": bucket.get("earliest_capture", {}).get("value_as_string") if bucket.get("earliest_capture", {}).get("value") else None,
             })
 
         if sort == "latest":
@@ -775,7 +818,7 @@ class SceneSearchClient:
             "size": page_size,
             "_source": [
                 "scene_id", "start_ms", "end_ms", "transcript_raw",
-                "transcript_char_count", "keyword_tags", "product_tags",
+                "transcript_char_count", "scene_caption", "keyword_tags", "product_tags",
                 "product_entities", "speech_segment_count",
                 "people_cluster_ids", "ingest_time", "keyframe_timestamp_ms",
                 "video_title", "source_type", "source_path", "capture_time",
@@ -794,6 +837,7 @@ class SceneSearchClient:
                 "end_ms": src.get("end_ms", 0),
                 "transcript_raw": src.get("transcript_raw", ""),
                 "transcript_char_count": src.get("transcript_char_count", 0),
+                "scene_caption": src.get("scene_caption", ""),
                 "keyword_tags": src.get("keyword_tags", []),
                 "product_tags": src.get("product_tags", []),
                 "product_entities": src.get("product_entities", []),
@@ -965,7 +1009,7 @@ class SceneSearchClient:
             "total_libraries": int(aggs["total_libraries"]["value"]),
             "source_breakdown": source_breakdown,
             "latest_ingest_time": aggs["latest_ingest"]["value_as_string"] if aggs["latest_ingest"]["value"] else None,
-            "latest_capture_time": aggs["latest_capture"]["value_as_string"] if aggs["latest_capture"]["value"] else None,
+            "latest_capture_time": aggs.get("latest_capture", {}).get("value_as_string") if aggs.get("latest_capture", {}).get("value") else None,
             "scenes_last_24h": int(aggs["scenes_last_24h"]["doc_count"]),
             "scenes_last_7d": int(aggs["scenes_last_7d"]["doc_count"]),
         }

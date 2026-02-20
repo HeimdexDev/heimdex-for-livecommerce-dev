@@ -172,6 +172,7 @@ class SceneSearchService:
                     end_ms=src.get("end_ms", 0),
                     snippet=src.get("transcript_raw", "")[:500],
                     ocr_snippet=ocr_snippet,
+                    scene_caption=src.get("scene_caption", "")[:200],
                     thumbnail_url=src.get("thumbnail_url"),
                     source_type=src.get("source_type", "gdrive"),
                     required_drive_nickname=src.get("required_drive_nickname"),

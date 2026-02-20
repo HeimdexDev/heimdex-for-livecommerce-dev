@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-from heimdex_media_contracts.ingest import SourceType
+from app.modules.ingest.schemas import SourceType
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +136,7 @@ class SceneResult(BaseModel):
     end_ms: int
     snippet: str
     ocr_snippet: str = ""
+    scene_caption: str = ""
     thumbnail_url: str | None
     source_type: SourceType
     required_drive_nickname: str | None = None

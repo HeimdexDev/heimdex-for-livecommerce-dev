@@ -92,6 +92,7 @@ export interface SceneResult {
   snippet: string;
   ocr_snippet?: string;
   ocr_char_count?: number;
+  scene_caption?: string;
   thumbnail_url: string | null;
   source_type: "gdrive" | "removable_disk" | "local";
   required_drive_nickname: string | null;

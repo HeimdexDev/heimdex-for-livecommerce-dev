@@ -275,7 +275,7 @@ class DriveFileRepository:
             select(DriveFile).where(DriveFile.id == file_id)
         )
         df = result.scalar_one()
-        new_state = _compute_enrichment_state(df.stt_status, ocr_status)
+        new_state = _compute_enrichment_state(df.stt_status, ocr_status, df.caption_status)
 
         values: dict[str, object] = {
             "ocr_status": ocr_status,
@@ -284,6 +284,55 @@ class DriveFileRepository:
         }
         if enrichment_error is not None:
             values["enrichment_error"] = enrichment_error
+        await self.session.execute(
+            update(DriveFile).where(DriveFile.id == file_id).values(**values)
+        )
+        await self.session.flush()
+
+    async def claim_caption_pending_files(self, limit: int = 1) -> list[DriveFile]:
+        """Claim files ready for caption enrichment using SELECT FOR UPDATE SKIP LOCKED.
+
+        Priority: only caption files where OCR+STT are already done/failed/null.
+        Requires keyframe_s3_prefix to be set (needs keyframes for captioning).
+        """
+        result = await self.session.execute(
+            select(DriveFile)
+            .where(
+                DriveFile.caption_status == "pending",
+                DriveFile.keyframe_s3_prefix.isnot(None),
+                DriveFile.is_deleted.is_(False),
+            )
+            .order_by(DriveFile.created_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        files = list(result.scalars().all())
+        for f in files:
+            f.caption_status = "running"
+        if files:
+            await self.session.flush()
+        return files
+
+    async def update_caption_enrichment_status(
+        self,
+        file_id: UUID,
+        caption_status: str,
+        caption_error: Optional[str] = None,
+    ) -> None:
+        """Update caption status and recompute enrichment_state from stt+ocr+caption."""
+        result = await self.session.execute(
+            select(DriveFile).where(DriveFile.id == file_id)
+        )
+        df = result.scalar_one()
+        new_state = _compute_enrichment_state(df.stt_status, df.ocr_status, caption_status)
+
+        values: dict[str, object] = {
+            "caption_status": caption_status,
+            "enrichment_state": new_state,
+            "enrichment_updated_at": func.now(),
+        }
+        if caption_error is not None:
+            values["caption_error"] = caption_error
         await self.session.execute(
             update(DriveFile).where(DriveFile.id == file_id).values(**values)
         )
@@ -299,7 +348,7 @@ class DriveFileRepository:
             select(DriveFile).where(DriveFile.id == file_id)
         )
         df = result.scalar_one()
-        new_state = _compute_enrichment_state(stt_status, df.ocr_status)
+        new_state = _compute_enrichment_state(stt_status, df.ocr_status, df.caption_status)
 
         values: dict[str, object] = {
             "stt_status": stt_status,
@@ -315,13 +364,13 @@ class DriveFileRepository:
 
 
 def _compute_enrichment_state(
-    stt_status: Optional[str], ocr_status: Optional[str],
+    stt_status: Optional[str], ocr_status: Optional[str], caption_status: Optional[str] = None,
 ) -> str:
     """Derive enrichment_state from stt_status + ocr_status.
 
     State priority: done > failed/failed_partial > running > pending.
     """
-    active = [s for s in (stt_status, ocr_status) if s is not None]
+    active = [s for s in (stt_status, ocr_status, caption_status) if s is not None]
     if not active:
         return "pending"
     if all(s == "done" for s in active):

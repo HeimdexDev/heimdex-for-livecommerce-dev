@@ -83,9 +83,12 @@ class TestSceneClientAggregateVideos:
             "video_title": {"buckets": [{"key": video_title, "doc_count": scene_count}]},
             "source_type": {"buckets": [{"key": source_type, "doc_count": scene_count}]},
             "required_drive_nickname": {"buckets": []},
+            "source_path": {"buckets": []},
             "keyword_tags": {"buckets": [{"key": "review", "doc_count": 3}]},
             "product_tags": {"buckets": [{"key": "skincare", "doc_count": 2}]},
             "people_count": {"value": 1},
+            "min_keyframe_ms": {"value": 500},
+            "earliest_capture": {"value": None, "value_as_string": None},
         }
 
     @pytest.mark.asyncio
@@ -374,6 +377,7 @@ class TestSceneClientGetVideoStats:
                     ]
                 },
                 "latest_ingest": {"value": 1000, "value_as_string": "2026-02-10T05:00:00Z"},
+                "latest_capture": {"value": 900, "value_as_string": "2026-02-09T12:00:00Z"},
                 "scenes_last_24h": {"doc_count": 25},
                 "scenes_last_7d": {"doc_count": 75},
             },
@@ -399,6 +403,7 @@ class TestSceneClientGetVideoStats:
                 "total_libraries": {"value": 0},
                 "source_breakdown": {"buckets": []},
                 "latest_ingest": {"value": None, "value_as_string": None},
+                "latest_capture": {"value": None, "value_as_string": None},
                 "scenes_last_24h": {"doc_count": 0},
                 "scenes_last_7d": {"doc_count": 0},
             },
@@ -422,6 +427,7 @@ class TestSceneClientGetVideoStats:
                 "total_libraries": {"value": 0},
                 "source_breakdown": {"buckets": []},
                 "latest_ingest": {"value": None, "value_as_string": None},
+                "latest_capture": {"value": None, "value_as_string": None},
                 "scenes_last_24h": {"doc_count": 0},
                 "scenes_last_7d": {"doc_count": 0},
             },

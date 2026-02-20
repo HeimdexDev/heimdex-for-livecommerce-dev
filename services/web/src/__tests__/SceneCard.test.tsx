@@ -375,13 +375,41 @@ describe("SceneCard OCR features", () => {
     expect(screen.getByText("0.2700")).toBeInTheDocument();
   });
 
-  it("does not render OCR contribution in debug panel when 0", async () => {
-    const user = userEvent.setup();
-    render(<SearchResults response={sceneResponse} showDebug={true} agentAvailable={false} />);
+   it("does not render OCR contribution in debug panel when 0", async () => {
+     const user = userEvent.setup();
+     render(<SearchResults response={sceneResponse} showDebug={true} agentAvailable={false} />);
 
-    const debugToggle = screen.getByText("Debug Info");
-    await user.click(debugToggle);
+     const debugToggle = screen.getByText("Debug Info");
+     await user.click(debugToggle);
 
-    expect(screen.queryByText("OCR Contribution:")).not.toBeInTheDocument();
+     expect(screen.queryByText("OCR Contribution:")).not.toBeInTheDocument();
+   });
+});
+
+describe("SceneCard scene_caption features", () => {
+  it("renders scene_caption when present", () => {
+    const captionScene: SceneResult = {
+      ...sceneResult,
+      scene_caption: "테스트 캡션",
+    };
+    const resp: SceneSearchResponse = {
+      ...sceneResponse,
+      results: [captionScene],
+    };
+    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    expect(screen.getByText("테스트 캡션")).toBeInTheDocument();
+  });
+
+  it("does not render scene_caption section when empty", () => {
+    const noCaptionScene: SceneResult = {
+      ...sceneResult,
+      scene_caption: "",
+    };
+    const resp: SceneSearchResponse = {
+      ...sceneResponse,
+      results: [noCaptionScene],
+    };
+    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    expect(screen.queryByText("AI 캡션")).not.toBeInTheDocument();
   });
 });

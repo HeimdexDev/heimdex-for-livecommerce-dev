@@ -141,6 +141,12 @@ class Settings(BaseSettings):
     drive_stt_concurrency: int = 1
     drive_stt_max_audio_seconds: int = 3600
 
+    # --- Caption enrichment worker ---
+    scene_caption_enabled: bool = False
+    drive_caption_poll_interval_seconds: int = 30
+    drive_caption_concurrency: int = 1
+    drive_caption_model: str = "OpenGVLab/InternVL2-1B"
+
     # --- CORS ---
     cors_allow_origin_regex: str = (
         r"^https?://"
