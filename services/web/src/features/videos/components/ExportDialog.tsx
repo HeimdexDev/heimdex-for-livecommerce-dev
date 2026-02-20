@@ -121,20 +121,24 @@ export function ExportDialog({
                 placeholder={DEFAULT_OUTPUT_DIR}
                 required
               />
-              {agentAvailable && (
-                <button
-                  type="button"
-                  className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
-                  onClick={handleBrowse}
-                  disabled={isBrowsing || isExporting}
-                >
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                  </svg>
-                  {isBrowsing ? "선택 중..." : "찾아보기"}
-                </button>
-              )}
+              <button
+                type="button"
+                className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleBrowse}
+                disabled={!agentAvailable || isBrowsing || isExporting}
+                title={agentAvailable ? "폴더 선택" : "에이전트 연결 시 사용 가능"}
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
+                </svg>
+                {isBrowsing ? "선택 중..." : "찾아보기"}
+              </button>
             </div>
+            {!agentAvailable && (
+              <p className="mt-1.5 text-xs text-amber-600">
+                Heimdex 에이전트를 연결하면 폴더 탐색기로 저장 위치를 선택할 수 있습니다.
+              </p>
+            )}
           </div>
 
           <div>
