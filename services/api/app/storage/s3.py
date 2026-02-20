@@ -1,20 +1,5 @@
-"""
-Shared S3/MinIO client for Heimdex.
-
-Uses MinIO connection settings from ``app.config``.  The bucket is
-specified per-instance so different features can use different buckets:
-
-    from app.storage.s3 import S3Client
-
-    # Drive proxy storage
-    s3 = S3Client(bucket=settings.drive_s3_bucket)
-
-    # Future: export artifacts
-    s3 = S3Client(bucket="heimdex-exports")
-
-All instances share the same MinIO endpoint / credentials.
-"""
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -26,8 +11,8 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+@lru_cache(maxsize=1)
 def _build_s3_client():
-    """Build a boto3 S3 client from the shared MinIO/S3 settings."""
     settings = get_settings()
     boto_config = BotoConfig(
         signature_version="s3v4",
