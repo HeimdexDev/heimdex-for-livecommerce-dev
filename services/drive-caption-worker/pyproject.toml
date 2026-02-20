@@ -11,7 +11,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "structlog>=23.0",
     "requests>=2.31",
-    "transformers>=4.40",
+    "transformers==4.44.2",
     "torch>=2.0",
     "torchvision>=0.15",
     "Pillow>=9.0",
