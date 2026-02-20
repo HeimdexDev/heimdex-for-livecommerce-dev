@@ -174,6 +174,7 @@ export function ShortsPlanPanel({
         selectedCount={selectedCount}
         isExporting={isExporting}
         defaultProjectName={defaultProjectName}
+        agentAvailable={agentAvailable}
       />
     </div>
   );

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { exportToPremiere } from "@/lib/agent-export";
-import { getAgentClipUrl } from "@/lib/agent";
+import { checkAgentHealth, getAgentClipUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { ExportDialog } from "@/features/videos/components/ExportDialog";
 import type { ExportClipInput } from "@/lib/types";
@@ -108,6 +108,7 @@ export function SavedShortsPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportResult, setExportResult] = useState<{ output_path: string; clip_count: number } | null>(null);
+  const [agentAvailable, setAgentAvailable] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -132,6 +133,10 @@ export function SavedShortsPage() {
 
     return () => { cancelled = true; };
   }, [getAccessToken]);
+
+  useEffect(() => {
+    checkAgentHealth().then((h) => setAgentAvailable(h !== null));
+  }, []);
 
   useEffect(() => {
     if (!showExportMenu) return;
@@ -375,6 +380,7 @@ export function SavedShortsPage() {
             selectedCount={selectedIds.size}
             isExporting={isExporting}
             defaultProjectName={selectedShorts[0]?.title ?? "Heimdex Export"}
+            agentAvailable={agentAvailable}
           />
         )}
 
