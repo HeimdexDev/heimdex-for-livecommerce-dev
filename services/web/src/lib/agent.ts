@@ -90,6 +90,14 @@ export function getAgentClipUrl(videoId: string, startMs: number, endMs: number,
   return base;
 }
 
+export function getCloudPlaybackUrl(videoId: string, startMs?: number): string {
+  const base = `/api/playback/${encodeURIComponent(videoId)}`;
+  if (startMs != null && startMs > 0) {
+    return `${base}#t=${(startMs / 1000).toFixed(1)}`;
+  }
+  return base;
+}
+
 export function getCloudThumbnailUrl(videoId: string, sceneId: string): string {
   return `/api/thumbnails/${encodeURIComponent(videoId)}/${encodeURIComponent(sceneId)}`;
 }

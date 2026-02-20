@@ -1,9 +1,11 @@
+import logging
 import os
 from typing import Annotated
 from uuid import UUID
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -22,7 +24,10 @@ from app.modules.drive.schemas import (
 from app.modules.tenancy.context import OrgContext
 from app.modules.tenancy.middleware import get_current_org
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/drive", tags=["drive"])
+playback_router = APIRouter(prefix="/playback", tags=["playback"])
 
 
 def _require_drive_enabled() -> None:
@@ -203,3 +208,117 @@ async def upsert_secret(
         impersonate_email=body.impersonate_email,
     )
     return secret
+
+
+_RANGE_CHUNK = 2 * 1024 * 1024
+
+
+@playback_router.get("/{video_id}")
+async def stream_playback(
+    video_id: str,
+    request: Request,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    if not video_id.startswith("gd_"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Playback proxy is only available for drive videos",
+        )
+
+    settings = get_settings()
+    if not settings.drive_connector_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Drive connector is not enabled",
+        )
+
+    file_repo = DriveFileRepository(db)
+    drive_file = await file_repo.get_by_video_id(org_ctx.org_id, video_id)
+    if drive_file is None or not drive_file.proxy_s3_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Video proxy not found",
+        )
+
+    from app.storage.s3 import S3Client
+
+    s3 = S3Client(bucket=settings.drive_s3_bucket)
+
+    try:
+        head = s3._client.head_object(Bucket=s3.bucket, Key=drive_file.proxy_s3_key)
+    except Exception:
+        logger.warning("playback_head_failed", extra={"key": drive_file.proxy_s3_key}, exc_info=True)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video proxy not found")
+
+    total_size = head["ContentLength"]
+    content_type = head.get("ContentType", "video/mp4")
+
+    range_header = request.headers.get("range")
+
+    if range_header:
+        # RFC 7233: Range = "bytes" "=" byte-range-set
+        range_spec = range_header.strip().lower()
+        if not range_spec.startswith("bytes="):
+            raise HTTPException(status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE)
+
+        range_val = range_spec[6:]
+        parts = range_val.split("-", 1)
+        start = int(parts[0]) if parts[0] else 0
+        end = int(parts[1]) if parts[1] else min(start + _RANGE_CHUNK - 1, total_size - 1)
+        end = min(end, total_size - 1)
+
+        if start >= total_size or start > end:
+            raise HTTPException(status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE)
+
+        content_length = end - start + 1
+
+        def _range_iter():
+            resp = s3._client.get_object(
+                Bucket=s3.bucket,
+                Key=drive_file.proxy_s3_key,
+                Range=f"bytes={start}-{end}",
+            )
+            body = resp["Body"]
+            try:
+                while True:
+                    chunk = body.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                body.close()
+
+        return StreamingResponse(
+            _range_iter(),
+            status_code=206,
+            media_type=content_type,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{total_size}",
+                "Content-Length": str(content_length),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=3600",
+            },
+        )
+
+    def _full_iter():
+        resp = s3._client.get_object(Bucket=s3.bucket, Key=drive_file.proxy_s3_key)
+        body = resp["Body"]
+        try:
+            while True:
+                chunk = body.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
+
+    return StreamingResponse(
+        _full_iter(),
+        media_type=content_type,
+        headers={
+            "Content-Length": str(total_size),
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "public, max-age=3600",
+        },
+    )

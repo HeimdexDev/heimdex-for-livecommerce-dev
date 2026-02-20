@@ -83,6 +83,16 @@ class DriveFileRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_video_id(self, org_id: UUID, video_id: str) -> Optional[DriveFile]:
+        result = await self.session.execute(
+            select(DriveFile).where(
+                DriveFile.org_id == org_id,
+                DriveFile.video_id == video_id,
+                DriveFile.is_deleted.is_(False),
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_google_file_id(self, org_id: UUID, google_file_id: str) -> Optional[DriveFile]:
         result = await self.session.execute(
             select(DriveFile).where(

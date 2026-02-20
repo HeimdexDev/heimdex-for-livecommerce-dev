@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { getVideoScenes } from "@/lib/api/videos";
-import { getAgentPlaybackUrl, getAgentThumbnailUrl } from "@/lib/agent";
+import { getAgentPlaybackUrl, getAgentThumbnailUrl, getCloudPlaybackUrl, getCloudThumbnailUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { formatTimestamp } from "@/lib/api/utils";
 import type { VideoScene, VideoScenesResponse } from "@/lib/types";
@@ -160,7 +160,10 @@ function VideoInfoPanel({
     : meta?.source_type === "local" ? "로컬 파일"
     : "-";
 
-  const folderName = meta?.library_name || meta?.source_path || "-";
+  const folderName =
+    meta?.source_type === "gdrive"
+      ? (meta?.source_path || meta?.library_name || "-")
+      : (meta?.library_name || meta?.source_path || "-");
   const captureDate = meta?.capture_time
     ? formatDatetime(meta.capture_time)
     : meta?.earliest_ingest_time
@@ -181,15 +184,23 @@ function VideoInfoPanel({
     }
   }, [startMs]);
 
+  const isCloud = meta?.source_type === "gdrive";
+  const playbackUrl = isCloud
+    ? getCloudPlaybackUrl(videoId, startMs)
+    : getAgentPlaybackUrl(videoId, startMs);
+  const posterUrl = isCloud
+    ? (scenes.length > 0 ? getCloudThumbnailUrl(videoId, scenes[0].scene_id) : undefined)
+    : getAgentThumbnailUrl(videoId);
+
   return (
     <div>
       <div className="aspect-video w-full overflow-hidden rounded-lg bg-black">
         <video
           ref={videoRef}
-          src={getAgentPlaybackUrl(videoId, startMs)}
+          src={playbackUrl}
           controls
           className="h-full w-full"
-          poster={getAgentThumbnailUrl(videoId)}
+          poster={posterUrl}
         />
       </div>
 
