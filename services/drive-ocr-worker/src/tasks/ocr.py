@@ -27,7 +27,7 @@ def select_keyframe_indices(scene_count: int, max_frames: int) -> list[int]:
     return sorted(indices)[:max_frames]
 
 
-async def process_ocr_pending_files(session: Any, settings: Any) -> None:
+async def process_ocr_pending_files(session: Any, settings: Any, ocr_engine: Any = None) -> None:
     import app.db.models  # noqa: F401 — register all SQLAlchemy models for FK resolution
     drive_repository = importlib.import_module("app.modules.drive.repository")
     file_repo = drive_repository.DriveFileRepository(session)
@@ -39,6 +39,7 @@ async def process_ocr_pending_files(session: Any, settings: Any) -> None:
             settings=settings,
             drive_file=drive_file,
             file_repo=file_repo,
+            ocr_engine=ocr_engine,
         )
 
 
@@ -47,12 +48,12 @@ async def _process_single_ocr(
     settings: Any,
     drive_file: Any,
     file_repo: Any,
+    ocr_engine: Any = None,
 ) -> None:
     drive_keys = importlib.import_module("app.modules.drive.keys")
     scene_manifest_s3_key = drive_keys.scene_manifest_s3_key
     enrichment_keyframe_s3_key = drive_keys.enrichment_keyframe_s3_key
     S3Client = importlib.import_module("app.storage.s3").S3Client
-    create_ocr_engine = importlib.import_module("heimdex_media_pipelines.ocr").create_ocr_engine
 
     _ = session
     org_id = drive_file.org_id
@@ -116,7 +117,10 @@ async def _process_single_ocr(
             return
 
         ocr_started = time.monotonic()
-        engine = create_ocr_engine(lang="korean", use_gpu=False)
+        if ocr_engine is None:
+            _create = importlib.import_module("heimdex_media_pipelines.ocr").create_ocr_engine
+            ocr_engine = _create(lang="korean", use_gpu=False)
+        engine = ocr_engine
         ocr_results: dict[int, str] = {}
 
         for scene_idx, kf_path in downloaded_keyframes.items():

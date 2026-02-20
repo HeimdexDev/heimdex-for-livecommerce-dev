@@ -25,7 +25,7 @@ def _release_slot() -> None:
         _global_active = max(0, _global_active - 1)
 
 
-async def poll_and_process(session_factory) -> None:
+async def poll_and_process(session_factory, ocr_engine=None) -> None:
     get_settings = importlib.import_module("app.config").get_settings
     process_ocr_pending_files = importlib.import_module("src.tasks.ocr").process_ocr_pending_files
 
@@ -39,7 +39,9 @@ async def poll_and_process(session_factory) -> None:
 
     async with session_factory() as session:
         try:
-            await process_ocr_pending_files(session=session, settings=settings)
+            await process_ocr_pending_files(
+                session=session, settings=settings, ocr_engine=ocr_engine,
+            )
             await session.commit()
         except Exception:
             await session.rollback()
@@ -71,12 +73,16 @@ def main() -> None:
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
+    create_ocr_engine = importlib.import_module("heimdex_media_pipelines.ocr").create_ocr_engine
+    ocr_engine = create_ocr_engine(lang="korean", use_gpu=False)
+    logger.info("ocr_engine_loaded_once")
+
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         poll_and_process,
         "interval",
         seconds=settings.drive_ocr_poll_interval_seconds,
-        args=[session_factory],
+        args=[session_factory, ocr_engine],
         max_instances=1,
         id="ocr_poll",
     )

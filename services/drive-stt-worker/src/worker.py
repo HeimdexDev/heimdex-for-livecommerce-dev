@@ -25,7 +25,7 @@ def _release_slot() -> None:
         _global_active = max(0, _global_active - 1)
 
 
-async def poll_and_process(session_factory) -> None:
+async def poll_and_process(session_factory, stt_processor=None) -> None:
     get_settings = importlib.import_module("app.config").get_settings
     process_stt_pending_files = importlib.import_module("src.tasks.stt").process_stt_pending_files
 
@@ -39,7 +39,9 @@ async def poll_and_process(session_factory) -> None:
 
     async with session_factory() as session:
         try:
-            await process_stt_pending_files(session=session, settings=settings)
+            await process_stt_pending_files(
+                session=session, settings=settings, stt_processor=stt_processor,
+            )
             await session.commit()
         except Exception:
             await session.rollback()
@@ -71,12 +73,24 @@ def main() -> None:
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
+    stt_mod = importlib.import_module("heimdex_media_pipelines.speech.stt")
+    stt_processor = stt_mod.create_stt_processor(
+        backend=settings.drive_stt_backend,
+        model_name=settings.drive_stt_model,
+        language=settings.drive_stt_language,
+        device="cpu",
+        compute_type="int8",
+        beam_size=1,
+        best_of=1,
+    )
+    logger.info("stt_processor_loaded_once", extra={"model": settings.drive_stt_model})
+
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         poll_and_process,
         "interval",
         seconds=settings.drive_stt_poll_interval_seconds,
-        args=[session_factory],
+        args=[session_factory, stt_processor],
         max_instances=1,
         id="stt_poll",
     )

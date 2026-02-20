@@ -18,7 +18,7 @@ def _get_audio_duration_seconds(audio_path: Path) -> float:
         return frames / rate if rate > 0 else 0.0
 
 
-async def process_stt_pending_files(session: Any, settings: Any) -> None:
+async def process_stt_pending_files(session: Any, settings: Any, stt_processor: Any = None) -> None:
     import app.db.models  # noqa: F401 — register all SQLAlchemy models for FK resolution
     drive_repository = importlib.import_module("app.modules.drive.repository")
     file_repo = drive_repository.DriveFileRepository(session)
@@ -30,6 +30,7 @@ async def process_stt_pending_files(session: Any, settings: Any) -> None:
             settings=settings,
             drive_file=drive_file,
             file_repo=file_repo,
+            stt_processor=stt_processor,
         )
 
 
@@ -38,6 +39,7 @@ async def _process_single_stt(
     settings: Any,
     drive_file: Any,
     file_repo: Any,
+    stt_processor: Any = None,
 ) -> None:
     drive_keys = importlib.import_module("app.modules.drive.keys")
     scene_manifest_s3_key = drive_keys.scene_manifest_s3_key
@@ -110,24 +112,21 @@ async def _process_single_stt(
 
         stt_started = time.monotonic()
 
-        create_stt_processor = importlib.import_module(
-            "heimdex_media_pipelines.speech.stt"
-        ).create_stt_processor
-        convert_to_speech_segments = importlib.import_module(
-            "heimdex_media_pipelines.speech.stt"
-        ).convert_to_speech_segments
+        stt_mod = importlib.import_module("heimdex_media_pipelines.speech.stt")
+        convert_to_speech_segments = stt_mod.convert_to_speech_segments
 
-        processor = create_stt_processor(
-            backend=settings.drive_stt_backend,
-            model_name=settings.drive_stt_model,
-            language=settings.drive_stt_language,
-            device="cpu",
-            compute_type="int8",
-            beam_size=1,
-            best_of=1,
-        )
+        if stt_processor is None:
+            stt_processor = stt_mod.create_stt_processor(
+                backend=settings.drive_stt_backend,
+                model_name=settings.drive_stt_model,
+                language=settings.drive_stt_language,
+                device="cpu",
+                compute_type="int8",
+                beam_size=1,
+                best_of=1,
+            )
 
-        transcript_segments = processor.transcribe(audio_path)
+        transcript_segments = stt_processor.transcribe(audio_path)
         stt_duration_ms = int((time.monotonic() - stt_started) * 1000)
 
         if not transcript_segments:
