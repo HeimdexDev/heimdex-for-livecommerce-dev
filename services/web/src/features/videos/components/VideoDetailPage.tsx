@@ -141,12 +141,14 @@ function VideoInfoPanel({
   videoId,
   meta,
   scenes,
-  startMs,
+  seekMs,
+  seekKey,
 }: {
   videoId: string;
   meta: VideoScenesResponse | null;
   scenes: VideoScene[];
-  startMs?: number;
+  seekMs?: number | null;
+  seekKey?: number;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const title = meta?.video_title || videoId;
@@ -179,15 +181,26 @@ function VideoInfoPanel({
   ];
 
   useEffect(() => {
-    if (videoRef.current && startMs != null && startMs > 0) {
-      videoRef.current.currentTime = startMs / 1000;
+    const video = videoRef.current;
+    if (!video || seekMs == null) return;
+
+    const doSeek = () => {
+      video.currentTime = seekMs / 1000;
+      video.play().catch(() => {});
+    };
+
+    if (video.readyState >= 1) {
+      doSeek();
+    } else {
+      video.addEventListener("loadedmetadata", doSeek, { once: true });
+      return () => video.removeEventListener("loadedmetadata", doSeek);
     }
-  }, [startMs]);
+  }, [seekMs, seekKey]);
 
   const isCloud = meta?.source_type === "gdrive";
   const playbackUrl = isCloud
-    ? getCloudPlaybackUrl(videoId, startMs)
-    : getAgentPlaybackUrl(videoId, startMs);
+    ? getCloudPlaybackUrl(videoId)
+    : getAgentPlaybackUrl(videoId);
   const posterUrl = isCloud
     ? (scenes.length > 0 ? getCloudThumbnailUrl(videoId, scenes[0].scene_id) : undefined)
     : getAgentThumbnailUrl(videoId);
@@ -340,12 +353,16 @@ function SceneCard({
   videoId,
   isSelected,
   onToggle,
+  onSeek,
+  isPlaying,
 }: {
   scene: VideoScene;
   index: number;
   videoId: string;
   isSelected: boolean;
   onToggle: (id: string) => void;
+  onSeek?: (startMs: number) => void;
+  isPlaying?: boolean;
 }) {
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [subtitleExpanded, setSubtitleExpanded] = useState(false);
@@ -373,17 +390,37 @@ function SceneCard({
     <div
       className={cn(
         "rounded-xl border bg-white transition-all",
-        isSelected ? "border-indigo-500 ring-2 ring-indigo-500/20" : "border-gray-200",
+        isPlaying
+          ? "border-indigo-500 border-l-4 border-l-indigo-500 ring-2 ring-indigo-500/20"
+          : isSelected
+            ? "border-indigo-500 ring-2 ring-indigo-500/20"
+            : "border-gray-200",
       )}
     >
       <div className="flex gap-0">
         <div className="w-[200px] flex-shrink-0">
-          <SceneThumbnail
-            videoId={videoId}
-            sceneId={scene.scene_id}
-            agentAvailable={true}
-            className="aspect-video w-full rounded-tl-xl"
-          />
+          <button
+            type="button"
+            onClick={() => onSeek?.(scene.start_ms)}
+            className="relative group w-full cursor-pointer"
+            title={`장면${index + 1} 재생`}
+          >
+            <SceneThumbnail
+              videoId={videoId}
+              sceneId={scene.scene_id}
+              agentAvailable={true}
+              className="aspect-video w-full rounded-tl-xl"
+            />
+            <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors rounded-tl-xl">
+              <svg
+                className="h-10 w-10 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-lg"
+                fill="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </div>
+          </button>
           <div className="px-3 py-2">
             <span className="mr-2 inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
               검색 정확도 00%
@@ -472,10 +509,14 @@ function ScenesPanel({
   scenes,
   totalScenes,
   videoId,
+  onSeekToScene,
+  activeSceneMs,
 }: {
   scenes: VideoScene[];
   totalScenes: number;
   videoId: string;
+  onSeekToScene?: (startMs: number) => void;
+  activeSceneMs?: number | null;
 }) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
@@ -587,6 +628,8 @@ function ScenesPanel({
             videoId={videoId}
             isSelected={selectedIds.has(scene.scene_id)}
             onToggle={toggleSelection}
+            onSeek={onSeekToScene}
+            isPlaying={activeSceneMs === scene.start_ms}
           />
         ))}
       </div>
@@ -657,6 +700,13 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
   const [scenes, setScenes] = useState<VideoScene[]>([]);
   const [totalScenes, setTotalScenes] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [seekMs, setSeekMs] = useState<number | null>(null);
+  const [seekKey, setSeekKey] = useState(0);
+
+  const handleSeekToScene = useCallback((startMs: number) => {
+    setSeekMs(startMs);
+    setSeekKey((k) => k + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -723,7 +773,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
       <div className="flex gap-8">
         <div className="w-[45%] flex-shrink-0">
-          <VideoInfoPanel videoId={videoId} meta={meta} scenes={scenes} />
+          <VideoInfoPanel videoId={videoId} meta={meta} scenes={scenes} seekMs={seekMs} seekKey={seekKey} />
 
           {view === "scenes" && (
             <div className="mt-4">
@@ -763,6 +813,8 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               scenes={scenes}
               totalScenes={totalScenes}
               videoId={videoId}
+              onSeekToScene={handleSeekToScene}
+              activeSceneMs={seekMs}
             />
           )}
         </div>
