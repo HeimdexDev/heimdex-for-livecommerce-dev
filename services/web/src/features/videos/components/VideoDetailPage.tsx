@@ -348,6 +348,10 @@ function SceneCard({
   const transcriptPreview = scene.transcript_raw.length > 100
     ? scene.transcript_raw.slice(0, 100) + "..."
     : scene.transcript_raw;
+  const captionText = scene.scene_caption?.trim() || "";
+  const captionPreview = captionText.length > 100
+    ? captionText.slice(0, 100) + "..."
+    : captionText;
 
   const tags = [...scene.keyword_tags, ...scene.product_tags].slice(0, 3);
 
@@ -409,6 +413,9 @@ function SceneCard({
               <div className="flex items-center gap-2 text-sm text-gray-700">
                 <ClipboardIcon />
                 <span className="font-medium">행동 요약</span>
+                {captionText && (
+                  <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">AI</span>
+                )}
               </div>
               {summaryExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
             </button>
@@ -416,7 +423,9 @@ function SceneCard({
               "mt-2 text-sm leading-relaxed text-gray-600",
               !summaryExpanded && "line-clamp-2",
             )}>
-              {summaryExpanded ? scene.transcript_raw : transcriptPreview}
+              {captionText
+                ? (summaryExpanded ? captionText : captionPreview)
+                : (summaryExpanded ? scene.transcript_raw : transcriptPreview)}
             </p>
           </div>
 

@@ -46,6 +46,7 @@ export interface VideoScene {
   end_ms: number;
   transcript_raw: string;
   transcript_char_count: number;
+  scene_caption?: string;
   keyword_tags: string[];
   product_tags: string[];
   product_entities: string[];

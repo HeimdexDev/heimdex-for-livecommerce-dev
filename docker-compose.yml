@@ -295,11 +295,13 @@ services:
       - DRIVE_CAPTION_CONCURRENCY=${DRIVE_CAPTION_CONCURRENCY:-1}
       - DRIVE_CAPTION_MODEL=${DRIVE_CAPTION_MODEL:-OpenGVLab/InternVL2-1B}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HF_HOME=/data/huggingface
     volumes:
       - ./services/drive-caption-worker:/app
       - ./services/api:/opt/heimdex-api:ro
       - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
       - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+      - huggingface_cache:/data/huggingface
     depends_on:
       postgres:
         condition: service_healthy
