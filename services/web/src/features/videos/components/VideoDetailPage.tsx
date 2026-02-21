@@ -237,7 +237,18 @@ function OverviewPanel({
     [scenes],
   );
 
-  const summary = fullTranscript.length > 500 ? fullTranscript.slice(0, 500) + "..." : fullTranscript;
+  const captionSummary = useMemo(() => {
+    const captions = scenes
+      .map((s) => s.scene_caption?.trim())
+      .filter((c): c is string => Boolean(c));
+    if (captions.length === 0) return "";
+    const unique = Array.from(new Set(captions));
+    return unique.join("\n");
+  }, [scenes]);
+
+  const hasCaptions = captionSummary.length > 0;
+  const summaryText = hasCaptions ? captionSummary : fullTranscript;
+  const summary = summaryText.length > 500 ? summaryText.slice(0, 500) + "..." : summaryText;
 
   const handleCopy = useCallback(async (text: string, section: string) => {
     try {
@@ -280,6 +291,9 @@ function OverviewPanel({
       <div className="mt-8">
         <div className="flex items-center gap-3">
           <h3 className="text-lg font-bold text-gray-900">행동 요약</h3>
+          {hasCaptions && (
+            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">AI</span>
+          )}
           {allTags.slice(0, 3).map((tag) => (
             <span
               key={tag}
