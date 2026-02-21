@@ -296,6 +296,8 @@ services:
       - DRIVE_CAPTION_MODEL=${DRIVE_CAPTION_MODEL:-OpenGVLab/InternVL2-1B}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - HF_HOME=/data/huggingface
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
     volumes:
       - ./services/drive-caption-worker:/app
       - ./services/api:/opt/heimdex-api:ro

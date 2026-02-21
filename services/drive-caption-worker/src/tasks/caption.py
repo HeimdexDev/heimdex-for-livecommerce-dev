@@ -4,6 +4,7 @@ import logging
 import shutil
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -71,21 +72,51 @@ async def _process_single_caption(
         keyframes_dir = temp_dir / "keyframes"
         keyframes_dir.mkdir(parents=True, exist_ok=True)
 
-        downloaded_keyframes: dict[int, Path] = {}
+        download_tasks: list[tuple[int, str, str, Path]] = []
         for scene_idx, scene in enumerate(scenes):
             scene_id = scene.get("scene_id")
             if not scene_id:
                 continue
             s3_key = enrichment_keyframe_s3_key(org_id_str, video_id, scene_id)
             local_path = keyframes_dir / f"{scene_id}.jpg"
-            try:
-                s3.download_file(s3_key, local_path)
-                downloaded_keyframes[scene_idx] = local_path
-            except Exception:
-                logger.warning(
-                    "caption_keyframe_download_failed",
-                    extra={"org_id": org_id_str, "video_id": video_id, "scene_id": scene_id},
-                )
+            download_tasks.append((scene_idx, scene_id, s3_key, local_path))
+
+        # Parallel S3 keyframe downloads + pipelined inference.
+        # All downloads fire at once; inference starts as each frame arrives.
+        # While the model processes frame N (~15s), remaining downloads
+        # complete in the background — no wasted I/O wait.
+        caption_started = time.monotonic()
+        if caption_engine is None:
+            _create = importlib.import_module("heimdex_media_pipelines.vision").create_caption_engine
+            caption_engine = _create(model="internvl2", use_gpu=False)
+        engine = caption_engine
+
+        downloaded_keyframes: dict[int, Path] = {}
+        caption_results: dict[int, str] = {}
+        download_failures = 0
+        n_workers = min(8, max(1, len(download_tasks)))
+
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            future_to_task = {
+                pool.submit(s3.download_file, s3_key, local_path): (scene_idx, scene_id, local_path)
+                for scene_idx, scene_id, s3_key, local_path in download_tasks
+            }
+            for future in as_completed(future_to_task):
+                scene_idx, scene_id, local_path = future_to_task[future]
+                try:
+                    future.result()
+                    downloaded_keyframes[scene_idx] = local_path
+                    # Pipeline: start inference immediately while other
+                    # downloads continue in the background threads.
+                    result = engine.caption(str(local_path))
+                    if result.caption:
+                        caption_results[scene_idx] = result.caption
+                except Exception:
+                    download_failures += 1
+                    logger.warning(
+                        "caption_keyframe_download_failed",
+                        extra={"org_id": org_id_str, "video_id": video_id, "scene_id": scene_id},
+                    )
 
         if not downloaded_keyframes:
             await file_repo.update_caption_enrichment_status(
@@ -94,18 +125,6 @@ async def _process_single_caption(
                 caption_error="no_keyframes_downloaded",
             )
             return
-
-        caption_started = time.monotonic()
-        if caption_engine is None:
-            _create = importlib.import_module("heimdex_media_pipelines.vision").create_caption_engine
-            caption_engine = _create(model="internvl2", use_gpu=False)
-        engine = caption_engine
-        caption_results: dict[int, str] = {}
-
-        for scene_idx, kf_path in downloaded_keyframes.items():
-            result = engine.caption(str(kf_path))
-            if result.caption:
-                caption_results[scene_idx] = result.caption
 
         updated_scenes: list[dict[str, Any]] = []
         total_caption_chars = 0
