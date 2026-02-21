@@ -591,6 +591,7 @@ function VideoCard({ video }: { video: VideoSummary }) {
         sceneId={video.source_type === "gdrive" ? `${video.video_id}_scene_000` : undefined}
         agentAvailable={true}
         className="aspect-video w-full rounded-lg"
+        sourceType={video.source_type}
       />
       <p className="mt-2 truncate text-sm font-medium text-gray-800 group-hover:text-indigo-600">
         {title}
@@ -614,6 +615,7 @@ function SceneCard({ scene }: { scene: SceneResult }) {
           sceneId={scene.scene_id}
           agentAvailable={true}
           className="w-full h-full"
+          sourceType={scene.source_type}
         />
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
           {timestamp}

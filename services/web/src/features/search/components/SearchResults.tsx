@@ -336,6 +336,7 @@ function VideoCard({
             sceneId={best.scene_id}
             agentAvailable={agentAvailable}
             className="w-32 h-20 rounded-lg"
+            sourceType={best.source_type}
           />
           <span className="absolute -top-2 -left-2 bg-primary-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
             {rank}
@@ -472,6 +473,7 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
             sceneId={result.scene_id}
             agentAvailable={agentAvailable}
             className="w-32 h-20 rounded-lg"
+            sourceType={result.source_type}
           />
           <span className="absolute -top-2 -left-2 bg-primary-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
             {rank}
@@ -684,6 +686,7 @@ function ResultCard({ result, rank, showDebug, agentAvailable }: ResultCardProps
             videoId={result.video_id}
             agentAvailable={agentAvailable}
             className="w-32 h-20 rounded-lg"
+            sourceType={result.source_type}
           />
           <span className="absolute -top-2 -left-2 bg-primary-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
             {rank}

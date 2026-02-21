@@ -11,7 +11,14 @@ interface SceneThumbnailProps {
   sceneId?: string;
   agentAvailable: boolean;
   className?: string;
+  sourceType?: "gdrive" | "removable_disk" | "local" | null;
 }
+
+const SOURCE_BADGE_CONFIG: Record<string, { label: string; bg: string }> = {
+  gdrive: { label: "Drive", bg: "bg-blue-500/80" },
+  removable_disk: { label: "Disk", bg: "bg-orange-500/80" },
+  local: { label: "Local", bg: "bg-green-500/80" },
+};
 
 const VideoIcon = ({ className }: { className?: string }) => (
   <svg
@@ -34,6 +41,7 @@ export function SceneThumbnail({
   sceneId,
   agentAvailable,
   className,
+  sourceType,
 }: SceneThumbnailProps) {
   const canTryCloud = !!sceneId;
 
@@ -60,8 +68,10 @@ export function SceneThumbnail({
         ? getAgentThumbnailUrl(videoId, sceneId)
         : null;
 
+  const badge = sourceType ? SOURCE_BADGE_CONFIG[sourceType] : null;
+
   return (
-    <div className={cn("bg-gray-200 overflow-hidden", className)}>
+    <div className={cn("relative bg-gray-200 overflow-hidden", className)}>
       {src ? (
         <img
           src={src}
@@ -73,6 +83,16 @@ export function SceneThumbnail({
         <div className="w-full h-full flex items-center justify-center text-gray-400">
           <VideoIcon className="w-8 h-8" />
         </div>
+      )}
+      {badge && (
+        <span
+          className={cn(
+            "absolute top-1 right-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-tight text-white",
+            badge.bg,
+          )}
+        >
+          {badge.label}
+        </span>
       )}
     </div>
   );

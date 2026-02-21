@@ -127,7 +127,8 @@ describe("VideoCard", () => {
 
   it("renders source type badge", () => {
     render(<VideoCard video={sampleVideo} onSelect={vi.fn()} agentAvailable={false} />);
-    expect(screen.getByText("Drive")).toBeInTheDocument();
+    const badges = screen.getAllByText("Drive");
+    expect(badges.length).toBe(2); // thumbnail overlay + text badge
   });
 
   it("renders keyword and product tags", () => {
@@ -148,7 +149,8 @@ describe("VideoCard", () => {
    it("renders removable_disk source type", () => {
      const diskVideo = { ...sampleVideo, source_type: "removable_disk" as const, first_scene_keyframe_ms: 0 };
      render(<VideoCard video={diskVideo} onSelect={vi.fn()} agentAvailable={false} />);
-     expect(screen.getByText("Disk")).toBeInTheDocument();
+     const badges = screen.getAllByText("Disk");
+     expect(badges.length).toBe(2); // thumbnail overlay + text badge
    });
 });
 
