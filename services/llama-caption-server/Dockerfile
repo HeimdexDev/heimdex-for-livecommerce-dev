@@ -8,6 +8,8 @@ RUN apt-get update \
         g++ \
         git \
         curl \
+        ca-certificates \
+        libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /
