@@ -141,7 +141,7 @@ function getParentFolderName(path: string | null | undefined): string | null {
   if (!path) return null;
   const parts = path.split("/").filter(Boolean);
   if (parts.length <= 1) return null;
-  return parts[parts.length - 2];
+  return parts[parts.length - 2].trim();
 }
 
 function VideoInfoPanel({
