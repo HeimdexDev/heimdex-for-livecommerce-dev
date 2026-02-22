@@ -117,23 +117,43 @@ jobs:
               sleep 5
             fi
 
-            # ---- Health checks ----
+            # ---- Health checks (retry loop — Next.js cold start can take 30s+) ----
             echo "--- health checks ---"
             FAIL=0
+            MAX_ATTEMPTS=20
+            INTERVAL=3
 
-            API_STATUS=$(curl -sf http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','UNKNOWN'))" 2>/dev/null || echo "DOWN")
-            if [ "$API_STATUS" = "ok" ]; then
-              echo "API: OK"
-            else
-              echo "API: FAILED ($API_STATUS)"
+            echo "Waiting for API (max ${MAX_ATTEMPTS}x${INTERVAL}s)..."
+            API_OK=false
+            for i in $(seq 1 $MAX_ATTEMPTS); do
+              API_STATUS=$(curl -sf --max-time 5 http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','UNKNOWN'))" 2>/dev/null || echo "DOWN")
+              if [ "$API_STATUS" = "ok" ]; then
+                echo "API: OK (attempt $i)"
+                API_OK=true
+                break
+              fi
+              echo "API: not ready (attempt $i/$MAX_ATTEMPTS, status=$API_STATUS)"
+              sleep $INTERVAL
+            done
+            if [ "$API_OK" = false ]; then
+              echo "API: FAILED after $MAX_ATTEMPTS attempts"
               FAIL=1
             fi
 
-            WEB_CODE=$(curl -sf -o /dev/null -w '%{http_code}' --max-time 10 http://localhost:3000 || echo "000")
-            if [ "${WEB_CODE}" -ge 200 ] && [ "${WEB_CODE}" -lt 400 ]; then
-              echo "Web: OK (HTTP $WEB_CODE)"
-            else
-              echo "Web: FAILED (HTTP $WEB_CODE)"
+            echo "Waiting for Web (max ${MAX_ATTEMPTS}x${INTERVAL}s)..."
+            WEB_OK=false
+            for i in $(seq 1 $MAX_ATTEMPTS); do
+              WEB_CODE=$(curl -sf -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3000 || echo "000")
+              if [ "${WEB_CODE}" -ge 200 ] && [ "${WEB_CODE}" -lt 400 ]; then
+                echo "Web: OK (HTTP $WEB_CODE, attempt $i)"
+                WEB_OK=true
+                break
+              fi
+              echo "Web: not ready (attempt $i/$MAX_ATTEMPTS, code=$WEB_CODE)"
+              sleep $INTERVAL
+            done
+            if [ "$WEB_OK" = false ]; then
+              echo "Web: FAILED after $MAX_ATTEMPTS attempts"
               FAIL=1
             fi
 
