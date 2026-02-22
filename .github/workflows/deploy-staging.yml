@@ -66,7 +66,7 @@ jobs:
               DIFF_FILES=$(git diff --name-only "$PREV" "$CURR" || true)
               echo "$DIFF_FILES" | grep -q '^services/api/' && API_CHANGED=true || true
               echo "$DIFF_FILES" | grep -q '^services/web/' && WEB_CHANGED=true || true
-              echo "$DIFF_FILES" | grep -q '^services/drive-caption-worker/' && WORKER_CHANGED=true || true
+              echo "$DIFF_FILES" | grep -qE '^services/drive-(stt|ocr|caption)-worker/' && WORKER_CHANGED=true || true
               echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example)' && API_CHANGED=true && WEB_CHANGED=true && WORKER_CHANGED=true || true
             else
               API_CHANGED=true
@@ -111,9 +111,10 @@ jobs:
               sleep 5
             fi
 
-            if [ "$WORKER_CHANGED" = true ]; then
-              echo "--- restarting drive-caption-worker ---"
-              docker compose restart drive-caption-worker
+            if [ "$WORKER_CHANGED" = true ] || [ "$API_CHANGED" = true ]; then
+              echo "--- rebuilding and restarting enrichment workers ---"
+              docker compose build drive-stt-worker drive-ocr-worker drive-caption-worker
+              docker compose up -d --no-deps --force-recreate drive-stt-worker drive-ocr-worker drive-caption-worker
               sleep 5
             fi
 
