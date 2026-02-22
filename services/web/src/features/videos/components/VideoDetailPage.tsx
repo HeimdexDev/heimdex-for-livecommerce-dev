@@ -137,6 +137,13 @@ function CheckCircleIcon({ filled }: { filled: boolean }) {
   );
 }
 
+function getParentFolderName(path: string | null | undefined): string | null {
+  if (!path) return null;
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length <= 1) return null;
+  return parts[parts.length - 2];
+}
+
 function VideoInfoPanel({
   videoId,
   meta,
@@ -164,7 +171,7 @@ function VideoInfoPanel({
 
   const folderName =
     meta?.source_type === "gdrive"
-      ? (meta?.source_path || meta?.library_name || "-")
+      ? (getParentFolderName(meta?.source_path) || meta?.library_name || "-")
       : (meta?.library_name || meta?.source_path || "-");
   const captureDate = meta?.capture_time
     ? formatDatetime(meta.capture_time)
