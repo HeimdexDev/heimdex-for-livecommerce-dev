@@ -19,7 +19,7 @@ def _get_audio_duration_seconds(audio_path: Path) -> float:
 
 
 async def process_stt_pending_files(session: Any, settings: Any, stt_processor: Any = None) -> None:
-    import app.db.models  # noqa: F401 — register all SQLAlchemy models for FK resolution
+    importlib.import_module("app.db.models")
     drive_repository = importlib.import_module("app.modules.drive.repository")
     file_repo = drive_repository.DriveFileRepository(session)
     files = await file_repo.claim_stt_pending_files(limit=1)
@@ -135,24 +135,11 @@ async def _process_single_stt(
             speech_segments = convert_to_speech_segments(transcript_segments)
             updated_scenes = _align_segments_to_scenes(scenes, speech_segments)
 
-        video_title = manifest.get(
-            "video_title", getattr(drive_file, "file_name", ""),
-        )
-        library_id = manifest.get(
-            "library_id", getattr(drive_file, "library_id", None),
-        )
-        duration_ms = manifest.get(
-            "total_duration_ms", getattr(drive_file, "proxy_duration_ms", 0),
-        )
-
         try:
-            ingest_result = _post_scenes_to_api(
+            ingest_result = _post_enrich_to_api(
                 settings=settings,
                 org_id=org_id,
                 video_id=video_id,
-                video_title=video_title,
-                library_id=library_id,
-                duration_ms=duration_ms,
                 scenes=updated_scenes,
             )
         except Exception as e:
@@ -187,7 +174,7 @@ async def _process_single_stt(
                 "scene_count": len(scenes),
                 "segment_count": total_segment_count,
                 "transcript_chars": total_transcript_chars,
-                "indexed_count": ingest_result.get("indexed_count", 0),
+                "updated_count": ingest_result.get("updated_count", 0),
             },
         )
 
@@ -258,27 +245,31 @@ def _build_scenes_no_speech(
     return updated
 
 
-def _post_scenes_to_api(
+def _post_enrich_to_api(
     settings: Any,
     org_id: Any,
     video_id: str,
-    video_title: str,
-    library_id: Any,
-    duration_ms: int,
     scenes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     requests = importlib.import_module("requests")
 
+    enrich_scenes = []
+    for scene in scenes:
+        enrich_scenes.append(
+            {
+                "scene_id": scene["scene_id"],
+                "transcript_raw": scene.get("transcript_raw", ""),
+                "speech_segment_count": scene.get("speech_segment_count", 0),
+            }
+        )
+
     payload = {
         "video_id": video_id,
-        "video_title": video_title,
-        "library_id": str(library_id),
-        "total_duration_ms": duration_ms,
-        "scenes": scenes,
+        "scenes": enrich_scenes,
     }
 
     api_base = settings.drive_api_base_url.rstrip("/")
-    url = f"{api_base}/internal/ingest/scenes"
+    url = f"{api_base}/internal/ingest/enrich"
 
     resp = requests.post(
         url,
@@ -293,7 +284,7 @@ def _post_scenes_to_api(
 
     if resp.status_code != 200:
         raise RuntimeError(
-            f"Internal ingest API returned {resp.status_code}: {resp.text[:500]}"
+            f"Internal enrich API returned {resp.status_code}: {resp.text[:500]}"
         )
 
     return resp.json()

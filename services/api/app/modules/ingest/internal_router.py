@@ -13,13 +13,18 @@ import hmac
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from heimdex_media_contracts.ingest import IngestScenesRequest
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.dependencies import get_db_session, get_scene_ingest_service
 from app.logging_config import get_logger
-from app.modules.ingest.schemas import IngestScenesRequest, IngestScenesResponse
+from app.modules.ingest.schemas import (
+    EnrichScenesRequest,
+    EnrichScenesResponse,
+    IngestScenesResponse,
+)
 from app.modules.ingest.service import SceneIngestService
 
 logger = get_logger(__name__)
@@ -123,3 +128,55 @@ async def internal_ingest_scenes(
         )
 
     return IngestScenesResponse(**result)
+
+
+@router.post("/enrich", response_model=EnrichScenesResponse)
+async def internal_enrich_scenes(
+    request: EnrichScenesRequest,
+    x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
+    _token: str = Depends(_verify_internal_token),
+    db: AsyncSession = Depends(get_db_session),
+    ingest_service: SceneIngestService = Depends(get_scene_ingest_service),
+):
+    try:
+        org_id = UUID(x_heimdex_org_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid X-Heimdex-Org-Id: {x_heimdex_org_id!r}",
+        )
+
+    from app.modules.orgs.repository import OrgRepository
+
+    org_repo = OrgRepository(db)
+    org = await org_repo.get_by_id(org_id)
+    if org is None:
+        logger.warning("internal_enrich_unknown_org", org_id=str(org_id))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    settings = get_settings()
+    if len(request.scenes) > settings.agent_ingest_max_scenes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Too many scenes: {len(request.scenes)} exceeds "
+                f"maximum of {settings.agent_ingest_max_scenes} per request"
+            ),
+        )
+
+    logger.info(
+        "internal_enrich_started",
+        org_id=str(org_id),
+        video_id=request.video_id,
+        scene_count=len(request.scenes),
+    )
+
+    result = await ingest_service.enrich_scenes(
+        request=request,
+        org_id=org_id,
+    )
+
+    return EnrichScenesResponse(**result)

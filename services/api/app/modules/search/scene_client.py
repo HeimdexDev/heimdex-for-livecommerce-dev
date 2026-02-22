@@ -377,6 +377,24 @@ class SceneSearchClient:
         await self.client.bulk(body=actions, params={"refresh": self.settings.opensearch_bulk_refresh})
         logger.info("scene_bulk_indexed_documents", count=len(documents))
 
+    async def mget_scenes(self, doc_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Batch-get scene documents by doc_id.
+
+        Returns:
+            Dict mapping doc_id -> document source. Missing docs are omitted.
+        """
+        if not doc_ids:
+            return {}
+
+        body = {"docs": [{"_index": self.index_name, "_id": did} for did in doc_ids]}
+        response = await self.client.mget(body=body)
+
+        result: dict[str, dict[str, Any]] = {}
+        for doc in response.get("docs", []):
+            if doc.get("found"):
+                result[doc["_id"]] = doc["_source"]
+        return result
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------

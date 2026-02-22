@@ -138,18 +138,11 @@ async def _process_single_caption(
                 frames_with_caption += 1
             updated_scenes.append(scene_copy)
 
-        video_title = manifest.get("video_title", getattr(drive_file, "file_name", ""))
-        library_id = manifest.get("library_id", getattr(drive_file, "library_id", None))
-        duration_ms = manifest.get("total_duration_ms", getattr(drive_file, "proxy_duration_ms", 0))
-
         try:
-            ingest_result = _post_scenes_to_api(
+            ingest_result = _post_enrich_to_api(
                 settings=settings,
                 org_id=org_id,
                 video_id=video_id,
-                video_title=video_title,
-                library_id=library_id,
-                duration_ms=duration_ms,
                 scenes=updated_scenes,
             )
         except Exception as e:
@@ -173,7 +166,7 @@ async def _process_single_caption(
                 "frames_with_caption": frames_with_caption,
                 "total_caption_chars": total_caption_chars,
                 "caption_duration_ms": int((time.monotonic() - caption_started) * 1000),
-                "indexed_count": ingest_result.get("indexed_count", 0),
+                "updated_count": ingest_result.get("updated_count", 0),
             },
         )
 
@@ -192,27 +185,34 @@ async def _process_single_caption(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def _post_scenes_to_api(
+def _post_enrich_to_api(
     settings: Any,
     org_id: Any,
     video_id: str,
-    video_title: str,
-    library_id: Any,
-    duration_ms: int,
     scenes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     requests = importlib.import_module("requests")
 
+    enrich_scenes = []
+    for scene in scenes:
+        if scene.get("scene_caption"):
+            enrich_scenes.append(
+                {
+                    "scene_id": scene["scene_id"],
+                    "scene_caption": scene["scene_caption"],
+                }
+            )
+
+    if not enrich_scenes:
+        return {"updated_count": 0, "video_id": video_id}
+
     payload = {
         "video_id": video_id,
-        "video_title": video_title,
-        "library_id": str(library_id),
-        "total_duration_ms": duration_ms,
-        "scenes": scenes,
+        "scenes": enrich_scenes,
     }
 
     api_base = settings.drive_api_base_url.rstrip("/")
-    url = f"{api_base}/internal/ingest/scenes"
+    url = f"{api_base}/internal/ingest/enrich"
 
     resp = requests.post(
         url,
@@ -227,7 +227,7 @@ def _post_scenes_to_api(
 
     if resp.status_code != 200:
         raise RuntimeError(
-            f"Internal ingest API returned {resp.status_code}: {resp.text[:500]}"
+            f"Internal enrich API returned {resp.status_code}: {resp.text[:500]}"
         )
 
     return resp.json()

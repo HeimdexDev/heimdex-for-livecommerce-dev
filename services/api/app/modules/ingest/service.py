@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from heimdex_media_contracts.ingest import IngestScenesRequest
 
 from app.logging_config import get_logger
+from app.modules.ingest.schemas import EnrichSceneUpdate, EnrichScenesRequest
 from app.modules.libraries.repository import LibraryRepository
 from app.modules.search.embedding import get_passage_embedding, get_passage_embeddings_batch
 from app.modules.search.normalize import normalize_transcript
@@ -212,4 +213,95 @@ class SceneIngestService:
             "indexed_count": len(documents),
             "video_id": request.video_id,
             "skipped_count": 0,
+        }
+
+    async def enrich_scenes(
+        self,
+        request: EnrichScenesRequest,
+        org_id: UUID,
+    ) -> dict[str, Any]:
+        """Merge enrichment data into existing scene documents."""
+        t_start = _time.monotonic()
+        org_id_str = str(org_id)
+
+        logger.info(
+            "scene_enrich_started",
+            org_id=org_id_str,
+            video_id=request.video_id,
+            scene_count=len(request.scenes),
+        )
+
+        doc_id_map: dict[str, EnrichSceneUpdate] = {}
+        for scene in request.scenes:
+            doc_id = f"{org_id_str}:{scene.scene_id}"
+            doc_id_map[doc_id] = scene
+
+        existing_docs = await self.scene_opensearch.mget_scenes(list(doc_id_map.keys()))
+
+        now = datetime.now(timezone.utc)
+        documents: list[tuple[str, dict[str, Any]]] = []
+        skipped = 0
+
+        for doc_id, enrichment in doc_id_map.items():
+            existing = existing_docs.get(doc_id)
+            if existing is None:
+                logger.warning(
+                    "enrich_scene_not_found",
+                    org_id=org_id_str,
+                    video_id=request.video_id,
+                    doc_id=doc_id,
+                )
+                skipped += 1
+                continue
+
+            merged = dict(existing)
+            if enrichment.transcript_raw is not None:
+                merged["transcript_raw"] = enrichment.transcript_raw
+                merged["speech_segment_count"] = enrichment.speech_segment_count or 0
+            if enrichment.ocr_text_raw is not None:
+                merged["ocr_text_raw"] = enrichment.ocr_text_raw
+                merged["ocr_char_count"] = enrichment.ocr_char_count or 0
+            if enrichment.scene_caption is not None:
+                merged["scene_caption"] = enrichment.scene_caption
+
+            transcript_norm = normalize_transcript(merged.get("transcript_raw", ""))
+            ocr_norm = normalize_transcript(merged.get("ocr_text_raw", "")) if merged.get("ocr_text_raw") else ""
+            caption_norm = normalize_transcript(merged.get("scene_caption", "")) if merged.get("scene_caption") else ""
+
+            merged["transcript_norm"] = transcript_norm
+            merged["transcript_char_count"] = len(transcript_norm)
+            merged["ocr_text_norm"] = ocr_norm
+            merged["ocr_char_count"] = len(ocr_norm)
+            merged["scene_caption"] = caption_norm
+
+            embedding_text = transcript_norm
+            if ocr_norm:
+                embedding_text = f"{transcript_norm} {ocr_norm}".strip() if transcript_norm else ocr_norm
+
+            if embedding_text:
+                merged["embedding_vector"] = get_passage_embedding(embedding_text)
+            else:
+                merged.pop("embedding_vector", None)
+
+            merged["ingest_time"] = now.isoformat()
+            documents.append((doc_id, merged))
+
+        if documents:
+            await self.scene_opensearch.bulk_index_scenes(documents)
+
+        t_end = _time.monotonic()
+
+        logger.info(
+            "scene_enrich_completed",
+            org_id=org_id_str,
+            video_id=request.video_id,
+            updated_count=len(documents),
+            skipped_count=skipped,
+            duration_ms=round((t_end - t_start) * 1000, 1),
+        )
+
+        return {
+            "updated_count": len(documents),
+            "video_id": request.video_id,
+            "skipped_count": skipped,
         }
