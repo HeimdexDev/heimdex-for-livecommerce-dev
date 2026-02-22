@@ -8,7 +8,7 @@ import { searchScenes } from "@/lib/api/search";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { GroupByToggle } from "@/features/search/components/GroupByToggle";
 import type { GroupBy } from "@/features/search/hooks/useSearch";
-import type { VideoSummary, VideoStats, SceneResult, VideoResult, AnySearchResponse, SceneSearchResponse } from "@/lib/types";
+import type { VideoSummary, VideoStats, SceneResult, VideoResult, AnySearchResponse, SceneSearchResponse, SearchFilters } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -16,6 +16,13 @@ import { cn } from "@/lib/utils";
 // ---------------------------------------------------------------------------
 const PAGE_SIZE = 16;
 const KOREAN_DAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
+type SourceType = "gdrive" | "removable_disk" | "local";
+const ALL_SOURCES: SourceType[] = ["gdrive", "removable_disk", "local"];
+const SOURCE_META: Record<SourceType, { label: string; color: string }> = {
+  gdrive: { label: "Drive", color: "text-blue-600 focus:ring-blue-500" },
+  removable_disk: { label: "Disk", color: "text-orange-500 focus:ring-orange-400" },
+  local: { label: "Local", color: "text-green-600 focus:ring-green-500" },
+};
 
 // ---------------------------------------------------------------------------
 // Icons
@@ -688,6 +695,9 @@ export default function DashboardContent() {
   const [showCalendar, setShowCalendar] = useState(false);
 
   const [groupBy, setGroupBy] = useState<GroupBy>("scene");
+  const [sourceFilters, setSourceFilters] = useState<Set<SourceType>>(
+    () => new Set(ALL_SOURCES),
+  );
   const [searchResponse, setSearchResponse] = useState<AnySearchResponse | null>(null);
   const [activeQuery, setActiveQuery] = useState("");
   const isSearchMode = searchResponse !== null;
@@ -767,14 +777,31 @@ export default function DashboardContent() {
     setCurrentPage(1);
   }, [sortBy]);
 
+  const toggleSource = useCallback((type: SourceType) => {
+    setSourceFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) {
+        if (next.size === 1) return prev;
+        next.delete(type);
+      } else {
+        next.add(type);
+      }
+      return next;
+    });
+  }, []);
+
   const performSearch = useCallback(
     async (q: string) => {
       setIsLoading(true);
       setCurrentPage(1);
       try {
         const tokenGetter = () => getAccessToken();
+        const filters: SearchFilters =
+          sourceFilters.size === ALL_SOURCES.length
+            ? {}
+            : { source_types: Array.from(sourceFilters) };
         const res = await searchScenes(
-          { q, alpha: 0.5, filters: {}, group_by: groupBy },
+          { q, alpha: 0.5, filters, group_by: groupBy },
           tokenGetter,
         );
         setSearchResponse(res);
@@ -794,7 +821,7 @@ export default function DashboardContent() {
         setIsLoading(false);
       }
     },
-    [getAccessToken, groupBy],
+    [getAccessToken, groupBy, sourceFilters],
   );
 
   const handleSearch = useCallback(
@@ -807,13 +834,12 @@ export default function DashboardContent() {
     [query, performSearch],
   );
 
-  // Re-search when groupBy changes
   useEffect(() => {
     if (activeQuery) {
       performSearch(activeQuery);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupBy]);
+  }, [groupBy, sourceFilters]);
 
   const handleClearSearch = useCallback(() => {
     setSearchResponse(null);
@@ -873,8 +899,31 @@ export default function DashboardContent() {
           </button>
         </form>
 
-        <div className="mt-3">
+        <div className="mt-3 flex items-center justify-between">
           <GroupByToggle value={groupBy} onChange={setGroupBy} />
+          <div className="flex items-center gap-3">
+            {ALL_SOURCES.map((type) => (
+              <label key={type} className="flex items-center gap-1.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={sourceFilters.has(type)}
+                  onChange={() => toggleSource(type)}
+                  className={cn(
+                    "h-3.5 w-3.5 rounded border-gray-300 focus:ring-1 focus:ring-offset-0",
+                    SOURCE_META[type].color,
+                  )}
+                />
+                <span
+                  className={cn(
+                    "text-xs font-medium transition-colors",
+                    sourceFilters.has(type) ? "text-gray-700" : "text-gray-400",
+                  )}
+                >
+                  {SOURCE_META[type].label}
+                </span>
+              </label>
+            ))}
+          </div>
         </div>
       </div>
 
