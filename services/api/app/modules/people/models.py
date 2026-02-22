@@ -42,6 +42,10 @@ class PeopleClusterLabel(Base, UUIDMixin, TimestampMixin):
     label: Mapped[str | None] = mapped_column(String(100), nullable=True)
     
     __table_args__ = (
+        UniqueConstraint(
+            "org_id", "person_cluster_id",
+            name="uq_people_cluster_labels_org_person",
+        ),
         {"comment": "Labels for face clusters within an org"},
     )
 

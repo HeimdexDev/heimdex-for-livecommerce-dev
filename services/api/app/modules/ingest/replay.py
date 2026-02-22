@@ -1,52 +1,52 @@
 import time
-from collections import OrderedDict
-from threading import Lock
+from datetime import datetime, timedelta, timezone
 
-from fastapi import Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.db.base import get_db_session
 from app.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 
-class IdempotencyCache:
-    def __init__(self, max_size: int = 10_000):
-        self._store: OrderedDict[str, float] = OrderedDict()
-        self._lock = Lock()
-        self._max_size = max_size
+async def check_idempotency_key(db: AsyncSession, key: str, ttl_seconds: int) -> bool:
+    """Atomically insert an idempotency key. Returns True if new, False if duplicate.
 
-    def check_and_store(self, key: str, ttl: int) -> bool:
-        now = time.monotonic()
-        with self._lock:
-            self._evict_expired(now)
-            if key in self._store:
-                return False
-            if len(self._store) >= self._max_size:
-                self._store.popitem(last=False)
-            self._store[key] = now + ttl
-            return True
-
-    def _evict_expired(self, now: float) -> None:
-        while self._store:
-            oldest_key, expires_at = next(iter(self._store.items()))
-            if expires_at <= now:
-                self._store.pop(oldest_key)
-            else:
-                break
+    Uses INSERT ... ON CONFLICT DO NOTHING for atomic dedup — safe under
+    concurrent requests and survives API restarts.
+    """
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+    result = await db.execute(
+        text(
+            "INSERT INTO ingest_idempotency_keys (key, expires_at) "
+            "VALUES (:key, :expires_at) "
+            "ON CONFLICT (key) DO NOTHING"
+        ),
+        {"key": key, "expires_at": expires_at},
+    )
+    await db.flush()
+    # rowcount == 1 means key was inserted (new), 0 means conflict (duplicate)
+    return result.rowcount == 1
 
 
-_cache = IdempotencyCache()
-
-
-def get_idempotency_cache() -> IdempotencyCache:
-    return _cache
+async def cleanup_expired_keys(db: AsyncSession) -> int:
+    """Delete expired idempotency keys. Called periodically, not on every request."""
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        text("DELETE FROM ingest_idempotency_keys WHERE expires_at <= :now"),
+        {"now": now},
+    )
+    return result.rowcount
 
 
 async def verify_ingest_replay(
     request: Request,
     x_heimdex_timestamp: str | None = Header(None),
     x_heimdex_idempotency_key: str | None = Header(None),
+    db: AsyncSession = Depends(get_db_session),
 ) -> None:
     settings = get_settings()
 
@@ -85,12 +85,12 @@ async def verify_ingest_replay(
         )
 
     if x_heimdex_idempotency_key:
-        cache = get_idempotency_cache()
-        ok = cache.check_and_store(
+        is_new = await check_idempotency_key(
+            db,
             x_heimdex_idempotency_key,
             settings.ingest_idempotency_ttl_seconds,
         )
-        if not ok:
+        if not is_new:
             logger.warning(
                 "ingest_idempotency_replay",
                 idempotency_key=x_heimdex_idempotency_key,

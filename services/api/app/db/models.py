@@ -11,4 +11,5 @@ from app.modules.people.models import DriveNicknameRegistry, PeopleClusterLabel,
 from app.modules.profiles.models import LibraryProfile  # noqa: F401
 from app.modules.shorts.models import SavedShort  # noqa: F401
 from app.modules.drive.models import DriveConnection, DriveFile, DriveSecret  # noqa: F401
+from app.modules.ingest.models import IdempotencyKey  # noqa: F401
 from app.modules.users.models import User  # noqa: F401

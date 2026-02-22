@@ -12,6 +12,11 @@ from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+
+class DiskBudgetExceededError(Exception):
+    pass
+
+
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 DRIVE_API_VERSION = "v3"
 VIDEO_MIME_PREFIXES = ("video/",)
@@ -94,8 +99,8 @@ class DriveClient:
         dest_path: Path,
         expected_md5: Optional[str] = None,
         chunk_size: Optional[int] = None,
+        budget_bytes: Optional[int] = None,
     ) -> Path:
-        """Download a file from Drive using Range headers for resumability."""
         self._ensure_valid_credentials()
         settings = get_settings()
         chunk = chunk_size or settings.drive_download_chunk_size
@@ -120,10 +125,23 @@ class DriveClient:
                 break
             response.raise_for_status()
 
+            if budget_bytes is not None:
+                content_length = response.headers.get("Content-Length")
+                if content_length and downloaded + int(content_length) > budget_bytes:
+                    raise DiskBudgetExceededError(
+                        f"Download would exceed disk budget: "
+                        f"{downloaded + int(content_length)} > {budget_bytes} bytes"
+                    )
+
             with open(dest_path, "ab") as f:
                 for data_chunk in response.iter_content(chunk_size=chunk):
                     f.write(data_chunk)
                     downloaded += len(data_chunk)
+                    if budget_bytes is not None and downloaded > budget_bytes:
+                        raise DiskBudgetExceededError(
+                            f"Download exceeded disk budget at {downloaded} bytes "
+                            f"(limit: {budget_bytes})"
+                        )
 
             content_range = response.headers.get("Content-Range", "")
             if "/" in content_range:

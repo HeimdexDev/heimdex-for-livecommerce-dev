@@ -70,7 +70,12 @@ def main() -> None:
         signal.pause()
         return
 
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    engine = create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_size=3,
+        max_overflow=2,
+    )
     session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     stt_mod = importlib.import_module("heimdex_media_pipelines.speech.stt")

@@ -13,6 +13,7 @@ from app.config import get_settings
 from app.dependencies import get_scene_ingest_service
 from app.logging_config import get_logger
 from app.modules.ingest.auth import verify_agent_token
+from app.modules.ingest.rate_limit import require_ingest_rate_limit
 from app.modules.ingest.replay import verify_ingest_replay
 from app.modules.ingest.schemas import IngestScenesRequest, IngestScenesResponse
 from app.modules.ingest.service import SceneIngestService
@@ -28,6 +29,7 @@ async def ingest_scenes(
     request: IngestScenesRequest,
     http_request: Request,
     org_ctx: OrgContext = Depends(verify_agent_token),
+    _rate_limit: None = Depends(require_ingest_rate_limit),
     _replay: None = Depends(verify_ingest_replay),
     ingest_service: SceneIngestService = Depends(get_scene_ingest_service),
 ):

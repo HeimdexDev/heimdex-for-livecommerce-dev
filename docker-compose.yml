@@ -2,6 +2,8 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: heimdex-postgres
+    mem_limit: 1g
+    cpus: "2.0"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-heimdex}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heimdex_dev_password}
@@ -22,6 +24,8 @@ services:
       dockerfile: Dockerfile
     image: heimdex-opensearch:2.11.1-nori
     container_name: heimdex-opensearch
+    mem_limit: 1g
+    cpus: "2.0"
     environment:
       - discovery.type=single-node
       - plugins.security.disabled=true
@@ -48,6 +52,8 @@ services:
   minio:
     image: minio/minio:latest
     container_name: heimdex-minio
+    mem_limit: 512m
+    cpus: "1.0"
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-heimdex}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-heimdex_dev_password}
@@ -68,6 +74,8 @@ services:
       context: ./services/api
       dockerfile: Dockerfile
     container_name: heimdex-api
+    mem_limit: 4g
+    cpus: "4.0"
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}
       - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql://heimdex:heimdex_dev_password@postgres:5432/heimdex}
@@ -152,6 +160,8 @@ services:
       context: ./services/web
       dockerfile: Dockerfile
     container_name: heimdex-web
+    mem_limit: 512m
+    cpus: "1.0"
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://devorg.app.heimdex.local:8000}
       - NEXT_PUBLIC_AUTH0_ENABLED=${NEXT_PUBLIC_AUTH0_ENABLED:-false}
@@ -176,6 +186,8 @@ services:
       context: ./services/worker
       dockerfile: Dockerfile
     container_name: heimdex-face-worker
+    mem_limit: 2g
+    cpus: "2.0"
     environment:
       - PYTHONPATH=/app
     volumes:
@@ -190,6 +202,8 @@ services:
       context: ./services/drive-worker
       dockerfile: Dockerfile
     container_name: heimdex-drive-worker
+    mem_limit: 2g
+    cpus: "2.0"
     environment:
       - PYTHONPATH=/app:/opt/heimdex-api
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}
@@ -240,6 +254,8 @@ services:
       context: ./services/drive-ocr-worker
       dockerfile: Dockerfile
     container_name: heimdex-drive-ocr-worker
+    mem_limit: 2g
+    cpus: "2.0"
     environment:
       - PYTHONPATH=/app:/opt/heimdex-api
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}
@@ -309,6 +325,8 @@ services:
       context: ./services/drive-caption-worker
       dockerfile: Dockerfile
     container_name: heimdex-drive-caption-worker
+    mem_limit: 4g
+    cpus: "2.0"
     environment:
       - PYTHONPATH=/app:/opt/heimdex-api
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}
@@ -361,6 +379,8 @@ services:
       context: ./services/drive-stt-worker
       dockerfile: Dockerfile
     container_name: heimdex-drive-stt-worker
+    mem_limit: 2g
+    cpus: "2.0"
     environment:
       - PYTHONPATH=/app:/opt/heimdex-api
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}

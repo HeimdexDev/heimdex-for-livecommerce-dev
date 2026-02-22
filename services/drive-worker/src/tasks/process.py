@@ -96,10 +96,12 @@ async def _process_single_file(
         logger.info("download_started", extra={"file_id": drive_file.google_file_id, "file_name": drive_file.file_name})
 
         await file_repo.update_status(drive_file.id, "downloading")
+        budget_bytes = int(settings.drive_temp_disk_budget_gb * 1024 * 1024 * 1024)
         drive_client.download_file_with_resume(
             file_id=drive_file.google_file_id,
             dest_path=original_path,
             expected_md5=drive_file.md5_checksum,
+            budget_bytes=budget_bytes,
         )
 
         await file_repo.update_status(drive_file.id, "transcoding")
