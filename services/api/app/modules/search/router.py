@@ -7,6 +7,7 @@ from app.config import get_settings
 from app.dependencies import get_scene_search_service, get_search_service
 from app.logging_config import get_logger
 from app.modules.auth import get_current_user
+from app.modules.search.rate_limit import require_search_rate_limit
 from app.modules.search.scene_service import SceneSearchService
 from app.modules.search.schemas import (
     SceneSearchResponse,
@@ -29,6 +30,7 @@ async def search(
     user: User = Depends(get_current_user),
     search_service: SearchService = Depends(get_search_service),
     scene_search_service: SceneSearchService = Depends(get_scene_search_service),
+    _rate_limit=Depends(require_search_rate_limit),
 ):
     """Unified search endpoint.
 
@@ -72,6 +74,7 @@ async def search_scenes(
     org_ctx: OrgContext = Depends(get_current_org),
     user: User = Depends(get_current_user),
     scene_search_service: SceneSearchService = Depends(get_scene_search_service),
+    _rate_limit=Depends(require_search_rate_limit),
 ):
     """Dedicated scene search endpoint.
 
