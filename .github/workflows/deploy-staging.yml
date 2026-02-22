@@ -9,10 +9,6 @@ concurrency:
   group: deploy-staging
   cancel-in-progress: false
 
-env:
-  APP_DIR: /opt/heimdex/dev-heimdex-for-livecommerce
-  CONTRACTS_DIR: /opt/heimdex/heimdex-media-contracts
-
 jobs:
   deploy:
     name: Deploy to staging EC2
@@ -32,49 +28,52 @@ jobs:
 
             APP_DIR=/opt/heimdex/dev-heimdex-for-livecommerce
             CONTRACTS_DIR=/opt/heimdex/heimdex-media-contracts
+            PIPELINES_DIR=/opt/heimdex/heimdex-media-pipelines
             LOG=/opt/heimdex/logs/deploy-$(date +%Y%m%d-%H%M%S).log
 
             exec > >(tee -a "$LOG") 2>&1
             echo "=== Deploy started at $(date) ==="
 
-            echo "--- git pull (monorepo) ---"
+            # ---- Sync all repos (force refspec to avoid stale ref locks) ----
+            for REPO_DIR in "$APP_DIR" "$CONTRACTS_DIR" "$PIPELINES_DIR"; do
+              echo "--- git pull: $REPO_DIR ---"
+              cd "$REPO_DIR"
+              git remote prune origin 2>/dev/null || true
+              git fetch origin +refs/heads/main:refs/remotes/origin/main
+              PREV_HEAD=$(git rev-parse HEAD)
+              git reset --hard origin/main
+              NEW_HEAD=$(git rev-parse HEAD)
+              if [ "$PREV_HEAD" = "$NEW_HEAD" ]; then
+                echo "  (no changes)"
+              else
+                echo "  $PREV_HEAD -> $NEW_HEAD"
+              fi
+            done
+
             cd "$APP_DIR"
-            git fetch origin main
-            git reset --hard origin/main
 
-            echo "--- git pull (contracts) ---"
-            cd "$CONTRACTS_DIR"
-            git fetch origin main
-            git reset --hard origin/main
-
-            cd "$APP_DIR"
-
-            # Detect what changed
+            # ---- Detect what changed ----
             PREV=$(git rev-parse HEAD~1 2>/dev/null || echo "")
             CURR=$(git rev-parse HEAD)
             API_CHANGED=false
             WEB_CHANGED=false
+            WORKER_CHANGED=false
 
             if [ -n "$PREV" ]; then
-              if git diff --name-only "$PREV" "$CURR" | grep -q '^services/api/'; then
-                API_CHANGED=true
-              fi
-              if git diff --name-only "$PREV" "$CURR" | grep -q '^services/web/'; then
-                WEB_CHANGED=true
-              fi
-              # If docker-compose.yml or root config changed, rebuild both
-              if git diff --name-only "$PREV" "$CURR" | grep -qE '^(docker-compose\.yml|\.env\.example)'; then
-                API_CHANGED=true
-                WEB_CHANGED=true
-              fi
+              DIFF_FILES=$(git diff --name-only "$PREV" "$CURR")
+              echo "$DIFF_FILES" | grep -q '^services/api/' && API_CHANGED=true || true
+              echo "$DIFF_FILES" | grep -q '^services/web/' && WEB_CHANGED=true || true
+              echo "$DIFF_FILES" | grep -q '^services/drive-caption-worker/' && WORKER_CHANGED=true || true
+              echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example)' && { API_CHANGED=true; WEB_CHANGED=true; WORKER_CHANGED=true; } || true
             else
               API_CHANGED=true
               WEB_CHANGED=true
+              WORKER_CHANGED=true
             fi
 
-            echo "API changed: $API_CHANGED | Web changed: $WEB_CHANGED"
+            echo "API changed: $API_CHANGED | Web changed: $WEB_CHANGED | Worker changed: $WORKER_CHANGED"
 
-            # Build changed services
+            # ---- Build changed services ----
             if [ "$API_CHANGED" = true ]; then
               echo "--- building api ---"
               docker compose build api
@@ -85,18 +84,18 @@ jobs:
               docker compose build web
             fi
 
-            # Ensure all services are up before migrations
+            # ---- Ensure all services are up before migrations ----
             echo "--- ensuring services are up ---"
             docker compose up -d
             sleep 10
 
-            # Run migrations via a throwaway container (not exec, which needs running container)
+            # ---- Run migrations ----
             if [ "$API_CHANGED" = true ]; then
               echo "--- running migrations ---"
               docker compose run --rm -T --no-deps api alembic upgrade head
             fi
 
-            # Restart changed services with new images
+            # ---- Restart changed services ----
             if [ "$API_CHANGED" = true ]; then
               echo "--- restarting api ---"
               docker compose up -d --no-deps api
@@ -109,7 +108,13 @@ jobs:
               sleep 5
             fi
 
-            # Health checks
+            if [ "$WORKER_CHANGED" = true ]; then
+              echo "--- restarting drive-caption-worker ---"
+              docker compose restart drive-caption-worker
+              sleep 5
+            fi
+
+            # ---- Health checks ----
             echo "--- health checks ---"
             FAIL=0
 
