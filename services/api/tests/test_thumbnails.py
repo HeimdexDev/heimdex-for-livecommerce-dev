@@ -230,3 +230,136 @@ def test_get_face_thumbnail_404_when_missing(tmp_path: Path):
         assert response.status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Path traversal tests (CWE-22)
+# ---------------------------------------------------------------------------
+import pytest
+
+
+def _setup_authed_client(tmp_path):
+    org_ctx = _make_org_context()
+    settings = Settings(thumbnail_storage_dir=str(tmp_path))
+
+    async def _mock_verify_agent_token() -> OrgContext:
+        return org_ctx
+
+    async def _mock_get_current_org() -> OrgContext:
+        return org_ctx
+
+    app.dependency_overrides[verify_agent_token] = _mock_verify_agent_token
+    app.dependency_overrides[get_current_org] = _mock_get_current_org
+    return org_ctx, settings
+
+
+@pytest.mark.parametrize("bad_video_id", [
+    "..hidden",
+    "prefix..suffix",
+])
+def test_upload_thumbnail_rejects_path_traversal_video_id(tmp_path, bad_video_id):
+    _, settings = _setup_authed_client(tmp_path)
+
+    startup_patchers = _startup_patches()
+    try:
+        with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3], startup_patchers[4]:
+            with patch("app.modules.thumbnails.router.get_settings", return_value=settings):
+                with TestClient(app) as client:
+                    response = client.post(
+                        f"/api/ingest/thumbnails/{bad_video_id}",
+                        headers={"host": "devorg.app.heimdex.local", "authorization": "Bearer test"},
+                        data={"scene_id": "safe_scene_0"},
+                        files={"file": ("thumb.jpg", b"\xff\xd8\xff\xd9", "image/jpeg")},
+                    )
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("bad_scene_id", [
+    "../../etc_scene_0",
+    "scene/../../secret",
+    "../parent",
+    "..",
+])
+def test_upload_thumbnail_rejects_path_traversal_scene_id(tmp_path, bad_scene_id):
+    _, settings = _setup_authed_client(tmp_path)
+
+    startup_patchers = _startup_patches()
+    try:
+        with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3], startup_patchers[4]:
+            with patch("app.modules.thumbnails.router.get_settings", return_value=settings):
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/api/ingest/thumbnails/safe-video",
+                        headers={"host": "devorg.app.heimdex.local", "authorization": "Bearer test"},
+                        data={"scene_id": bad_scene_id},
+                        files={"file": ("thumb.jpg", b"\xff\xd8\xff\xd9", "image/jpeg")},
+                    )
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("bad_id", [
+    "..hidden",
+    "prefix..suffix",
+])
+def test_upload_face_thumbnail_rejects_path_traversal(tmp_path, bad_id):
+    _, settings = _setup_authed_client(tmp_path)
+
+    startup_patchers = _startup_patches()
+    try:
+        with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3], startup_patchers[4]:
+            with patch("app.modules.thumbnails.router.get_settings", return_value=settings):
+                with TestClient(app) as client:
+                    response = client.post(
+                        f"/api/ingest/thumbnails/face/{bad_id}",
+                        headers={"host": "devorg.app.heimdex.local", "authorization": "Bearer test"},
+                        files={"file": ("face.jpg", b"\xff\xd8\xff\xd9", "image/jpeg")},
+                    )
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("bad_id", [
+    "..hidden",
+    "prefix..suffix",
+])
+def test_get_face_thumbnail_rejects_path_traversal(tmp_path, bad_id):
+    _, settings = _setup_authed_client(tmp_path)
+
+    startup_patchers = _startup_patches()
+    try:
+        with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3], startup_patchers[4]:
+            with patch("app.modules.thumbnails.router.get_settings", return_value=settings):
+                with TestClient(app) as client:
+                    response = client.get(
+                        f"/api/thumbnails/faces/{bad_id}",
+                        headers={"host": "devorg.app.heimdex.local"},
+                    )
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("bad_video_id", [
+    "..hidden",
+    "prefix..suffix",
+])
+def test_get_thumbnail_rejects_path_traversal(tmp_path, bad_video_id):
+    _, settings = _setup_authed_client(tmp_path)
+
+    startup_patchers = _startup_patches()
+    try:
+        with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3], startup_patchers[4]:
+            with patch("app.modules.thumbnails.router.get_settings", return_value=settings):
+                with TestClient(app) as client:
+                    response = client.get(
+                        f"/api/thumbnails/{bad_video_id}/safe_scene_0",
+                        headers={"host": "devorg.app.heimdex.local"},
+                    )
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()

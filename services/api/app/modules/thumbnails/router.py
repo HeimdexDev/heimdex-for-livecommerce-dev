@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Annotated
 
@@ -12,6 +13,25 @@ from app.modules.tenancy.middleware import get_current_org
 upload_router = APIRouter(prefix="/ingest/thumbnails", tags=["ingest"])
 public_router = APIRouter(prefix="/thumbnails", tags=["thumbnails"])
 
+_UNSAFE_PATH_RE = re.compile(r"[/\\\x00]")
+
+
+def _validate_path_component(value: str, name: str) -> None:
+    if not value or _UNSAFE_PATH_RE.search(value) or ".." in value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {name}",
+        )
+
+
+def _validate_resolved_path(constructed: Path, root: Path) -> None:
+    resolved = constructed.resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path",
+        )
+
 
 @upload_router.post("/face/{person_cluster_id}")
 async def upload_face_thumbnail(
@@ -19,6 +39,8 @@ async def upload_face_thumbnail(
     file: Annotated[UploadFile, File(...)],
     org_ctx: Annotated[OrgContext, Depends(verify_agent_token)],
 ):
+    _validate_path_component(person_cluster_id, "person_cluster_id")
+
     content_type = (file.content_type or "").lower()
     if content_type not in {"image/jpeg", "image/jpg"}:
         raise HTTPException(
@@ -27,9 +49,11 @@ async def upload_face_thumbnail(
         )
 
     settings = get_settings()
-    target_dir = Path(settings.thumbnail_storage_dir) / str(org_ctx.org_id) / "faces"
+    root = Path(settings.thumbnail_storage_dir)
+    target_dir = root / str(org_ctx.org_id) / "faces"
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{person_cluster_id}.jpg"
+    _validate_resolved_path(target_path, root)
     data = await file.read()
     target_path.write_bytes(data)
 
@@ -44,12 +68,15 @@ async def ingest_thumbnail(
     scene_id_form: Annotated[str | None, Form(alias="scene_id")] = None,
     scene_id_query: Annotated[str | None, Query(alias="scene_id")] = None,
 ):
+    _validate_path_component(video_id, "video_id")
+
     scene_id = scene_id_form or scene_id_query
     if not scene_id:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="scene_id is required",
         )
+    _validate_path_component(scene_id, "scene_id")
 
     content_type = (file.content_type or "").lower()
     if content_type not in {"image/jpeg", "image/jpg"}:
@@ -59,9 +86,11 @@ async def ingest_thumbnail(
         )
 
     settings = get_settings()
-    target_dir = Path(settings.thumbnail_storage_dir) / str(org_ctx.org_id) / video_id
+    root = Path(settings.thumbnail_storage_dir)
+    target_dir = root / str(org_ctx.org_id) / video_id
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / f"{scene_id}.jpg"
+    _validate_resolved_path(target_path, root)
     data = await file.read()
     target_path.write_bytes(data)
 
@@ -73,8 +102,12 @@ async def get_face_thumbnail(
     person_cluster_id: str,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
 ):
+    _validate_path_component(person_cluster_id, "person_cluster_id")
+
     settings = get_settings()
-    thumbnail_path = Path(settings.thumbnail_storage_dir) / str(org_ctx.org_id) / "faces" / f"{person_cluster_id}.jpg"
+    root = Path(settings.thumbnail_storage_dir)
+    thumbnail_path = root / str(org_ctx.org_id) / "faces" / f"{person_cluster_id}.jpg"
+    _validate_resolved_path(thumbnail_path, root)
     if not thumbnail_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found")
 
@@ -91,8 +124,13 @@ async def get_thumbnail(
     scene_id: str,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
 ):
+    _validate_path_component(video_id, "video_id")
+    _validate_path_component(scene_id, "scene_id")
+
     settings = get_settings()
-    thumbnail_path = Path(settings.thumbnail_storage_dir) / str(org_ctx.org_id) / video_id / f"{scene_id}.jpg"
+    root = Path(settings.thumbnail_storage_dir)
+    thumbnail_path = root / str(org_ctx.org_id) / video_id / f"{scene_id}.jpg"
+    _validate_resolved_path(thumbnail_path, root)
     if thumbnail_path.exists():
         return FileResponse(
             path=thumbnail_path,
