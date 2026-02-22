@@ -135,6 +135,9 @@ class DriveFile(Base, UUIDMixin, TimestampMixin):
         String(32), nullable=True
     )  # pending | running | done | failed
     caption_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     is_deleted: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default="false"

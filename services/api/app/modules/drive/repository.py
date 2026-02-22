@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
+import sqlalchemy as sa
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -220,6 +221,94 @@ class DriveFileRepository:
             )
         )
         await self.session.flush()
+
+    async def update_heartbeat(self, file_id: UUID) -> int:
+        result = await self.session.execute(
+            update(DriveFile)
+            .where(DriveFile.id == file_id)
+            .values(last_heartbeat_at=func.now())
+            .returning(DriveFile.id)
+        )
+        await self.session.flush()
+        return len(list(result.scalars().all()))
+
+    async def reap_stuck_files(self, stale_threshold_minutes: int = 30) -> int:
+        threshold_minutes = int(stale_threshold_minutes)
+        stale_interval = sa.text(f"INTERVAL '{threshold_minutes} minutes'")
+        stale_error = f"Reaped: no heartbeat for {threshold_minutes}min"
+        stale_condition = DriveFile.last_heartbeat_at < (func.now() - stale_interval)
+
+        processing_result = await self.session.execute(
+            update(DriveFile)
+            .where(
+                DriveFile.processing_status.in_(
+                    ["downloading", "transcoding", "processing", "indexing"]
+                ),
+                stale_condition,
+                DriveFile.retry_count < DriveFile.max_retries,
+                DriveFile.is_deleted.is_(False),
+            )
+            .values(
+                processing_status="pending",
+                retry_count=DriveFile.retry_count + 1,
+                last_error=stale_error,
+                last_heartbeat_at=None,
+            )
+            .returning(DriveFile.id)
+        )
+
+        reaped_ids: set[UUID] = set(processing_result.scalars().all())
+
+        stt_result = await self.session.execute(
+            update(DriveFile)
+            .where(
+                DriveFile.stt_status == "running",
+                stale_condition,
+                DriveFile.is_deleted.is_(False),
+            )
+            .values(
+                stt_status="pending",
+                enrichment_state="pending",
+                last_heartbeat_at=None,
+            )
+            .returning(DriveFile.id)
+        )
+        reaped_ids.update(stt_result.scalars().all())
+
+        ocr_result = await self.session.execute(
+            update(DriveFile)
+            .where(
+                DriveFile.ocr_status == "running",
+                stale_condition,
+                DriveFile.is_deleted.is_(False),
+            )
+            .values(
+                ocr_status="pending",
+                enrichment_state="pending",
+                last_heartbeat_at=None,
+            )
+            .returning(DriveFile.id)
+        )
+        reaped_ids.update(ocr_result.scalars().all())
+
+        caption_result = await self.session.execute(
+            update(DriveFile)
+            .where(
+                DriveFile.caption_status == "running",
+                stale_condition,
+                DriveFile.is_deleted.is_(False),
+            )
+            .values(
+                caption_status="pending",
+                enrichment_state="pending",
+                last_heartbeat_at=None,
+            )
+            .returning(DriveFile.id)
+        )
+        reaped_ids.update(caption_result.scalars().all())
+
+        await self.session.flush()
+        return len(reaped_ids)
 
 
     async def claim_stt_pending_files(self, limit: int = 1) -> list[DriveFile]:
