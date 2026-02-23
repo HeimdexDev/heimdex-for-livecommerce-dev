@@ -159,23 +159,21 @@ services:
     build:
       context: ./services/web
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://devorg.app.heimdex.local:8000}
+        - NEXT_PUBLIC_AUTH0_ENABLED=${NEXT_PUBLIC_AUTH0_ENABLED:-false}
+        - NEXT_PUBLIC_AUTH0_DOMAIN=${NEXT_PUBLIC_AUTH0_DOMAIN:-}
+        - NEXT_PUBLIC_AUTH0_CLIENT_ID=${NEXT_PUBLIC_AUTH0_CLIENT_ID:-}
+        - NEXT_PUBLIC_AUTH0_AUDIENCE=${NEXT_PUBLIC_AUTH0_AUDIENCE:-https://api.heimdex.io}
+        - NEXT_PUBLIC_AUTH0_ORGANIZATION=${NEXT_PUBLIC_AUTH0_ORGANIZATION:-}
     container_name: heimdex-web
     mem_limit: 512m
     cpus: "1.0"
     environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://devorg.app.heimdex.local:8000}
-      - NEXT_PUBLIC_AUTH0_ENABLED=${NEXT_PUBLIC_AUTH0_ENABLED:-false}
-      - NEXT_PUBLIC_AUTH0_DOMAIN=${NEXT_PUBLIC_AUTH0_DOMAIN:-}
-      - NEXT_PUBLIC_AUTH0_CLIENT_ID=${NEXT_PUBLIC_AUTH0_CLIENT_ID:-}
-      - NEXT_PUBLIC_AUTH0_AUDIENCE=${NEXT_PUBLIC_AUTH0_AUDIENCE:-https://api.heimdex.io}
-      - NEXT_PUBLIC_AUTH0_ORGANIZATION=${NEXT_PUBLIC_AUTH0_ORGANIZATION:-}
       - AGENT_UPDATE_MANIFEST_URL=${AGENT_UPDATE_MANIFEST_URL:-}
+      - HOSTNAME=0.0.0.0
     ports:
       - "3000:3000"
-    volumes:
-      - ./services/web:/app
-      - /app/node_modules
-      - /app/.next
     extra_hosts:
       - "devorg.app.heimdex.local:host-gateway"
     depends_on:

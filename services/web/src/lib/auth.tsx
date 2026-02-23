@@ -211,13 +211,17 @@ function Auth0AuthProvider({ children }: { children: ReactNode }) {
 
 // Main AuthProvider that switches between Auth0 and dev mode
 export function AuthProvider({ children }: { children: ReactNode }) {
-  if (!AUTH0_ENABLED) {
+  // SSR guard: Auth0Provider requires a browser context. During SSR, render
+  // the dev provider (which returns a safe loading state) to avoid the SDK
+  // throwing null when window/document are unavailable.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  if (!AUTH0_ENABLED || !mounted) {
     return <DevAuthProvider>{children}</DevAuthProvider>;
   }
 
-  // Get redirect URI based on current origin
-  const redirectUri =
-    typeof window !== "undefined" ? `${window.location.origin}/auth/callback` : "";
+  const redirectUri = `${window.location.origin}/auth/callback`;
 
   const authParams = {
     redirect_uri: redirectUri,
