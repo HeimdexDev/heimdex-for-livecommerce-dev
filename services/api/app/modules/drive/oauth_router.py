@@ -28,7 +28,7 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
-DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+DRIVE_SCOPES = "openid email https://www.googleapis.com/auth/drive.readonly"
 
 # HMAC-signed state tokens (stateless CSRF protection)
 _STATE_TTL_SECONDS = 600  # 10 minutes
@@ -86,7 +86,7 @@ async def authorize(
         "client_id": settings.google_oauth_client_id,
         "redirect_uri": settings.google_oauth_redirect_uri,
         "response_type": "code",
-        "scope": DRIVE_SCOPE,
+        "scope": DRIVE_SCOPES,
         "access_type": "offline",
         "prompt": "consent",
         "state": state,
