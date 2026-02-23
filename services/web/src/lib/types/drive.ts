@@ -29,8 +29,12 @@ export interface DriveConnectionResponse {
   id: string;
   org_id: string;
   library_id: string;
-  drive_id: string;
-  drive_name: string;
+  drive_id: string | null;
+  drive_name: string | null;
+  scope_type: string;
+  folder_id: string | null;
+  folder_name: string | null;
+  folder_path: string | null;
   status: string;
   last_sync_at: string | null;
   sync_requested_at: string | null;
@@ -41,4 +45,21 @@ export interface DriveConnectionResponse {
 export interface SyncTriggerResponse {
   status: string;
   sync_requested_at: string;
+}
+
+export interface DriveOAuthStatus {
+  connected: boolean;
+  google_email: string | null;
+  connected_at: string | null;
+}
+
+export interface DriveFolderItem {
+  id: string;
+  name: string;
+  parents?: string[];
+}
+
+export interface BrowseFoldersResponse {
+  folders: DriveFolderItem[];
+  parent_id: string;
 }

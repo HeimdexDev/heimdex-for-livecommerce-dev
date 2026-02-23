@@ -17,6 +17,7 @@ from app.modules.drive.schemas import (
     DriveConnectionUpdate,
     DriveFileListResponse,
     DriveFileResponse,
+    DriveFolderConnectionCreate,
     DriveFolderInfo,
     DriveFolderListResponse,
     DriveSecretCreate,
@@ -245,6 +246,86 @@ async def upsert_secret(
         impersonate_email=body.impersonate_email,
     )
     return secret
+
+
+@router.post("/folder-connections", response_model=DriveConnectionResponse, status_code=status.HTTP_201_CREATED)
+async def create_folder_connection(
+    body: DriveFolderConnectionCreate,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _: Annotated[None, Depends(_require_drive_enabled)],
+):
+    settings = get_settings()
+    if not settings.google_oauth_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google Drive OAuth is not configured",
+        )
+
+    secret_repo = DriveSecretRepository(db)
+    secret = await secret_repo.get_by_org(org_ctx.org_id, secret_type="oauth_token")
+    if secret is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google Drive is not connected. Please connect via OAuth first.",
+        )
+
+    from app.modules.drive.models import DriveConnection
+
+    conn = DriveConnection(
+        org_id=org_ctx.org_id,
+        library_id=body.library_id,
+        scope_type="folder",
+        drive_id=None,
+        drive_name=None,
+        folder_id=body.folder_id,
+        folder_name=body.folder_name,
+        folder_path=body.folder_path,
+    )
+    db.add(conn)
+    await db.flush()
+    await db.refresh(conn)
+    return conn
+
+
+@router.get("/browse-folders")
+async def browse_folders(
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    _: Annotated[None, Depends(_require_drive_enabled)],
+    parent_id: str = "root",
+):
+    settings = get_settings()
+    if not settings.google_oauth_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google Drive OAuth is not configured",
+        )
+
+    secret_repo = DriveSecretRepository(db)
+    secret = await secret_repo.get_by_org(org_ctx.org_id, secret_type="oauth_token")
+    if secret is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google Drive is not connected. Please connect via OAuth first.",
+        )
+
+    key = bytes.fromhex(settings.drive_sa_encryption_key)
+    aesgcm = AESGCM(key)
+    decrypted = aesgcm.decrypt(secret.nonce, secret.encrypted_value, None)
+
+    import json
+    token_data = json.loads(decrypted)
+
+    from app.modules.drive.google_client import DriveClient
+    drive_client = DriveClient.from_oauth_token(
+        refresh_token=token_data["refresh_token"],
+        client_id=token_data["client_id"],
+        client_secret=token_data["client_secret"],
+    )
+
+    folders = drive_client.list_folders(parent_id)
+    return {"folders": folders, "parent_id": parent_id}
 
 
 _RANGE_CHUNK = 2 * 1024 * 1024

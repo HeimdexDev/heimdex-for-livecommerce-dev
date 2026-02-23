@@ -3,7 +3,16 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/lib/auth";
 import { getDevices } from "@/lib/api/devices";
-import { getDriveStatus, getDriveConnections, triggerDriveSync, getDriveFolders } from "@/lib/api/drive";
+import {
+  getDriveStatus,
+  getDriveConnections,
+  triggerDriveSync,
+  getDriveFolders,
+  getOAuthStatus,
+  getOAuthAuthorizeUrl,
+  disconnectOAuth,
+  createFolderConnection,
+} from "@/lib/api/drive";
 import {
   getAgentStatus,
   getAgentSources,
@@ -19,7 +28,8 @@ import { SyncedFolderList } from "@/components/sync/SyncedFolderList";
 import { DriveFolderList } from "@/components/sync/DriveFolderList";
 import { UploadProgress } from "@/components/sync/UploadProgress";
 import { StopConfirmDialog } from "@/components/sync/StopConfirmDialog";
-import type { DeviceListItem, DriveStatusResponse, DriveFolderInfo, DriveConnectionResponse } from "@/lib/types";
+import { DriveFolderBrowser } from "@/components/sync/DriveFolderBrowser";
+import type { DeviceListItem, DriveStatusResponse, DriveFolderInfo, DriveConnectionResponse, DriveOAuthStatus } from "@/lib/types";
 
 type UploadState = "hidden" | "uploading" | "paused" | "complete" | "error";
 
@@ -117,6 +127,9 @@ function SyncContent() {
   const [driveFoldersLoading, setDriveFoldersLoading] = useState(false);
   const [driveSyncing, setDriveSyncing] = useState(false);
   const [driveConnections, setDriveConnections] = useState<DriveConnectionResponse[]>([]);
+  const [oauthStatus, setOauthStatus] = useState<DriveOAuthStatus | null>(null);
+  const [showFolderBrowser, setShowFolderBrowser] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState(false);
   const pollingRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const unreachableCountRef = useRef(0);
@@ -158,6 +171,15 @@ function SyncContent() {
     }
   }, [getAccessToken]);
 
+  const loadOAuthStatus = useCallback(async () => {
+    try {
+      const status = await getOAuthStatus(getAccessToken);
+      setOauthStatus(status);
+    } catch {
+      setOauthStatus(null);
+    }
+  }, [getAccessToken]);
+
   const loadDriveFolders = useCallback(async () => {
     const activeConn = driveConnections.find(c => c.status === "active");
     if (!activeConn) return;
@@ -179,9 +201,10 @@ function SyncContent() {
     loadSources();
     loadDriveStatus();
     loadDriveConnections();
-    const id = setInterval(() => { loadDevices(); loadSources(); loadDriveStatus(); loadDriveConnections(); }, DEVICE_POLL_INTERVAL_MS);
+    loadOAuthStatus();
+    const id = setInterval(() => { loadDevices(); loadSources(); loadDriveStatus(); loadDriveConnections(); loadOAuthStatus(); }, DEVICE_POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [loadDevices, loadSources, loadDriveStatus, loadDriveConnections]);
+  }, [loadDevices, loadSources, loadDriveStatus, loadDriveConnections, loadOAuthStatus]);
 
   useEffect(() => {
     if (showDriveFolders) {
@@ -339,6 +362,46 @@ function SyncContent() {
     }
   }, [driveConnections, getAccessToken, loadDriveStatus, showDriveFolders, loadDriveFolders]);
 
+  const handleConnectGoogle = useCallback(async () => {
+    setOauthLoading(true);
+    try {
+      const { authorize_url } = await getOAuthAuthorizeUrl(getAccessToken);
+      window.location.href = authorize_url;
+    } catch (err) {
+      console.error("OAuth authorize failed:", err);
+      setOauthLoading(false);
+    }
+  }, [getAccessToken]);
+
+  const handleDisconnectGoogle = useCallback(async () => {
+    setOauthLoading(true);
+    try {
+      await disconnectOAuth(getAccessToken);
+      setOauthStatus({ connected: false, google_email: null, connected_at: null });
+      setShowFolderBrowser(false);
+      loadDriveConnections();
+    } catch (err) {
+      console.error("OAuth disconnect failed:", err);
+    } finally {
+      setOauthLoading(false);
+    }
+  }, [getAccessToken, loadDriveConnections]);
+
+  const handleFolderSelected = useCallback(async (folderId: string, folderName: string, folderPath: string) => {
+    const defaultLibraryId = driveConnections[0]?.library_id;
+    if (!defaultLibraryId) {
+      console.error("No library_id available for folder connection");
+      return;
+    }
+    try {
+      await createFolderConnection(defaultLibraryId, folderId, folderName, folderPath, getAccessToken);
+      setShowFolderBrowser(false);
+      loadDriveConnections();
+    } catch (err) {
+      console.error("Failed to create folder connection:", err);
+    }
+  }, [driveConnections, getAccessToken, loadDriveConnections]);
+
   const handleDeleteSource = useCallback(async (id: string) => {
     const ok = await deleteAgentSource(id);
     if (ok) loadSources();
@@ -399,6 +462,111 @@ function SyncContent() {
           onUpdate={() => {}}
           disabled
         />
+      </div>
+
+      {/* Google Drive OAuth Section */}
+      <div className="mt-8">
+        {oauthStatus?.connected ? (
+          <div className="rounded-xl border border-gray-200 bg-white p-6">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-50">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-600" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M5.5 16a3.5 3.5 0 01-.369-6.98 4 4 0 117.753-1.977A4.5 4.5 0 1113.5 16h-8z" />
+                  </svg>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-gray-900">Google 드라이브 연결됨</h3>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+                      연결됨
+                    </span>
+                  </div>
+                  {oauthStatus.google_email && (
+                    <p className="mt-0.5 text-xs text-gray-500">{oauthStatus.google_email}</p>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowFolderBrowser((prev) => !prev)}
+                  className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600"
+                >
+                  폴더 추가
+                </button>
+                <button
+                  onClick={handleDisconnectGoogle}
+                  disabled={oauthLoading}
+                  className="rounded-lg border border-red-200 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                >
+                  연결 해제
+                </button>
+              </div>
+            </div>
+
+            {showFolderBrowser && (
+              <DriveFolderBrowser
+                onFolderSelected={handleFolderSelected}
+                onClose={() => setShowFolderBrowser(false)}
+                getAccessToken={getAccessToken}
+              />
+            )}
+
+            {/* Connected folder connections */}
+            {driveConnections.filter((c) => c.scope_type === "folder").length > 0 && (
+              <div className="mt-4 space-y-2">
+                <h4 className="text-xs font-medium text-gray-500">동기화 폴더</h4>
+                {driveConnections
+                  .filter((c) => c.scope_type === "folder")
+                  .map((conn) => (
+                    <div
+                      key={conn.id}
+                      className="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3"
+                    >
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-500">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-gray-800">{conn.folder_name}</p>
+                        {conn.folder_path && (
+                          <p className="truncate text-xs text-gray-400">{conn.folder_path}</p>
+                        )}
+                      </div>
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                        conn.status === "active"
+                          ? "bg-green-50 text-green-700"
+                          : "bg-gray-100 text-gray-500"
+                      }`}>
+                        {conn.status === "active" ? "활성" : conn.status}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white p-6 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-500" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M5.5 16a3.5 3.5 0 01-.369-6.98 4 4 0 117.753-1.977A4.5 4.5 0 1113.5 16h-8z" />
+              </svg>
+            </div>
+            <h3 className="mt-3 text-sm font-semibold text-gray-900">Google 드라이브 연결</h3>
+            <p className="mt-1 text-xs text-gray-500">
+              Google 계정을 연결하여 드라이브 폴더를 동기화하세요.
+            </p>
+            <button
+              onClick={handleConnectGoogle}
+              disabled={oauthLoading}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+            >
+              {oauthLoading ? "연결 중..." : "Google 드라이브 연결하기"}
+            </button>
+          </div>
+        )}
       </div>
 
       {showFolders && (

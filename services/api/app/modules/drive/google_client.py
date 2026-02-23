@@ -35,6 +35,23 @@ class DriveClient:
         )
         self._service = build("drive", DRIVE_API_VERSION, credentials=self._credentials)
 
+    @classmethod
+    def from_oauth_token(cls, refresh_token: str, client_id: str, client_secret: str) -> "DriveClient":
+        from google.oauth2.credentials import Credentials as UserCredentials
+        credentials = UserCredentials(
+            token=None,
+            refresh_token=refresh_token,
+            client_id=client_id,
+            client_secret=client_secret,
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=DRIVE_SCOPES,
+        )
+        credentials.refresh(GoogleAuthRequest())
+        instance = cls.__new__(cls)
+        instance._credentials = credentials
+        instance._service = build("drive", DRIVE_API_VERSION, credentials=credentials)
+        return instance
+
     def _ensure_valid_credentials(self) -> None:
         if not self._credentials.valid:
             self._credentials.refresh(GoogleAuthRequest())
@@ -263,6 +280,83 @@ class DriveClient:
             },
         )
         return result
+
+    def list_folder_files(
+        self,
+        folder_id: str,
+        page_token: Optional[str] = None,
+        page_size: int = 100,
+    ) -> dict[str, Any]:
+        self._ensure_valid_credentials()
+        query = f"'{folder_id}' in parents and mimeType contains 'video/' and trashed = false"
+        return (
+            self._service.files()
+            .list(
+                q=query,
+                fields="nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,parents)",
+                pageSize=page_size,
+                pageToken=page_token,
+                includeItemsFromAllDrives=True,
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
+
+    def list_subfolders(self, folder_id: str) -> list[str]:
+        """Return all subfolder IDs recursively under folder_id."""
+        self._ensure_valid_credentials()
+        all_folder_ids: list[str] = []
+        queue = [folder_id]
+        while queue:
+            current = queue.pop(0)
+            query = f"'{current}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+            page_token: Optional[str] = None
+            while True:
+                resp = (
+                    self._service.files()
+                    .list(
+                        q=query,
+                        fields="nextPageToken,files(id)",
+                        pageSize=100,
+                        pageToken=page_token,
+                        includeItemsFromAllDrives=True,
+                        supportsAllDrives=True,
+                    )
+                    .execute()
+                )
+                for f in resp.get("files", []):
+                    fid = f["id"]
+                    all_folder_ids.append(fid)
+                    queue.append(fid)
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break
+        return all_folder_ids
+
+    def list_folders(self, parent_id: str = "root") -> list[dict[str, Any]]:
+        """List immediate child folders of parent_id. Used by folder picker API."""
+        self._ensure_valid_credentials()
+        query = f"'{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        results: list[dict[str, Any]] = []
+        page_token: Optional[str] = None
+        while True:
+            resp = (
+                self._service.files()
+                .list(
+                    q=query,
+                    fields="nextPageToken,files(id,name,parents)",
+                    pageSize=100,
+                    pageToken=page_token,
+                    includeItemsFromAllDrives=True,
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
+            results.extend(resp.get("files", []))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return results
 
     @staticmethod
     def _execute_with_retry(request_fn, max_retries: int = MAX_RETRIES) -> Any:

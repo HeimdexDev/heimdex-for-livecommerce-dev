@@ -84,13 +84,26 @@ async def _process_single_file(
 
     try:
         secret_repo = DriveSecretRepository(session)
-        secret = await secret_repo.get_by_org(drive_file.org_id)
-        if not secret:
-            await file_repo.mark_failed(drive_file.id, "No SA key configured for org")
-            return
+        scope_type = getattr(connection, "scope_type", "drive") or "drive"
 
-        sa_key_info = _decrypt_sa_key(secret.encrypted_value, secret.nonce, settings.drive_sa_encryption_key)
-        drive_client = DriveClient(sa_key_info, secret.impersonate_email)
+        if scope_type == "folder":
+            secret = await secret_repo.get_by_org(drive_file.org_id, secret_type="oauth_token")
+            if not secret:
+                await file_repo.mark_failed(drive_file.id, "No OAuth token configured for org")
+                return
+            token_data = _decrypt_sa_key(secret.encrypted_value, secret.nonce, settings.drive_sa_encryption_key)
+            drive_client = DriveClient.from_oauth_token(
+                refresh_token=token_data["refresh_token"],
+                client_id=token_data["client_id"],
+                client_secret=token_data["client_secret"],
+            )
+        else:
+            secret = await secret_repo.get_by_org(drive_file.org_id, secret_type="service_account_key")
+            if not secret:
+                await file_repo.mark_failed(drive_file.id, "No SA key configured for org")
+                return
+            sa_key_info = _decrypt_sa_key(secret.encrypted_value, secret.nonce, settings.drive_sa_encryption_key)
+            drive_client = DriveClient(sa_key_info, secret.impersonate_email)
 
         original_path = temp_dir / f"original_{drive_file.google_file_id}"
         logger.info("download_started", extra={"file_id": drive_file.google_file_id, "file_name": drive_file.file_name})

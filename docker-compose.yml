@@ -127,6 +127,10 @@ services:
       - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
       - DRIVE_SA_ENCRYPTION_KEY=${DRIVE_SA_ENCRYPTION_KEY:-}
       - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      # Google Drive OAuth (folder-scoped sync)
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
+      - GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      - GOOGLE_OAUTH_REDIRECT_URI=${GOOGLE_OAUTH_REDIRECT_URI:-}
       - HF_HOME=/data/huggingface
     ports:
       - "8000:8000"

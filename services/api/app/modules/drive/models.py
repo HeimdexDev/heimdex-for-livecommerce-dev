@@ -2,22 +2,22 @@
 SQLAlchemy models for Google Drive integration.
 
 Tables:
-- drive_connections: Tracks which Shared Drives are connected per org.
-- drive_files: Tracks every video file discovered in connected Shared Drives.
-- drive_secrets: Encrypted storage for Google service account keys (AES-256-GCM).
+- drive_connections: Tracks connected Shared Drives and folder-scoped sources per org.
+- drive_files: Tracks every video file discovered in connected Drive sources.
+- drive_secrets: Encrypted storage for Drive credentials (AES-256-GCM).
 
 Design decisions (from ARCHITECTURE.md):
 - All tables FK to orgs.id with CASCADE delete (multi-tenant isolation).
 - drive_files.video_id is deterministic: "gd_{sha256(org_id:google_file_id)[:16]}".
 - processing_status is a text enum enforced at application layer (not DB CHECK)
   to allow future states without migrations.
-- drive_secrets stores encrypted SA key JSON + nonce (AES-256-GCM).
+- drive_secrets stores encrypted service account keys and OAuth token payloads.
 """
 from datetime import datetime
 from typing import Optional, final
 from uuid import UUID as PyUUID
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,7 +26,7 @@ from app.db.base import Base, TimestampMixin, UUIDMixin
 
 @final
 class DriveConnection(Base, UUIDMixin, TimestampMixin):
-    """Tracks which Google Shared Drives are connected per org."""
+    """Tracks which Google Drive scopes are connected per org."""
 
     __tablename__ = "drive_connections"
 
@@ -42,8 +42,12 @@ class DriveConnection(Base, UUIDMixin, TimestampMixin):
         nullable=False,
         index=True,
     )
-    drive_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    drive_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False, server_default="drive")
+    drive_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    drive_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    folder_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    folder_name: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    folder_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default="active"
     )  # active | paused | disconnected | error
@@ -60,9 +64,22 @@ class DriveConnection(Base, UUIDMixin, TimestampMixin):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     __table_args__: tuple[object, ...] = (
-        UniqueConstraint("org_id", "drive_id", name="uq_drive_connections_org_drive"),
+        Index(
+            "uq_drive_connections_org_drive_not_null",
+            "org_id",
+            "drive_id",
+            unique=True,
+            postgresql_where=text("drive_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_drive_connections_org_folder_not_null",
+            "org_id",
+            "folder_id",
+            unique=True,
+            postgresql_where=text("folder_id IS NOT NULL"),
+        ),
         Index("ix_drive_connections_status", "status"),
-        {"comment": "Google Shared Drive connections per org"},
+        {"comment": "Google Drive scoped connections per org"},
     )
 
 
@@ -159,7 +176,7 @@ class DriveFile(Base, UUIDMixin, TimestampMixin):
 
 @final
 class DriveSecret(Base, UUIDMixin, TimestampMixin):
-    """Encrypted storage for Google service account keys (AES-256-GCM)."""
+    """Encrypted storage for Google service account keys and OAuth tokens (AES-256-GCM)."""
 
     __tablename__ = "drive_secrets"
 
@@ -178,5 +195,5 @@ class DriveSecret(Base, UUIDMixin, TimestampMixin):
 
     __table_args__: tuple[object, ...] = (
         UniqueConstraint("org_id", "secret_type", name="uq_drive_secrets_org_type"),
-        {"comment": "Encrypted Google SA keys for Drive integration"},
+        {"comment": "Encrypted Google Drive credentials for Drive integration"},
     )

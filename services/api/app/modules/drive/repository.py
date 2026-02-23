@@ -564,14 +564,26 @@ class DriveSecretRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def get_by_org(self, org_id: UUID) -> Optional[DriveSecret]:
+    async def get_by_org(
+        self, org_id: UUID, secret_type: str = "service_account_key"
+    ) -> Optional[DriveSecret]:
         result = await self.session.execute(
-            select(DriveSecret).where(DriveSecret.org_id == org_id)
+            select(DriveSecret).where(
+                DriveSecret.org_id == org_id,
+                DriveSecret.secret_type == secret_type,
+            )
         )
         return result.scalar_one_or_none()
 
-    async def upsert(self, org_id: UUID, encrypted_value: bytes, nonce: bytes, impersonate_email: str) -> DriveSecret:
-        existing = await self.get_by_org(org_id)
+    async def upsert(
+        self,
+        org_id: UUID,
+        encrypted_value: bytes,
+        nonce: bytes,
+        impersonate_email: str,
+        secret_type: str = "service_account_key",
+    ) -> DriveSecret:
+        existing = await self.get_by_org(org_id, secret_type=secret_type)
         if existing:
             existing.encrypted_value = encrypted_value
             existing.nonce = nonce
@@ -581,6 +593,7 @@ class DriveSecretRepository:
             return existing
         secret = DriveSecret(
             org_id=org_id,
+            secret_type=secret_type,
             encrypted_value=encrypted_value,
             nonce=nonce,
             impersonate_email=impersonate_email,
@@ -589,3 +602,11 @@ class DriveSecretRepository:
         await self.session.flush()
         await self.session.refresh(secret)
         return secret
+
+    async def delete_by_org_and_type(self, org_id: UUID, secret_type: str) -> bool:
+        existing = await self.get_by_org(org_id, secret_type=secret_type)
+        if existing is None:
+            return False
+        await self.session.delete(existing)
+        await self.session.flush()
+        return True

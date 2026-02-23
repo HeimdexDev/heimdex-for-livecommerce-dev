@@ -11,12 +11,23 @@ class DriveConnectionCreate(BaseModel):
     drive_name: str = Field(..., min_length=1, max_length=500)
 
 
+class DriveFolderConnectionCreate(BaseModel):
+    library_id: UUID
+    folder_id: str = Field(..., min_length=1, max_length=256)
+    folder_name: str = Field(..., min_length=1, max_length=500)
+    folder_path: str = Field("", max_length=2000)
+
+
 class DriveConnectionResponse(BaseModel):
     id: UUID
     org_id: UUID
     library_id: UUID
-    drive_id: str
-    drive_name: str
+    scope_type: str
+    drive_id: Optional[str] = None
+    drive_name: Optional[str] = None
+    folder_id: Optional[str] = None
+    folder_name: Optional[str] = None
+    folder_path: Optional[str] = None
     status: str
     last_sync_at: Optional[datetime] = None
     last_full_sync_at: Optional[datetime] = None
@@ -92,6 +103,12 @@ class DriveStatusResponse(BaseModel):
     pending: int = 0
     failed: int = 0
     last_indexed_at: Optional[datetime] = None
+
+
+class DriveOAuthStatusResponse(BaseModel):
+    connected: bool
+    google_email: Optional[str] = None
+    connected_at: Optional[datetime] = None
 
 
 class DriveSecretCreate(BaseModel):

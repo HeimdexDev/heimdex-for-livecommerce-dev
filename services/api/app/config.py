@@ -125,6 +125,11 @@ class Settings(BaseSettings):
     drive_api_base_url: str = "http://api:8000"  # API base URL for drive-worker HTTP calls
     drive_enrichment_enabled: bool = False
 
+    # --- Google Drive OAuth (folder-scoped sync) ---
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str = ""  # e.g., https://devorg.app.heimdexdemo.dev/api/drive/oauth/callback
+
     # --- OCR enrichment worker ---
     drive_ocr_enabled: bool = False
     drive_ocr_poll_interval_seconds: int = 30

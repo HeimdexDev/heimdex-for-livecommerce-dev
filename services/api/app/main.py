@@ -286,8 +286,10 @@ app.include_router(videos_router, prefix="/api")
 if get_settings().drive_connector_enabled:
     from app.modules.drive.router import router as drive_router
     from app.modules.drive.router import playback_router
+    from app.modules.drive.oauth_router import oauth_router as drive_oauth_router
     from app.modules.export.router import router as export_router
     app.include_router(drive_router, prefix="/api")
+    app.include_router(drive_oauth_router, prefix="/api")
     app.include_router(playback_router, prefix="/api")
     app.include_router(export_router, prefix="/api")
 
