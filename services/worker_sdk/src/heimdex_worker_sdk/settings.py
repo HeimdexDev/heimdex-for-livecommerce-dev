@@ -3,6 +3,9 @@
 Field names match ``app.config.Settings`` exactly so the same environment
 variables work without any docker-compose or .env changes.  Only the fields
 that workers actually need are declared here.
+
+Post-Phase 1: workers are fully DB-free and communicate via internal HTTP
+API only.  No database_url or ORM fields belong here.
 """
 
 from functools import lru_cache
@@ -18,14 +21,6 @@ class WorkerSettings(BaseSettings):
     environment: Literal["development", "staging", "production"] = "development"
     log_level: str = "INFO"
 
-    # --- Database (needed while workers still import app.db.models) ---
-    database_url: str = (
-        "postgresql+asyncpg://heimdex:heimdex_dev_password@localhost:5432/heimdex"
-    )
-    database_url_sync: str = (
-        "postgresql://heimdex:heimdex_dev_password@localhost:5432/heimdex"
-    )
-
     # --- MinIO / S3 ---
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "heimdex"
@@ -36,7 +31,6 @@ class WorkerSettings(BaseSettings):
     drive_s3_bucket: str = "heimdex-drive"
     drive_internal_api_key: str = ""
     drive_api_base_url: str = "http://api:8000"
-    drive_sa_encryption_key: str = ""
     drive_connector_enabled: bool = False
     drive_enrichment_enabled: bool = False
 

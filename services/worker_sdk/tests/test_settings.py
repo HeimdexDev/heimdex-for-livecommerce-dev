@@ -19,11 +19,6 @@ class TestWorkerSettingsDefaults:
         s = WorkerSettings()
         assert s.log_level == "INFO"
 
-    def test_default_database_url(self):
-        s = WorkerSettings()
-        assert "asyncpg" in s.database_url
-        assert "heimdex" in s.database_url
-
     def test_default_minio_settings(self):
         s = WorkerSettings()
         assert s.minio_endpoint == "localhost:9000"

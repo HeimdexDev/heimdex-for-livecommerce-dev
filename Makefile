@@ -1,10 +1,10 @@
 # Heimdex Quality Gate
 # Run `make check` to verify all quality gates pass
 
-.PHONY: check test test-integration build lint lint-frontend lint-backend
+.PHONY: check test test-integration build lint lint-frontend lint-backend check-coupling
 
 # Run core quality checks (tests + build)
-check: test build
+check: test build check-coupling
 	@echo ""
 	@echo "============================================"
 	@echo "  All quality gates passed!"
@@ -45,3 +45,6 @@ lint:
 	@echo ""
 	@echo "Running frontend linting..."
 	docker compose exec -T web npm run lint
+
+check-coupling:
+	@bash scripts/check_no_worker_db_coupling.sh
