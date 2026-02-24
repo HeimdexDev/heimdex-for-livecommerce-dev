@@ -21,6 +21,8 @@ from heimdex_worker_sdk.internal_api import (
     UpsertResult,
 )
 
+from heimdex_worker_sdk.sqs_client import SQSJobClient, SQSMessage
+
 __all__ = [
     "WorkerSettings",
     "get_worker_settings",
@@ -31,6 +33,8 @@ __all__ = [
     "UpsertResult",
     "AccessToken",
     "ClaimedProcessingFile",
+    "SQSJobClient",
+    "SQSMessage",
     "audio_s3_key",
     "drive_video_id",
     "enrichment_keyframe_s3_key",
