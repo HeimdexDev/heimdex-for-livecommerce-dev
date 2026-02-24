@@ -61,7 +61,7 @@ class TenancyMiddleware:
             return
 
         path = scope.get("path", "")
-        if path in HEALTH_PATHS:
+        if path in HEALTH_PATHS or path.startswith("/internal/"):
             await self.app(scope, receive, send)
             return
 
