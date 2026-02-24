@@ -1,3 +1,9 @@
+FROM python:3.11-slim AS sdk-builder
+WORKDIR /build
+COPY services/worker_sdk/pyproject.toml .
+COPY services/worker_sdk/src/ src/
+RUN pip install --no-cache-dir build && python -m build --wheel --outdir /dist
+
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -9,7 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY pyproject.toml .
+COPY --from=sdk-builder /dist/heimdex_worker_sdk-*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/heimdex_worker_sdk-*.whl && rm -f /tmp/*.whl
+
+COPY services/drive-caption-worker/pyproject.toml .
 RUN pip install --no-cache-dir -e . 2>/dev/null || \
     pip install --no-cache-dir \
       "boto3>=1.34" "apscheduler>=3.10,<4" "pydantic-settings>=2.0" \
@@ -17,7 +26,7 @@ RUN pip install --no-cache-dir -e . 2>/dev/null || \
       "transformers==4.44.2" "torch>=2.0" "torchvision>=0.15" "Pillow>=9.0" \
       "einops>=0.7" "timm>=0.9"
 
-COPY src/ src/
+COPY services/drive-caption-worker/src/ src/
 
 RUN useradd -m -u 1000 appuser
 USER appuser

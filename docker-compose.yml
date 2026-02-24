@@ -201,15 +201,13 @@ services:
 
   drive-worker:
     build:
-      context: ./services/drive-worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/drive-worker/Dockerfile
     container_name: heimdex-drive-worker
     mem_limit: 2g
     cpus: "2.0"
     environment:
-      - PYTHONPATH=/app:/opt/heimdex-api:/opt/heimdex-worker-sdk/src
-      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}
-      - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql://heimdex:heimdex_dev_password@postgres:5432/heimdex}
+      - PYTHONPATH=/app
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
@@ -217,7 +215,6 @@ services:
       - DRIVE_CONNECTOR_ENABLED=${DRIVE_CONNECTOR_ENABLED:-false}
       - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
       - DRIVE_API_BASE_URL=http://api:8000
-      - DRIVE_SA_ENCRYPTION_KEY=${DRIVE_SA_ENCRYPTION_KEY:-}
       - DRIVE_WORKER_POLL_INTERVAL_SECONDS=${DRIVE_WORKER_POLL_INTERVAL_SECONDS:-30}
       - DRIVE_WORKER_GLOBAL_CONCURRENCY=${DRIVE_WORKER_GLOBAL_CONCURRENCY:-2}
       - DRIVE_WORKER_PER_ORG_CONCURRENCY=${DRIVE_WORKER_PER_ORG_CONCURRENCY:-1}
@@ -234,15 +231,11 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./services/drive-worker:/app
-      - ./services/api:/opt/heimdex-api:ro
-      - ./services/worker_sdk:/opt/heimdex-worker-sdk:ro
       # Mount pipeline repos for scene detection + keyframe extraction (V3a)
       - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
       - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
       - ./data:/data
     depends_on:
-      postgres:
-        condition: service_healthy
       minio:
         condition: service_healthy
       api:
@@ -250,18 +243,17 @@ services:
     command: >
       sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
              pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
-             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
              python -m src.worker"
 
   drive-ocr-worker:
     build:
-      context: ./services/drive-ocr-worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/drive-ocr-worker/Dockerfile
     container_name: heimdex-drive-ocr-worker
     mem_limit: 2g
     cpus: "2.0"
     environment:
-      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+      - PYTHONPATH=/app
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
@@ -277,7 +269,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./services/drive-ocr-worker:/app
-      - ./services/worker_sdk:/opt/heimdex-worker-sdk:ro
       - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
       - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
     depends_on:
@@ -288,7 +279,6 @@ services:
     command: >
       sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
              pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
-             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
              python -m src.worker"
 
   llama-caption-server:
@@ -323,13 +313,13 @@ services:
 
   drive-caption-worker:
     build:
-      context: ./services/drive-caption-worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/drive-caption-worker/Dockerfile
     container_name: heimdex-drive-caption-worker
     mem_limit: 4g
     cpus: "2.0"
     environment:
-      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+      - PYTHONPATH=/app
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
@@ -350,7 +340,6 @@ services:
       - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
     volumes:
       - ./services/drive-caption-worker:/app
-      - ./services/worker_sdk:/opt/heimdex-worker-sdk:ro
       - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
       - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
       - huggingface_cache:/data/huggingface
@@ -365,18 +354,17 @@ services:
     command: >
       sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
              pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
-             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
              python -m src.worker"
 
   drive-stt-worker:
     build:
-      context: ./services/drive-stt-worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/drive-stt-worker/Dockerfile
     container_name: heimdex-drive-stt-worker
     mem_limit: 2g
     cpus: "2.0"
     environment:
-      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+      - PYTHONPATH=/app
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
@@ -394,7 +382,6 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - ./services/drive-stt-worker:/app
-      - ./services/worker_sdk:/opt/heimdex-worker-sdk:ro
       - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
       - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
       - whisper_model_cache:/data/whisper-models
@@ -406,7 +393,6 @@ services:
     command: >
       sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
              pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
-             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
              python -m src.worker"
 
 volumes:

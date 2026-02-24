@@ -1,0 +1,52 @@
+# docker-compose.override.yml
+# DEV-ONLY: Mounts worker_sdk source and installs it as editable.
+# This file is auto-loaded by `docker compose up` when present.
+# Production images bake the SDK wheel at build time (see Dockerfiles).
+#
+# To run WITHOUT this override (prod-like):
+#   docker compose -f docker-compose.yml up
+
+services:
+  drive-worker:
+    volumes:
+      - ./services/worker_sdk:/opt/heimdex-worker-sdk:ro
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+  drive-ocr-worker:
+    volumes:
+      - ./services/worker_sdk:/opt/heimdex-worker-sdk:ro
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+  drive-caption-worker:
+    volumes:
+      - ./services/worker_sdk:/opt/heimdex-worker-sdk:ro
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+  drive-stt-worker:
+    volumes:
+      - ./services/worker_sdk:/opt/heimdex-worker-sdk:ro
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
