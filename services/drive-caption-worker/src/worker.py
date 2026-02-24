@@ -25,8 +25,8 @@ def _release_slot() -> None:
         _global_active = max(0, _global_active - 1)
 
 
-async def poll_and_process(session_factory, caption_engine=None) -> None:
-    get_settings = importlib.import_module("app.config").get_settings
+async def poll_and_process(api_client, caption_engine=None) -> None:
+    get_settings = importlib.import_module("heimdex_worker_sdk.settings").get_worker_settings
     process_caption_pending_files = importlib.import_module("src.tasks.caption").process_caption_pending_files
 
     settings = get_settings()
@@ -37,26 +37,20 @@ async def poll_and_process(session_factory, caption_engine=None) -> None:
     if not _acquire_slot(settings):
         return
 
-    async with session_factory() as session:
-        try:
-            await process_caption_pending_files(
-                session=session, settings=settings, caption_engine=caption_engine,
-            )
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            logger.exception("caption_poll_cycle_failed")
-        finally:
-            _release_slot()
+    try:
+        await process_caption_pending_files(
+            api_client=api_client, settings=settings, caption_engine=caption_engine,
+        )
+    except Exception:
+        logger.exception("caption_poll_cycle_failed")
+    finally:
+        _release_slot()
 
 
 def main() -> None:
-    get_settings = importlib.import_module("app.config").get_settings
+    get_settings = importlib.import_module("heimdex_worker_sdk.settings").get_worker_settings
     AsyncIOScheduler = importlib.import_module("apscheduler.schedulers.asyncio").AsyncIOScheduler
-    sqlalchemy_asyncio = importlib.import_module("sqlalchemy.ext.asyncio")
-    create_async_engine = sqlalchemy_asyncio.create_async_engine
-    async_sessionmaker = sqlalchemy_asyncio.async_sessionmaker
-    AsyncSession = sqlalchemy_asyncio.AsyncSession
+    InternalAPIClient = importlib.import_module("heimdex_worker_sdk.internal_api").InternalAPIClient
 
     settings = get_settings()
 
@@ -70,13 +64,10 @@ def main() -> None:
         signal.pause()
         return
 
-    engine = create_async_engine(
-        settings.database_url,
-        pool_pre_ping=True,
-        pool_size=3,
-        max_overflow=2,
+    api_client = InternalAPIClient(
+        base_url=settings.drive_api_base_url,
+        api_key=settings.drive_internal_api_key,
     )
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     create_caption_engine = importlib.import_module("heimdex_media_pipelines.vision").create_caption_engine
     engine_key = getattr(settings, "caption_engine", "internvl2")
@@ -98,7 +89,7 @@ def main() -> None:
         poll_and_process,
         "interval",
         seconds=settings.drive_caption_poll_interval_seconds,
-        args=[session_factory, caption_engine],
+        args=[api_client, caption_engine],
         max_instances=1,
         id="caption_poll",
     )

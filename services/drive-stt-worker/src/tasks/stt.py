@@ -18,37 +18,32 @@ def _get_audio_duration_seconds(audio_path: Path) -> float:
         return frames / rate if rate > 0 else 0.0
 
 
-async def process_stt_pending_files(session: Any, settings: Any, stt_processor: Any = None) -> None:
-    importlib.import_module("app.db.models")
-    drive_repository = importlib.import_module("app.modules.drive.repository")
-    file_repo = drive_repository.DriveFileRepository(session)
-    files = await file_repo.claim_stt_pending_files(limit=1)
+async def process_stt_pending_files(api_client: Any, settings: Any, stt_processor: Any = None) -> None:
+    files = api_client.claim_jobs("stt", limit=1)
 
-    for drive_file in files:
-        await _process_single_stt(
-            session=session,
+    for claimed_file in files:
+        _process_single_stt(
+            api_client=api_client,
             settings=settings,
-            drive_file=drive_file,
-            file_repo=file_repo,
+            claimed_file=claimed_file,
             stt_processor=stt_processor,
         )
 
 
-async def _process_single_stt(
-    session: Any,
+def _process_single_stt(
+    api_client: Any,
     settings: Any,
-    drive_file: Any,
-    file_repo: Any,
+    claimed_file: Any,
     stt_processor: Any = None,
 ) -> None:
-    drive_keys = importlib.import_module("app.modules.drive.keys")
+    drive_keys = importlib.import_module("heimdex_worker_sdk.drive_keys")
     scene_manifest_s3_key = drive_keys.scene_manifest_s3_key
-    S3Client = importlib.import_module("app.storage.s3").S3Client
+    S3Client = importlib.import_module("heimdex_worker_sdk.s3").S3Client
 
-    _ = session
-    org_id = drive_file.org_id
+    org_id = claimed_file.org_id
     org_id_str = str(org_id)
-    video_id = drive_file.video_id
+    file_id = claimed_file.id
+    video_id = claimed_file.video_id
     temp_dir = Path(tempfile.mkdtemp(prefix=f"stt_{video_id}_"))
 
     try:
@@ -56,13 +51,11 @@ async def _process_single_stt(
 
         audio_path = temp_dir / "audio.wav"
         try:
-            s3.download_file(drive_file.audio_s3_key, audio_path)
+            s3.download_file(claimed_file.audio_s3_key, audio_path)
         except Exception as e:
             error_msg = f"audio_download_failed: {type(e).__name__}: {e}"
-            await file_repo.update_stt_enrichment_status(
-                drive_file.id,
-                stt_status="failed",
-                enrichment_error=error_msg,
+            api_client.update_job_status(
+                file_id, job_type="stt", status="failed", error=error_msg,
             )
             return
 
@@ -81,10 +74,8 @@ async def _process_single_stt(
                     "max_seconds": settings.drive_stt_max_audio_seconds,
                 },
             )
-            await file_repo.update_stt_enrichment_status(
-                drive_file.id,
-                stt_status="failed",
-                enrichment_error=error_msg,
+            api_client.update_job_status(
+                file_id, job_type="stt", status="failed", error=error_msg,
             )
             return
 
@@ -94,10 +85,8 @@ async def _process_single_stt(
             s3.download_file(manifest_key, manifest_path)
         except Exception as e:
             error_msg = f"manifest_download_failed: {type(e).__name__}: {e}"
-            await file_repo.update_stt_enrichment_status(
-                drive_file.id,
-                stt_status="failed",
-                enrichment_error=error_msg,
+            api_client.update_job_status(
+                file_id, job_type="stt", status="failed", error=error_msg,
             )
             return
 
@@ -105,9 +94,7 @@ async def _process_single_stt(
         scenes = manifest.get("scenes", [])
 
         if not scenes:
-            await file_repo.update_stt_enrichment_status(
-                drive_file.id, stt_status="done",
-            )
+            api_client.update_job_status(file_id, job_type="stt", status="done")
             return
 
         stt_started = time.monotonic()
@@ -144,16 +131,12 @@ async def _process_single_stt(
             )
         except Exception as e:
             error_msg = f"stt_reingest_failed: {type(e).__name__}: {e}"
-            await file_repo.update_stt_enrichment_status(
-                drive_file.id,
-                stt_status="failed",
-                enrichment_error=error_msg,
+            api_client.update_job_status(
+                file_id, job_type="stt", status="failed", error=error_msg,
             )
             return
 
-        await file_repo.update_stt_enrichment_status(
-            drive_file.id, stt_status="done",
-        )
+        api_client.update_job_status(file_id, job_type="stt", status="done")
 
         total_segment_count = sum(
             s.get("speech_segment_count", 0) for s in updated_scenes
@@ -180,10 +163,8 @@ async def _process_single_stt(
 
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
-        await file_repo.update_stt_enrichment_status(
-            drive_file.id,
-            stt_status="failed",
-            enrichment_error=error_msg,
+        api_client.update_job_status(
+            file_id, job_type="stt", status="failed", error=error_msg,
         )
         logger.exception(
             "stt_processing_failed",

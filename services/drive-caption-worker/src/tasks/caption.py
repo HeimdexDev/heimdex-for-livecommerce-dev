@@ -11,38 +11,33 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-async def process_caption_pending_files(session: Any, settings: Any, caption_engine: Any = None) -> None:
-    importlib.import_module("app.db.models")
-    drive_repository = importlib.import_module("app.modules.drive.repository")
-    file_repo = drive_repository.DriveFileRepository(session)
-    files = await file_repo.claim_caption_pending_files(limit=1)
+async def process_caption_pending_files(api_client: Any, settings: Any, caption_engine: Any = None) -> None:
+    files = api_client.claim_jobs("caption", limit=1)
 
-    for drive_file in files:
-        await _process_single_caption(
-            session=session,
+    for claimed_file in files:
+        _process_single_caption(
+            api_client=api_client,
             settings=settings,
-            drive_file=drive_file,
-            file_repo=file_repo,
+            claimed_file=claimed_file,
             caption_engine=caption_engine,
         )
 
 
-async def _process_single_caption(
-    session: Any,
+def _process_single_caption(
+    api_client: Any,
     settings: Any,
-    drive_file: Any,
-    file_repo: Any,
+    claimed_file: Any,
     caption_engine: Any = None,
 ) -> None:
-    drive_keys = importlib.import_module("app.modules.drive.keys")
+    drive_keys = importlib.import_module("heimdex_worker_sdk.drive_keys")
     scene_manifest_s3_key = drive_keys.scene_manifest_s3_key
     enrichment_keyframe_s3_key = drive_keys.enrichment_keyframe_s3_key
-    S3Client = importlib.import_module("app.storage.s3").S3Client
+    S3Client = importlib.import_module("heimdex_worker_sdk.s3").S3Client
 
-    _ = session
-    org_id = drive_file.org_id
+    org_id = claimed_file.org_id
     org_id_str = str(org_id)
-    video_id = drive_file.video_id
+    file_id = claimed_file.id
+    video_id = claimed_file.video_id
     temp_dir = Path(tempfile.mkdtemp(prefix=f"caption_{video_id}_"))
 
     try:
@@ -54,11 +49,7 @@ async def _process_single_caption(
             s3.download_file(manifest_key, manifest_path)
         except Exception as e:
             error_msg = f"manifest_download_failed: {type(e).__name__}: {e}"
-            await file_repo.update_caption_enrichment_status(
-                drive_file.id,
-                caption_status="failed",
-                caption_error=error_msg,
-            )
+            api_client.update_job_status(file_id, job_type="caption", status="failed", error=error_msg)
             return
 
         manifest = json.loads(manifest_path.read_text())
@@ -66,7 +57,7 @@ async def _process_single_caption(
         scene_count = len(scenes)
 
         if scene_count == 0:
-            await file_repo.update_caption_enrichment_status(drive_file.id, caption_status="done")
+            api_client.update_job_status(file_id, job_type="caption", status="done")
             return
 
         keyframes_dir = temp_dir / "keyframes"
@@ -81,10 +72,6 @@ async def _process_single_caption(
             local_path = keyframes_dir / f"{scene_id}.jpg"
             download_tasks.append((scene_idx, scene_id, s3_key, local_path))
 
-        # Parallel S3 keyframe downloads + pipelined inference.
-        # All downloads fire at once; inference starts as each frame arrives.
-        # While the model processes frame N (~15s), remaining downloads
-        # complete in the background — no wasted I/O wait.
         caption_started = time.monotonic()
         if caption_engine is None:
             _create = importlib.import_module("heimdex_media_pipelines.vision").create_caption_engine
@@ -106,8 +93,6 @@ async def _process_single_caption(
                 try:
                     future.result()
                     downloaded_keyframes[scene_idx] = local_path
-                    # Pipeline: start inference immediately while other
-                    # downloads continue in the background threads.
                     result = engine.caption(str(local_path))
                     if result.caption:
                         caption_results[scene_idx] = result.caption
@@ -119,10 +104,8 @@ async def _process_single_caption(
                     )
 
         if not downloaded_keyframes:
-            await file_repo.update_caption_enrichment_status(
-                drive_file.id,
-                caption_status="failed",
-                caption_error="no_keyframes_downloaded",
+            api_client.update_job_status(
+                file_id, job_type="caption", status="failed", error="no_keyframes_downloaded",
             )
             return
 
@@ -147,14 +130,10 @@ async def _process_single_caption(
             )
         except Exception as e:
             error_msg = f"caption_reingest_failed: {type(e).__name__}: {e}"
-            await file_repo.update_caption_enrichment_status(
-                drive_file.id,
-                caption_status="failed",
-                caption_error=error_msg,
-            )
+            api_client.update_job_status(file_id, job_type="caption", status="failed", error=error_msg)
             return
 
-        await file_repo.update_caption_enrichment_status(drive_file.id, caption_status="done")
+        api_client.update_job_status(file_id, job_type="caption", status="done")
 
         logger.info(
             "caption_processing_complete",
@@ -172,11 +151,7 @@ async def _process_single_caption(
 
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
-        await file_repo.update_caption_enrichment_status(
-            drive_file.id,
-            caption_status="failed",
-            caption_error=error_msg,
-        )
+        api_client.update_job_status(file_id, job_type="caption", status="failed", error=error_msg)
         logger.exception(
             "caption_processing_failed",
             extra={"org_id": org_id_str, "video_id": video_id},
