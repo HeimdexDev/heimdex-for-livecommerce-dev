@@ -41,6 +41,66 @@ class ClaimedFile:
     lease_expires_at: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class ClaimedConnection:
+    """Represents a claimed drive connection returned from the sync API."""
+
+    connection_id: UUID
+    org_id: UUID
+    library_id: UUID
+    scope_type: str
+    drive_id: Optional[str] = None
+    folder_id: Optional[str] = None
+    folder_name: Optional[str] = None
+    folder_path: Optional[str] = None
+    change_token: Optional[str] = None
+    last_sync_at: Optional[str] = None
+    last_full_sync_at: Optional[str] = None
+    lease_token: str = ""
+    lease_expires_at: str = ""
+
+
+@dataclass(frozen=True)
+class UpsertResult:
+    """Result of a batch file upsert operation."""
+
+    created_count: int
+    updated_count: int
+    unchanged_count: int
+    enqueued_jobs: dict
+
+
+@dataclass(frozen=True)
+class AccessToken:
+    """Short-lived Google access token returned by the token broker."""
+
+    access_token: str
+    token_type: str
+    expires_at: str
+    scope_type: str
+
+
+@dataclass(frozen=True)
+class ClaimedProcessingFile:
+    """Represents a claimed file for processing (not enrichment)."""
+
+    id: UUID
+    org_id: UUID
+    connection_id: UUID
+    google_file_id: str
+    file_name: str
+    video_id: str
+    mime_type: str
+    md5_checksum: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    drive_path: Optional[str] = None
+    library_id: Optional[UUID] = None
+    scope_type: Optional[str] = None
+    drive_id: Optional[str] = None
+    lease_token: Optional[str] = None
+    lease_expires_at: Optional[str] = None
+
+
 @dataclass
 class InternalAPIClient:
     """HTTP client for /internal/drive/* endpoints.
@@ -125,6 +185,150 @@ class InternalAPIClient:
         """
         url = f"{self.base_url.rstrip('/')}/internal/drive/files/{file_id}"
         return self._request_with_retry("GET", url)
+
+    def claim_connection(self, limit: int = 1) -> list[ClaimedConnection]:
+        """Claim active drive connections for sync."""
+        url = f"{self.base_url.rstrip('/')}/internal/drive/sync/claim_connection"
+        payload = {"limit": limit}
+        data = self._request_with_retry("POST", url, json=payload)
+        return [
+            ClaimedConnection(
+                connection_id=UUID(c["connection_id"]),
+                org_id=UUID(c["org_id"]),
+                library_id=UUID(c["library_id"]),
+                scope_type=c["scope_type"],
+                drive_id=c.get("drive_id"),
+                folder_id=c.get("folder_id"),
+                folder_name=c.get("folder_name"),
+                folder_path=c.get("folder_path"),
+                change_token=c.get("change_token"),
+                last_sync_at=c.get("last_sync_at"),
+                last_full_sync_at=c.get("last_full_sync_at"),
+                lease_token=c.get("lease_token", ""),
+                lease_expires_at=c.get("lease_expires_at", ""),
+            )
+            for c in data.get("connections", [])
+        ]
+
+    def upsert_files(
+        self,
+        connection_id: UUID,
+        *,
+        lease_token: str,
+        items: list[dict],
+    ) -> UpsertResult:
+        """Batch upsert discovered files for a connection."""
+        url = f"{self.base_url.rstrip('/')}/internal/drive/sync/connections/{connection_id}/upsert_files"
+        payload = {"lease_token": lease_token, "items": items}
+        data = self._request_with_retry("POST", url, json=payload)
+        return UpsertResult(
+            created_count=data["created_count"],
+            updated_count=data["updated_count"],
+            unchanged_count=data["unchanged_count"],
+            enqueued_jobs=data.get("enqueued_jobs", {}),
+        )
+
+    def checkpoint(
+        self,
+        connection_id: UUID,
+        *,
+        lease_token: str,
+        change_token: Optional[str] = None,
+        last_sync_at: Optional[str] = None,
+        last_full_sync_at: Optional[str] = None,
+        error_message: Optional[str] = None,
+        release: bool = True,
+    ) -> bool:
+        """Update sync cursor and optionally release connection lease."""
+        url = f"{self.base_url.rstrip('/')}/internal/drive/sync/connections/{connection_id}/checkpoint"
+        payload: dict[str, Any] = {"lease_token": lease_token, "release": release}
+        if change_token is not None:
+            payload["change_token"] = change_token
+        if last_sync_at is not None:
+            payload["last_sync_at"] = last_sync_at
+        if last_full_sync_at is not None:
+            payload["last_full_sync_at"] = last_full_sync_at
+        if error_message is not None:
+            payload["error_message"] = error_message
+        data = self._request_with_retry("PATCH", url, json=payload)
+        return data.get("ok", False)
+
+    def get_drive_token(self, connection_id: UUID, *, lease_token: str) -> AccessToken:
+        """Get a short-lived Google access token for a connection."""
+        url = f"{self.base_url.rstrip('/')}/internal/drive/sync/connections/{connection_id}/token"
+        payload = {"lease_token": lease_token}
+        data = self._request_with_retry("POST", url, json=payload)
+        return AccessToken(
+            access_token=data["access_token"],
+            token_type=data["token_type"],
+            expires_at=data["expires_at"],
+            scope_type=data["scope_type"],
+        )
+
+    def claim_processing(self, limit: int = 1) -> list[ClaimedProcessingFile]:
+        """Claim pending files for video processing."""
+        url = f"{self.base_url.rstrip('/')}/internal/drive/processing/claim"
+        payload = {"limit": limit}
+        data = self._request_with_retry("POST", url, json=payload)
+        return [
+            ClaimedProcessingFile(
+                id=UUID(f["id"]),
+                org_id=UUID(f["org_id"]),
+                connection_id=UUID(f["connection_id"]),
+                google_file_id=f["google_file_id"],
+                file_name=f["file_name"],
+                video_id=f["video_id"],
+                mime_type=f["mime_type"],
+                md5_checksum=f.get("md5_checksum"),
+                file_size_bytes=f.get("file_size_bytes"),
+                drive_path=f.get("drive_path"),
+                library_id=UUID(f["library_id"]) if f.get("library_id") else None,
+                scope_type=f.get("scope_type"),
+                drive_id=f.get("drive_id"),
+                lease_token=f.get("lease_token"),
+                lease_expires_at=f.get("lease_expires_at"),
+            )
+            for f in data.get("files", [])
+        ]
+
+    def update_processing_status(
+        self,
+        file_id: UUID,
+        *,
+        status: str,
+        lease_token: Optional[str] = None,
+        error: Optional[str] = None,
+        proxy_s3_key: Optional[str] = None,
+        proxy_size_bytes: Optional[int] = None,
+        proxy_duration_ms: Optional[int] = None,
+        thumbnail_s3_prefix: Optional[str] = None,
+        scene_count: Optional[int] = None,
+        audio_s3_key: Optional[str] = None,
+        keyframe_s3_prefix: Optional[str] = None,
+    ) -> bool:
+        """Update processing status for a file."""
+        url = f"{self.base_url.rstrip('/')}/internal/drive/processing/{file_id}/status"
+        payload: dict[str, Any] = {"status": status}
+        if lease_token is not None:
+            payload["lease_token"] = lease_token
+        if error is not None:
+            payload["error"] = error
+        if proxy_s3_key is not None:
+            payload["proxy_s3_key"] = proxy_s3_key
+        if proxy_size_bytes is not None:
+            payload["proxy_size_bytes"] = proxy_size_bytes
+        if proxy_duration_ms is not None:
+            payload["proxy_duration_ms"] = proxy_duration_ms
+        if thumbnail_s3_prefix is not None:
+            payload["thumbnail_s3_prefix"] = thumbnail_s3_prefix
+        if scene_count is not None:
+            payload["scene_count"] = scene_count
+        if audio_s3_key is not None:
+            payload["audio_s3_key"] = audio_s3_key
+        if keyframe_s3_prefix is not None:
+            payload["keyframe_s3_prefix"] = keyframe_s3_prefix
+        data = self._request_with_retry("PATCH", url, json=payload)
+        return data.get("ok", False)
 
     def _request_with_retry(
         self,

@@ -14,7 +14,14 @@ from uuid import UUID, uuid4
 import pytest
 import requests
 
-from heimdex_worker_sdk.internal_api import InternalAPIClient, ClaimedFile
+from heimdex_worker_sdk.internal_api import (
+    AccessToken,
+    ClaimedConnection,
+    ClaimedFile,
+    ClaimedProcessingFile,
+    InternalAPIClient,
+    UpsertResult,
+)
 
 
 @pytest.fixture
@@ -296,6 +303,275 @@ class TestGetFile:
         ):
             with pytest.raises(RuntimeError, match="404"):
                 client.get_file(uuid4())
+
+
+class TestClaimConnection:
+    def test_claim_connection_returns_connections(self, client):
+        connection_id = str(uuid4())
+        org_id = str(uuid4())
+        library_id = str(uuid4())
+        resp_data = {
+            "connections": [
+                {
+                    "connection_id": connection_id,
+                    "org_id": org_id,
+                    "library_id": library_id,
+                    "scope_type": "drive",
+                    "drive_id": "drive-123",
+                    "lease_token": str(uuid4()),
+                    "lease_expires_at": "2026-02-24T10:30:00+00:00",
+                }
+            ]
+        }
+
+        with patch.object(client._session, "request", return_value=_mock_response(200, resp_data)):
+            result = client.claim_connection(limit=1)
+
+        assert len(result) == 1
+        assert isinstance(result[0], ClaimedConnection)
+        assert result[0].connection_id == UUID(connection_id)
+        assert result[0].org_id == UUID(org_id)
+        assert result[0].library_id == UUID(library_id)
+        assert result[0].scope_type == "drive"
+
+    def test_claim_connection_empty_list(self, client):
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"connections": []})):
+            result = client.claim_connection()
+
+        assert result == []
+
+    def test_claim_connection_sends_correct_payload(self, client):
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"connections": []})) as mock_req:
+            client.claim_connection(limit=3)
+
+        call_args = mock_req.call_args
+        assert call_args[0] == ("POST", "http://api:8000/internal/drive/sync/claim_connection")
+        assert call_args[1]["json"] == {"limit": 3}
+
+
+class TestUpsertFiles:
+    def test_upsert_files_success(self, client):
+        connection_id = uuid4()
+        resp_data = {
+            "created_count": 2,
+            "updated_count": 0,
+            "unchanged_count": 1,
+            "enqueued_jobs": {"processing": 2},
+        }
+
+        with patch.object(client._session, "request", return_value=_mock_response(200, resp_data)):
+            result = client.upsert_files(
+                connection_id,
+                lease_token="lease-123",
+                items=[{"provider_file_id": "abc"}],
+            )
+
+        assert isinstance(result, UpsertResult)
+        assert result.created_count == 2
+        assert result.updated_count == 0
+        assert result.unchanged_count == 1
+        assert result.enqueued_jobs == {"processing": 2}
+
+    def test_upsert_files_sends_correct_payload_and_url(self, client):
+        connection_id = uuid4()
+        items = [{"provider_file_id": "x", "name": "a.mp4"}]
+        with patch.object(client._session, "request", return_value=_mock_response(200, {
+            "created_count": 0,
+            "updated_count": 0,
+            "unchanged_count": 1,
+            "enqueued_jobs": {},
+        })) as mock_req:
+            client.upsert_files(connection_id, lease_token="lease-xyz", items=items)
+
+        call_args = mock_req.call_args
+        assert call_args[0] == (
+            "POST",
+            f"http://api:8000/internal/drive/sync/connections/{connection_id}/upsert_files",
+        )
+        assert call_args[1]["json"] == {"lease_token": "lease-xyz", "items": items}
+
+
+class TestCheckpoint:
+    def test_checkpoint_success_defaults_release_true(self, client):
+        connection_id = uuid4()
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"ok": True})):
+            result = client.checkpoint(connection_id, lease_token="lease-123")
+
+        assert result is True
+
+    def test_checkpoint_release_false(self, client):
+        connection_id = uuid4()
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"ok": True})) as mock_req:
+            client.checkpoint(connection_id, lease_token="lease-123", release=False)
+
+        assert mock_req.call_args[1]["json"] == {"lease_token": "lease-123", "release": False}
+
+    def test_checkpoint_with_optional_fields(self, client):
+        connection_id = uuid4()
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"ok": True})) as mock_req:
+            client.checkpoint(
+                connection_id,
+                lease_token="lease-123",
+                change_token="token-next",
+                last_sync_at="2026-02-24T10:00:00+00:00",
+                last_full_sync_at="2026-02-24T09:00:00+00:00",
+                error_message="rate limited",
+            )
+
+        assert mock_req.call_args[1]["json"] == {
+            "lease_token": "lease-123",
+            "release": True,
+            "change_token": "token-next",
+            "last_sync_at": "2026-02-24T10:00:00+00:00",
+            "last_full_sync_at": "2026-02-24T09:00:00+00:00",
+            "error_message": "rate limited",
+        }
+
+
+class TestGetDriveToken:
+    def test_get_drive_token_success(self, client):
+        connection_id = uuid4()
+        resp_data = {
+            "access_token": "ya29.token",
+            "token_type": "Bearer",
+            "expires_at": "2026-02-24T12:00:00+00:00",
+            "scope_type": "drive",
+        }
+        with patch.object(client._session, "request", return_value=_mock_response(200, resp_data)):
+            token = client.get_drive_token(connection_id, lease_token="lease-abc")
+
+        assert isinstance(token, AccessToken)
+        assert token.access_token == "ya29.token"
+        assert token.token_type == "Bearer"
+        assert token.scope_type == "drive"
+
+    def test_get_drive_token_sends_correct_payload(self, client):
+        connection_id = uuid4()
+        with patch.object(client._session, "request", return_value=_mock_response(200, {
+            "access_token": "t",
+            "token_type": "Bearer",
+            "expires_at": "2026-02-24T12:00:00+00:00",
+            "scope_type": "folder",
+        })) as mock_req:
+            client.get_drive_token(connection_id, lease_token="lease-xyz")
+
+        assert mock_req.call_args[0] == (
+            "POST",
+            f"http://api:8000/internal/drive/sync/connections/{connection_id}/token",
+        )
+        assert mock_req.call_args[1]["json"] == {"lease_token": "lease-xyz"}
+
+
+class TestClaimProcessing:
+    def test_claim_processing_returns_files(self, client):
+        file_id = str(uuid4())
+        org_id = str(uuid4())
+        connection_id = str(uuid4())
+        library_id = str(uuid4())
+        resp_data = {
+            "files": [
+                {
+                    "id": file_id,
+                    "org_id": org_id,
+                    "connection_id": connection_id,
+                    "google_file_id": "google-1",
+                    "file_name": "video.mp4",
+                    "video_id": "gd_abc",
+                    "mime_type": "video/mp4",
+                    "md5_checksum": "deadbeef",
+                    "file_size_bytes": 123,
+                    "drive_path": "Folder/video.mp4",
+                    "library_id": library_id,
+                    "scope_type": "drive",
+                    "drive_id": "drive-1",
+                    "lease_token": str(uuid4()),
+                    "lease_expires_at": "2026-02-24T10:30:00+00:00",
+                }
+            ]
+        }
+
+        with patch.object(client._session, "request", return_value=_mock_response(200, resp_data)):
+            files = client.claim_processing(limit=1)
+
+        assert len(files) == 1
+        assert isinstance(files[0], ClaimedProcessingFile)
+        assert files[0].id == UUID(file_id)
+        assert files[0].org_id == UUID(org_id)
+        assert files[0].connection_id == UUID(connection_id)
+        assert files[0].library_id == UUID(library_id)
+
+    def test_claim_processing_empty_list(self, client):
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"files": []})):
+            files = client.claim_processing()
+
+        assert files == []
+
+    def test_claim_processing_sends_correct_payload(self, client):
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"files": []})) as mock_req:
+            client.claim_processing(limit=2)
+
+        assert mock_req.call_args[0] == ("POST", "http://api:8000/internal/drive/processing/claim")
+        assert mock_req.call_args[1]["json"] == {"limit": 2}
+
+
+class TestUpdateProcessingStatus:
+    def test_update_processing_status_success(self, client):
+        file_id = uuid4()
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"ok": True})):
+            result = client.update_processing_status(file_id, status="transcoding")
+
+        assert result is True
+
+    def test_update_processing_status_with_error(self, client):
+        file_id = uuid4()
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"ok": True})) as mock_req:
+            client.update_processing_status(
+                file_id,
+                status="failed",
+                lease_token="lease-123",
+                error="download failed",
+            )
+
+        assert mock_req.call_args[1]["json"] == {
+            "status": "failed",
+            "lease_token": "lease-123",
+            "error": "download failed",
+        }
+
+    def test_update_processing_status_with_optional_metadata(self, client):
+        file_id = uuid4()
+        with patch.object(client._session, "request", return_value=_mock_response(200, {"ok": True})) as mock_req:
+            client.update_processing_status(
+                file_id,
+                status="indexed",
+                proxy_s3_key="proxy/key.mp4",
+                proxy_size_bytes=100,
+                proxy_duration_ms=200,
+                thumbnail_s3_prefix="thumbs/",
+                scene_count=3,
+                audio_s3_key="audio/key.wav",
+                keyframe_s3_prefix="keyframes/",
+            )
+
+        assert mock_req.call_args[1]["json"] == {
+            "status": "indexed",
+            "proxy_s3_key": "proxy/key.mp4",
+            "proxy_size_bytes": 100,
+            "proxy_duration_ms": 200,
+            "thumbnail_s3_prefix": "thumbs/",
+            "scene_count": 3,
+            "audio_s3_key": "audio/key.wav",
+            "keyframe_s3_prefix": "keyframes/",
+        }
+
+    def test_update_processing_status_404_raises(self, client):
+        with patch.object(
+            client._session,
+            "request",
+            return_value=_mock_response(404, text="Not found"),
+        ):
+            with pytest.raises(RuntimeError, match="404"):
+                client.update_processing_status(uuid4(), status="indexed")
 
 
 # ── Retry behavior tests ─────────────────────────────────────────────

@@ -13,7 +13,7 @@ Covers:
 import asyncio
 import hashlib
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -24,12 +24,14 @@ from app.modules.drive.internal_sync_router import (
     _MAX_UPSERT_ITEMS,
     claim_sync_connection,
     checkpoint_connection,
+    get_connection_token,
     upsert_files,
 )
 from app.modules.drive.internal_sync_schemas import (
     ClaimSyncConnectionRequest,
     DriveDiscoveredFile,
     SyncCheckpointRequest,
+    TokenRequest,
     UpsertFilesRequest,
 )
 
@@ -659,6 +661,165 @@ class TestUpsertFiles:
 
         total = result.created_count + result.updated_count + result.unchanged_count
         assert total == len(items)
+
+
+class TestTokenEndpoint:
+    @pytest.mark.asyncio
+    async def test_success_service_account_scope_drive(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            scope_type="drive",
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        secret = MagicMock()
+        secret.nonce = b"nonce"
+        secret.encrypted_value = b"encrypted"
+        secret.impersonate_email = "svc@example.com"
+
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        secret_result = MagicMock()
+        secret_result.scalar_one_or_none.return_value = secret
+        db.execute = AsyncMock(side_effect=[conn_result, secret_result])
+
+        settings = MagicMock()
+        settings.drive_sa_encryption_key = "00" * 32
+        expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+        creds = MagicMock()
+        creds.token = "sa-token"
+        creds.expiry = expiry
+
+        with patch("app.modules.drive.internal_sync_router.get_settings", return_value=settings):
+            with patch("app.modules.drive.internal_sync_router.AESGCM") as mock_aesgcm:
+                mock_aesgcm.return_value.decrypt.return_value = (
+                    b'{"type":"service_account","private_key":"x","client_email":"svc@example.com"}'
+                )
+                with patch("app.modules.drive.internal_sync_router.service_account.Credentials.from_service_account_info", return_value=creds) as mock_from_sa:
+                    result = await get_connection_token(
+                        connection_id=conn.id,
+                        request=TokenRequest(lease_token=token),
+                        _token="valid",
+                        db=db,
+                    )
+
+        assert result.access_token == "sa-token"
+        assert result.token_type == "Bearer"
+        assert result.expires_at == expiry
+        assert result.scope_type == "drive"
+        mock_from_sa.assert_called_once()
+        creds.refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_success_oauth_scope_folder(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            scope_type="folder",
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        secret = MagicMock()
+        secret.nonce = b"nonce"
+        secret.encrypted_value = b"encrypted"
+
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        secret_result = MagicMock()
+        secret_result.scalar_one_or_none.return_value = secret
+        db.execute = AsyncMock(side_effect=[conn_result, secret_result])
+
+        settings = MagicMock()
+        settings.drive_sa_encryption_key = "00" * 32
+        expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+
+        creds = MagicMock()
+        creds.token = "oauth-token"
+        creds.expiry = expiry
+
+        with patch("app.modules.drive.internal_sync_router.get_settings", return_value=settings):
+            with patch("app.modules.drive.internal_sync_router.AESGCM") as mock_aesgcm:
+                mock_aesgcm.return_value.decrypt.return_value = (
+                    b'{"refresh_token":"r","client_id":"id","client_secret":"secret"}'
+                )
+                with patch("app.modules.drive.internal_sync_router.OAuthCredentials", return_value=creds) as mock_oauth_creds:
+                    result = await get_connection_token(
+                        connection_id=conn.id,
+                        request=TokenRequest(lease_token=token),
+                        _token="valid",
+                        db=db,
+                    )
+
+        assert result.access_token == "oauth-token"
+        assert result.scope_type == "folder"
+        mock_oauth_creds.assert_called_once()
+        creds.refresh.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_connection_not_found_returns_404(self):
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(return_value=conn_result)
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await get_connection_token(
+                connection_id=uuid4(),
+                request=TokenRequest(lease_token=str(uuid4())),
+                _token="valid",
+                db=db,
+            )
+        assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_lease_token_mismatch_returns_409(self):
+        conn = _make_connection(
+            lease_token=str(uuid4()),
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        db.execute = AsyncMock(return_value=conn_result)
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await get_connection_token(
+                connection_id=conn.id,
+                request=TokenRequest(lease_token=str(uuid4())),
+                _token="valid",
+                db=db,
+            )
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == "lease_token_mismatch"
+
+    @pytest.mark.asyncio
+    async def test_missing_secret_returns_404(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        secret_result = MagicMock()
+        secret_result.scalar_one_or_none.return_value = None
+        db.execute = AsyncMock(side_effect=[conn_result, secret_result])
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await get_connection_token(
+                connection_id=conn.id,
+                request=TokenRequest(lease_token=token),
+                _token="valid",
+                db=db,
+            )
+        assert exc_info.value.status_code == 404
 
 
 # ── Video ID determinism tests ────────────────────────────────────────

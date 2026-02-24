@@ -1,123 +1,146 @@
+"""
+Drive file processing via internal HTTP API.
+
+Claims pending files from the API, downloads from Google Drive,
+transcodes, detects scenes, uploads artifacts to S3, and ingests
+to the search index. No direct database access.
+"""
 import json
 import logging
 import shutil
 import subprocess
 import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, List, Optional
 from uuid import UUID
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+import requests
+
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build as build_google_service
+from googleapiclient.http import MediaIoBaseDownload
+
+from heimdex_worker_sdk.internal_api import InternalAPIClient
 
 logger = logging.getLogger(__name__)
 
 
-async def process_pending_files(
-    session: AsyncSession,
+def _build_drive_service(access_token: str):
+    """Build a Google Drive API service from a pre-minted access token."""
+    credentials = Credentials(token=access_token)
+    return build_google_service("drive", "v3", credentials=credentials)
+
+
+def process_pending_files(
+    api_client: InternalAPIClient,
     settings: Any,
     acquire_slot: Callable,
     release_slot: Callable,
 ) -> None:
-    import app.db.models  # noqa: F401 — register all SQLAlchemy models for FK resolution
-    from app.modules.drive.models import DriveConnection, DriveFile, DriveSecret
-    from app.modules.drive.repository import DriveConnectionRepository, DriveFileRepository
+    """Claim and process pending video files.
 
-    conn_repo = DriveConnectionRepository(session)
-    file_repo = DriveFileRepository(session)
-
-    active_connections = await conn_repo.get_active_connections()
-    if not active_connections:
+    Flow per file:
+    1. Claim file for processing (lease-based)
+    2. Acquire concurrency slot
+    3. Get short-lived Google access token via token broker
+    4. Download from Google Drive
+    5. Transcode to proxy
+    6. Detect scenes, extract keyframes
+    7. Upload artifacts to S3
+    8. Ingest scenes to search index
+    9. Report final status (indexed/failed)
+    """
+    files = api_client.claim_processing(limit=1)
+    if not files:
         return
 
-    for connection in active_connections:
-        org_id_str = str(connection.org_id)
+    for claimed_file in files:
+        org_id_str = str(claimed_file.org_id)
 
         if not acquire_slot(org_id_str, settings):
+            # Can't process now — release the lease by reporting failure
+            try:
+                api_client.update_processing_status(
+                    claimed_file.id,
+                    status="failed",
+                    lease_token=claimed_file.lease_token,
+                    error="concurrency_slot_unavailable",
+                )
+            except Exception:
+                logger.warning(
+                    "process_slot_release_failed",
+                    extra={"file_id": str(claimed_file.id)},
+                    exc_info=True,
+                )
             continue
 
         try:
-            files = await file_repo.claim_pending_files(connection.org_id, limit=1)
-            if not files:
-                release_slot(org_id_str)
-                continue
-
-            drive_file = files[0]
-            await _process_single_file(
-                session=session,
+            _process_single_file(
+                api_client=api_client,
                 settings=settings,
-                connection=connection,
-                drive_file=drive_file,
-                file_repo=file_repo,
+                claimed_file=claimed_file,
             )
         except Exception as e:
             logger.exception("process_file_error", extra={"org_id": org_id_str})
-            release_slot(org_id_str)
-        else:
+        finally:
             release_slot(org_id_str)
 
 
-async def _process_single_file(
-    session: AsyncSession,
+def _process_single_file(
+    api_client: InternalAPIClient,
     settings: Any,
-    connection: Any,
-    drive_file: Any,
-    file_repo: Any,
+    claimed_file: Any,
 ) -> None:
-    from app.modules.drive.google_client import DriveClient
     from heimdex_worker_sdk.drive_keys import (
         audio_s3_key, enrichment_keyframe_s3_key, enrichment_keyframe_s3_prefix,
         proxy_s3_key, thumbnail_s3_key, thumbnail_s3_prefix,
     )
-    from app.modules.drive.models import DriveSecret
-    from app.modules.drive.repository import DriveSecretRepository
     from heimdex_media_pipelines.transcoding import make_transcode_decision, probe_video, transcode_to_proxy
     from heimdex_media_pipelines.scenes.detector import detect_scenes
     from heimdex_media_pipelines.scenes.keyframe import extract_all_keyframes
     from heimdex_media_pipelines.scenes.assembler import assemble_scenes
     from heimdex_worker_sdk.s3 import S3Client
 
-    org_id_str = str(drive_file.org_id)
-    temp_dir = Path(settings.drive_temp_dir) / org_id_str / str(drive_file.id)
+    org_id_str = str(claimed_file.org_id)
+    temp_dir = Path(settings.drive_temp_dir) / org_id_str / str(claimed_file.id)
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        secret_repo = DriveSecretRepository(session)
-        scope_type = getattr(connection, "scope_type", "drive") or "drive"
+        # Get access token via token broker
+        token_info = api_client.get_drive_token(
+            claimed_file.connection_id,
+            lease_token=claimed_file.lease_token,
+        )
+        service = _build_drive_service(token_info.access_token)
 
-        if scope_type == "folder":
-            secret = await secret_repo.get_by_org(drive_file.org_id, secret_type="oauth_token")
-            if not secret:
-                await file_repo.mark_failed(drive_file.id, "No OAuth token configured for org")
-                return
-            token_data = _decrypt_sa_key(secret.encrypted_value, secret.nonce, settings.drive_sa_encryption_key)
-            drive_client = DriveClient.from_oauth_token(
-                refresh_token=token_data["refresh_token"],
-                client_id=token_data["client_id"],
-                client_secret=token_data["client_secret"],
-            )
-        else:
-            secret = await secret_repo.get_by_org(drive_file.org_id, secret_type="service_account_key")
-            if not secret:
-                await file_repo.mark_failed(drive_file.id, "No SA key configured for org")
-                return
-            sa_key_info = _decrypt_sa_key(secret.encrypted_value, secret.nonce, settings.drive_sa_encryption_key)
-            drive_client = DriveClient(sa_key_info, secret.impersonate_email)
+        # Download
+        original_path = temp_dir / f"original_{claimed_file.google_file_id}"
+        logger.info("download_started", extra={
+            "file_id": claimed_file.google_file_id,
+            "file_name": claimed_file.file_name,
+        })
 
-        original_path = temp_dir / f"original_{drive_file.google_file_id}"
-        logger.info("download_started", extra={"file_id": drive_file.google_file_id, "file_name": drive_file.file_name})
+        api_client.update_processing_status(
+            claimed_file.id,
+            status="downloading",
+            lease_token=claimed_file.lease_token,
+        )
 
-        await file_repo.update_status(drive_file.id, "downloading")
         budget_bytes = int(settings.drive_temp_disk_budget_gb * 1024 * 1024 * 1024)
-        drive_client.download_file_with_resume(
-            file_id=drive_file.google_file_id,
+        _download_file(
+            service=service,
+            google_file_id=claimed_file.google_file_id,
             dest_path=original_path,
-            expected_md5=drive_file.md5_checksum,
             budget_bytes=budget_bytes,
         )
 
-        await file_repo.update_status(drive_file.id, "transcoding")
+        # Transcode
+        api_client.update_processing_status(
+            claimed_file.id,
+            status="transcoding",
+            lease_token=claimed_file.lease_token,
+        )
+
         probe = probe_video(original_path)
         max_height = settings.drive_proxy_max_height
         max_bitrate_kbps = int(settings.drive_proxy_max_bitrate.rstrip("k"))
@@ -136,36 +159,36 @@ async def _process_single_file(
             )
         else:
             proxy_path = original_path
-            logger.info("transcode_skipped", extra={"reason": decision.reason, "file_id": drive_file.google_file_id})
+            logger.info("transcode_skipped", extra={
+                "reason": decision.reason,
+                "file_id": claimed_file.google_file_id,
+            })
 
+        # Upload proxy to S3
         s3 = S3Client(bucket=settings.drive_s3_bucket)
         s3.ensure_bucket()
-        s3_key = proxy_s3_key(org_id_str, connection.drive_id, drive_file.google_file_id)
+        s3_key = proxy_s3_key(org_id_str, claimed_file.drive_id, claimed_file.google_file_id)
         s3.upload_file(proxy_path, s3_key, content_type="video/mp4")
 
         proxy_probe = probe_video(proxy_path) if decision.should_transcode else probe
-
         proxy_size = proxy_path.stat().st_size
 
-        await file_repo.update_status(
-            drive_file.id,
-            "processing",
-            proxy_s3_key=s3_key,
-            proxy_size_bytes=proxy_size,
-            proxy_duration_ms=proxy_probe.duration_ms,
-            thumbnail_s3_prefix=thumbnail_s3_prefix(org_id_str, drive_file.video_id),
+        # Scene detection
+        api_client.update_processing_status(
+            claimed_file.id,
+            status="processing",
+            lease_token=claimed_file.lease_token,
         )
 
-        # Scene detection uses original (not proxy) for best-quality boundaries.
         t0 = time.monotonic()
         scene_boundaries = detect_scenes(
             video_path=str(original_path),
-            video_id=drive_file.video_id,
+            video_id=claimed_file.video_id,
         )
         logger.info(
             "scene_detection_complete",
             extra={
-                "video_id": drive_file.video_id,
+                "video_id": claimed_file.video_id,
                 "scene_count": len(scene_boundaries),
                 "elapsed_s": round(time.monotonic() - t0, 3),
             },
@@ -180,94 +203,135 @@ async def _process_single_file(
 
         scene_result = assemble_scenes(
             video_path=str(original_path),
-            video_id=drive_file.video_id,
+            video_id=claimed_file.video_id,
             scene_boundaries=scene_boundaries,
             total_duration_ms=proxy_probe.duration_ms,
         )
 
+        # Upload thumbnails
         for scene_doc in scene_result.scenes:
             if scene_doc.thumbnail_path and Path(scene_doc.thumbnail_path).is_file():
                 thumb_key = thumbnail_s3_key(
-                    org_id_str, drive_file.video_id, scene_doc.scene_id,
+                    org_id_str, claimed_file.video_id, scene_doc.scene_id,
                 )
                 s3.upload_file(
                     Path(scene_doc.thumbnail_path), thumb_key,
                     content_type="image/jpeg",
                 )
 
+        # Upload enrichment artifacts (audio, keyframes)
         enrichment_fields = _upload_enrichment_artifacts(
             s3=s3,
             original_path=original_path,
             scene_result=scene_result,
             org_id_str=org_id_str,
-            video_id=drive_file.video_id,
+            video_id=claimed_file.video_id,
             temp_dir=temp_dir,
             enabled=settings.drive_enrichment_enabled,
         )
 
-        capture_iso = drive_file.google_created_time.isoformat() if drive_file.google_created_time else None
+        # Build scene dicts for ingest
+        # Note: ClaimedProcessingFile doesn't have google_created_time,
+        # so we pass None for capture_time
         scene_dicts = _build_ingest_scene_dicts(
             scene_result.scenes,
             source_type="gdrive",
-            capture_time=capture_iso,
+            capture_time=None,
         )
 
         if settings.drive_enrichment_enabled:
             _upload_scene_manifest(
                 s3=s3,
                 org_id_str=org_id_str,
-                video_id=drive_file.video_id,
-                video_title=drive_file.file_name,
-                library_id=connection.library_id,
+                video_id=claimed_file.video_id,
+                video_title=claimed_file.file_name,
+                library_id=claimed_file.library_id,
                 duration_ms=proxy_probe.duration_ms,
                 scenes=scene_dicts,
                 temp_dir=temp_dir,
             )
 
+        # Ingest scenes to search index
         ingest_result = _post_scenes_to_api(
             settings=settings,
-            org_id=drive_file.org_id,
-            video_id=drive_file.video_id,
-            video_title=drive_file.file_name,
-            library_id=connection.library_id,
+            org_id=claimed_file.org_id,
+            video_id=claimed_file.video_id,
+            video_title=claimed_file.file_name,
+            library_id=claimed_file.library_id,
             duration_ms=proxy_probe.duration_ms,
             scenes=scene_dicts,
-            source_path=drive_file.drive_path,
+            source_path=claimed_file.drive_path,
         )
 
-        await file_repo.update_status(
-            drive_file.id,
-            "indexed",
+        # Report success
+        api_client.update_processing_status(
+            claimed_file.id,
+            status="indexed",
+            lease_token=claimed_file.lease_token,
             scene_count=ingest_result["indexed_count"],
-            **enrichment_fields,
+            proxy_s3_key=s3_key,
+            proxy_size_bytes=proxy_size,
+            proxy_duration_ms=proxy_probe.duration_ms,
+            thumbnail_s3_prefix=thumbnail_s3_prefix(org_id_str, claimed_file.video_id),
+            audio_s3_key=enrichment_fields.get("audio_s3_key"),
+            keyframe_s3_prefix=enrichment_fields.get("keyframe_s3_prefix"),
         )
 
         logger.info(
             "file_processing_complete",
             extra={
-                "file_id": drive_file.google_file_id,
-                "video_id": drive_file.video_id,
+                "file_id": claimed_file.google_file_id,
+                "video_id": claimed_file.video_id,
                 "proxy_s3_key": s3_key,
                 "proxy_size_bytes": proxy_size,
                 "transcoded": decision.should_transcode,
                 "scene_count": len(scene_result.scenes),
                 "indexed_count": ingest_result["indexed_count"],
-                "enrichment_state": enrichment_fields.get("enrichment_state"),
             },
         )
 
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
-        logger.error("file_processing_failed", extra={"file_id": drive_file.google_file_id, "error": error_msg})
-
-        if drive_file.retry_count + 1 >= drive_file.max_retries:
-            await file_repo.mark_failed(drive_file.id, error_msg)
-        else:
-            await file_repo.increment_retry(drive_file.id, error_msg)
+        logger.error("file_processing_failed", extra={
+            "file_id": claimed_file.google_file_id,
+            "error": error_msg,
+        })
+        try:
+            api_client.update_processing_status(
+                claimed_file.id,
+                status="failed",
+                lease_token=claimed_file.lease_token,
+                error=error_msg,
+            )
+        except Exception:
+            logger.warning(
+                "process_status_update_failed",
+                extra={"file_id": str(claimed_file.id)},
+                exc_info=True,
+            )
 
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _download_file(
+    service: Any,
+    google_file_id: str,
+    dest_path: Path,
+    budget_bytes: int,
+) -> None:
+    """Download a file from Google Drive using resumable media download."""
+    request = service.files().get_media(fileId=google_file_id, supportsAllDrives=True)
+    with open(dest_path, "wb") as fh:
+        downloader = MediaIoBaseDownload(fh, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+            if dest_path.stat().st_size > budget_bytes:
+                raise RuntimeError(
+                    f"Download exceeds disk budget: {dest_path.stat().st_size} > {budget_bytes}"
+                )
 
 
 def _upload_enrichment_artifacts(
@@ -350,11 +414,6 @@ def _upload_enrichment_artifacts(
             },
         )
 
-    if fields:
-        fields["enrichment_state"] = "pending"
-        fields["stt_status"] = "pending" if "audio_s3_key" in fields else None
-        fields["ocr_status"] = "pending" if "keyframe_s3_prefix" in fields else None
-
     return fields
 
 
@@ -423,8 +482,6 @@ def _post_scenes_to_api(
     scenes: List[dict[str, Any]],
     source_path: Optional[str] = None,
 ) -> dict[str, Any]:
-    import requests
-
     payload: dict[str, Any] = {
         "video_id": video_id,
         "video_title": video_title,
@@ -455,13 +512,3 @@ def _post_scenes_to_api(
         )
 
     return resp.json()
-
-
-def _decrypt_sa_key(encrypted_value: bytes, nonce: bytes, encryption_key_hex: str) -> dict[str, Any]:
-    """Decrypt AES-256-GCM encrypted SA key JSON."""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-    key = bytes.fromhex(encryption_key_hex)
-    aesgcm = AESGCM(key)
-    plaintext = aesgcm.decrypt(nonce, encrypted_value, None)
-    return json.loads(plaintext)

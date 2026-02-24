@@ -15,16 +15,22 @@ Lease tokens: Each claimed connection receives a UUID lease_token with 10-min ex
 Checkpoint/upsert must present the matching lease_token; mismatches yield 409.
 """
 import hashlib
+import json
 import time
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import APIRouter, Depends, HTTPException, status as http_status
+from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as OAuthCredentials
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
+from app.config import get_settings
 from app.dependencies import get_db_session
 from app.logging_config import get_logger
 from app.modules.drive.internal_router import (
@@ -38,10 +44,12 @@ from app.modules.drive.internal_sync_schemas import (
     ClaimSyncConnectionResponse,
     SyncCheckpointRequest,
     SyncCheckpointResponse,
+    TokenRequest,
+    TokenResponse,
     UpsertFilesRequest,
     UpsertFilesResponse,
 )
-from app.modules.drive.models import DriveConnection, DriveFile
+from app.modules.drive.models import DriveConnection, DriveFile, DriveSecret
 
 logger = get_logger(__name__)
 
@@ -237,6 +245,83 @@ async def checkpoint_connection(
     )
 
     return SyncCheckpointResponse(ok=True)
+
+
+@router.post(
+    "/connections/{connection_id}/token",
+    response_model=TokenResponse,
+)
+async def get_connection_token(
+    connection_id: UUID,
+    request: TokenRequest,
+    _token: str = Depends(_verify_internal_token),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Return short-lived Google access token for claimed connection."""
+    result = await db.execute(
+        select(DriveConnection).where(DriveConnection.id == connection_id)
+    )
+    connection = result.scalar_one_or_none()
+    if connection is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"Connection not found: {connection_id}",
+        )
+
+    _enforce_connection_lease(connection, request.lease_token)
+
+    if connection.scope_type == "drive":
+        secret_type = "service_account_key"
+    elif connection.scope_type == "folder":
+        secret_type = "oauth_token"
+    else:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported scope_type: {connection.scope_type}",
+        )
+
+    secret_result = await db.execute(
+        select(DriveSecret).where(
+            DriveSecret.org_id == connection.org_id,
+            DriveSecret.secret_type == secret_type,
+        )
+    )
+    secret = secret_result.scalar_one_or_none()
+    if secret is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"Drive secret not found for org {connection.org_id}",
+        )
+
+    settings = get_settings()
+    key = bytes.fromhex(settings.drive_sa_encryption_key)
+    aesgcm = AESGCM(key)
+    plaintext = aesgcm.decrypt(secret.nonce, secret.encrypted_value, None)
+    secret_data = json.loads(plaintext.decode())
+
+    if connection.scope_type == "drive":
+        credentials = service_account.Credentials.from_service_account_info(
+            secret_data,
+            scopes=["https://www.googleapis.com/auth/drive.readonly"],
+            subject=secret.impersonate_email,
+        )
+    else:
+        credentials = OAuthCredentials(
+            token=None,
+            refresh_token=secret_data["refresh_token"],
+            client_id=secret_data["client_id"],
+            client_secret=secret_data["client_secret"],
+            token_uri=secret_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+        )
+
+    credentials.refresh(GoogleAuthRequest())
+
+    return TokenResponse(
+        access_token=credentials.token,
+        token_type="Bearer",
+        expires_at=credentials.expiry,
+        scope_type=connection.scope_type,
+    )
 
 
 # ── Upsert files ──────────────────────────────────────────────────────

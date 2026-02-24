@@ -302,6 +302,9 @@ if get_settings().drive_connector_enabled:
     from app.modules.drive.internal_sync_router import router as internal_drive_sync_router
     app.include_router(internal_drive_sync_router)
 
+    from app.modules.drive.internal_processing_router import router as internal_drive_processing_router
+    app.include_router(internal_drive_processing_router)
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

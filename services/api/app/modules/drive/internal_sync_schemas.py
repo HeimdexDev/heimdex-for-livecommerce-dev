@@ -66,6 +66,21 @@ class SyncCheckpointResponse(BaseModel):
     ok: bool
 
 
+class TokenRequest(BaseModel):
+    """Request body for POST /internal/drive/sync/connections/{id}/token."""
+
+    lease_token: str
+
+
+class TokenResponse(BaseModel):
+    """Response for POST /internal/drive/sync/connections/{id}/token."""
+
+    access_token: str
+    token_type: str = "Bearer"
+    expires_at: datetime
+    scope_type: str
+
+
 # ── Upsert Files ──────────────────────────────────────────────────────
 
 class DriveDiscoveredFile(BaseModel):

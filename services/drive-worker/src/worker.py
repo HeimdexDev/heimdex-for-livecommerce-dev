@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Lock
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from heimdex_worker_sdk.internal_api import InternalAPIClient
 
 from heimdex_worker_sdk.settings import get_worker_settings
 from src.tasks.discover import discover_new_files
@@ -50,7 +50,7 @@ def _release_slot(org_id: str) -> None:
         _org_slots[org_id] = max(0, _org_slots[org_id] - 1)
 
 
-async def poll_and_process(session_factory: async_sessionmaker[AsyncSession]) -> None:
+async def poll_and_process(api_client: InternalAPIClient) -> None:
     settings = get_worker_settings()
 
     if not settings.drive_connector_enabled:
@@ -61,22 +61,19 @@ async def poll_and_process(session_factory: async_sessionmaker[AsyncSession]) ->
         logger.warning("disk_budget_exceeded", extra={"temp_dir": str(temp_dir), "budget_gb": settings.drive_temp_disk_budget_gb})
         return
 
-    async with session_factory() as session:
-        try:
-            discovered_count = await discover_new_files(session=session, settings=settings)
-            if discovered_count:
-                logger.info("drive_discovery_complete", extra={"discovered_count": discovered_count})
+    try:
+        discovered_count = discover_new_files(api_client=api_client, settings=settings)
+        if discovered_count:
+            logger.info("drive_discovery_complete", extra={"discovered_count": discovered_count})
 
-            await process_pending_files(
-                session=session,
-                settings=settings,
-                acquire_slot=_acquire_slot,
-                release_slot=_release_slot,
-            )
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            logger.exception("poll_cycle_failed")
+        process_pending_files(
+            api_client=api_client,
+            settings=settings,
+            acquire_slot=_acquire_slot,
+            release_slot=_release_slot,
+        )
+    except Exception:
+        logger.exception("poll_cycle_failed")
 
 
 def main() -> None:
@@ -92,13 +89,10 @@ def main() -> None:
         signal.pause()
         return
 
-    engine = create_async_engine(
-        settings.database_url,
-        pool_pre_ping=True,
-        pool_size=3,
-        max_overflow=2,
+    api_client = InternalAPIClient(
+        base_url=settings.drive_api_base_url,
+        api_key=settings.drive_internal_api_key,
     )
-    session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     temp_dir = Path(settings.drive_temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
@@ -108,7 +102,7 @@ def main() -> None:
         poll_and_process,
         "interval",
         seconds=settings.drive_worker_poll_interval_seconds,
-        args=[session_factory],
+        args=[api_client],
         max_instances=1,
         id="drive_poll",
     )

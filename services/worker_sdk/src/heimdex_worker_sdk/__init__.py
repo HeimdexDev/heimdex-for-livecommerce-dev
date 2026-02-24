@@ -12,14 +12,25 @@ from heimdex_worker_sdk.drive_keys import (
 )
 from heimdex_worker_sdk.s3 import S3Client
 from heimdex_worker_sdk.settings import WorkerSettings, get_worker_settings
-from heimdex_worker_sdk.internal_api import ClaimedFile, InternalAPIClient
+from heimdex_worker_sdk.internal_api import (
+    AccessToken,
+    ClaimedConnection,
+    ClaimedFile,
+    ClaimedProcessingFile,
+    InternalAPIClient,
+    UpsertResult,
+)
 
 __all__ = [
     "WorkerSettings",
     "get_worker_settings",
     "S3Client",
     "InternalAPIClient",
+    "ClaimedConnection",
     "ClaimedFile",
+    "UpsertResult",
+    "AccessToken",
+    "ClaimedProcessingFile",
     "audio_s3_key",
     "drive_video_id",
     "enrichment_keyframe_s3_key",
