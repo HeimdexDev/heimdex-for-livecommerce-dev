@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "heimdex-worker-sdk"
+version = "0.1.0"
+description = "Shared settings, S3 client, and drive key helpers for Heimdex workers"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic-settings>=2.0",
+    "boto3>=1.28",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

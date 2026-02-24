@@ -26,7 +26,7 @@ def _parse_google_time(ts: str | None) -> datetime | None:
 async def discover_new_files(session: AsyncSession, settings: Any) -> int:
     import app.db.models  # noqa: F401 — register all SQLAlchemy models for FK resolution
     from app.modules.drive.google_client import DriveClient
-    from app.modules.drive.keys import drive_video_id
+    from heimdex_worker_sdk.drive_keys import drive_video_id
     from app.modules.drive.models import DriveFile
     from app.modules.drive.repository import (
         DriveConnectionRepository,
@@ -98,7 +98,7 @@ async def _discover_drive_connection(
 ) -> int:
     """Discover files from a Shared Drive connection (existing SA+DWD flow)."""
     from app.modules.drive.google_client import DriveClient
-    from app.modules.drive.keys import drive_video_id
+    from heimdex_worker_sdk.drive_keys import drive_video_id
     from app.modules.drive.models import DriveFile
 
     org_id = connection.org_id
@@ -199,7 +199,7 @@ async def _discover_folder_connection(
 ) -> int:
     """Discover video files from a folder-scoped OAuth connection (recursive)."""
     from app.modules.drive.google_client import DriveClient
-    from app.modules.drive.keys import drive_video_id
+    from heimdex_worker_sdk.drive_keys import drive_video_id
     from app.modules.drive.models import DriveFile
 
     org_id = connection.org_id

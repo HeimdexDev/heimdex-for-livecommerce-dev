@@ -50,10 +50,10 @@ async def _process_single_ocr(
     file_repo: Any,
     ocr_engine: Any = None,
 ) -> None:
-    drive_keys = importlib.import_module("app.modules.drive.keys")
+    drive_keys = importlib.import_module("heimdex_worker_sdk.drive_keys")
     scene_manifest_s3_key = drive_keys.scene_manifest_s3_key
     enrichment_keyframe_s3_key = drive_keys.enrichment_keyframe_s3_key
-    S3Client = importlib.import_module("app.storage.s3").S3Client
+    S3Client = importlib.import_module("heimdex_worker_sdk.s3").S3Client
 
     _ = session
     org_id = drive_file.org_id

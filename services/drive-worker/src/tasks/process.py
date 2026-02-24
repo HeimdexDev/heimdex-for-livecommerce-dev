@@ -66,7 +66,7 @@ async def _process_single_file(
     file_repo: Any,
 ) -> None:
     from app.modules.drive.google_client import DriveClient
-    from app.modules.drive.keys import (
+    from heimdex_worker_sdk.drive_keys import (
         audio_s3_key, enrichment_keyframe_s3_key, enrichment_keyframe_s3_prefix,
         proxy_s3_key, thumbnail_s3_key, thumbnail_s3_prefix,
     )
@@ -76,7 +76,7 @@ async def _process_single_file(
     from heimdex_media_pipelines.scenes.detector import detect_scenes
     from heimdex_media_pipelines.scenes.keyframe import extract_all_keyframes
     from heimdex_media_pipelines.scenes.assembler import assemble_scenes
-    from app.storage.s3 import S3Client
+    from heimdex_worker_sdk.s3 import S3Client
 
     org_id_str = str(drive_file.org_id)
     temp_dir = Path(settings.drive_temp_dir) / org_id_str / str(drive_file.id)
@@ -282,7 +282,7 @@ def _upload_enrichment_artifacts(
     if not enabled:
         return {}
 
-    from app.modules.drive.keys import (
+    from heimdex_worker_sdk.drive_keys import (
         audio_s3_key, enrichment_keyframe_s3_key, enrichment_keyframe_s3_prefix,
     )
 
@@ -368,7 +368,7 @@ def _upload_scene_manifest(
     scenes: List[dict[str, Any]],
     temp_dir: Path,
 ) -> None:
-    from app.modules.drive.keys import scene_manifest_s3_key
+    from heimdex_worker_sdk.drive_keys import scene_manifest_s3_key
 
     manifest = {
         "video_id": video_id,

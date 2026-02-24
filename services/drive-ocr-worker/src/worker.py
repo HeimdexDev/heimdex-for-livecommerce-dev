@@ -26,7 +26,7 @@ def _release_slot() -> None:
 
 
 async def poll_and_process(session_factory, ocr_engine=None) -> None:
-    get_settings = importlib.import_module("app.config").get_settings
+    get_settings = importlib.import_module("heimdex_worker_sdk.settings").get_worker_settings
     process_ocr_pending_files = importlib.import_module("src.tasks.ocr").process_ocr_pending_files
 
     settings = get_settings()
@@ -51,7 +51,7 @@ async def poll_and_process(session_factory, ocr_engine=None) -> None:
 
 
 def main() -> None:
-    get_settings = importlib.import_module("app.config").get_settings
+    get_settings = importlib.import_module("heimdex_worker_sdk.settings").get_worker_settings
     AsyncIOScheduler = importlib.import_module("apscheduler.schedulers.asyncio").AsyncIOScheduler
     sqlalchemy_asyncio = importlib.import_module("sqlalchemy.ext.asyncio")
     create_async_engine = sqlalchemy_asyncio.create_async_engine

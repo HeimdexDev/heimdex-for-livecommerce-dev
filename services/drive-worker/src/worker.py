@@ -9,7 +9,7 @@ from threading import Lock
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.config import get_settings
+from heimdex_worker_sdk.settings import get_worker_settings
 from src.tasks.discover import discover_new_files
 from src.tasks.process import process_pending_files
 
@@ -51,7 +51,7 @@ def _release_slot(org_id: str) -> None:
 
 
 async def poll_and_process(session_factory: async_sessionmaker[AsyncSession]) -> None:
-    settings = get_settings()
+    settings = get_worker_settings()
 
     if not settings.drive_connector_enabled:
         return
@@ -80,7 +80,7 @@ async def poll_and_process(session_factory: async_sessionmaker[AsyncSession]) ->
 
 
 def main() -> None:
-    settings = get_settings()
+    settings = get_worker_settings()
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
