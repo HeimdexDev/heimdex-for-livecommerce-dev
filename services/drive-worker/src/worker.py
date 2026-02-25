@@ -12,14 +12,13 @@ from heimdex_worker_sdk.internal_api import InternalAPIClient
 
 from heimdex_worker_sdk.settings import get_worker_settings
 from src.tasks.discover import discover_new_files
-from src.tasks.process import process_pending_files
 
 logger = logging.getLogger(__name__)
 
 _org_slots: dict[str, int] = defaultdict(int)
 _org_lock = threading.Lock()
 
-# Global concurrency semaphore — shared between HTTP poll and SQS consumer.
+# Global concurrency semaphore — acquired by SQS consumer for backpressure control.
 _global_semaphore: Optional[threading.Semaphore] = None
 
 
@@ -38,27 +37,12 @@ def _check_disk_budget(temp_dir: Path, budget_gb: float) -> bool:
     return used_gb < budget_gb
 
 
-def _acquire_slot(org_id: str, settings) -> bool:
-    sem = _init_semaphore(settings.drive_worker_global_concurrency)
-    acquired = sem.acquire(blocking=False)
-    if not acquired:
-        return False
-    with _org_lock:
-        if _org_slots[org_id] >= settings.drive_worker_per_org_concurrency:
-            sem.release()
-            return False
-        _org_slots[org_id] += 1
-        return True
+async def poll_and_discover(api_client: InternalAPIClient) -> None:
+    """Periodic discovery of new files from Google Drive.
 
-
-def _release_slot(org_id: str) -> None:
-    if _global_semaphore is not None:
-        _global_semaphore.release()
-    with _org_lock:
-        _org_slots[org_id] = max(0, _org_slots[org_id] - 1)
-
-
-async def poll_and_process(api_client: InternalAPIClient) -> None:
+    Processing is handled exclusively by the SQS consumer (Phase 3).
+    This poll loop only syncs Google Drive connections to find new files.
+    """
     settings = get_worker_settings()
 
     if not settings.drive_connector_enabled:
@@ -73,15 +57,8 @@ async def poll_and_process(api_client: InternalAPIClient) -> None:
         discovered_count = discover_new_files(api_client=api_client, settings=settings)
         if discovered_count:
             logger.info("drive_discovery_complete", extra={"discovered_count": discovered_count})
-
-        process_pending_files(
-            api_client=api_client,
-            settings=settings,
-            acquire_slot=_acquire_slot,
-            release_slot=_release_slot,
-        )
     except Exception:
-        logger.exception("poll_cycle_failed")
+        logger.exception("discovery_cycle_failed")
 
 
 def _make_sqs_callback(api_client, settings):
@@ -89,7 +66,7 @@ def _make_sqs_callback(api_client, settings):
 
     The SQS path only handles processing claims — discovery stays HTTP-only.
     The callback converts the SQS message to a ClaimedProcessingFile and
-    calls the same _process_single_file function used by HTTP poll.
+    calls the same _process_single_file function used by the legacy poll.
     """
     from heimdex_worker_sdk.message_adapters import sqs_to_claimed_processing_file
     from src.tasks.process import _process_single_file
@@ -146,40 +123,43 @@ def main() -> None:
     # Initialize shared semaphore before starting any consumers
     semaphore = _init_semaphore(settings.drive_worker_global_concurrency)
 
-    # ── SQS Consumer (Phase 2) ──────────────────────────────────────
+    # ── SQS Consumer (primary job source for processing) ──────────
     # Only handles processing claims. Discovery stays HTTP-only.
-    sqs_consumer = None
-    if settings.sqs_consumer_enabled and settings.sqs_processing_queue_url:
-        from heimdex_worker_sdk.sqs_client import SQSJobClient
-        from heimdex_worker_sdk.sqs_consumer import SQSConsumerLoop
-
-        sqs_client = SQSJobClient(
-            queue_url=settings.sqs_processing_queue_url,
-            region=settings.sqs_region,
-            endpoint_url=settings.sqs_endpoint_url or None,
+    import sys
+    if not settings.sqs_consumer_enabled or not settings.sqs_processing_queue_url:
+        logger.error(
+            "sqs_consumer_required",
+            extra={"sqs_consumer_enabled": settings.sqs_consumer_enabled, "queue_url": bool(settings.sqs_processing_queue_url)},
         )
-        sqs_consumer = SQSConsumerLoop(
-            sqs_client=sqs_client,
-            process_callback=_make_sqs_callback(api_client, settings),
-            semaphore=semaphore,
-            visibility_timeout=120,
-            heartbeat_interval=80,
-            worker_name="processing",
-        )
-        sqs_consumer.start()
-    elif settings.sqs_consumer_enabled:
-        logger.warning("sqs_consumer_enabled_but_no_queue_url", extra={"queue": "processing"})
+        sys.exit(1)
 
-    # ── Legacy HTTP Poll (always active during Phase 2) ─────────────
-    # Handles both discovery AND processing claims
+    from heimdex_worker_sdk.sqs_client import SQSJobClient
+    from heimdex_worker_sdk.sqs_consumer import SQSConsumerLoop
+
+    sqs_client = SQSJobClient(
+        queue_url=settings.sqs_processing_queue_url,
+        region=settings.sqs_region,
+        endpoint_url=settings.sqs_endpoint_url or None,
+    )
+    sqs_consumer = SQSConsumerLoop(
+        sqs_client=sqs_client,
+        process_callback=_make_sqs_callback(api_client, settings),
+        semaphore=semaphore,
+        visibility_timeout=120,
+        heartbeat_interval=80,
+        worker_name="processing",
+    )
+    sqs_consumer.start()
+
+    # ── HTTP Poll (discovery only — no processing claims) ─────────
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
-        poll_and_process,
+        poll_and_discover,
         "interval",
         seconds=settings.drive_worker_poll_interval_seconds,
         args=[api_client],
         max_instances=1,
-        id="drive_poll",
+        id="drive_discovery_poll",
     )
 
     async def _run() -> None:
@@ -189,8 +169,7 @@ def main() -> None:
         def shutdown(*_: object) -> None:
             logger.info("shutdown_signal_received")
             scheduler.shutdown(wait=False)
-            if sqs_consumer is not None:
-                sqs_consumer.stop(timeout=30.0)
+            sqs_consumer.stop(timeout=30.0)
             stop_event.set()
 
         loop.add_signal_handler(signal.SIGTERM, shutdown)
@@ -200,7 +179,7 @@ def main() -> None:
         logger.info(
             "drive_worker_started",
             extra={
-                "poll_interval": settings.drive_worker_poll_interval_seconds,
+                "discovery_poll_interval": settings.drive_worker_poll_interval_seconds,
                 "global_concurrency": settings.drive_worker_global_concurrency,
                 "per_org_concurrency": settings.drive_worker_per_org_concurrency,
                 "disk_budget_gb": settings.drive_temp_disk_budget_gb,

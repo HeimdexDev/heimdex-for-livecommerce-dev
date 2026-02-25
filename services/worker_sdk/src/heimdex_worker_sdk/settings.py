@@ -51,7 +51,7 @@ class WorkerSettings(BaseSettings):
 
     # --- Caption enrichment ---
     scene_caption_enabled: bool = False
-    drive_caption_poll_interval_seconds: int = 30
+    drive_caption_poll_interval_seconds: int = 30  # DEPRECATED (Phase 3): enrichment workers use SQS only
     drive_caption_concurrency: int = 1
     drive_caption_model: str = "OpenGVLab/InternVL2-1B"
     caption_engine: str = "internvl2"
@@ -63,19 +63,19 @@ class WorkerSettings(BaseSettings):
     drive_stt_model: str = "small"
     drive_stt_language: str = "ko"
     drive_stt_backend: str = "faster-whisper"
-    drive_stt_poll_interval_seconds: int = 30
+    drive_stt_poll_interval_seconds: int = 30  # DEPRECATED (Phase 3): enrichment workers use SQS only
     drive_stt_concurrency: int = 1
     drive_stt_max_audio_seconds: int = 3600
 
     # --- OCR enrichment ---
     drive_ocr_enabled: bool = False
-    drive_ocr_poll_interval_seconds: int = 30
+    drive_ocr_poll_interval_seconds: int = 30  # DEPRECATED (Phase 3): enrichment workers use SQS only
     drive_ocr_concurrency: int = 1
     drive_ocr_max_frames_per_scene: int = 10
     drive_ocr_max_frames_per_video: int = 300
 
 
-    # --- SQS (Phase 0 producer / Phase 2 consumer) ---
+    # --- SQS (Phase 0 producer / Phase 2 consumer / Phase 3 mandatory for enrichment) ---
     sqs_enabled: bool = False
     sqs_consumer_enabled: bool = False
     sqs_endpoint_url: str = ""

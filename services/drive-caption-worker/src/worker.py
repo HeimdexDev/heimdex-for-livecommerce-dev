@@ -2,12 +2,13 @@ import asyncio
 import importlib
 import logging
 import signal
+import sys
 import threading
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Shared concurrency semaphore — acquired by both SQS consumer and HTTP poll.
+# Shared concurrency semaphore — acquired by SQS consumer for backpressure control.
 _semaphore: Optional[threading.Semaphore] = None
 
 
@@ -16,38 +17,6 @@ def _init_semaphore(max_concurrent: int) -> threading.Semaphore:
     if _semaphore is None:
         _semaphore = threading.Semaphore(max_concurrent)
     return _semaphore
-
-
-def _acquire_slot(settings) -> bool:
-    sem = _init_semaphore(settings.drive_caption_concurrency)
-    return sem.acquire(blocking=False)
-
-
-def _release_slot() -> None:
-    if _semaphore is not None:
-        _semaphore.release()
-
-
-async def poll_and_process(api_client, caption_engine=None) -> None:
-    get_settings = importlib.import_module("heimdex_worker_sdk.settings").get_worker_settings
-    process_caption_pending_files = importlib.import_module("src.tasks.caption").process_caption_pending_files
-
-    settings = get_settings()
-
-    if not settings.scene_caption_enabled:
-        return
-
-    if not _acquire_slot(settings):
-        return
-
-    try:
-        await process_caption_pending_files(
-            api_client=api_client, settings=settings, caption_engine=caption_engine,
-        )
-    except Exception:
-        logger.exception("caption_poll_cycle_failed")
-    finally:
-        _release_slot()
 
 
 def _make_sqs_callback(api_client, settings, caption_engine):
@@ -69,7 +38,6 @@ def _make_sqs_callback(api_client, settings, caption_engine):
 
 def main() -> None:
     get_settings = importlib.import_module("heimdex_worker_sdk.settings").get_worker_settings
-    AsyncIOScheduler = importlib.import_module("apscheduler.schedulers.asyncio").AsyncIOScheduler
     InternalAPIClient = importlib.import_module("heimdex_worker_sdk.internal_api").InternalAPIClient
 
     settings = get_settings()
@@ -107,39 +75,28 @@ def main() -> None:
     # Initialize shared semaphore before starting any consumers
     semaphore = _init_semaphore(settings.drive_caption_concurrency)
 
-    # ── SQS Consumer (Phase 2) ──────────────────────────────────────
-    sqs_consumer = None
-    if settings.sqs_consumer_enabled and settings.sqs_caption_queue_url:
-        from heimdex_worker_sdk.sqs_client import SQSJobClient
-        from heimdex_worker_sdk.sqs_consumer import SQSConsumerLoop
+    # ── SQS Consumer (primary job source) ──────────────────────────────────────
+    if not settings.sqs_consumer_enabled or not settings.sqs_caption_queue_url:
+        logger.error("sqs_consumer_required_but_not_configured", extra={"queue": "caption"})
+        sys.exit(1)
 
-        sqs_client = SQSJobClient(
-            queue_url=settings.sqs_caption_queue_url,
-            region=settings.sqs_region,
-            endpoint_url=settings.sqs_endpoint_url or None,
-        )
-        sqs_consumer = SQSConsumerLoop(
-            sqs_client=sqs_client,
-            process_callback=_make_sqs_callback(api_client, settings, caption_engine),
-            semaphore=semaphore,
-            visibility_timeout=60,
-            heartbeat_interval=40,
-            worker_name="caption",
-        )
-        sqs_consumer.start()
-    elif settings.sqs_consumer_enabled:
-        logger.warning("sqs_consumer_enabled_but_no_queue_url", extra={"queue": "caption"})
+    from heimdex_worker_sdk.sqs_client import SQSJobClient
+    from heimdex_worker_sdk.sqs_consumer import SQSConsumerLoop
 
-    # ── Legacy HTTP Poll (always active during Phase 2) ─────────────
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        poll_and_process,
-        "interval",
-        seconds=settings.drive_caption_poll_interval_seconds,
-        args=[api_client, caption_engine],
-        max_instances=1,
-        id="caption_poll",
+    sqs_client = SQSJobClient(
+        queue_url=settings.sqs_caption_queue_url,
+        region=settings.sqs_region,
+        endpoint_url=settings.sqs_endpoint_url or None,
     )
+    sqs_consumer = SQSConsumerLoop(
+        sqs_client=sqs_client,
+        process_callback=_make_sqs_callback(api_client, settings, caption_engine),
+        semaphore=semaphore,
+        visibility_timeout=60,
+        heartbeat_interval=40,
+        worker_name="caption",
+    )
+    sqs_consumer.start()
 
     async def _run() -> None:
         stop_event = asyncio.Event()
@@ -147,19 +104,15 @@ def main() -> None:
 
         def shutdown(*_: object) -> None:
             logger.info("shutdown_signal_received")
-            scheduler.shutdown(wait=False)
-            if sqs_consumer is not None:
-                sqs_consumer.stop(timeout=30.0)
+            sqs_consumer.stop(timeout=30.0)
             stop_event.set()
 
         loop.add_signal_handler(signal.SIGTERM, shutdown)
         loop.add_signal_handler(signal.SIGINT, shutdown)
 
-        scheduler.start()
         logger.info(
             "caption_worker_started",
             extra={
-                "poll_interval": settings.drive_caption_poll_interval_seconds,
                 "concurrency": settings.drive_caption_concurrency,
                 "sqs_consumer_enabled": settings.sqs_consumer_enabled,
             },
