@@ -10,6 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 ENV WHISPER_CACHE_DIR=/data/whisper-models
+ENV HF_HOME=/data/huggingface
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
@@ -51,7 +52,7 @@ RUN pip install --no-cache-dir \
       "boto3>=1.34" "apscheduler>=3.10,<4" "pydantic-settings>=2.0" \
       "structlog>=23.0" "requests>=2.31"
 
-RUN mkdir -p "${WHISPER_CACHE_DIR}" \
+RUN mkdir -p "${WHISPER_CACHE_DIR}" "${HF_HOME}" \
     && python -c "from faster_whisper import WhisperModel; WhisperModel('small', device='cpu', compute_type='int8')"
 
 COPY dev-heimdex-for-livecommerce/services/drive-stt-worker/src/ src/
