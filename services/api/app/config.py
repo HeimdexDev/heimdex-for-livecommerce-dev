@@ -133,7 +133,6 @@ class Settings(BaseSettings):
 
     # --- OCR enrichment worker ---
     drive_ocr_enabled: bool = False
-    drive_ocr_poll_interval_seconds: int = 30
     drive_ocr_concurrency: int = 1
     drive_ocr_max_frames_per_scene: int = 10
     drive_ocr_max_frames_per_video: int = 300
@@ -143,13 +142,11 @@ class Settings(BaseSettings):
     drive_stt_model: str = "turbo"
     drive_stt_language: str = "ko"
     drive_stt_backend: str = "faster-whisper"
-    drive_stt_poll_interval_seconds: int = 30
     drive_stt_concurrency: int = 1
     drive_stt_max_audio_seconds: int = 21600
 
     # --- Caption enrichment worker ---
     scene_caption_enabled: bool = False
-    drive_caption_poll_interval_seconds: int = 30
     drive_caption_concurrency: int = 1
     drive_caption_model: str = "Qwen/Qwen2-VL-2B-Instruct"
     caption_engine: str = "qwen2vl"  # "qwen2vl", "internvl2", "florence2", or "llama_http"
@@ -157,7 +154,7 @@ class Settings(BaseSettings):
     llama_caption_api_key: str = ""
 
 
-    # --- SQS (dormant — Phase 0) ---
+    # --- SQS (Phase 3 complete — enrichment workers are mandatory SQS consumers) ---
     sqs_enabled: bool = False
     sqs_endpoint_url: str = ""
     sqs_region: str = "ap-northeast-2"
