@@ -377,6 +377,28 @@ class SceneSearchClient:
         await self.client.bulk(body=actions, params={"refresh": self.settings.opensearch_bulk_refresh})
         logger.info("scene_bulk_indexed_documents", count=len(documents))
 
+    async def bulk_partial_update_scenes(self, updates: list[tuple[str, dict[str, Any]]]) -> None:
+        """Partial-update scene documents (merge fields, don't replace full doc).
+
+        Uses the OpenSearch bulk ``update`` action with ``doc`` to merge only
+        the provided fields into existing documents.  Fields not included in
+        the update dict are left untouched — this prevents concurrent
+        enrichment workers from overwriting each other's data.
+
+        Args:
+            updates: List of ``(doc_id, partial_fields_dict)`` tuples.
+        """
+        if not updates:
+            return
+
+        actions: list[dict[str, Any]] = []
+        for doc_id, partial in updates:
+            actions.append({"update": {"_index": self.index_name, "_id": doc_id}})
+            actions.append({"doc": partial})
+
+        await self.client.bulk(body=actions, params={"refresh": self.settings.opensearch_bulk_refresh})
+        logger.info("scene_bulk_partial_updated", count=len(updates))
+
     async def mget_scenes(self, doc_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Batch-get scene documents by doc_id.
 

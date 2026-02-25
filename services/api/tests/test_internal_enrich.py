@@ -13,6 +13,7 @@ class TestInternalEnrichService:
         client = MagicMock()
         client.mget_scenes = AsyncMock()
         client.bulk_index_scenes = AsyncMock()
+        client.bulk_partial_update_scenes = AsyncMock()
         return client
 
     @pytest.fixture
@@ -38,16 +39,18 @@ class TestInternalEnrichService:
             }
         }
 
-        with patch("app.modules.ingest.service.get_passage_embedding", return_value=[0.1] * 1024):
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.1] * 1024]):
             result = await service.enrich_scenes(request, org_id)
 
         assert result["updated_count"] == 1
-        docs = mock_scene_client.bulk_index_scenes.call_args[0][0]
-        _, merged = docs[0]
-        assert merged["transcript_raw"] == "hello world"
-        assert merged["speech_segment_count"] == 2
-        assert merged["ocr_text_raw"] == "SALE"
-        assert "embedding_vector" in merged
+        updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
+        _, partial = updates[0]
+        assert partial["transcript_raw"] == "hello world"
+        assert partial["speech_segment_count"] == 2
+        assert "embedding_vector" in partial
+        # Partial update should NOT contain fields not being enriched
+        assert "scene_caption" not in partial
+        assert "ocr_text_raw" not in partial
 
     @pytest.mark.asyncio
     async def test_enrich_with_ocr_merges_correctly(self, service, mock_scene_client):
@@ -68,14 +71,16 @@ class TestInternalEnrichService:
             }
         }
 
-        with patch("app.modules.ingest.service.get_passage_embedding", return_value=[0.1] * 1024):
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.1] * 1024]):
             await service.enrich_scenes(request, org_id)
 
-        docs = mock_scene_client.bulk_index_scenes.call_args[0][0]
-        _, merged = docs[0]
-        assert merged["ocr_text_raw"] == "50% OFF"
-        assert merged["ocr_text_norm"] == "50% off"
-        assert merged["transcript_raw"] == "hello"
+        updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
+        _, partial = updates[0]
+        assert partial["ocr_text_raw"] == "50% OFF"
+        assert partial["ocr_text_norm"] == "50% off"
+        # Partial update should NOT contain transcript or caption
+        assert "transcript_raw" not in partial
+        assert "scene_caption" not in partial
 
     @pytest.mark.asyncio
     async def test_enrich_with_caption_merges_correctly(self, service, mock_scene_client):
@@ -96,17 +101,20 @@ class TestInternalEnrichService:
             }
         }
 
-        with patch("app.modules.ingest.service.get_passage_embedding", return_value=[0.1] * 1024):
-            await service.enrich_scenes(request, org_id)
+        result = await service.enrich_scenes(request, org_id)
 
-        docs = mock_scene_client.bulk_index_scenes.call_args[0][0]
-        _, merged = docs[0]
-        assert merged["scene_caption"] == "a person holding product"
-        assert merged["transcript_raw"] == "hello"
-        assert merged["ocr_text_raw"] == "sale"
+        updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
+        _, partial = updates[0]
+        assert partial["scene_caption"] == "a person holding product"
+        # Caption-only enrichment should NOT touch transcript, OCR, or embedding
+        assert "transcript_raw" not in partial
+        assert "ocr_text_raw" not in partial
+        assert "embedding_vector" not in partial
 
     @pytest.mark.asyncio
-    async def test_partial_merge_preserves_unset_fields(self, service, mock_scene_client):
+    async def test_partial_update_only_contains_enriched_fields(self, service, mock_scene_client):
+        """Partial updates should contain ONLY fields from this enrichment,
+        preventing concurrent workers from overwriting each other's data."""
         org_id = uuid4()
         scene_id = "vid1_scene_0"
         doc_id = f"{org_id}:{scene_id}"
@@ -125,14 +133,16 @@ class TestInternalEnrichService:
             }
         }
 
-        with patch("app.modules.ingest.service.get_passage_embedding", return_value=[0.1] * 1024):
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.1] * 1024]):
             await service.enrich_scenes(request, org_id)
 
-        docs = mock_scene_client.bulk_index_scenes.call_args[0][0]
-        _, merged = docs[0]
-        assert merged["transcript_raw"] == "new text"
-        assert merged["ocr_text_raw"] == "original ocr"
-        assert merged["scene_caption"] == "original caption"
+        updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
+        _, partial = updates[0]
+        assert partial["transcript_raw"] == "new text"
+        # These fields should NOT be in the partial update — they belong to
+        # other enrichment workers and must not be overwritten.
+        assert "ocr_text_raw" not in partial
+        assert "scene_caption" not in partial
 
     @pytest.mark.asyncio
     async def test_scene_not_found_skipped_with_warning(self, service, mock_scene_client):
@@ -150,11 +160,12 @@ class TestInternalEnrichService:
 
         assert result["updated_count"] == 0
         assert result["skipped_count"] == 1
-        mock_scene_client.bulk_index_scenes.assert_not_awaited()
+        mock_scene_client.bulk_partial_update_scenes.assert_not_awaited()
         mock_warning.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_embedding_recomputed_from_merged_text(self, service, mock_scene_client):
+        """When OCR is enriched, embedding should combine existing transcript + new OCR."""
         org_id = uuid4()
         scene_id = "vid1_scene_0"
         doc_id = f"{org_id}:{scene_id}"
@@ -172,10 +183,59 @@ class TestInternalEnrichService:
             }
         }
 
-        with patch("app.modules.ingest.service.get_passage_embedding", return_value=[0.2] * 1024) as mock_embed:
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.2] * 1024]) as mock_embed:
             await service.enrich_scenes(request, org_id)
 
-        mock_embed.assert_called_once_with("hello sale")
+        # Embedding text should combine existing transcript + new OCR
+        mock_embed.assert_called_once_with(["hello sale"])
+
+    @pytest.mark.asyncio
+    async def test_concurrent_enrichment_safety(self, service, mock_scene_client):
+        """Caption-only enrichment should not overwrite existing transcript/OCR.
+
+        This is the race condition fix: previously, the enrich service would
+        read the full doc, normalize ALL fields, and write the full doc back.
+        If STT ran concurrently, it could overwrite caption data with stale
+        values from its own read.  With partial updates, each worker only
+        writes its own fields.
+        """
+        org_id = uuid4()
+        scene_id = "vid1_scene_0"
+        doc_id = f"{org_id}:{scene_id}"
+
+        # Caption enrichment only sends scene_caption
+        request = EnrichScenesRequest(
+            video_id="vid1",
+            scenes=[EnrichSceneUpdate(scene_id=scene_id, scene_caption="라이브 방송 중 상품 소개")],
+        )
+
+        # Existing doc already has transcript and OCR from other workers
+        mock_scene_client.mget_scenes.return_value = {
+            doc_id: {
+                "scene_id": scene_id,
+                "transcript_raw": "안녕하세요 여러분",
+                "transcript_norm": "안녕하세요 여러분",
+                "ocr_text_raw": "30% 할인",
+                "scene_caption": "",
+                "embedding_vector": [0.5] * 1024,
+            }
+        }
+
+        result = await service.enrich_scenes(request, org_id)
+
+        assert result["updated_count"] == 1
+        updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
+        _, partial = updates[0]
+
+        # Caption enrichment writes only caption + ingest_time
+        assert partial["scene_caption"] == "라이브 방송 중 상품 소개"
+        assert "ingest_time" in partial
+
+        # Must NOT touch transcript, OCR, or embedding
+        assert "transcript_raw" not in partial
+        assert "transcript_norm" not in partial
+        assert "ocr_text_raw" not in partial
+        assert "embedding_vector" not in partial
 
 
 class TestInternalEnrichEndpoint:

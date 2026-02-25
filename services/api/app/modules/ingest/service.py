@@ -239,10 +239,9 @@ class SceneIngestService:
         existing_docs = await self.scene_opensearch.mget_scenes(list(doc_id_map.keys()))
 
         now = datetime.now(timezone.utc)
-        documents: list[tuple[str, dict[str, Any]]] = []
+        partial_updates: list[tuple[str, dict[str, Any]]] = []
         skipped = 0
-        embedding_inputs: list[tuple[str, str]] = []
-
+        embedding_inputs: list[tuple[int, str]] = []
         for doc_id, enrichment in doc_id_map.items():
             existing = existing_docs.get(doc_id)
             if existing is None:
@@ -254,57 +253,56 @@ class SceneIngestService:
                 )
                 skipped += 1
                 continue
-
-            merged = dict(existing)
+            # Build partial update containing ONLY the fields this
+            # enrichment provides.  Using partial updates instead of full
+            # document replace prevents concurrent workers (STT, OCR,
+            # Caption) from overwriting each other's data.
+            partial: dict[str, Any] = {}
+            needs_embedding_update = False
             if enrichment.transcript_raw is not None:
-                merged["transcript_raw"] = enrichment.transcript_raw
-                merged["speech_segment_count"] = enrichment.speech_segment_count or 0
+                transcript_norm = normalize_transcript(enrichment.transcript_raw)
+                partial["transcript_raw"] = enrichment.transcript_raw
+                partial["transcript_norm"] = transcript_norm
+                partial["transcript_char_count"] = len(transcript_norm)
+                partial["speech_segment_count"] = enrichment.speech_segment_count or 0
+                needs_embedding_update = True
             if enrichment.ocr_text_raw is not None:
-                merged["ocr_text_raw"] = enrichment.ocr_text_raw
-                merged["ocr_char_count"] = enrichment.ocr_char_count or 0
+                ocr_norm = normalize_transcript(enrichment.ocr_text_raw) if enrichment.ocr_text_raw else ""
+                partial["ocr_text_raw"] = enrichment.ocr_text_raw
+                partial["ocr_text_norm"] = ocr_norm
+                partial["ocr_char_count"] = len(ocr_norm)
+                needs_embedding_update = True
             if enrichment.scene_caption is not None:
-                merged["scene_caption"] = enrichment.scene_caption
+                caption_norm = normalize_transcript(enrichment.scene_caption) if enrichment.scene_caption else ""
+                partial["scene_caption"] = caption_norm
 
-            transcript_norm = normalize_transcript(merged.get("transcript_raw", ""))
-            ocr_norm = normalize_transcript(merged.get("ocr_text_raw", "")) if merged.get("ocr_text_raw") else ""
-            caption_norm = normalize_transcript(merged.get("scene_caption", "")) if merged.get("scene_caption") else ""
+            if needs_embedding_update:
+                # Embedding uses transcript + OCR.  Merge newly enriched
+                # values with existing doc values for full embedding text.
+                t_raw = partial.get("transcript_raw", existing.get("transcript_raw", ""))
+                o_raw = partial.get("ocr_text_raw", existing.get("ocr_text_raw", ""))
+                t_norm = normalize_transcript(t_raw) if t_raw else ""
+                o_norm = normalize_transcript(o_raw) if o_raw else ""
+                embedding_text = t_norm
+                if o_norm:
+                    embedding_text = f"{t_norm} {o_norm}".strip() if t_norm else o_norm
+                if embedding_text:
+                    embedding_inputs.append((len(partial_updates), embedding_text))
 
-            merged["transcript_norm"] = transcript_norm
-            merged["transcript_char_count"] = len(transcript_norm)
-            merged["ocr_text_norm"] = ocr_norm
-            merged["ocr_char_count"] = len(ocr_norm)
-            merged["scene_caption"] = caption_norm
-
-            embedding_text = transcript_norm
-            if ocr_norm:
-                embedding_text = f"{transcript_norm} {ocr_norm}".strip() if transcript_norm else ocr_norm
-
-            if embedding_text:
-                embedding_inputs.append((doc_id, embedding_text))
-            else:
-                merged.pop("embedding_vector", None)
-
-            merged["ingest_time"] = now.isoformat()
-            documents.append((doc_id, merged))
+            partial["ingest_time"] = now.isoformat()
+            partial_updates.append((doc_id, partial))
 
         t_after_prepare = _time.monotonic()
-
         if embedding_inputs:
             texts = [text for _, text in embedding_inputs]
             vectors = get_passage_embeddings_batch(texts)
-            doc_embeddings = {
-                doc_id: vec for (doc_id, _), vec in zip(embedding_inputs, vectors)
-            }
-            for idx, (doc_id, merged) in enumerate(documents):
-                embedding = doc_embeddings.get(doc_id)
-                if embedding is not None:
-                    merged["embedding_vector"] = embedding
-                    documents[idx] = (doc_id, merged)
+            for (idx, _), vec in zip(embedding_inputs, vectors):
+                partial_updates[idx][1]["embedding_vector"] = vec
 
         t_after_embedding = _time.monotonic()
 
-        if documents:
-            await self.scene_opensearch.bulk_index_scenes(documents)
+        if partial_updates:
+            await self.scene_opensearch.bulk_partial_update_scenes(partial_updates)
 
         t_after_index = _time.monotonic()
 
@@ -312,15 +310,14 @@ class SceneIngestService:
             "scene_enrich_completed",
             org_id=org_id_str,
             video_id=request.video_id,
-            updated_count=len(documents),
+            updated_count=len(partial_updates),
             skipped_count=skipped,
             duration_embedding_ms=round((t_after_embedding - t_after_prepare) * 1000, 1),
             duration_indexing_ms=round((t_after_index - t_after_embedding) * 1000, 1),
             duration_total_ms=round((t_after_index - t_start) * 1000, 1),
         )
-
         return {
-            "updated_count": len(documents),
+            "updated_count": len(partial_updates),
             "video_id": request.video_id,
             "skipped_count": skipped,
         }
