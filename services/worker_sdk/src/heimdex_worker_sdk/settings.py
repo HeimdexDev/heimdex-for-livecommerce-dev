@@ -85,6 +85,12 @@ class WorkerSettings(BaseSettings):
     sqs_stt_queue_url: str = ""
     sqs_ocr_queue_url: str = ""
 
+
+    # --- GPU acceleration (AirCloud+ remote workers) ---
+    use_gpu: bool = False  # Set True on GPU instances; caption/OCR engines auto-detect CUDA
+    stt_device: str = "cpu"  # "cpu", "cuda", or "auto"; faster-whisper device selection
+    stt_compute_type: str = "int8"  # "int8", "float16", "float32", "auto"; GPU prefers float16
+
     class Config:
         env_file: str = ".env"
         env_file_encoding: str = "utf-8"

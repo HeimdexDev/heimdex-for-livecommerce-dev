@@ -111,7 +111,7 @@ def _process_single_ocr(
         ocr_started = time.monotonic()
         if ocr_engine is None:
             _create = importlib.import_module("heimdex_media_pipelines.ocr").create_ocr_engine
-            ocr_engine = _create(lang="korean", use_gpu=False)
+            ocr_engine = _create(lang="korean", use_gpu=settings.use_gpu)
         engine = ocr_engine
         ocr_results: dict[int, str] = {}
 

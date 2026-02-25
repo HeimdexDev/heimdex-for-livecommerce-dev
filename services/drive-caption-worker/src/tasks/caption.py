@@ -76,7 +76,7 @@ def _process_single_caption(
         caption_started = time.monotonic()
         if caption_engine is None:
             _create = importlib.import_module("heimdex_media_pipelines.vision").create_caption_engine
-            caption_engine = _create(model="internvl2", use_gpu=False)
+            caption_engine = _create(model="internvl2", use_gpu=settings.use_gpu)
         engine = caption_engine
 
         downloaded_keyframes: dict[int, Path] = {}

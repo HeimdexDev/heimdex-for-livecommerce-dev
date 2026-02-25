@@ -108,8 +108,8 @@ def _process_single_stt(
                 backend=settings.drive_stt_backend,
                 model_name=settings.drive_stt_model,
                 language=settings.drive_stt_language,
-                device="cpu",
-                compute_type="int8",
+                device=settings.stt_device,
+                compute_type=settings.stt_compute_type,
                 beam_size=1,
                 best_of=1,
             )
