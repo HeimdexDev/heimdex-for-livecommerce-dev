@@ -58,7 +58,7 @@ def main() -> None:
     )
 
     create_ocr_engine = importlib.import_module("heimdex_media_pipelines.ocr").create_ocr_engine
-    ocr_engine = create_ocr_engine(lang="korean", use_gpu=False)
+    ocr_engine = create_ocr_engine(lang="korean", use_gpu=settings.use_gpu)
     logger.info("ocr_engine_loaded_once")
 
     # Initialize shared semaphore before starting any consumers
