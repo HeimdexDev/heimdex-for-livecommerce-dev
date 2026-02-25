@@ -60,21 +60,20 @@ jobs:
             CURR=$(git rev-parse HEAD)
             API_CHANGED=false
             WEB_CHANGED=false
-            WORKER_CHANGED=false
 
             if [ -n "$PREV" ]; then
               DIFF_FILES=$(git diff --name-only "$PREV" "$CURR" || true)
               echo "$DIFF_FILES" | grep -q '^services/api/' && API_CHANGED=true || true
               echo "$DIFF_FILES" | grep -q '^services/web/' && WEB_CHANGED=true || true
-              echo "$DIFF_FILES" | grep -qE '^services/drive-(stt|ocr|caption)-worker/' && WORKER_CHANGED=true || true
-              echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example)' && API_CHANGED=true && WEB_CHANGED=true && WORKER_CHANGED=true || true
+
+              echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example)' && API_CHANGED=true && WEB_CHANGED=true || true
             else
               API_CHANGED=true
               WEB_CHANGED=true
-              WORKER_CHANGED=true
+
             fi
 
-            echo "API changed: $API_CHANGED | Web changed: $WEB_CHANGED | Worker changed: $WORKER_CHANGED"
+            echo "API changed: $API_CHANGED | Web changed: $WEB_CHANGED"
 
             # ---- Build changed services ----
             if [ "$API_CHANGED" = true ]; then
@@ -111,16 +110,8 @@ jobs:
               sleep 5
             fi
 
-            # WARNING (2026-02-26): Enrichment workers (STT, OCR, Caption) have migrated to Aircloud+ GPU.
-            # This block rebuilds and restarts EC2 CPU enrichment containers, creating DUAL SQS consumers
-            # that compete with Aircloud+ workers. This is the #1 priority fix in housekeeping PR2.
-            # PR2 will remove this block entirely. Until then, deploys may cause brief message duplication.
-            if [ "$WORKER_CHANGED" = true ] || [ "$API_CHANGED" = true ]; then
-              echo "--- rebuilding and restarting enrichment workers ---"
-              docker compose build drive-stt-worker drive-ocr-worker drive-caption-worker
-              docker compose up -d --no-deps --force-recreate drive-stt-worker drive-ocr-worker drive-caption-worker
-              sleep 5
-            fi
+            # Enrichment workers (STT, OCR, Caption) run on Aircloud+ GPU since 2026-02-26.
+            # EC2 no longer builds or restarts them. See docs/housekeeping/01_cleanup_plan.md.
 
             # ---- Health checks (retry loop — Next.js cold start can take 30s+) ----
             echo "--- health checks ---"

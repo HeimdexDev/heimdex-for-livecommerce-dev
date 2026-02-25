@@ -195,6 +195,7 @@ services:
   # DEPRECATED (2026-02-26): face-worker is dead code — never ran in production.
   # Kept for reference only. Removal planned in PR4 (housekeeping).
   face-worker:
+    profiles: ["face-dev"]
     build:
       context: ./services/worker
       dockerfile: Dockerfile
@@ -265,8 +266,9 @@ services:
   # DEPRECATED (2026-02-26): OCR enrichment worker migrated to Aircloud+ GPU.
   # This CPU service definition is kept for local dev only.
   # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-ocr-worker-gpu:latest on Aircloud+.
-  # PR2 will add 'profiles: [local-enrichment]' to prevent accidental startup.
+  # Guarded by profiles: ["ec2-legacy"] — requires --profile ec2-legacy to start.
   drive-ocr-worker:
+    profiles: ["ec2-legacy"]
     build:
       context: .
       dockerfile: services/drive-ocr-worker/Dockerfile
@@ -312,6 +314,7 @@ services:
   # Caption worker no longer uses HTTP-based llama backend (CAPTION_ENGINE=qwen2vl on Aircloud+).
   # Kept for local dev fallback only. Removal planned in PR2/PR4.
   llama-caption-server:
+    profiles: ["llama-caption"]
     build:
       context: ./services/llama-caption-server
       dockerfile: Dockerfile
@@ -345,8 +348,9 @@ services:
   # This CPU service definition is kept for local dev only.
   # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-caption-worker-gpu:latest on Aircloud+.
   # Model: Qwen/Qwen2-VL-2B-Instruct (GPU) vs OpenGVLab/InternVL2-1B (CPU, below).
-  # PR2 will add 'profiles: [local-enrichment]' to prevent accidental startup.
+  # Guarded by profiles: ["ec2-legacy"] — requires --profile ec2-legacy to start.
   drive-caption-worker:
+    profiles: ["ec2-legacy"]
     build:
       context: .
       dockerfile: services/drive-caption-worker/Dockerfile
@@ -401,8 +405,9 @@ services:
   # This CPU service definition is kept for local dev only.
   # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-stt-worker-gpu:latest on Aircloud+.
   # Model: turbo/cuda/float16 (GPU) vs small/cpu/int8 (CPU, below).
-  # PR2 will add 'profiles: [local-enrichment]' to prevent accidental startup.
+  # Guarded by profiles: ["ec2-legacy"] — requires --profile ec2-legacy to start.
   drive-stt-worker:
+    profiles: ["ec2-legacy"]
     build:
       context: .
       dockerfile: services/drive-stt-worker/Dockerfile
@@ -450,8 +455,9 @@ services:
 
   # NOTE (2026-02-26): elasticmq is for LOCAL DEV SQS simulation only.
   # Staging/prod uses real AWS SQS (ap-northeast-2). Not needed on EC2.
-  # EC2 still runs this container — removal planned in PR2.
+  # Guarded by profiles: ["local-dev"] — requires --profile local-dev to start.
   elasticmq:
+    profiles: ["local-dev"]
     image: softwaremill/elasticmq-native:latest
     container_name: heimdex-elasticmq
     mem_limit: 256m
