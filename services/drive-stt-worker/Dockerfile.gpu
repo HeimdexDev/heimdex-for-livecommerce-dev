@@ -9,8 +9,8 @@ FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
-ENV WHISPER_CACHE_DIR=/data/whisper-models
-ENV HF_HOME=/data/huggingface
+ENV WHISPER_CACHE_DIR=/models/whisper
+ENV HF_HOME=/models/huggingface
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
@@ -58,7 +58,7 @@ RUN mkdir -p "${WHISPER_CACHE_DIR}" "${HF_HOME}" \
 COPY dev-heimdex-for-livecommerce/services/drive-stt-worker/src/ src/
 
 RUN useradd -m -u 1000 appuser \
-    && chown -R appuser:appuser /app /data
+    && chown -R appuser:appuser /app /models
 USER appuser
 
 CMD ["python", "-m", "src.worker"]
