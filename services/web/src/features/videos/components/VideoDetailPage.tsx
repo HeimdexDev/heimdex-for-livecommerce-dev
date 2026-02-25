@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
+import { useAgent } from "@/features/search/hooks/useAgent";
 import { getVideoScenes } from "@/lib/api/videos";
 import { getAgentPlaybackUrl, getAgentThumbnailUrl, getCloudPlaybackUrl, getCloudThumbnailUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
@@ -253,7 +254,10 @@ function OverviewPanel({
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
 
   const fullTranscript = useMemo(
-    () => scenes.map((s) => s.transcript_raw).filter(Boolean).join("\n\n"),
+    () => scenes
+      .filter((s) => s.transcript_raw)
+      .map((s) => `[${formatTimestamp(s.start_ms)}] ${s.transcript_raw}`)
+      .join("\n\n"),
     [scenes],
   );
 
@@ -358,6 +362,7 @@ function SceneCard({
   scene,
   index,
   videoId,
+  agentAvailable,
   isSelected,
   onToggle,
   onSeek,
@@ -366,6 +371,7 @@ function SceneCard({
   scene: VideoScene;
   index: number;
   videoId: string;
+  agentAvailable: boolean;
   isSelected: boolean;
   onToggle: (id: string) => void;
   onSeek?: (startMs: number) => void;
@@ -415,7 +421,7 @@ function SceneCard({
             <SceneThumbnail
               videoId={videoId}
               sceneId={scene.scene_id}
-              agentAvailable={true}
+              agentAvailable={agentAvailable}
               className="aspect-video w-full rounded-tl-xl"
             />
             <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors rounded-tl-xl">
@@ -503,6 +509,7 @@ function SceneCard({
               "mt-2 text-sm leading-relaxed text-gray-600",
               !subtitleExpanded && "line-clamp-2",
             )}>
+              <span className="text-gray-400 font-mono text-xs">[{formatTimestamp(scene.start_ms)}]</span>{" "}
               {subtitleExpanded ? scene.transcript_raw : transcriptPreview}
             </p>
           </div>
@@ -516,12 +523,14 @@ function ScenesPanel({
   scenes,
   totalScenes,
   videoId,
+  agentAvailable,
   onSeekToScene,
   activeSceneMs,
 }: {
   scenes: VideoScene[];
   totalScenes: number;
   videoId: string;
+  agentAvailable: boolean;
   onSeekToScene?: (startMs: number) => void;
   activeSceneMs?: number | null;
 }) {
@@ -633,6 +642,7 @@ function ScenesPanel({
             scene={scene}
             index={(currentPage - 1) * SCENES_PER_PAGE + i}
             videoId={videoId}
+            agentAvailable={agentAvailable}
             isSelected={selectedIds.has(scene.scene_id)}
             onToggle={toggleSelection}
             onSeek={onSeekToScene}
@@ -702,6 +712,7 @@ function ScenesPanel({
 
 export function VideoDetailPage({ videoId }: { videoId: string }) {
   const { getAccessToken } = useAuth();
+  const { isAvailable: agentAvailable } = useAgent();
   const [view, setView] = useState<ViewMode>("overview");
   const [meta, setMeta] = useState<VideoScenesResponse | null>(null);
   const [scenes, setScenes] = useState<VideoScene[]>([]);
@@ -820,6 +831,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               scenes={scenes}
               totalScenes={totalScenes}
               videoId={videoId}
+              agentAvailable={agentAvailable}
               onSeekToScene={handleSeekToScene}
               activeSceneMs={seekMs}
             />

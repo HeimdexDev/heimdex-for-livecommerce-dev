@@ -25,6 +25,7 @@ export function ShortsPlanPanel({
     selectedIds,
     isExporting,
     exportError,
+    exportWarning,
     exportResult,
     generatePlan,
     toggleCandidate,
@@ -44,6 +45,13 @@ export function ShortsPlanPanel({
 
   const selectedCount = selectedIds.size;
   const hasResults = candidates.length > 0;
+  const selectedCandidates = useMemo(
+    () => candidates.filter((candidate) => selectedIds.has(candidate.candidate_id)),
+    [candidates, selectedIds],
+  );
+  const hasNoCloudClips = selectedCandidates.length > 0
+    && selectedCandidates.every((candidate) => !candidate.video_id.startsWith("gd_"));
+  const allSelectedLocalAndAgentOffline = selectedCandidates.length > 0 && hasNoCloudClips && !agentAvailable;
   const defaultProjectName = useMemo(() => {
     const baseName = (videoTitle || videoId).trim();
     return `${baseName} Shorts`;
@@ -124,12 +132,12 @@ export function ShortsPlanPanel({
               <button
                 type="button"
                 className="btn-primary text-sm px-3 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={selectedCount === 0 || (!isCloudExport && !agentAvailable) || isExporting}
+                disabled={selectedCount === 0 || (hasNoCloudClips && !agentAvailable) || isExporting}
                 onClick={() => setIsExportDialogOpen(true)}
               >
                 {isExporting ? "Exporting..." : (isCloudExport ? "Download EDL" : "Export to Premiere")}
               </button>
-              {!isCloudExport && !agentAvailable && <span className="text-xs text-gray-500">(Agent offline)</span>}
+              {allSelectedLocalAndAgentOffline && <span className="text-xs text-gray-500">(Agent offline)</span>}
             </div>
           </div>
 
@@ -162,6 +170,19 @@ export function ShortsPlanPanel({
               </button>
             </div>
           )}
+
+          {exportWarning && (
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-sm flex items-start justify-between gap-2">
+              <p className="min-w-0 break-words">{exportWarning}</p>
+              <button
+                type="button"
+                className="text-amber-700 hover:text-amber-800 font-medium"
+                onClick={clearExportResult}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
         </>
       )}
 
@@ -173,7 +194,7 @@ export function ShortsPlanPanel({
           }
         }}
         onExport={(config) => {
-          void exportSelectedToPremiere(config);
+          void exportSelectedToPremiere({ ...config, agentAvailable });
           setIsExportDialogOpen(false);
         }}
         selectedCount={selectedCount}

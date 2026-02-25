@@ -108,6 +108,7 @@ export function SavedShortsPage() {
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [exportResult, setExportResult] = useState<{ output_path: string; clip_count: number } | null>(null);
   const [agentAvailable, setAgentAvailable] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
@@ -183,6 +184,7 @@ export function SavedShortsPage() {
       setShowExportDialog(false);
       setIsExporting(true);
       setExportError(null);
+      setExportNotice(null);
       setExportResult(null);
       try {
         const clips: ExportClipInput[] = selectedShorts.map((s) => ({
@@ -194,26 +196,59 @@ export function SavedShortsPage() {
         }));
 
         const allCloud = selectedShorts.every((s) => s.video_id.startsWith("gd_"));
+        const allLocal = selectedShorts.every((s) => !s.video_id.startsWith("gd_"));
+        const localShorts = selectedShorts.filter((s) => !s.video_id.startsWith("gd_"));
+        const cloudClips = clips.filter((clip) => clip.video_id.startsWith("gd_"));
+        const localClips = clips.filter((clip) => !clip.video_id.startsWith("gd_"));
 
         if (allCloud) {
           const result = await exportEdlCloud(
             {
               project_name: config.projectName,
               frame_rate: config.frameRate,
-              clips,
+              clips: cloudClips,
             },
             getAccessToken,
           );
           setExportResult({ output_path: result.filename, clip_count: result.clip_count });
-        } else {
+        } else if (allLocal) {
           const result = await exportToPremiere({
             project_name: config.projectName,
             format: "edl",
             frame_rate: config.frameRate,
             output_dir: config.outputDir,
-            clips,
+            clips: localClips,
           });
           setExportResult({ output_path: result.output_path, clip_count: result.clip_count });
+        } else {
+          const cloudResult = await exportEdlCloud(
+            {
+              project_name: config.projectName,
+              frame_rate: config.frameRate,
+              clips: cloudClips,
+            },
+            getAccessToken,
+          );
+
+          if (agentAvailable) {
+            const localResult = await exportToPremiere({
+              project_name: config.projectName,
+              format: "edl",
+              frame_rate: config.frameRate,
+              output_dir: config.outputDir,
+              clips: localClips,
+            });
+            setExportResult({
+              output_path: localResult.output_path,
+              clip_count: cloudResult.clip_count + localResult.clip_count,
+            });
+          } else {
+            const skippedLocalNames = localShorts
+              .map((short, index) => short.title ?? `Local Clip ${index + 1}`)
+              .join(", ");
+            setExportNotice(`에이전트가 오프라인 상태여서 로컬 클립을 건너뛰었습니다: ${skippedLocalNames}`);
+            setExportResult({ output_path: cloudResult.filename, clip_count: cloudResult.clip_count });
+          }
         }
       } catch (err) {
         setExportError(err instanceof Error ? err.message : "내보내기에 실패했습니다");
@@ -221,7 +256,7 @@ export function SavedShortsPage() {
         setIsExporting(false);
       }
     },
-    [selectedShorts, getAccessToken],
+    [selectedShorts, getAccessToken, agentAvailable],
   );
 
   const sorted = useMemo(() => {
@@ -277,12 +312,12 @@ export function SavedShortsPage() {
         <Link href="/" className="rounded-full p-1 hover:bg-gray-200">
           <BackArrowIcon />
         </Link>
-        <span className="text-gray-700 font-medium">저장된 숏츠</span>
+        <span className="text-gray-700 font-medium">저장된 쇼츠</span>
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-6">
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-bold text-gray-900">저장된 숏츠 영상</h1>
+          <h1 className="text-xl font-bold text-gray-900">저장된 쇼츠 영상</h1>
           <div className="relative" ref={exportMenuRef}>
             <button
               type="button"
@@ -373,7 +408,7 @@ export function SavedShortsPage() {
                   </button>
                 </Link>
                 <div className="mt-2 flex items-center justify-between">
-                  <p className="truncate text-sm text-gray-900">{short.title ?? `숏츠 ${short.scene_ids.length}장면`}</p>
+                  <p className="truncate text-sm text-gray-900">{short.title ?? `쇼츠 ${short.scene_ids.length}장면`}</p>
                   <button
                     type="button"
                     onClick={() => handleDelete(short.id)}
@@ -388,8 +423,8 @@ export function SavedShortsPage() {
         ) : (
           <div className="mt-12 flex flex-col items-center justify-center py-16 text-gray-400">
             <VideoFileIcon />
-            <p className="mt-3 text-sm">저장된 숏츠 영상이 없습니다.</p>
-            <p className="mt-1 text-xs text-gray-400">영상 장면 분석에서 숏츠를 제작하고 저장해 보세요.</p>
+            <p className="mt-3 text-sm">저장된 쇼츠 영상이 없습니다.</p>
+            <p className="mt-1 text-xs text-gray-400">영상 장면 분석에서 쇼츠를 제작하고 저장해 보세요.</p>
           </div>
         )}
 
@@ -419,6 +454,14 @@ export function SavedShortsPage() {
             <p className="text-sm font-medium text-red-800">내보내기 실패</p>
             <p className="mt-1 text-xs text-red-600">{exportError}</p>
             <button type="button" onClick={() => setExportError(null)} className="mt-2 text-xs text-red-700 underline">닫기</button>
+          </div>
+        )}
+
+        {exportNotice && (
+          <div className="fixed bottom-6 right-6 z-50 max-w-sm rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-lg">
+            <p className="text-sm font-medium text-amber-800">일부 클립만 내보냄</p>
+            <p className="mt-1 text-xs text-amber-700">{exportNotice}</p>
+            <button type="button" onClick={() => setExportNotice(null)} className="mt-2 text-xs text-amber-700 underline">닫기</button>
           </div>
         )}
 
