@@ -461,6 +461,15 @@ class TestPropertyBasedQuality:
 class TestRRFTuning:
     """Tests for experimenting with RRF parameter tuning."""
 
+    def test_rrf_k_20_has_stronger_separation_than_60(self):
+        from app.modules.search.fusion import rrf_score
+
+        spread_20 = rrf_score(1, 20) - rrf_score(10, 20)
+        spread_60 = rrf_score(1, 60) - rrf_score(10, 60)
+
+        assert spread_20 > spread_60
+
+
     @pytest.mark.parametrize("k", [30, 60, 100])
     def test_rrf_k_impact(self, k):
         """

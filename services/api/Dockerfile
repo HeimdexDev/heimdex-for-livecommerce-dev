@@ -16,7 +16,7 @@ RUN sed -i '/"heimdex-media-contracts"/d' pyproject.toml && \
 COPY . .
 
 ARG PRELOAD_EMBEDDING_MODEL=false
-ENV HF_HOME=/app/.cache/huggingface
+ENV HF_HOME=/home/appuser/.cache/huggingface
 
 RUN if [ "$PRELOAD_EMBEDDING_MODEL" = "true" ]; then \
     python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"; \
