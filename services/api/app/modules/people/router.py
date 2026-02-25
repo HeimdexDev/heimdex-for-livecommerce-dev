@@ -1,7 +1,7 @@
+from pathlib import Path as FilePath
 from typing import cast
 from uuid import UUID
-
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -140,6 +140,88 @@ async def rename_person(
         person_cluster_id=updated.person_cluster_id,
         label=updated.label,
     )
+
+
+@router.delete("/{person_cluster_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_person(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
+    exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Permanently delete a face profile and remove from all scene data."""
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    org_id_str = str(org_ctx.org_id)
+    logger.info(
+        "delete_person_request",
+        user_id=str(user.id),
+        org_id=org_id_str,
+        person_cluster_id=person_cluster_id,
+    )
+
+    # 1. Delete cluster label from Postgres (also validates existence)
+    deleted_label = await people_repo.delete_by_cluster_id(
+        org_ctx.org_id, person_cluster_id
+    )
+
+    # 2. Delete all exclude preferences for this cluster (all users)
+    exclude_count = await exclude_repo.delete_by_cluster_id(
+        org_ctx.org_id, person_cluster_id
+    )
+
+    await db.commit()
+
+    # 3. Remove cluster_id from OpenSearch scene documents
+    scenes_updated = 0
+    try:
+        scenes_updated = await scene_opensearch.remove_person_cluster_id(
+            org_id_str, person_cluster_id
+        )
+    except Exception:
+        logger.exception(
+            "delete_person_opensearch_cleanup_failed",
+            org_id=org_id_str,
+            person_cluster_id=person_cluster_id,
+        )
+
+    # 4. Delete face thumbnail file
+    try:
+        thumbnail_dir = FilePath(settings.thumbnail_storage_dir)
+        face_path = thumbnail_dir / org_id_str / "faces" / f"{person_cluster_id}.jpg"
+        if face_path.exists():
+            face_path.unlink()
+    except Exception:
+        logger.exception(
+            "delete_person_thumbnail_cleanup_failed",
+            org_id=org_id_str,
+            person_cluster_id=person_cluster_id,
+        )
+
+    if not deleted_label and scenes_updated == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Person cluster not found",
+        )
+
+    logger.info(
+        "delete_person_complete",
+        org_id=org_id_str,
+        person_cluster_id=person_cluster_id,
+        label_deleted=deleted_label,
+        exclude_prefs_deleted=exclude_count,
+        scenes_updated=scenes_updated,
+    )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/{person_cluster_id}/videos", response_model=PersonVideosResponse)
