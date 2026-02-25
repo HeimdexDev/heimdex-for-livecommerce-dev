@@ -978,6 +978,54 @@ class SceneSearchClient:
 
         return result
 
+    async def remove_person_cluster_id(
+        self,
+        org_id: str,
+        person_cluster_id: str,
+    ) -> int:
+        """Remove a person_cluster_id from all scene documents in an org.
+
+        Uses update_by_query with a painless script to remove the cluster_id
+        from the people_cluster_ids array on every matching scene.
+
+        Returns the number of documents updated.
+        """
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"people_cluster_ids": person_cluster_id}},
+                    ],
+                }
+            },
+            "script": {
+                "source": (
+                    "if (ctx._source.people_cluster_ids != null) {"
+                    "  ctx._source.people_cluster_ids.removeIf("
+                    "    id -> id.equals(params.cluster_id)"
+                    "  );"
+                    "}"
+                ),
+                "lang": "painless",
+                "params": {"cluster_id": person_cluster_id},
+            },
+        }
+
+        response = await self.client.update_by_query(
+            index=self.alias_name,
+            body=body,
+            refresh=True,
+        )
+        updated = int(response.get("updated", 0))
+        logger.info(
+            "remove_person_cluster_id_complete",
+            org_id=org_id,
+            person_cluster_id=person_cluster_id,
+            scenes_updated=updated,
+        )
+        return updated
+
     async def get_video_stats(
         self,
         org_id: str,

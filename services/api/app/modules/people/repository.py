@@ -100,6 +100,15 @@ class PeopleClusterLabelRepository:
         )
         return list(result.scalars().all())
 
+    async def delete_by_cluster_id(self, org_id: UUID, cluster_id: str) -> bool:
+        """Hard-delete a cluster label row. Returns True if a row was deleted."""
+        existing = await self.get_by_cluster_id(org_id, cluster_id)
+        if existing is None:
+            return False
+        await self.session.delete(existing)
+        await self.session.flush()
+        return True
+
 
 class PeopleExcludePreferenceRepository:
     def __init__(self, session: AsyncSession):
@@ -133,3 +142,17 @@ class PeopleExcludePreferenceRepository:
             )
         await self.session.flush()
         return person_cluster_ids
+
+    async def delete_by_cluster_id(self, org_id: UUID, cluster_id: str) -> int:
+        """Delete all exclude preferences for a cluster across all users.
+
+        Returns the number of rows deleted.
+        """
+        result = await self.session.execute(
+            delete(PeopleExcludePreference).where(
+                PeopleExcludePreference.org_id == org_id,
+                PeopleExcludePreference.person_cluster_id == cluster_id,
+            )
+        )
+        await self.session.flush()
+        return result.rowcount  # type: ignore[return-value]
