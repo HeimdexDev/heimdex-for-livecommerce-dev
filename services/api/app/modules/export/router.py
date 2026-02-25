@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.base import get_db_session
 from app.modules.drive.repository import DriveFileRepository
 from app.modules.export.edl import EdlClip, generate_edl
-from app.modules.export.schemas import ExportClipRequest, ExportEdlRequest, ExportEdlResponse
+from app.modules.export.fcp_xml import FcpClip, generate_fcp_xml
+from app.modules.drive.models import DriveConnection
+from app.modules.export.schemas import ExportClipRequest, ExportEdlRequest, ExportEdlResponse, ExportPremiereRequest
 from app.modules.tenancy.context import OrgContext
 from app.modules.tenancy.middleware import get_current_org
 from app.config import get_settings
@@ -274,3 +276,99 @@ def _cleanup_task(tmp_dir: Path):
     """BackgroundTask that removes the temp directory after response is sent."""
     from starlette.background import BackgroundTask
     return BackgroundTask(shutil.rmtree, tmp_dir, ignore_errors=True)
+
+
+@router.post("/premiere")
+async def export_premiere(
+    body: ExportPremiereRequest,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    """Generate FCP 7 XML for Premiere Pro with Google Drive local paths."""
+    file_repo = DriveFileRepository(db)
+
+    # Normalize mount path: strip trailing slashes
+    mount = body.drive_mount_path.rstrip("/").rstrip("\\")
+
+    resolved_clips: list[FcpClip] = []
+    unresolved_clips: list[str] = []
+
+    for clip in body.clips:
+        if not clip.video_id.startswith("gd_"):
+            unresolved_clips.append(clip.video_id)
+            continue
+
+        drive_file = await file_repo.get_by_video_id(org_ctx.org_id, clip.video_id)
+        if drive_file is None:
+            unresolved_clips.append(clip.video_id)
+            continue
+
+        if clip.start_ms >= clip.end_ms:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"start_ms must be less than end_ms for clip {clip.video_id}",
+            )
+
+        # Resolve local Google Drive path
+        conn = await db.get(DriveConnection, drive_file.connection_id)
+        if conn is None:
+            unresolved_clips.append(clip.video_id)
+            continue
+
+        # Build local path based on connection type
+        if conn.scope_type == "drive" and conn.drive_name:
+            # Shared Drive: {mount}/Shared drives/{drive_name}/{drive_path}
+            local_path = f"{mount}/Shared drives/{conn.drive_name}/{drive_file.drive_path}"
+        elif conn.scope_type == "folder" and conn.folder_path:
+            # My Drive folder: {mount}/{folder_path}/{drive_path}
+            folder_base = conn.folder_path
+            # folder_path may start with '내 드라이브/' or 'My Drive/'
+            # The actual mount maps directly, e.g. mount/My Drive/subfolder/...
+            local_path = f"{mount}/{folder_base}/{drive_file.drive_path}"
+        else:
+            # Fallback: just use drive_path under mount
+            local_path = f"{mount}/{drive_file.drive_path}"
+
+        clip_name = clip.clip_name.strip() or drive_file.file_name
+
+        resolved_clips.append(FcpClip(
+            clip_name=clip_name,
+            file_path=local_path,
+            file_name=drive_file.file_name,
+            start_ms=clip.start_ms,
+            end_ms=clip.end_ms,
+            source_duration_ms=drive_file.proxy_duration_ms or 0,
+        ))
+
+    if not resolved_clips:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No clips could be resolved. Ensure all video_ids start with 'gd_' and exist.",
+        )
+
+    project_name = _sanitize_filename(body.project_name)
+    xml_content = generate_fcp_xml(resolved_clips, project_name, body.frame_rate)
+    filename = f"{project_name}.xml"
+
+    logger.info(
+        "premiere_exported",
+        extra={
+            "org_id": str(org_ctx.org_id),
+            "project_name": project_name,
+            "clip_count": len(resolved_clips),
+            "unresolved": len(unresolved_clips),
+            "format": "fcp_xml",
+        },
+    )
+
+    return Response(
+        content=xml_content,
+        media_type="application/xml",
+        headers={
+            "Content-Disposition": _content_disposition(filename),
+            "X-Clip-Count": str(len(resolved_clips)),
+            "X-Unresolved-Clips": ",".join(unresolved_clips)
+            if unresolved_clips
+            else "",
+        },
+    )

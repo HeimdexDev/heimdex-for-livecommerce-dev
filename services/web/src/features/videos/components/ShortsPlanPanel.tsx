@@ -135,7 +135,7 @@ export function ShortsPlanPanel({
                 disabled={selectedCount === 0 || (hasNoCloudClips && !agentAvailable) || isExporting}
                 onClick={() => setIsExportDialogOpen(true)}
               >
-                {isExporting ? "Exporting..." : (isCloudExport ? "Download EDL" : "Export to Premiere")}
+                {isExporting ? "Exporting..." : "Export to Premiere"}
               </button>
               {allSelectedLocalAndAgentOffline && <span className="text-xs text-gray-500">(Agent offline)</span>}
             </div>
@@ -144,7 +144,7 @@ export function ShortsPlanPanel({
           {exportResult && (
             <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex items-start justify-between gap-2">
               <p className="min-w-0 break-words">
-                {exportResult.output_path.endsWith(".edl") && !exportResult.output_path.includes("/")
+                {(exportResult.output_path.endsWith(".edl") || exportResult.output_path.endsWith(".xml")) && !exportResult.output_path.includes("/")
                   ? `${exportResult.output_path} 다운로드 완료`
                   : `Exported to ${exportResult.output_path}`}
               </p>

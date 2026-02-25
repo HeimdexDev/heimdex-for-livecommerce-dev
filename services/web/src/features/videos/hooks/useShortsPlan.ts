@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo } from "react";
 import { useAuth } from "@/lib/auth";
 import { generateShortsPlan } from "@/lib/api/shorts";
 import { exportToPremiere } from "@/lib/agent-export";
-import { exportEdlCloud } from "@/lib/cloud-export";
+import { exportEdlCloud, exportPremiereCloud } from "@/lib/cloud-export";
 import type {
   ExportPremiereResponse,
   ShortsCandidateResponse,
@@ -33,6 +33,7 @@ export interface UseShortsPlanReturn {
     outputDir: string;
     frameRate: number;
     agentAvailable: boolean;
+    driveMountPath?: string;
   }) => Promise<void>;
   clearExportResult: () => void;
   reset: () => void;
@@ -111,6 +112,7 @@ export function useShortsPlan(): UseShortsPlanReturn {
       outputDir: string;
       frameRate: number;
       agentAvailable: boolean;
+      driveMountPath?: string;
     }) => {
       const selectedCandidates = candidates.filter((candidate) =>
         selectedIds.has(candidate.candidate_id),
@@ -143,21 +145,40 @@ export function useShortsPlan(): UseShortsPlanReturn {
         const allLocal = localCandidates.length === selectedCandidates.length;
 
         if (allCloud) {
-          const result = await exportEdlCloud(
-            {
-              project_name: config.projectName,
-              frame_rate: config.frameRate,
-              clips: cloudClips,
-            },
-            getAccessToken,
-          );
-          setExportResult({
-            status: "ok",
-            format: "edl",
-            output_path: result.filename,
-            clip_count: result.clip_count,
-            unresolved_clips: result.unresolved_clips,
-          });
+          if (config.driveMountPath) {
+            const result = await exportPremiereCloud(
+              {
+                project_name: config.projectName,
+                frame_rate: config.frameRate,
+                drive_mount_path: config.driveMountPath,
+                clips: cloudClips,
+              },
+              getAccessToken,
+            );
+            setExportResult({
+              status: "ok",
+              format: "edl",
+              output_path: result.filename,
+              clip_count: result.clip_count,
+              unresolved_clips: result.unresolved_clips,
+            });
+          } else {
+            const result = await exportEdlCloud(
+              {
+                project_name: config.projectName,
+                frame_rate: config.frameRate,
+                clips: cloudClips,
+              },
+              getAccessToken,
+            );
+            setExportResult({
+              status: "ok",
+              format: "edl",
+              output_path: result.filename,
+              clip_count: result.clip_count,
+              unresolved_clips: result.unresolved_clips,
+            });
+          }
         } else if (allLocal) {
           const result = await exportToPremiere({
             project_name: config.projectName,
@@ -168,44 +189,88 @@ export function useShortsPlan(): UseShortsPlanReturn {
           });
           setExportResult(result);
         } else {
-          const cloudResult = await exportEdlCloud(
-            {
-              project_name: config.projectName,
-              frame_rate: config.frameRate,
-              clips: cloudClips,
-            },
-            getAccessToken,
-          );
+          // Mixed: cloud clips via FCP XML or EDL, local clips via agent
+          if (config.driveMountPath) {
+            const cloudResult = await exportPremiereCloud(
+              {
+                project_name: config.projectName,
+                frame_rate: config.frameRate,
+                drive_mount_path: config.driveMountPath,
+                clips: cloudClips,
+              },
+              getAccessToken,
+            );
 
-          if (config.agentAvailable) {
-            const localResult = await exportToPremiere({
-              project_name: config.projectName,
-              format: "edl",
-              frame_rate: config.frameRate,
-              output_dir: config.outputDir,
-              clips: localClips,
-            });
+            if (config.agentAvailable) {
+              const localResult = await exportToPremiere({
+                project_name: config.projectName,
+                format: "edl",
+                frame_rate: config.frameRate,
+                output_dir: config.outputDir,
+                clips: localClips,
+              });
 
-            setExportResult({
-              status: "ok",
-              format: "edl",
-              output_path: localResult.output_path,
-              clip_count: cloudResult.clip_count + localResult.clip_count,
-              unresolved_clips: [...cloudResult.unresolved_clips, ...localResult.unresolved_clips],
-            });
+              setExportResult({
+                status: "ok",
+                format: "edl",
+                output_path: localResult.output_path,
+                clip_count: cloudResult.clip_count + localResult.clip_count,
+                unresolved_clips: [...cloudResult.unresolved_clips, ...localResult.unresolved_clips],
+              });
+            } else {
+              const skippedLocal = localCandidates
+                .map((candidate, index) => candidate.title_suggestion || `Local Clip ${index + 1}`)
+                .join(", ");
+
+              setExportWarning(`Agent offline. Skipped local clips: ${skippedLocal}`);
+              setExportResult({
+                status: "ok",
+                format: "edl",
+                output_path: cloudResult.filename,
+                clip_count: cloudResult.clip_count,
+                unresolved_clips: cloudResult.unresolved_clips,
+              });
+            }
           } else {
-            const skippedLocal = localCandidates
-              .map((candidate, index) => candidate.title_suggestion || `Local Clip ${index + 1}`)
-              .join(", ");
+            const cloudResult = await exportEdlCloud(
+              {
+                project_name: config.projectName,
+                frame_rate: config.frameRate,
+                clips: cloudClips,
+              },
+              getAccessToken,
+            );
 
-            setExportWarning(`Agent offline. Skipped local clips: ${skippedLocal}`);
-            setExportResult({
-              status: "ok",
-              format: "edl",
-              output_path: cloudResult.filename,
-              clip_count: cloudResult.clip_count,
-              unresolved_clips: cloudResult.unresolved_clips,
-            });
+            if (config.agentAvailable) {
+              const localResult = await exportToPremiere({
+                project_name: config.projectName,
+                format: "edl",
+                frame_rate: config.frameRate,
+                output_dir: config.outputDir,
+                clips: localClips,
+              });
+
+              setExportResult({
+                status: "ok",
+                format: "edl",
+                output_path: localResult.output_path,
+                clip_count: cloudResult.clip_count + localResult.clip_count,
+                unresolved_clips: [...cloudResult.unresolved_clips, ...localResult.unresolved_clips],
+              });
+            } else {
+              const skippedLocal = localCandidates
+                .map((candidate, index) => candidate.title_suggestion || `Local Clip ${index + 1}`)
+                .join(", ");
+
+              setExportWarning(`Agent offline. Skipped local clips: ${skippedLocal}`);
+              setExportResult({
+                status: "ok",
+                format: "edl",
+                output_path: cloudResult.filename,
+                clip_count: cloudResult.clip_count,
+                unresolved_clips: cloudResult.unresolved_clips,
+              });
+            }
           }
         }
       } catch (err) {

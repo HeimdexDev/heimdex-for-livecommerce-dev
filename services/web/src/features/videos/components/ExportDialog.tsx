@@ -5,6 +5,7 @@ import { pickDirectory } from "@/lib/agent";
 
 const DEFAULT_OUTPUT_DIR = "~/Desktop/Heimdex Exports";
 const FRAME_RATE_OPTIONS = [24, 25, 29.97, 30, 60];
+const DRIVE_MOUNT_PATH_KEY = "heimdex_drive_mount_path";
 
 interface ExportDialogProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ interface ExportDialogProps {
     projectName: string;
     outputDir: string;
     frameRate: number;
+    driveMountPath?: string;
   }) => void;
   selectedCount: number;
   isExporting: boolean;
@@ -35,6 +37,10 @@ export function ExportDialog({
   const [outputDir, setOutputDir] = useState(DEFAULT_OUTPUT_DIR);
   const [frameRate, setFrameRate] = useState(29.97);
   const [isBrowsing, setIsBrowsing] = useState(false);
+  const [driveMountPath, setDriveMountPath] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return localStorage.getItem(DRIVE_MOUNT_PATH_KEY) ?? "";
+  });
 
   useEffect(() => {
     if (!isOpen) return;
@@ -59,15 +65,19 @@ export function ExportDialog({
   }
 
   const isSubmitDisabled =
-    isExporting || projectName.trim().length === 0 || (!isCloudExport && outputDir.trim().length === 0);
+    isExporting || projectName.trim().length === 0 || (!isCloudExport && outputDir.trim().length === 0) || (isCloudExport && driveMountPath.trim().length === 0);
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (isSubmitDisabled) return;
+    if (isCloudExport && driveMountPath.trim()) {
+      localStorage.setItem(DRIVE_MOUNT_PATH_KEY, driveMountPath.trim());
+    }
     onExport({
       projectName: projectName.trim(),
       outputDir: outputDir.trim(),
       frameRate,
+      driveMountPath: isCloudExport ? driveMountPath.trim() : undefined,
     });
   };
 
@@ -112,11 +122,19 @@ export function ExportDialog({
 
           {isCloudExport ? (
             <div>
-              <p className="text-sm text-gray-600 flex items-center gap-1.5">
-                <svg className="h-4 w-4 text-blue-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-                </svg>
-                EDL 파일이 브라우저를 통해 다운로드됩니다.
+              <label htmlFor="export-drive-mount" className="block text-sm font-medium text-gray-700 mb-1">
+                Google Drive 경로
+              </label>
+              <input
+                id="export-drive-mount"
+                className="input-field"
+                value={driveMountPath}
+                onChange={(event) => setDriveMountPath(event.target.value)}
+                placeholder={typeof navigator !== "undefined" && navigator.platform?.includes("Win") ? "G:\\" : "/Volumes/GoogleDrive"}
+                required
+              />
+              <p className="mt-1.5 text-xs text-gray-500">
+                Google Drive for Desktop 마운트 경로를 입력하세요. Premiere Pro에서 영상 파일을 자동으로 연결합니다.
               </p>
             </div>
           ) : (
@@ -156,7 +174,7 @@ export function ExportDialog({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">포맷</label>
-            <p className="text-sm text-gray-700">EDL (CMX 3600)</p>
+            <p className="text-sm text-gray-700">{isCloudExport ? "FCP XML (Premiere Pro)" : "EDL (CMX 3600)"}</p>
           </div>
 
           <div>

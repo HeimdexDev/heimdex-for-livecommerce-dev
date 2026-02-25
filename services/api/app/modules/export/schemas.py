@@ -27,3 +27,14 @@ class ExportEdlResponse(BaseModel):
     clip_count: int
     unresolved_clips: list[str]
     filename: str
+
+
+class ExportPremiereRequest(BaseModel):
+    project_name: str = Field(..., min_length=1, max_length=200)
+    frame_rate: float = Field(29.97, gt=0)
+    drive_mount_path: str = Field(
+        ...,
+        min_length=1,
+        description="Local Google Drive mount path, e.g. /Volumes/GoogleDrive or G:\\"
+    )
+    clips: list[ExportClipInput] = Field(..., min_length=1)

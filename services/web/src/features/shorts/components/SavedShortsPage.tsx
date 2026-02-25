@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { exportToPremiere } from "@/lib/agent-export";
-import { exportEdlCloud, downloadClipCloud } from "@/lib/cloud-export";
+import { exportEdlCloud, exportPremiereCloud, downloadClipCloud } from "@/lib/cloud-export";
 import { checkAgentHealth, getAgentClipUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { ExportDialog } from "@/features/videos/components/ExportDialog";
@@ -197,7 +197,7 @@ export function SavedShortsPage() {
   );
 
   const handlePremiereExport = useCallback(
-    async (config: { projectName: string; outputDir: string; frameRate: number }) => {
+    async (config: { projectName: string; outputDir: string; frameRate: number; driveMountPath?: string }) => {
       setShowExportDialog(false);
       setIsExporting(true);
       setExportError(null);
@@ -219,15 +219,28 @@ export function SavedShortsPage() {
         const localClips = clips.filter((clip) => !clip.video_id.startsWith("gd_"));
 
         if (allCloud) {
-          const result = await exportEdlCloud(
-            {
-              project_name: config.projectName,
-              frame_rate: config.frameRate,
-              clips: cloudClips,
-            },
-            getAccessToken,
-          );
-          setExportResult({ output_path: result.filename, clip_count: result.clip_count });
+          if (config.driveMountPath) {
+            const result = await exportPremiereCloud(
+              {
+                project_name: config.projectName,
+                frame_rate: config.frameRate,
+                drive_mount_path: config.driveMountPath,
+                clips: cloudClips,
+              },
+              getAccessToken,
+            );
+            setExportResult({ output_path: result.filename, clip_count: result.clip_count });
+          } else {
+            const result = await exportEdlCloud(
+              {
+                project_name: config.projectName,
+                frame_rate: config.frameRate,
+                clips: cloudClips,
+              },
+              getAccessToken,
+            );
+            setExportResult({ output_path: result.filename, clip_count: result.clip_count });
+          }
         } else if (allLocal) {
           const result = await exportToPremiere({
             project_name: config.projectName,
@@ -238,33 +251,65 @@ export function SavedShortsPage() {
           });
           setExportResult({ output_path: result.output_path, clip_count: result.clip_count });
         } else {
-          const cloudResult = await exportEdlCloud(
-            {
-              project_name: config.projectName,
-              frame_rate: config.frameRate,
-              clips: cloudClips,
-            },
-            getAccessToken,
-          );
+          if (config.driveMountPath) {
+            const cloudResult = await exportPremiereCloud(
+              {
+                project_name: config.projectName,
+                frame_rate: config.frameRate,
+                drive_mount_path: config.driveMountPath,
+                clips: cloudClips,
+              },
+              getAccessToken,
+            );
 
-          if (agentAvailable) {
-            const localResult = await exportToPremiere({
-              project_name: config.projectName,
-              format: "edl",
-              frame_rate: config.frameRate,
-              output_dir: config.outputDir,
-              clips: localClips,
-            });
-            setExportResult({
-              output_path: localResult.output_path,
-              clip_count: cloudResult.clip_count + localResult.clip_count,
-            });
+            if (agentAvailable) {
+              const localResult = await exportToPremiere({
+                project_name: config.projectName,
+                format: "edl",
+                frame_rate: config.frameRate,
+                output_dir: config.outputDir,
+                clips: localClips,
+              });
+              setExportResult({
+                output_path: localResult.output_path,
+                clip_count: cloudResult.clip_count + localResult.clip_count,
+              });
+            } else {
+              const skippedLocalNames = localShorts
+                .map((short, index) => short.title ?? `Local Clip ${index + 1}`)
+                .join(", ");
+              setExportNotice(`에이전트가 오프라인 상태여서 로컬 클립을 건너뛰었습니다: ${skippedLocalNames}`);
+              setExportResult({ output_path: cloudResult.filename, clip_count: cloudResult.clip_count });
+            }
           } else {
-            const skippedLocalNames = localShorts
-              .map((short, index) => short.title ?? `Local Clip ${index + 1}`)
-              .join(", ");
-            setExportNotice(`에이전트가 오프라인 상태여서 로컬 클립을 건너뛰었습니다: ${skippedLocalNames}`);
-            setExportResult({ output_path: cloudResult.filename, clip_count: cloudResult.clip_count });
+            const cloudResult = await exportEdlCloud(
+              {
+                project_name: config.projectName,
+                frame_rate: config.frameRate,
+                clips: cloudClips,
+              },
+              getAccessToken,
+            );
+
+            if (agentAvailable) {
+              const localResult = await exportToPremiere({
+                project_name: config.projectName,
+                format: "edl",
+                frame_rate: config.frameRate,
+                output_dir: config.outputDir,
+                clips: localClips,
+              });
+              setExportResult({
+                output_path: localResult.output_path,
+                clip_count: cloudResult.clip_count + localResult.clip_count,
+              });
+            } else {
+              const skippedLocalNames = localShorts
+                .map((short, index) => short.title ?? `Local Clip ${index + 1}`)
+                .join(", ");
+              setExportNotice(`에이전트가 오프라인 상태여서 로컬 클립을 건너뛰었습니다: ${skippedLocalNames}`);
+              setExportResult({ output_path: cloudResult.filename, clip_count: cloudResult.clip_count });
+            }
           }
         }
       } catch (err) {
