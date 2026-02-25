@@ -9,6 +9,7 @@ import { getPersonVideos } from "@/lib/api/people";
 import { getCloudThumbnailUrl, getFaceThumbnailUrl } from "@/lib/agent";
 import type { PersonResponse, PersonVideoItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { DeletePersonDialog } from "./DeletePersonDialog";
 
 function PersonIcon({ className }: { className?: string }) {
   return (
@@ -68,15 +69,29 @@ function BackArrowIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+      <path
+        fillRule="evenodd"
+        d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
+        clipRule="evenodd"
+      />
+    </svg>
+  );
+}
+
 function PersonAvatar({
   person,
   isSelected,
   onToggle,
+  onDelete,
   agentAvailable,
 }: {
   person: PersonResponse;
   isSelected: boolean;
   onToggle: (id: string) => void;
+  onDelete: (id: string) => void;
   agentAvailable: boolean;
 }) {
   const [imgError, setImgError] = useState(false);
@@ -89,47 +104,60 @@ function PersonAvatar({
   const thumbnailUrl = !useFallback ? faceThumbnailUrl : sceneThumbnailUrl;
 
   return (
-    <button
-      type="button"
-      onClick={() => onToggle(person.person_cluster_id)}
-      className="flex flex-col items-center gap-1"
-    >
-      <div
-        className={cn(
-          "flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-gray-100 transition-all",
-          isSelected ? "ring-2 ring-indigo-500 ring-offset-2" : "hover:bg-gray-200",
-        )}
+    <div className="group relative flex flex-col items-center gap-1">
+      <button
+        type="button"
+        onClick={() => onToggle(person.person_cluster_id)}
+        className="flex flex-col items-center"
       >
-        {thumbnailUrl && !imgError ? (
-          <img
-            src={thumbnailUrl}
-            alt={person.label ?? "인물"}
-            className="h-full w-full object-cover"
-            onError={() => {
-              if (!useFallback && sceneThumbnailUrl) {
-                setUseFallback(true);
-              } else {
-                setImgError(true);
-              }
-            }}
-          />
-        ) : (
-          <div className="relative flex h-full w-full items-center justify-center">
-            <PersonIcon className="h-10 w-10 text-gray-400" />
-            {!agentAvailable && (
-              <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-gray-500/80 px-1.5 py-0.5 text-[8px] font-medium leading-tight text-white">
-                오프라인
-              </span>
-            )}
-          </div>
-        )}
-      </div>
+        <div
+          className={cn(
+            "flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-gray-100 transition-all",
+            isSelected ? "ring-2 ring-indigo-500 ring-offset-2" : "hover:bg-gray-200",
+          )}
+        >
+          {thumbnailUrl && !imgError ? (
+            <img
+              src={thumbnailUrl}
+              alt={person.label ?? "인물"}
+              className="h-full w-full object-cover"
+              onError={() => {
+                if (!useFallback && sceneThumbnailUrl) {
+                  setUseFallback(true);
+                } else {
+                  setImgError(true);
+                }
+              }}
+            />
+          ) : (
+            <div className="relative flex h-full w-full items-center justify-center">
+              <PersonIcon className="h-10 w-10 text-gray-400" />
+              {!agentAvailable && (
+                <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-gray-500/80 px-1.5 py-0.5 text-[8px] font-medium leading-tight text-white">
+                  오프라인
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete(person.person_cluster_id);
+        }}
+        className="absolute -right-1 -top-1 hidden rounded-full bg-white p-1 shadow-md transition-colors hover:bg-red-50 hover:text-red-500 group-hover:block"
+        title="삭제"
+      >
+        <TrashIcon />
+      </button>
       {person.label && (
         <span className="max-w-[80px] truncate text-xs text-gray-600">
           {person.label}
         </span>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -316,10 +344,13 @@ export function PeopleSettings() {
     excludedIds,
     toggleExclude,
     isSavingExcludes,
+    deletePerson,
+    isDeleting,
   } = usePeople();
   const { getAccessToken } = useAuth();
   const { isAvailable: agentAvailable } = useAgent();
   const [searchQuery, setSearchQuery] = useState("");
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const filteredPeople = useMemo(() => {
     if (!searchQuery.trim()) return people;
@@ -457,6 +488,7 @@ export function PeopleSettings() {
                       person={person}
                       isSelected={excludedIds.has(person.person_cluster_id)}
                       onToggle={toggleExclude}
+                      onDelete={setDeleteTargetId}
                       agentAvailable={agentAvailable}
                     />
                   ))}
@@ -466,6 +498,20 @@ export function PeopleSettings() {
           </div>
         </div>
       )}
+      <DeletePersonDialog
+        isOpen={deleteTargetId !== null}
+        personLabel={
+          people.find((p) => p.person_cluster_id === deleteTargetId)?.label ?? null
+        }
+        isDeleting={isDeleting}
+        onCancel={() => setDeleteTargetId(null)}
+        onConfirm={async () => {
+          if (deleteTargetId) {
+            await deletePerson(deleteTargetId);
+            setDeleteTargetId(null);
+          }
+        }}
+      />
     </div>
   );
 }

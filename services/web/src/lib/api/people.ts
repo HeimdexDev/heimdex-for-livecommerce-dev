@@ -76,6 +76,45 @@ export async function renamePerson(
   );
 }
 
+export async function deletePerson(
+  personClusterId: string,
+  getToken?: TokenGetter,
+): Promise<void> {
+  const headers: Record<string, string> = {};
+
+  if (getToken) {
+    try {
+      const token = await getToken();
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+    } catch (err) {
+      console.warn("[Heimdex] Failed to get access token:", err);
+    }
+  }
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/people/${encodeURIComponent(personClusterId)}`,
+      { method: "DELETE", headers },
+    );
+
+    if (!response.ok && response.status !== 204) {
+      const responseBody = await response.json().catch(() => null);
+      throw ApiError.fromResponse(response.status, responseBody);
+    }
+  } catch (err) {
+    if (err instanceof ApiError) {
+      throw err;
+    }
+    throw new ApiError(
+      "network",
+      0,
+      "Network error. Check your connection and try again.",
+    );
+  }
+}
+
 export async function getPersonVideos(
   personClusterId: string,
   getToken?: TokenGetter,

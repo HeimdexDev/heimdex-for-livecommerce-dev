@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import {
   getPeople,
   renamePerson as renamePersionApi,
+  deletePerson as deletePersonApi,
   getExcludePreferences,
   saveExcludePreferences,
 } from "@/lib/api/people";
@@ -21,6 +22,8 @@ export interface UsePeopleReturn {
   excludedIds: Set<string>;
   toggleExclude: (personClusterId: string) => void;
   isSavingExcludes: boolean;
+  deletePerson: (personClusterId: string) => Promise<void>;
+  isDeleting: boolean;
 }
 
 export function usePeople(): UsePeopleReturn {
@@ -32,6 +35,7 @@ export function usePeople(): UsePeopleReturn {
   const [isRenaming, setIsRenaming] = useState(false);
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
   const [isSavingExcludes, setIsSavingExcludes] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestExcludedRef = useRef<Set<string>>(new Set());
 
@@ -120,6 +124,32 @@ export function usePeople(): UsePeopleReturn {
     [getAccessToken],
   );
 
+  const remove = useCallback(
+    async (personClusterId: string) => {
+      setIsDeleting(true);
+      setError(null);
+      try {
+        await deletePersonApi(personClusterId, getAccessToken);
+        setPeople((prev) =>
+          prev.filter((p) => p.person_cluster_id !== personClusterId),
+        );
+        setExcludedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(personClusterId);
+          latestExcludedRef.current = next;
+          return next;
+        });
+      } catch (err) {
+        const msg =
+          err instanceof ApiError ? err.detail : "인물 삭제에 실패했습니다.";
+        setError(msg);
+      } finally {
+        setIsDeleting(false);
+      }
+    },
+    [getAccessToken],
+  );
+
   useEffect(() => {
     fetchPeopleList();
     return () => {
@@ -139,5 +169,7 @@ export function usePeople(): UsePeopleReturn {
     excludedIds,
     toggleExclude,
     isSavingExcludes,
+    deletePerson: remove,
+    isDeleting,
   };
 }
