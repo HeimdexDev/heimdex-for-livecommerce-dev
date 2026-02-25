@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 // Constants
 // ---------------------------------------------------------------------------
 const PAGE_SIZE = 16;
+const DATE_RANGE_KEY = "heimdex_dashboard_date_range";
 const KOREAN_DAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
 type SourceType = "gdrive" | "removable_disk" | "local";
 const ALL_SOURCES: SourceType[] = ["gdrive", "removable_disk", "local"];
@@ -687,11 +688,31 @@ export default function DashboardContent() {
   const [sortBy, setSortBy] = useState<SortOption>("latest");
   const [currentPage, setCurrentPage] = useState(1);
   const [dateStart, setDateStart] = useState<Date | null>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = sessionStorage.getItem(DATE_RANGE_KEY);
+        if (raw) {
+          const { start } = JSON.parse(raw);
+          if (start) return new Date(start);
+        }
+      } catch {}
+    }
     const d = new Date();
     d.setDate(d.getDate() - 7);
     return d;
   });
-  const [dateEnd, setDateEnd] = useState<Date | null>(() => new Date());
+  const [dateEnd, setDateEnd] = useState<Date | null>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const raw = sessionStorage.getItem(DATE_RANGE_KEY);
+        if (raw) {
+          const { end } = JSON.parse(raw);
+          if (end) return new Date(end);
+        }
+      } catch {}
+    }
+    return new Date();
+  });
   const [showCalendar, setShowCalendar] = useState(false);
 
   const [groupBy, setGroupBy] = useState<GroupBy>("scene");
@@ -853,6 +874,9 @@ export default function DashboardContent() {
     setDateEnd(end);
     setShowCalendar(false);
     setCurrentPage(1);
+    try {
+      sessionStorage.setItem(DATE_RANGE_KEY, JSON.stringify({ start: formatDateKr(start), end: formatDateKr(end) }));
+    } catch {}
   }, []);
 
   const videoCount = isSearchMode ? (searchResponse?.results.length ?? 0) : totalVideos;
