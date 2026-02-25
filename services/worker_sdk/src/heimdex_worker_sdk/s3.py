@@ -17,10 +17,21 @@ from heimdex_worker_sdk.settings import get_worker_settings
 logger = logging.getLogger(__name__)
 
 
+# Sentinel values that mean "no MinIO, use real AWS S3".
+# Needed because some container platforms (e.g. AirCloud+) cannot
+# set truly empty env vars, so the default 'localhost:9000' persists.
+_MINIO_DISABLED_SENTINELS = {"", "none", "disabled"}
+
+
+def _use_real_s3(endpoint: str) -> bool:
+    """Return True when the S3 client should use real AWS S3."""
+    return endpoint.strip().lower() in _MINIO_DISABLED_SENTINELS
+
+
 @lru_cache(maxsize=1)
 def _build_s3_client():
     settings = get_worker_settings()
-    if settings.minio_endpoint:
+    if not _use_real_s3(settings.minio_endpoint):
         # MinIO / S3-compatible mode
         boto_config = BotoConfig(
             signature_version="s3v4",
@@ -47,11 +58,12 @@ def _build_s3_client():
             region_name=settings.s3_region,
         )
 
+    use_s3 = _use_real_s3(settings.minio_endpoint)
     logger.info(
         "s3_client_initialized",
         extra={
-            "mode": "minio" if settings.minio_endpoint else "aws-s3",
-            "region": "us-east-1" if settings.minio_endpoint else settings.s3_region,
+            "mode": "aws-s3" if use_s3 else "minio",
+            "region": settings.s3_region if use_s3 else "us-east-1",
             "bucket": settings.drive_s3_bucket,
         },
     )
