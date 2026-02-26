@@ -11,10 +11,12 @@ logger = get_logger(__name__)
 
 def get_opensearch_client() -> AsyncOpenSearch:
     settings = get_settings()
+    # Detect SSL from URL scheme (AWS OpenSearch Service uses HTTPS)
+    is_https = settings.opensearch_url.startswith("https://")
     return AsyncOpenSearch(
         hosts=[settings.opensearch_url],
-        use_ssl=False,
-        verify_certs=False,
+        use_ssl=is_https,
+        verify_certs=is_https,
         ssl_show_warn=False,
         timeout=60,
         max_retries=3,
