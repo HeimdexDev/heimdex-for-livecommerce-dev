@@ -41,15 +41,13 @@ def _process_single_transcode(
     message_body = getattr(raw_message, "body", {}) if raw_message is not None else {}
     video_id = message_body.get("video_id", claimed_file.video_id)
     google_file_id = message_body.get("google_file_id")
-    drive_id = message_body.get("drive_id")
+    drive_id = message_body.get("drive_id") or "None"  # folder-scoped connections have no drive_id
     file_name = message_body.get("file_name", video_id)
     library_id = message_body.get("library_id")
     source_path = message_body.get("source_path")
 
     if not google_file_id:
         raise RuntimeError("missing_google_file_id_in_transcode_message")
-    if not drive_id:
-        raise RuntimeError("missing_drive_id_in_transcode_message")
 
     original_key = message_body.get("original_s3_key")
     if not original_key:
