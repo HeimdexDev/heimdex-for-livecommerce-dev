@@ -128,6 +128,9 @@ services:
       - SQS_CAPTION_QUEUE_URL=${SQS_CAPTION_QUEUE_URL:-}
       - SQS_STT_QUEUE_URL=${SQS_STT_QUEUE_URL:-}
       - SQS_OCR_QUEUE_URL=${SQS_OCR_QUEUE_URL:-}
+      - SQS_TRANSCODE_QUEUE_URL=${SQS_TRANSCODE_QUEUE_URL:-}
+      # GPU transcode mode (cpu=local ffmpeg, gpu=S3+SQS+NVENC)
+      - DRIVE_TRANSCODE_MODE=${DRIVE_TRANSCODE_MODE:-cpu}
       # Dev features
       - ENABLE_DEV_REFRESH=${ENABLE_DEV_REFRESH:-true}
       # Drive internal ingest key (shared with drive-worker)
@@ -247,6 +250,9 @@ services:
       - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
       - SQS_REGION=${SQS_REGION:-ap-northeast-2}
       - SQS_PROCESSING_QUEUE_URL=${SQS_PROCESSING_QUEUE_URL:-}
+      - SQS_TRANSCODE_QUEUE_URL=${SQS_TRANSCODE_QUEUE_URL:-}
+      # GPU transcode mode (cpu=local ffmpeg, gpu=S3+SQS+NVENC)
+      - DRIVE_TRANSCODE_MODE=${DRIVE_TRANSCODE_MODE:-cpu}
     volumes:
       - ./services/drive-worker:/app
       # Mount pipeline repos for scene detection + keyframe extraction (V3a)
