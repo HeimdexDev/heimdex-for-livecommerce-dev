@@ -198,7 +198,9 @@ async def update_processing_status(
             values["original_s3_key"] = request.original_s3_key
         if request.original_size_bytes is not None:
             values["original_size_bytes"] = request.original_size_bytes
-        # Keep the lease active — transcode-worker will update status next
+        # Release lease — drive-worker is done; transcode-worker uses SQS (no lease)
+        values["lease_token"] = None
+        values["lease_expires_at"] = None
     else:
         values["processing_status"] = request.status
 
