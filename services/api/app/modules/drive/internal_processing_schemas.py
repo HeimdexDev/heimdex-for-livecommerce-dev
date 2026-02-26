@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 ProcessingStatus = Literal[
     "downloading",
     "transcoding",
+    "awaiting_transcode",
     "processing",
     "indexing",
     "indexed",
@@ -54,6 +55,8 @@ class UpdateProcessingStatusRequest(BaseModel):
     scene_count: Optional[int] = Field(default=None, ge=0)
     audio_s3_key: Optional[str] = None
     keyframe_s3_prefix: Optional[str] = None
+    original_s3_key: Optional[str] = None
+    original_size_bytes: Optional[int] = None
 
 
 class UpdateProcessingStatusResponse(BaseModel):

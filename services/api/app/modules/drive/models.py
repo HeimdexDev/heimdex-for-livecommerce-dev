@@ -129,6 +129,8 @@ class DriveFile(Base, UUIDMixin, TimestampMixin):
     proxy_s3_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     proxy_duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     proxy_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    original_s3_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    original_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     thumbnail_s3_prefix: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     scene_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 

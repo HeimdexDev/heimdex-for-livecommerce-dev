@@ -5,6 +5,8 @@ Claims pending files from the API, downloads from Google Drive,
 transcodes, detects scenes, uploads artifacts to S3, and ingests
 to the search index. No direct database access.
 """
+# pyright: reportMissingImports=false
+
 import json
 import logging
 import shutil
@@ -34,8 +36,8 @@ def _build_drive_service(access_token: str):
 def process_pending_files(
     api_client: InternalAPIClient,
     settings: Any,
-    acquire_slot: Callable,
-    release_slot: Callable,
+    acquire_slot: Callable[..., bool],
+    release_slot: Callable[..., None],
 ) -> None:
     """Claim and process pending video files.
 
@@ -135,6 +137,16 @@ def _process_single_file(
             dest_path=original_path,
             budget_bytes=budget_bytes,
         )
+
+        if settings.drive_transcode_mode == "gpu":
+            _handle_gpu_mode(
+                api_client=api_client,
+                settings=settings,
+                claimed_file=claimed_file,
+                original_path=original_path,
+                temp_dir=temp_dir,
+            )
+            return
 
         # Transcode
         api_client.update_processing_status(
@@ -317,6 +329,58 @@ def _process_single_file(
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def _handle_gpu_mode(
+    api_client: InternalAPIClient,
+    settings: Any,
+    claimed_file: Any,
+    original_path: Path,
+    temp_dir: Path,
+) -> None:
+    """GPU mode: upload original to S3 and hand off to transcode-worker."""
+    from heimdex_worker_sdk import drive_keys as drive_keys_module
+    from heimdex_worker_sdk.s3 import S3Client
+
+    org_id_str = str(claimed_file.org_id)
+    _ = temp_dir
+
+    s3 = S3Client(bucket=settings.drive_s3_bucket)
+    s3.ensure_bucket()
+    original_key_builder = getattr(drive_keys_module, "original_s3_key", None)
+    if callable(original_key_builder):
+        s3_key = str(original_key_builder(org_id_str, claimed_file.drive_id, claimed_file.google_file_id))
+    else:
+        s3_key = f"{org_id_str}/drive/{claimed_file.drive_id}/{claimed_file.google_file_id}/original"
+    original_size_bytes = original_path.stat().st_size
+
+    logger.info("gpu_mode_uploading_original", extra={
+        "file_id": claimed_file.google_file_id,
+        "s3_key": s3_key,
+        "size_bytes": original_size_bytes,
+    })
+
+    s3.upload_file(
+        original_path,
+        s3_key,
+        content_type=claimed_file.mime_type or "application/octet-stream",
+    )
+
+    update_processing_status = getattr(api_client, "update_processing_status")
+    update_processing_status(
+        claimed_file.id,
+        status="awaiting_transcode",
+        lease_token=claimed_file.lease_token,
+        original_s3_key=s3_key,
+        original_size_bytes=original_size_bytes,
+    )
+
+    logger.info("gpu_mode_handoff_complete", extra={
+        "file_id": claimed_file.google_file_id,
+        "video_id": claimed_file.video_id,
+        "original_s3_key": s3_key,
+        "original_size_bytes": original_size_bytes,
+    })
+
+
 def _download_file(
     service: Any,
     google_file_id: str,
@@ -344,7 +408,7 @@ def _upload_enrichment_artifacts(
     video_id: str,
     temp_dir: Path,
     enabled: bool = False,
-) -> dict[str, object]:
+) -> dict[str, str]:
     if not enabled:
         return {}
 
@@ -352,7 +416,7 @@ def _upload_enrichment_artifacts(
         audio_s3_key, enrichment_keyframe_s3_key, enrichment_keyframe_s3_prefix,
     )
 
-    fields: dict[str, object] = {}
+    fields: dict[str, str] = {}
 
     audio_path = temp_dir / "audio.wav"
     t0 = time.monotonic()

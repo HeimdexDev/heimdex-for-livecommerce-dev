@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     drive_proxy_audio_bitrate: str = "128k"
     drive_proxy_max_bitrate: str = "2500k"
     drive_proxy_bufsize: str = "5000k"
+    drive_transcode_mode: str = "cpu"  # "cpu" (drive-worker transcodes) or "gpu" (Aircloud+ transcode-worker)
     drive_download_chunk_size: int = 10 * 1024 * 1024
     drive_download_max_retries: int = 3
     drive_s3_bucket: str = "heimdex-drive"
@@ -162,6 +163,7 @@ class Settings(BaseSettings):
     sqs_caption_queue_url: str = ""
     sqs_stt_queue_url: str = ""
     sqs_ocr_queue_url: str = ""
+    sqs_transcode_queue_url: str = ""
 
     # --- CORS ---
     cors_allow_origin_regex: str = (

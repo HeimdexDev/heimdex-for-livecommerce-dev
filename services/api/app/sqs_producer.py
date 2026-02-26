@@ -31,6 +31,7 @@ _QUEUE_URL_ATTRS = {
     "caption": "sqs_caption_queue_url",
     "stt": "sqs_stt_queue_url",
     "ocr": "sqs_ocr_queue_url",
+    "transcode": "sqs_transcode_queue_url",
 }
 
 
@@ -199,3 +200,43 @@ def publish_enrichment_jobs(
             },
             f"{file_id}:stt:{minute}",
         )
+
+
+def publish_transcode_job(
+    *,
+    file_id: UUID,
+    org_id: UUID,
+    connection_id: UUID,
+    video_id: str,
+    google_file_id: str,
+    file_name: str,
+    original_s3_key: str,
+    original_size_bytes: int,
+    library_id: UUID,
+    scope_type: str,
+    drive_id: Optional[str],
+) -> None:
+    """Publish a transcode job to the GPU transcode queue.
+
+    Called from ``update_processing_status`` when status transitions to
+    'awaiting_transcode' and drive_transcode_mode='gpu'.
+    """
+    now = datetime.now(timezone.utc)
+    body = {
+        "version": "1",
+        "type": "transcode.job_created",
+        "timestamp": now.isoformat(),
+        "file_id": str(file_id),
+        "org_id": str(org_id),
+        "connection_id": str(connection_id),
+        "video_id": video_id,
+        "google_file_id": google_file_id,
+        "file_name": file_name,
+        "original_s3_key": original_s3_key,
+        "original_size_bytes": original_size_bytes,
+        "library_id": str(library_id),
+        "scope_type": scope_type,
+        "drive_id": drive_id,
+    }
+    dedup_id = f"{file_id}:transcode:{now.strftime('%Y%m%dT%H%M')}"
+    _publish("transcode", body, dedup_id)

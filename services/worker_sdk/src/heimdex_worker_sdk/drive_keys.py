@@ -41,3 +41,8 @@ def enrichment_keyframe_s3_key(
 
 def scene_manifest_s3_key(org_id: str, video_id: str) -> str:
     return f"{org_id}/drive/manifests/{video_id}/scenes.json"
+
+
+def original_s3_key(org_id: str, drive_id: str, google_file_id: str) -> str:
+    """S3 key for the original (pre-transcode) file uploaded by drive-worker."""
+    return f"{org_id}/drive/{drive_id}/{google_file_id}/original"

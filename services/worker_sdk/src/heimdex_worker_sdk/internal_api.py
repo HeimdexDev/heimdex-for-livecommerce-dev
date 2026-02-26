@@ -67,7 +67,7 @@ class UpsertResult:
     created_count: int
     updated_count: int
     unchanged_count: int
-    enqueued_jobs: dict
+    enqueued_jobs: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -215,7 +215,7 @@ class InternalAPIClient:
         connection_id: UUID,
         *,
         lease_token: str,
-        items: list[dict],
+        items: list[dict[str, Any]],
     ) -> UpsertResult:
         """Batch upsert discovered files for a connection."""
         url = f"{self.base_url.rstrip('/')}/internal/drive/sync/connections/{connection_id}/upsert_files"
@@ -305,6 +305,8 @@ class InternalAPIClient:
         status: str,
         lease_token: Optional[str] = None,
         error: Optional[str] = None,
+        original_s3_key: Optional[str] = None,
+        original_size_bytes: Optional[int] = None,
         proxy_s3_key: Optional[str] = None,
         proxy_size_bytes: Optional[int] = None,
         proxy_duration_ms: Optional[int] = None,
@@ -320,6 +322,10 @@ class InternalAPIClient:
             payload["lease_token"] = lease_token
         if error is not None:
             payload["error"] = error
+        if original_s3_key is not None:
+            payload["original_s3_key"] = original_s3_key
+        if original_size_bytes is not None:
+            payload["original_size_bytes"] = original_size_bytes
         if proxy_s3_key is not None:
             payload["proxy_s3_key"] = proxy_s3_key
         if proxy_size_bytes is not None:

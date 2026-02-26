@@ -25,7 +25,8 @@ from app.modules.drive.internal_router import (
     _verify_internal_token,
 )
 from app.modules.drive.models import DriveConnection, DriveFile
-from app.sqs_producer import publish_enrichment_jobs
+from app.config import get_settings
+from app.sqs_producer import publish_enrichment_jobs, publish_transcode_job
 
 logger = get_logger(__name__)
 
@@ -191,6 +192,13 @@ async def update_processing_status(
             values["audio_s3_key"] = request.audio_s3_key
         if request.keyframe_s3_prefix is not None:
             values["keyframe_s3_prefix"] = request.keyframe_s3_prefix
+    elif request.status == "awaiting_transcode":
+        values["processing_status"] = "awaiting_transcode"
+        if request.original_s3_key is not None:
+            values["original_s3_key"] = request.original_s3_key
+        if request.original_size_bytes is not None:
+            values["original_size_bytes"] = request.original_size_bytes
+        # Keep the lease active — transcode-worker will update status next
     else:
         values["processing_status"] = request.status
 
@@ -220,6 +228,29 @@ async def update_processing_status(
             keyframe_s3_prefix=_eff_keyframe,
             audio_s3_key=_eff_audio,
         )
+
+    # SQS: publish transcode job when drive-worker finishes original upload.
+    # Only fires when drive_transcode_mode='gpu' and status is 'awaiting_transcode'.
+    if values.get("processing_status") == "awaiting_transcode":
+        settings = get_settings()
+        if settings.drive_transcode_mode == "gpu":
+            conn_result = await db.execute(
+                select(DriveConnection).where(DriveConnection.id == drive_file.connection_id)
+            )
+            connection = conn_result.scalar_one_or_none()
+            publish_transcode_job(
+                file_id=file_id,
+                org_id=drive_file.org_id,
+                connection_id=drive_file.connection_id,
+                video_id=drive_file.video_id,
+                google_file_id=drive_file.google_file_id,
+                file_name=drive_file.file_name,
+                original_s3_key=request.original_s3_key or "",
+                original_size_bytes=request.original_size_bytes or 0,
+                library_id=connection.library_id if connection else drive_file.org_id,
+                scope_type=connection.scope_type if connection else "full_drive",
+                drive_id=connection.drive_id if connection else None,
+            )
 
     latency_ms = int((time.monotonic() - t0) * 1000)
     logger.info(

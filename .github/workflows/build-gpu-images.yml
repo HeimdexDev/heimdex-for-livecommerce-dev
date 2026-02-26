@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       workers:
-        description: 'Workers to build (comma-separated: caption,stt,ocr or "all")'
+        description: 'Workers to build (comma-separated: caption,stt,ocr,transcode or "all")'
         required: false
         default: 'all'
   push:
@@ -14,6 +14,7 @@ on:
       - 'services/drive-caption-worker/**'
       - 'services/drive-stt-worker/**'
       - 'services/drive-ocr-worker/**'
+      - 'services/drive-transcode-worker/**'
       - 'services/worker_sdk/**'
 
 env:
@@ -29,7 +30,7 @@ jobs:
       packages: write
     strategy:
       matrix:
-        worker: [caption, stt, ocr]
+        worker: [caption, stt, ocr, transcode]
       fail-fast: false
     steps:
       - name: Check if worker should build
