@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
+    build-essential \
+    python3-dev \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
@@ -25,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
       python3.11 \
+      python3.11-dev \
       python3.11-distutils \
       python3.11-venv \
     && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
@@ -50,7 +53,9 @@ RUN pip install --no-cache-dir /tmp/heimdex-media-pipelines \
     && rm -rf /tmp/heimdex-media-pipelines
 
 # InsightFace + ONNX Runtime GPU for face detection and ArcFace embedding
-RUN pip install --no-cache-dir \
+# Cython is a build dependency for insightface
+RUN pip install --no-cache-dir "Cython>=3.0" && \
+    pip install --no-cache-dir \
       "insightface>=0.7.3" \
       "onnxruntime-gpu>=1.16.0" \
       "numpy>=1.24" \
