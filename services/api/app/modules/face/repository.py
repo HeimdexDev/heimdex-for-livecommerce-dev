@@ -22,10 +22,10 @@ class FaceRepository:
 
         query = text(
             """
-            SELECT cluster_id, 1 - (centroid_embedding <=> :embedding::vector) AS similarity
+            SELECT cluster_id, 1 - (centroid_embedding <=> CAST(:embedding AS vector)) AS similarity
             FROM face_identities
             WHERE org_id = :org_id
-            ORDER BY centroid_embedding <=> :embedding::vector
+            ORDER BY centroid_embedding <=> CAST(:embedding AS vector)
             LIMIT 1
             """
         )
