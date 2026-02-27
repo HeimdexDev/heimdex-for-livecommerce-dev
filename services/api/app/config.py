@@ -104,6 +104,7 @@ class Settings(BaseSettings):
     agent_intent_exchange_max_attempts: int = 5
 
     people_enabled: bool = True
+    face_match_threshold: float = 0.55
 
     # --- Google Drive connector ---
     drive_connector_enabled: bool = False
@@ -164,6 +165,7 @@ class Settings(BaseSettings):
     sqs_stt_queue_url: str = ""
     sqs_ocr_queue_url: str = ""
     sqs_transcode_queue_url: str = ""
+    sqs_face_queue_url: str = ""
 
     # --- CORS ---
     cors_allow_origin_regex: str = (

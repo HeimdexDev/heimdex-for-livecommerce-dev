@@ -86,6 +86,7 @@ class WorkerSettings(BaseSettings):
     sqs_stt_queue_url: str = ""
     sqs_ocr_queue_url: str = ""
     sqs_transcode_queue_url: str = ""
+    sqs_face_queue_url: str = ""
 
 
     # --- GPU acceleration (AirCloud+ remote workers) ---
@@ -93,6 +94,9 @@ class WorkerSettings(BaseSettings):
     stt_device: str = "cpu"  # "cpu", "cuda", or "auto"; faster-whisper device selection
     stt_compute_type: str = "int8"  # "int8", "float16", "float32", "auto"; GPU prefers float16
 
+    # --- Face detection ---
+    face_match_threshold: float = 0.55
+    drive_face_concurrency: int = 1
     class Config:
         env_file: str = ".env"
         env_file_encoding: str = "utf-8"
