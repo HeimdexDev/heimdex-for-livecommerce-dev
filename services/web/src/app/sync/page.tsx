@@ -13,6 +13,7 @@ import {
   disconnectOAuth,
   createFolderConnection,
   getDriveConnectionProgress,
+  deleteDriveConnection,
 } from "@/lib/api/drive";
 import { DriveSyncProgress as DriveSyncProgressComponent } from "@/components/sync/DriveSyncProgress";
 import {
@@ -31,6 +32,7 @@ import { DriveFolderList } from "@/components/sync/DriveFolderList";
 import { UploadProgress } from "@/components/sync/UploadProgress";
 import { StopConfirmDialog } from "@/components/sync/StopConfirmDialog";
 import { DriveFolderBrowser } from "@/components/sync/DriveFolderBrowser";
+import { DeleteConnectionDialog } from "@/components/sync/DeleteConnectionDialog";
 import type { DeviceListItem, DriveStatusResponse, DriveFolderInfo, DriveConnectionResponse, DriveOAuthStatus, DriveSyncProgress } from "@/lib/types";
 
 type UploadState = "hidden" | "uploading" | "paused" | "complete" | "error";
@@ -133,6 +135,8 @@ function SyncContent() {
   const [showFolderBrowser, setShowFolderBrowser] = useState(false);
   const [oauthLoading, setOauthLoading] = useState(false);
   const [syncProgress, setSyncProgress] = useState<DriveSyncProgress | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DriveConnectionResponse | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const syncProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollingRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -440,6 +444,21 @@ function SyncContent() {
     if (ok) loadSources();
   }, [loadSources]);
 
+  const handleDeleteConnection = useCallback(async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await deleteDriveConnection(deleteTarget.id, getAccessToken);
+      setDeleteTarget(null);
+      loadDriveConnections();
+      loadDriveStatus();
+    } catch (err) {
+      console.error("Failed to delete connection:", err);
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [deleteTarget, getAccessToken, loadDriveConnections, loadDriveStatus]);
+
   return (
     <div className="mx-auto max-w-5xl pt-12">
       <div className="mb-12 text-center">
@@ -541,6 +560,44 @@ function SyncContent() {
               />
             )}
 
+            {/* Connected drive connections */}
+            {driveConnections.filter((c) => c.scope_type === "drive").length > 0 && (
+              <div className="mt-4 space-y-2">
+                <h4 className="text-xs font-medium text-gray-500">공유 드라이브</h4>
+                {driveConnections
+                  .filter((c) => c.scope_type === "drive")
+                  .map((conn) => (
+                    <div
+                      key={conn.id}
+                      className="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3"
+                    >
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-500">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M5.5 16a3.5 3.5 0 01-.369-6.98 4 4 0 117.753-1.977A4.5 4.5 0 1113.5 16h-8z" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-gray-800">{conn.drive_name || "공유 드라이브"}</p>
+                      </div>
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                        conn.status === "active"
+                          ? "bg-green-50 text-green-700"
+                          : "bg-gray-100 text-gray-500"
+                      }`}>
+                        {conn.status === "active" ? "활성" : conn.status}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(conn)}
+                        className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                      >
+                        삭제
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            )}
+
             {/* Connected folder connections */}
             {driveConnections.filter((c) => c.scope_type === "folder").length > 0 && (
               <div className="mt-4 space-y-2">
@@ -570,6 +627,13 @@ function SyncContent() {
                       }`}>
                         {conn.status === "active" ? "활성" : conn.status}
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(conn)}
+                        className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                      >
+                        삭제
+                      </button>
                     </div>
                   ))}
               </div>
@@ -632,6 +696,14 @@ function SyncContent() {
         isOpen={showStopDialog}
         onCancel={handleStopCancel}
         onConfirm={handleStopConfirm}
+      />
+
+      <DeleteConnectionDialog
+        isOpen={deleteTarget !== null}
+        connectionName={deleteTarget?.drive_name || deleteTarget?.folder_name || null}
+        isDeleting={isDeleting}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConnection}
       />
     </div>
   );

@@ -333,3 +333,23 @@ export async function getDriveConnectionProgress(
     throw new ApiError("network", 0, "Network error.");
   }
 }
+
+export async function deleteDriveConnection(
+  connectionId: string,
+  getToken?: TokenGetter,
+): Promise<void> {
+  const headers = await _buildHeaders(getToken);
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/drive/connections/${connectionId}`,
+      { method: "DELETE", headers },
+    );
+    if (!response.ok && response.status !== 204) {
+      const body = await response.json().catch(() => null);
+      throw ApiError.fromResponse(response.status, body);
+    }
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError("network", 0, "Network error.");
+  }
+}

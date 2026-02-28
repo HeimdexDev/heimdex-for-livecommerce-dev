@@ -10,8 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.dependencies import get_scene_opensearch_client
 from app.db.base import get_db_session
 from app.modules.drive.repository import DriveConnectionRepository, DriveFileRepository, DriveSecretRepository
+from app.modules.search.scene_client import SceneSearchClient
 from app.modules.drive.schemas import (
     CurrentFileInfo,
     DriveConnectionCreate,
@@ -180,12 +182,30 @@ async def delete_connection(
     connection_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
-    _: Annotated[None, Depends(_require_drive_enabled)],
+    scene_client: Annotated[SceneSearchClient, Depends(get_scene_opensearch_client)],
+    _: None = Depends(_require_drive_enabled),
 ):
     conn_repo = DriveConnectionRepository(db)
-    deleted = await conn_repo.delete(connection_id, org_ctx.org_id)
-    if not deleted:
+    file_repo = DriveFileRepository(db)
+
+    conn = await conn_repo.get_by_id(connection_id, org_ctx.org_id)
+    if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+
+    video_ids = await file_repo.soft_delete_by_connection(connection_id, org_ctx.org_id)
+
+    org_id_str = str(org_ctx.org_id)
+    for vid in video_ids:
+        try:
+            await scene_client.delete_scenes_by_video_id(org_id_str, vid)
+        except Exception:
+            logger.warning(
+                "cascade_delete_scenes_failed",
+                extra={"connection_id": str(connection_id), "video_id": vid},
+            )
+
+    conn.status = "disconnected"
+    await db.flush()
 
 
 @router.get("/connections/{connection_id}/files", response_model=DriveFileListResponse)

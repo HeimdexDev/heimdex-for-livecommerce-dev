@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.dependencies import get_scene_opensearch_client
 from app.db.base import get_db_session
 from app.modules.drive.router import router as drive_router
 from app.modules.drive.repository import DriveConnectionRepository, DriveFileRepository
@@ -25,7 +26,11 @@ def _make_connection() -> MagicMock:
     return conn
 
 
-def _build_drive_app(db: AsyncMock, org_ctx: OrgContext) -> FastAPI:
+def _build_drive_app(
+    db: AsyncMock,
+    org_ctx: OrgContext,
+    scene_client: AsyncMock | None = None,
+) -> FastAPI:
     app = FastAPI()
     app.include_router(drive_router, prefix="/api")
 
@@ -35,8 +40,12 @@ def _build_drive_app(db: AsyncMock, org_ctx: OrgContext) -> FastAPI:
     async def _mock_get_current_org() -> OrgContext:
         return org_ctx
 
+    async def _mock_scene_client() -> AsyncMock:
+        return scene_client or AsyncMock()
+
     app.dependency_overrides[get_db_session] = _mock_get_db_session
     app.dependency_overrides[get_current_org] = _mock_get_current_org
+    app.dependency_overrides[get_scene_opensearch_client] = _mock_scene_client
     return app
 
 
@@ -115,6 +124,260 @@ def test_trigger_sync_drive_disabled():
     assert response.json()["detail"] == "Drive connector is not enabled"
     mock_set_sync.assert_not_awaited()
     app.dependency_overrides.clear()
+
+
+def test_delete_connection_cascade_soft_deletes_files():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug="testorg")
+    db = AsyncMock()
+    scene_client = AsyncMock()
+    scene_client.delete_scenes_by_video_id = AsyncMock(return_value=3)
+    app = _build_drive_app(db, org_ctx, scene_client=scene_client)
+
+    connection_id = uuid4()
+    conn = _make_connection()
+
+    with (
+        patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
+        patch.object(
+            DriveConnectionRepository,
+            "get_by_id",
+            AsyncMock(return_value=conn),
+        ),
+        patch.object(
+            DriveFileRepository,
+            "soft_delete_by_connection",
+            AsyncMock(return_value=["vid_1", "vid_2", "vid_3"]),
+        ) as mock_soft_delete,
+    ):
+        with TestClient(app) as client:
+            response = client.delete(
+                f"/api/drive/connections/{connection_id}",
+                headers={"host": "testorg.app.heimdex.local"},
+            )
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 204
+    mock_soft_delete.assert_awaited_once_with(connection_id, org_ctx.org_id)
+    assert scene_client.delete_scenes_by_video_id.await_count == 3
+    db.flush.assert_awaited_once()
+
+
+def test_delete_connection_cascade_removes_scenes():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug="testorg")
+    db = AsyncMock()
+    scene_client = AsyncMock()
+    scene_client.delete_scenes_by_video_id = AsyncMock(return_value=5)
+    app = _build_drive_app(db, org_ctx, scene_client=scene_client)
+
+    connection_id = uuid4()
+    conn = _make_connection()
+    video_ids = ["vid_a", "vid_b"]
+
+    with (
+        patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
+        patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
+        patch.object(
+            DriveFileRepository,
+            "soft_delete_by_connection",
+            AsyncMock(return_value=video_ids),
+        ),
+    ):
+        with TestClient(app) as client:
+            response = client.delete(
+                f"/api/drive/connections/{connection_id}",
+                headers={"host": "testorg.app.heimdex.local"},
+            )
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 204
+    expected_calls = [
+        ((str(org_ctx.org_id), "vid_a"),),
+        ((str(org_ctx.org_id), "vid_b"),),
+    ]
+    actual_calls = [call.args for call in scene_client.delete_scenes_by_video_id.await_args_list]
+    assert actual_calls == [c[0] for c in expected_calls]
+
+
+def test_delete_connection_sets_disconnected_status():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug="testorg")
+    db = AsyncMock()
+    scene_client = AsyncMock()
+    scene_client.delete_scenes_by_video_id = AsyncMock(return_value=1)
+    app = _build_drive_app(db, org_ctx, scene_client=scene_client)
+
+    connection_id = uuid4()
+    conn = _make_connection()
+    conn.status = "active"
+
+    with (
+        patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
+        patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
+        patch.object(
+            DriveFileRepository,
+            "soft_delete_by_connection",
+            AsyncMock(return_value=["vid_1"]),
+        ),
+    ):
+        with TestClient(app) as client:
+            response = client.delete(
+                f"/api/drive/connections/{connection_id}",
+                headers={"host": "testorg.app.heimdex.local"},
+            )
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 204
+    assert conn.status == "disconnected"
+    db.flush.assert_awaited_once()
+
+
+def test_delete_connection_not_found_returns_404():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug="testorg")
+    db = AsyncMock()
+    scene_client = AsyncMock()
+    app = _build_drive_app(db, org_ctx, scene_client=scene_client)
+
+    connection_id = uuid4()
+
+    with (
+        patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
+        patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=None)),
+        patch.object(DriveFileRepository, "soft_delete_by_connection", AsyncMock()) as mock_soft_delete,
+    ):
+        with TestClient(app) as client:
+            response = client.delete(
+                f"/api/drive/connections/{connection_id}",
+                headers={"host": "testorg.app.heimdex.local"},
+            )
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Connection not found"
+    mock_soft_delete.assert_not_awaited()
+
+
+def test_delete_connection_wrong_org_returns_404():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug="testorg")
+    db = AsyncMock()
+    scene_client = AsyncMock()
+    app = _build_drive_app(db, org_ctx, scene_client=scene_client)
+
+    connection_id = uuid4()
+
+    with (
+        patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
+        patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=None)),
+        patch.object(DriveFileRepository, "soft_delete_by_connection", AsyncMock()) as mock_soft_delete,
+    ):
+        with TestClient(app) as client:
+            response = client.delete(
+                f"/api/drive/connections/{connection_id}",
+                headers={"host": "testorg.app.heimdex.local"},
+            )
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Connection not found"
+    mock_soft_delete.assert_not_awaited()
+
+
+def test_delete_connection_no_files():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug="testorg")
+    db = AsyncMock()
+    scene_client = AsyncMock()
+    scene_client.delete_scenes_by_video_id = AsyncMock(return_value=0)
+    app = _build_drive_app(db, org_ctx, scene_client=scene_client)
+
+    connection_id = uuid4()
+    conn = _make_connection()
+    conn.status = "active"
+
+    with (
+        patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
+        patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
+        patch.object(
+            DriveFileRepository,
+            "soft_delete_by_connection",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        with TestClient(app) as client:
+            response = client.delete(
+                f"/api/drive/connections/{connection_id}",
+                headers={"host": "testorg.app.heimdex.local"},
+            )
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 204
+    assert conn.status == "disconnected"
+    scene_client.delete_scenes_by_video_id.assert_not_awaited()
+    db.flush.assert_awaited_once()
+
+
+def test_delete_connection_already_deleted_files_skipped():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug="testorg")
+    db = AsyncMock()
+    scene_client = AsyncMock()
+    scene_client.delete_scenes_by_video_id = AsyncMock(return_value=2)
+    app = _build_drive_app(db, org_ctx, scene_client=scene_client)
+
+    connection_id = uuid4()
+    conn = _make_connection()
+    conn.status = "active"
+
+    with (
+        patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
+        patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
+        patch.object(
+            DriveFileRepository,
+            "soft_delete_by_connection",
+            AsyncMock(return_value=["vid_live_1", "vid_live_2"]),
+        ),
+    ):
+        with TestClient(app) as client:
+            response = client.delete(
+                f"/api/drive/connections/{connection_id}",
+                headers={"host": "testorg.app.heimdex.local"},
+            )
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 204
+    assert scene_client.delete_scenes_by_video_id.await_count == 2
+    called_video_ids = [call.args[1] for call in scene_client.delete_scenes_by_video_id.await_args_list]
+    assert called_video_ids == ["vid_live_1", "vid_live_2"]
+
+
+def test_delete_connection_opensearch_failure_doesnt_block():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug="testorg")
+    db = AsyncMock()
+    scene_client = AsyncMock()
+    scene_client.delete_scenes_by_video_id = AsyncMock(side_effect=RuntimeError("opensearch down"))
+    app = _build_drive_app(db, org_ctx, scene_client=scene_client)
+
+    connection_id = uuid4()
+    conn = _make_connection()
+    conn.status = "active"
+
+    with (
+        patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
+        patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
+        patch.object(
+            DriveFileRepository,
+            "soft_delete_by_connection",
+            AsyncMock(return_value=["vid_1"]),
+        ),
+        patch("app.modules.drive.router.logger.warning") as mock_warning,
+    ):
+        with TestClient(app) as client:
+            response = client.delete(
+                f"/api/drive/connections/{connection_id}",
+                headers={"host": "testorg.app.heimdex.local"},
+            )
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 204
+    assert conn.status == "disconnected"
+    db.flush.assert_awaited_once()
+    mock_warning.assert_called_once()
 
 
 def test_list_folders_empty():

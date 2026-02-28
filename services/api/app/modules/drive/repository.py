@@ -148,6 +148,36 @@ class DriveFileRepository:
         count_result = await self.session.execute(count_q)
         return list(result.scalars().all()), count_result.scalar_one()
 
+    async def soft_delete_by_connection(
+        self, connection_id: UUID, org_id: UUID
+    ) -> list[str]:
+        result = await self.session.execute(
+            select(DriveFile).where(
+                DriveFile.connection_id == connection_id,
+                DriveFile.org_id == org_id,
+                DriveFile.is_deleted.is_(False),
+            )
+        )
+        files = result.scalars().all()
+
+        if not files:
+            return []
+
+        video_ids = list({f.video_id for f in files})
+
+        await self.session.execute(
+            update(DriveFile)
+            .where(
+                DriveFile.connection_id == connection_id,
+                DriveFile.org_id == org_id,
+                DriveFile.is_deleted.is_(False),
+            )
+            .values(is_deleted=True, deleted_at=func.now(), processing_status="deleted")
+        )
+        await self.session.flush()
+
+        return video_ids
+
     async def count_by_status(self, org_id: UUID) -> dict[str, int]:
         """Return {processing_status: count} for non-deleted files in this org."""
         result = await self.session.execute(
