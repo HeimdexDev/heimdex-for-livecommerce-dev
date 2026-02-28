@@ -42,12 +42,15 @@ from app.modules.drive.internal_sync_schemas import (
     ClaimedConnectionInfo,
     ClaimSyncConnectionRequest,
     ClaimSyncConnectionResponse,
+    ConnectionFileIdsResponse,
     DeleteFilesRequest,
     DeleteFilesResponse,
     SyncCheckpointRequest,
     SyncCheckpointResponse,
     TokenRequest,
     TokenResponse,
+    UpdateMetadataRequest,
+    UpdateMetadataResponse,
     UpsertFilesRequest,
     UpsertFilesResponse,
 )
@@ -548,6 +551,92 @@ async def upsert_files(
         updated_count=updated_count,
         unchanged_count=unchanged_count,
         enqueued_jobs=enqueued_jobs,
+        metadata_updates=metadata_updates,
+    )
+
+
+@router.get(
+    "/connections/{connection_id}/file_ids",
+    response_model=ConnectionFileIdsResponse,
+)
+async def list_connection_file_ids(
+    connection_id: UUID,
+    _token: str = Depends(_verify_internal_token),
+    db: AsyncSession = Depends(get_db_session),
+):
+    conn_result = await db.execute(
+        select(DriveConnection).where(DriveConnection.id == connection_id)
+    )
+    connection = conn_result.scalar_one_or_none()
+    if connection is None:
+        raise HTTPException(status_code=404, detail=f"Connection not found: {connection_id}")
+
+    file_ids_result = await db.execute(
+        select(DriveFile.google_file_id).where(
+            DriveFile.connection_id == connection_id,
+            DriveFile.org_id == connection.org_id,
+            DriveFile.is_deleted.is_(False),
+        )
+    )
+    google_file_ids = [row[0] for row in file_ids_result.all()]
+    return ConnectionFileIdsResponse(
+        google_file_ids=google_file_ids,
+        total_count=len(google_file_ids),
+    )
+
+
+@router.patch(
+    "/connections/{connection_id}/update_metadata",
+    response_model=UpdateMetadataResponse,
+)
+async def update_metadata(
+    connection_id: UUID,
+    request: UpdateMetadataRequest,
+    _token: str = Depends(_verify_internal_token),
+    db: AsyncSession = Depends(get_db_session),
+    scene_client: SceneSearchClient = Depends(get_scene_opensearch_client),
+):
+    conn_result = await db.execute(
+        select(DriveConnection).where(DriveConnection.id == connection_id)
+    )
+    connection = conn_result.scalar_one_or_none()
+    if connection is None:
+        raise HTTPException(status_code=404, detail=f"Connection not found: {connection_id}")
+    _enforce_connection_lease(connection, request.lease_token)
+
+    if not request.updates:
+        return UpdateMetadataResponse(updated_scene_count=0, skipped_count=0)
+
+    merged_updates: dict[str, dict[str, str]] = {}
+    for update_item in request.updates:
+        merged = merged_updates.setdefault(update_item.video_id, {})
+        if update_item.video_title is not None:
+            merged["video_title"] = update_item.video_title
+        if update_item.source_path is not None:
+            merged["source_path"] = update_item.source_path
+
+    partial_updates: list[tuple[str, dict[str, str]]] = []
+    skipped_count = 0
+    org_id_str = str(connection.org_id)
+    for video_id, fields in merged_updates.items():
+        if not fields:
+            skipped_count += 1
+            continue
+
+        scene_ids = await scene_client.find_scene_ids_by_video_id(org_id_str, video_id)
+        if not scene_ids:
+            skipped_count += 1
+            continue
+
+        for scene_id in scene_ids:
+            partial_updates.append((scene_id, fields))
+
+    if partial_updates:
+        await scene_client.bulk_partial_update_scenes(partial_updates)
+
+    return UpdateMetadataResponse(
+        updated_scene_count=len(partial_updates),
+        skipped_count=skipped_count,
     )
 
 

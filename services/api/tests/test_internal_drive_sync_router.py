@@ -26,12 +26,16 @@ from app.modules.drive.internal_sync_router import (
     checkpoint_connection,
     delete_files,
     get_connection_token,
+    list_connection_file_ids,
+    update_metadata,
     upsert_files,
 )
 from app.modules.drive.internal_sync_schemas import (
     ClaimSyncConnectionRequest,
     DeleteFilesRequest,
     DriveDiscoveredFile,
+    MetadataUpdateItem,
+    UpdateMetadataRequest,
     SyncCheckpointRequest,
     TokenRequest,
     UpsertFilesRequest,
@@ -756,6 +760,27 @@ class TestUpsertFiles:
         assert existing_file.file_name == "new_name.mp4"
 
     @pytest.mark.asyncio
+    async def test_upsert_returns_metadata_updates(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_for_upsert(conn, existing_google_ids={"gf_rename_meta"})
+
+        request = UpsertFilesRequest(
+            lease_token=token,
+            items=[_make_discovered_file(provider_file_id="gf_rename_meta", name="updated_name.mp4")],
+        )
+
+        result = await upsert_files(connection_id=conn.id, request=request, _token="valid", db=db)
+
+        assert result.updated_count == 1
+        assert result.metadata_updates == [
+            {"video_id": "vid_gf_rename_meta", "video_title": "updated_name.mp4"}
+        ]
+
+    @pytest.mark.asyncio
     async def test_upsert_detects_move(self):
         token = str(uuid4())
         conn = _make_connection(
@@ -775,6 +800,29 @@ class TestUpsertFiles:
 
         assert result.updated_count == 1
         assert existing_file.drive_path == "new/path.mp4"
+
+    @pytest.mark.asyncio
+    async def test_upsert_returns_metadata_updates_on_move(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_for_upsert(conn, existing_google_ids={"gf_move_meta"})
+        existing_file = db._existing_files_map["gf_move_meta"]
+        existing_file.drive_path = "before/path.mp4"
+
+        request = UpsertFilesRequest(
+            lease_token=token,
+            items=[_make_discovered_file(provider_file_id="gf_move_meta", drive_path="after/path.mp4")],
+        )
+
+        result = await upsert_files(connection_id=conn.id, request=request, _token="valid", db=db)
+
+        assert result.updated_count == 1
+        assert result.metadata_updates == [
+            {"video_id": "vid_gf_move_meta", "source_path": "after/path.mp4"}
+        ]
 
     @pytest.mark.asyncio
     async def test_upsert_unchanged(self):
@@ -881,6 +929,258 @@ class TestDeleteFiles:
         assert result.not_found_count == 2
         db.flush.assert_not_awaited()
         scene_client.delete_scenes_by_video_id.assert_not_awaited()
+
+
+class TestUpdateMetadata:
+    @pytest.mark.asyncio
+    async def test_update_metadata_rename(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        db.execute = AsyncMock(return_value=conn_result)
+
+        scene_client = MagicMock()
+        scene_client.find_scene_ids_by_video_id = AsyncMock(return_value=["scene_1", "scene_2"])
+        scene_client.bulk_partial_update_scenes = AsyncMock()
+
+        request = UpdateMetadataRequest(
+            lease_token=token,
+            updates=[MetadataUpdateItem(video_id="vid_1", video_title="renamed.mp4")],
+        )
+        result = await update_metadata(
+            connection_id=conn.id,
+            request=request,
+            _token="valid",
+            db=db,
+            scene_client=scene_client,
+        )
+
+        assert result.updated_scene_count == 2
+        assert result.skipped_count == 0
+        scene_client.bulk_partial_update_scenes.assert_awaited_once_with(
+            [("scene_1", {"video_title": "renamed.mp4"}), ("scene_2", {"video_title": "renamed.mp4"})]
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_move(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        db.execute = AsyncMock(return_value=conn_result)
+
+        scene_client = MagicMock()
+        scene_client.find_scene_ids_by_video_id = AsyncMock(return_value=["scene_1"])
+        scene_client.bulk_partial_update_scenes = AsyncMock()
+
+        request = UpdateMetadataRequest(
+            lease_token=token,
+            updates=[MetadataUpdateItem(video_id="vid_1", source_path="folder/new.mp4")],
+        )
+        result = await update_metadata(
+            connection_id=conn.id,
+            request=request,
+            _token="valid",
+            db=db,
+            scene_client=scene_client,
+        )
+
+        assert result.updated_scene_count == 1
+        assert result.skipped_count == 0
+        scene_client.bulk_partial_update_scenes.assert_awaited_once_with(
+            [("scene_1", {"source_path": "folder/new.mp4"})]
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_both(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        db.execute = AsyncMock(return_value=conn_result)
+
+        scene_client = MagicMock()
+        scene_client.find_scene_ids_by_video_id = AsyncMock(return_value=["scene_1"])
+        scene_client.bulk_partial_update_scenes = AsyncMock()
+
+        request = UpdateMetadataRequest(
+            lease_token=token,
+            updates=[MetadataUpdateItem(video_id="vid_1", video_title="renamed.mp4", source_path="folder/new.mp4")],
+        )
+        result = await update_metadata(
+            connection_id=conn.id,
+            request=request,
+            _token="valid",
+            db=db,
+            scene_client=scene_client,
+        )
+
+        assert result.updated_scene_count == 1
+        assert result.skipped_count == 0
+        scene_client.bulk_partial_update_scenes.assert_awaited_once_with(
+            [("scene_1", {"video_title": "renamed.mp4", "source_path": "folder/new.mp4"})]
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_empty_list(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        db.execute = AsyncMock(return_value=conn_result)
+
+        scene_client = MagicMock()
+        scene_client.find_scene_ids_by_video_id = AsyncMock()
+        scene_client.bulk_partial_update_scenes = AsyncMock()
+
+        result = await update_metadata(
+            connection_id=conn.id,
+            request=UpdateMetadataRequest(lease_token=token, updates=[]),
+            _token="valid",
+            db=db,
+            scene_client=scene_client,
+        )
+
+        assert result.updated_scene_count == 0
+        assert result.skipped_count == 0
+        scene_client.find_scene_ids_by_video_id.assert_not_awaited()
+        scene_client.bulk_partial_update_scenes.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_invalid_lease(self):
+        conn = _make_connection(
+            lease_token=str(uuid4()),
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        db.execute = AsyncMock(return_value=conn_result)
+
+        scene_client = MagicMock()
+        scene_client.find_scene_ids_by_video_id = AsyncMock()
+        scene_client.bulk_partial_update_scenes = AsyncMock()
+
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc_info:
+            await update_metadata(
+                connection_id=conn.id,
+                request=UpdateMetadataRequest(
+                    lease_token=str(uuid4()),
+                    updates=[MetadataUpdateItem(video_id="vid_1", video_title="new")],
+                ),
+                _token="valid",
+                db=db,
+                scene_client=scene_client,
+            )
+        assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_update_metadata_no_scenes(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        db.execute = AsyncMock(return_value=conn_result)
+
+        scene_client = MagicMock()
+        scene_client.find_scene_ids_by_video_id = AsyncMock(return_value=[])
+        scene_client.bulk_partial_update_scenes = AsyncMock()
+
+        result = await update_metadata(
+            connection_id=conn.id,
+            request=UpdateMetadataRequest(
+                lease_token=token,
+                updates=[MetadataUpdateItem(video_id="vid_missing", video_title="new")],
+            ),
+            _token="valid",
+            db=db,
+            scene_client=scene_client,
+        )
+
+        assert result.updated_scene_count == 0
+        assert result.skipped_count == 1
+        scene_client.bulk_partial_update_scenes.assert_not_awaited()
+
+
+class TestListConnectionFileIds:
+    @pytest.mark.asyncio
+    async def test_list_connection_file_ids(self):
+        conn = _make_connection()
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        file_ids_result = MagicMock()
+        file_ids_result.all.return_value = [("gf_1",), ("gf_2",)]
+        db.execute = AsyncMock(side_effect=[conn_result, file_ids_result])
+
+        result = await list_connection_file_ids(
+            connection_id=conn.id,
+            _token="valid",
+            db=db,
+        )
+
+        assert result.google_file_ids == ["gf_1", "gf_2"]
+        assert result.total_count == 2
+
+    @pytest.mark.asyncio
+    async def test_list_connection_file_ids_excludes_deleted(self):
+        conn = _make_connection()
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        file_ids_result = MagicMock()
+        file_ids_result.all.return_value = [("gf_active",)]
+        db.execute = AsyncMock(side_effect=[conn_result, file_ids_result])
+
+        result = await list_connection_file_ids(
+            connection_id=conn.id,
+            _token="valid",
+            db=db,
+        )
+
+        assert result.google_file_ids == ["gf_active"]
+        assert result.total_count == 1
+
+    @pytest.mark.asyncio
+    async def test_list_connection_file_ids_empty(self):
+        conn = _make_connection()
+        db = AsyncMock()
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        file_ids_result = MagicMock()
+        file_ids_result.all.return_value = []
+        db.execute = AsyncMock(side_effect=[conn_result, file_ids_result])
+
+        result = await list_connection_file_ids(
+            connection_id=conn.id,
+            _token="valid",
+            db=db,
+        )
+
+        assert result.google_file_ids == []
+        assert result.total_count == 0
 
 
 class TestTokenEndpoint:

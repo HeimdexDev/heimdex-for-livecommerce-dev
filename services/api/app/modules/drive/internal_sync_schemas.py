@@ -113,7 +113,8 @@ class UpsertFilesResponse(BaseModel):
     created_count: int
     updated_count: int
     unchanged_count: int
-    enqueued_jobs: dict[str, int]
+    enqueued_jobs: dict[str, int] = Field(default_factory=dict)
+    metadata_updates: list[dict[str, str]] = Field(default_factory=list)
 
 
 class DeleteFilesRequest(BaseModel):
@@ -128,3 +129,24 @@ class DeleteFilesResponse(BaseModel):
 
     deleted_count: int
     not_found_count: int
+
+
+class MetadataUpdateItem(BaseModel):
+    video_id: str
+    video_title: Optional[str] = None
+    source_path: Optional[str] = None
+
+
+class UpdateMetadataRequest(BaseModel):
+    lease_token: str
+    updates: list[MetadataUpdateItem]
+
+
+class UpdateMetadataResponse(BaseModel):
+    updated_scene_count: int
+    skipped_count: int
+
+
+class ConnectionFileIdsResponse(BaseModel):
+    google_file_ids: list[str] = Field(default_factory=list)
+    total_count: int
