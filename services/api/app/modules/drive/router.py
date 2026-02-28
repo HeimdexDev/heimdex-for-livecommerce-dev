@@ -1,6 +1,7 @@
 import logging
 import os
-from typing import Annotated
+import json
+from typing import Annotated, Any
 from uuid import UUID
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -48,6 +49,14 @@ def _require_drive_enabled() -> None:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Drive connector is not enabled",
         )
+
+
+def _decrypt_oauth_token_data(secret: Any, encryption_key_hex: str) -> dict[str, str]:
+    key = bytes.fromhex(encryption_key_hex)
+    aesgcm = AESGCM(key)
+    decrypted = aesgcm.decrypt(secret.nonce, secret.encrypted_value, None)
+    token_data = json.loads(decrypted)
+    return token_data
 
 
 PROCESSING_STATUSES = frozenset({"downloading", "transcoding", "processing"})
@@ -362,6 +371,25 @@ async def create_folder_connection(
             detail="Google Drive is not connected. Please connect via OAuth first.",
         )
 
+    drive_id = None
+    try:
+        token_data = _decrypt_oauth_token_data(secret, settings.drive_sa_encryption_key)
+        from app.modules.drive.google_client import DriveClient
+
+        drive_client = DriveClient.from_oauth_token(
+            refresh_token=token_data["refresh_token"],
+            client_id=token_data["client_id"],
+            client_secret=token_data["client_secret"],
+        )
+        file_meta = drive_client._service.files().get(
+            fileId=body.folder_id,
+            fields="driveId",
+            supportsAllDrives=True,
+        ).execute()
+        drive_id = file_meta.get("driveId")
+    except Exception:
+        logger.warning("folder_drive_id_detection_failed", extra={"folder_id": body.folder_id})
+
     # Auto-select library if not provided
     library_id = body.library_id
     if library_id is None:
@@ -385,7 +413,7 @@ async def create_folder_connection(
         org_id=org_ctx.org_id,
         library_id=library_id,
         scope_type="folder",
-        drive_id=None,
+        drive_id=drive_id,
         drive_name=None,
         folder_id=body.folder_id,
         folder_name=body.folder_name,
@@ -419,12 +447,7 @@ async def browse_folders(
             detail="Google Drive is not connected. Please connect via OAuth first.",
         )
 
-    key = bytes.fromhex(settings.drive_sa_encryption_key)
-    aesgcm = AESGCM(key)
-    decrypted = aesgcm.decrypt(secret.nonce, secret.encrypted_value, None)
-
-    import json
-    token_data = json.loads(decrypted)
+    token_data = _decrypt_oauth_token_data(secret, settings.drive_sa_encryption_key)
 
     from app.modules.drive.google_client import DriveClient
     drive_client = DriveClient.from_oauth_token(

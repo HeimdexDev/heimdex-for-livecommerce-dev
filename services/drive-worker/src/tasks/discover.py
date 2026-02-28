@@ -12,6 +12,7 @@ from typing import Any
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build as build_google_service
+from googleapiclient.errors import HttpError
 
 from heimdex_worker_sdk.internal_api import InternalAPIClient
 
@@ -292,7 +293,56 @@ def _discover_folder_connection(
     conn: Any,
     settings: Any,
 ) -> int:
-    """Discover video files from a folder-scoped OAuth connection (recursive)."""
+    now = datetime.now(timezone.utc)
+    seven_days_ago = now - timedelta(days=7)
+
+    last_full = None
+    if conn.last_full_sync_at:
+        try:
+            last_full = datetime.fromisoformat(conn.last_full_sync_at)
+        except (ValueError, TypeError):
+            last_full = None
+
+    use_incremental = (
+        conn.change_token is not None
+        and last_full is not None
+        and last_full > seven_days_ago
+    )
+
+    if use_incremental:
+        try:
+            return _incremental_sync_folder(api_client, service, conn)
+        except HttpError as e:
+            if getattr(e.resp, "status", None) == 410:
+                logger.warning(
+                    "folder_change_token_expired",
+                    extra={
+                        "org_id": str(conn.org_id),
+                        "connection_id": str(conn.connection_id),
+                        "folder_id": conn.folder_id,
+                    },
+                )
+            else:
+                raise
+
+    count = _full_scan_folder(api_client, service, conn)
+
+    token_kwargs: dict[str, Any] = {"supportsAllDrives": True}
+    if conn.drive_id:
+        token_kwargs["driveId"] = conn.drive_id
+    start_token = service.changes().getStartPageToken(**token_kwargs).execute()["startPageToken"]
+
+    api_client.checkpoint(
+        conn.connection_id,
+        lease_token=conn.lease_token,
+        change_token=start_token,
+        last_full_sync_at=now.isoformat(),
+        release=False,
+    )
+    return count
+
+
+def _full_scan_folder(api_client: InternalAPIClient, service: Any, conn: Any) -> int:
     folder_id = conn.folder_id
     if not folder_id:
         logger.warning(
@@ -334,6 +384,8 @@ def _discover_folder_connection(
                 "q": f"'{current_folder_id}' in parents and mimeType contains 'video/' and trashed = false",
                 "fields": "nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,parents,webViewLink)",
                 "pageSize": 100,
+                "supportsAllDrives": True,
+                "includeItemsFromAllDrives": True,
             }
             if page_token:
                 kwargs["pageToken"] = page_token
@@ -364,6 +416,108 @@ def _discover_folder_connection(
 
     reconcile_count = _reconcile_deleted_files(api_client, conn, scanned_google_file_ids)
     return upsert_count + reconcile_count
+
+
+def _incremental_sync_folder(api_client: InternalAPIClient, service: Any, conn: Any) -> int:
+    monitored_ids: set[str] = {conn.folder_id}
+    try:
+        subfolder_ids = _list_subfolders(service, conn.folder_id)
+        monitored_ids.update(subfolder_ids)
+    except Exception:
+        logger.warning("incremental_subfolder_listing_failed", exc_info=True)
+
+    folder_path_prefix = conn.folder_path or conn.folder_name or ""
+    page_token = conn.change_token
+    items_to_upsert: list[dict[str, Any]] = []
+    file_ids_to_delete: list[str] = []
+
+    while True:
+        kwargs: dict[str, Any] = {
+            "pageToken": page_token,
+            "fields": "nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,size,md5Checksum,modifiedTime,trashed,parents,webViewLink))",
+            "supportsAllDrives": True,
+            "includeItemsFromAllDrives": True,
+        }
+        if conn.drive_id:
+            kwargs["driveId"] = conn.drive_id
+        else:
+            kwargs["restrictToMyDrive"] = True
+
+        response = service.changes().list(**kwargs).execute()
+
+        for change in response.get("changes", []):
+            file_id = change.get("fileId")
+            is_removed = change.get("removed", False)
+            file_data = change.get("file", {})
+            is_trashed = file_data.get("trashed", False)
+            parents = file_data.get("parents", [])
+
+            if (
+                file_data.get("mimeType") == "application/vnd.google-apps.folder"
+                and not is_removed
+                and not is_trashed
+                and parents
+                and parents[0] in monitored_ids
+            ):
+                new_folder_id = file_data.get("id")
+                if new_folder_id:
+                    monitored_ids.add(new_folder_id)
+
+            if not is_removed and (not parents or parents[0] not in monitored_ids):
+                continue
+
+            if is_removed or is_trashed:
+                if file_id:
+                    file_ids_to_delete.append(file_id)
+                continue
+
+            mime_type = file_data.get("mimeType", "")
+            if not mime_type.startswith("video/"):
+                continue
+
+            file_name = file_data.get("name", "")
+            drive_path = f"{folder_path_prefix}/{file_name}" if folder_path_prefix else file_name
+            items_to_upsert.append(_file_to_upsert_item(file_data, drive_path))
+
+        if "newStartPageToken" in response:
+            new_token = response["newStartPageToken"]
+            break
+        page_token = response["nextPageToken"]
+
+    upsert_count = 0
+    if items_to_upsert:
+        upsert_count, metadata_updates = _batch_upsert(api_client, conn, items_to_upsert)
+        if metadata_updates:
+            api_client.update_metadata(
+                conn.connection_id,
+                lease_token=conn.lease_token,
+                updates=metadata_updates,
+            )
+
+    delete_count = 0
+    if file_ids_to_delete:
+        delete_count = _batch_delete(api_client, conn, file_ids_to_delete)
+
+    api_client.checkpoint(
+        conn.connection_id,
+        lease_token=conn.lease_token,
+        change_token=new_token,
+        release=False,
+    )
+
+    logger.info(
+        "incremental_sync_folder_complete",
+        extra={
+            "org_id": str(conn.org_id),
+            "connection_id": str(conn.connection_id),
+            "folder_id": conn.folder_id,
+            "upserted": upsert_count,
+            "deleted": delete_count,
+            "monitored_folders": len(monitored_ids),
+        },
+    )
+
+    return upsert_count + delete_count
 
 
 def _file_to_upsert_item(file: dict[str, Any], drive_path: str | None = None) -> dict[str, Any]:
@@ -518,6 +672,8 @@ def _list_subfolders(service: Any, parent_id: str) -> list[str]:
                 "q": f"'{current}' in parents and mimeType='application/vnd.google-apps.folder' and trashed = false",
                 "fields": "nextPageToken,files(id)",
                 "pageSize": 1000,
+                "supportsAllDrives": True,
+                "includeItemsFromAllDrives": True,
             }
             if page_token:
                 kwargs["pageToken"] = page_token

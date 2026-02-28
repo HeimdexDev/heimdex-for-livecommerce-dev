@@ -5,6 +5,8 @@ import sys
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+from googleapiclient.errors import HttpError
+
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "services" / "worker_sdk" / "src"))
@@ -21,8 +23,20 @@ def _make_conn(*, change_token: str | None, last_full_sync_at: str | None) -> Ma
     conn.connection_id = uuid4()
     conn.lease_token = str(uuid4())
     conn.drive_id = "shared-drive-1"
+    conn.folder_id = None
+    conn.folder_name = None
+    conn.folder_path = None
     conn.change_token = change_token
     conn.last_full_sync_at = last_full_sync_at
+    return conn
+
+
+def _make_folder_conn(*, change_token: str | None, last_full_sync_at: str | None, drive_id: str | None) -> MagicMock:
+    conn = _make_conn(change_token=change_token, last_full_sync_at=last_full_sync_at)
+    conn.drive_id = drive_id
+    conn.folder_id = "folder-root"
+    conn.folder_name = "Folder Root"
+    conn.folder_path = "Folder Root"
     return conn
 
 
@@ -181,3 +195,181 @@ def test_full_scan_with_reconciliation(monkeypatch):
     assert captured_updates["connection_id"] == conn.connection_id
     assert captured_updates["lease_token"] == conn.lease_token
     assert captured_updates["updates"] == [{"video_id": "vid_1", "video_title": "renamed.mp4"}]
+
+
+def test_folder_incremental_sync_routes_correctly(monkeypatch):
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(
+        change_token="token-1",
+        last_full_sync_at=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        drive_id=None,
+    )
+
+    monkeypatch.setattr(discover, "_incremental_sync_folder", lambda *_: 7)
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_: (_ for _ in ()).throw(RuntimeError("should not full scan")))
+
+    result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
+    assert result == 7
+
+
+def test_folder_full_scan_when_no_change_token(monkeypatch):
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(change_token=None, last_full_sync_at=None, drive_id=None)
+
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_: 3)
+    service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
+        "startPageToken": "start-token"
+    }
+
+    result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
+    assert result == 3
+    service.changes.return_value.getStartPageToken.assert_called_once_with(supportsAllDrives=True)
+    assert api_client.checkpoint.call_count == 1
+
+
+def test_folder_full_scan_when_stale(monkeypatch):
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(
+        change_token="stale-token",
+        last_full_sync_at=(datetime.now(timezone.utc) - timedelta(days=8)).isoformat(),
+        drive_id="shared-drive-1",
+    )
+
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_: 2)
+    monkeypatch.setattr(discover, "_incremental_sync_folder", lambda *_: (_ for _ in ()).throw(RuntimeError("should not incremental")))
+    service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
+        "startPageToken": "fresh-token"
+    }
+
+    result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
+    assert result == 2
+    service.changes.return_value.getStartPageToken.assert_called_once_with(
+        supportsAllDrives=True,
+        driveId="shared-drive-1",
+    )
+
+
+def test_folder_incremental_filters_by_ancestry(monkeypatch):
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(change_token="token-1", last_full_sync_at=None, drive_id=None)
+
+    monkeypatch.setattr(discover, "_list_subfolders", lambda *_: ["folder-child"])
+
+    captured_items: list[dict[str, str]] = []
+
+    def _fake_batch_upsert(_api_client, _conn, items):
+        captured_items.extend(items)
+        return len(items), []
+
+    monkeypatch.setattr(discover, "_batch_upsert", _fake_batch_upsert)
+    monkeypatch.setattr(discover, "_batch_delete", lambda *_: 0)
+
+    service.changes.return_value.list.return_value.execute.return_value = {
+        "changes": [
+            {
+                "fileId": "outside-video",
+                "removed": False,
+                "file": {
+                    "id": "outside-video",
+                    "name": "outside.mp4",
+                    "mimeType": "video/mp4",
+                    "parents": ["outside-folder"],
+                    "trashed": False,
+                },
+            },
+            {
+                "fileId": "inside-video",
+                "removed": False,
+                "file": {
+                    "id": "inside-video",
+                    "name": "inside.mp4",
+                    "mimeType": "video/mp4",
+                    "parents": ["folder-child"],
+                    "trashed": False,
+                },
+            },
+        ],
+        "newStartPageToken": "token-2",
+    }
+
+    result = discover._incremental_sync_folder(api_client, service, conn)
+
+    assert result == 1
+    assert len(captured_items) == 1
+    assert captured_items[0]["provider_file_id"] == "inside-video"
+    assert captured_items[0]["drive_path"] == "Folder Root/inside.mp4"
+    assert service.changes.return_value.list.call_args.kwargs["restrictToMyDrive"] is True
+
+
+def test_folder_incremental_detects_new_subfolder(monkeypatch):
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(change_token="token-1", last_full_sync_at=None, drive_id="shared-drive-1")
+
+    monkeypatch.setattr(discover, "_list_subfolders", lambda *_: [])
+    captured_items: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        discover,
+        "_batch_upsert",
+        lambda _api_client, _conn, items: (captured_items.extend(items) or len(items), []),
+    )
+    monkeypatch.setattr(discover, "_batch_delete", lambda *_: 0)
+
+    service.changes.return_value.list.return_value.execute.return_value = {
+        "changes": [
+            {
+                "fileId": "folder-new",
+                "removed": False,
+                "file": {
+                    "id": "folder-new",
+                    "name": "Subfolder",
+                    "mimeType": "application/vnd.google-apps.folder",
+                    "parents": ["folder-root"],
+                    "trashed": False,
+                },
+            },
+            {
+                "fileId": "video-new",
+                "removed": False,
+                "file": {
+                    "id": "video-new",
+                    "name": "new.mp4",
+                    "mimeType": "video/mp4",
+                    "parents": ["folder-new"],
+                    "trashed": False,
+                },
+            },
+        ],
+        "newStartPageToken": "token-2",
+    }
+
+    result = discover._incremental_sync_folder(api_client, service, conn)
+
+    assert result == 1
+    assert len(captured_items) == 1
+    assert captured_items[0]["provider_file_id"] == "video-new"
+    assert service.changes.return_value.list.call_args.kwargs["driveId"] == "shared-drive-1"
+
+
+def test_folder_410_recovery(monkeypatch):
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(
+        change_token="token-1",
+        last_full_sync_at=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        drive_id=None,
+    )
+
+    expired_error = HttpError(resp=MagicMock(status=410, reason="Gone"), content=b"expired", uri="https://drive")
+    monkeypatch.setattr(discover, "_incremental_sync_folder", lambda *_: (_ for _ in ()).throw(expired_error))
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_: 5)
+    service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
+        "startPageToken": "fresh-token"
+    }
+
+    result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
+    assert result == 5
