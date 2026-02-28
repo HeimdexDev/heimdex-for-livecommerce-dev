@@ -296,6 +296,38 @@ def _discover_folder_connection(
     now = datetime.now(timezone.utc)
     seven_days_ago = now - timedelta(days=7)
 
+    # Lazy backfill: detect drive_id for pre-Phase-5 folder connections
+    detected_drive_id: str | None = None
+    if conn.drive_id is None and conn.folder_id:
+        try:
+            file_meta = service.files().get(
+                fileId=conn.folder_id,
+                fields="driveId",
+                supportsAllDrives=True,
+            ).execute()
+            detected_drive_id = file_meta.get("driveId")
+            if detected_drive_id:
+                conn.drive_id = detected_drive_id
+                logger.info(
+                    "folder_drive_id_backfilled",
+                    extra={
+                        "org_id": str(conn.org_id),
+                        "connection_id": str(conn.connection_id),
+                        "folder_id": conn.folder_id,
+                        "drive_id": detected_drive_id,
+                    },
+                )
+        except Exception:
+            logger.warning(
+                "folder_drive_id_detection_failed",
+                extra={
+                    "org_id": str(conn.org_id),
+                    "connection_id": str(conn.connection_id),
+                    "folder_id": conn.folder_id,
+                },
+                exc_info=True,
+            )
+
     last_full = None
     if conn.last_full_sync_at:
         try:
@@ -311,7 +343,7 @@ def _discover_folder_connection(
 
     if use_incremental:
         try:
-            return _incremental_sync_folder(api_client, service, conn)
+            return _incremental_sync_folder(api_client, service, conn, detected_drive_id=detected_drive_id)
         except HttpError as e:
             if getattr(e.resp, "status", None) == 410:
                 logger.warning(
@@ -337,6 +369,7 @@ def _discover_folder_connection(
         lease_token=conn.lease_token,
         change_token=start_token,
         last_full_sync_at=now.isoformat(),
+        drive_id=detected_drive_id,
         release=False,
     )
     return count
@@ -418,7 +451,10 @@ def _full_scan_folder(api_client: InternalAPIClient, service: Any, conn: Any) ->
     return upsert_count + reconcile_count
 
 
-def _incremental_sync_folder(api_client: InternalAPIClient, service: Any, conn: Any) -> int:
+def _incremental_sync_folder(
+    api_client: InternalAPIClient, service: Any, conn: Any,
+    detected_drive_id: str | None = None,
+) -> int:
     monitored_ids: set[str] = {conn.folder_id}
     try:
         subfolder_ids = _list_subfolders(service, conn.folder_id)
@@ -502,6 +538,7 @@ def _incremental_sync_folder(api_client: InternalAPIClient, service: Any, conn: 
         conn.connection_id,
         lease_token=conn.lease_token,
         change_token=new_token,
+        drive_id=detected_drive_id,
         release=False,
     )
 

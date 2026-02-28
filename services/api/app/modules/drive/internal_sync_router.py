@@ -235,6 +235,8 @@ async def checkpoint_connection(
         values["last_full_sync_at"] = request.last_full_sync_at
     if request.error_message is not None:
         values["error_message"] = request.error_message
+    if request.drive_id is not None:
+        values["drive_id"] = request.drive_id
 
     if request.release:
         values["lease_token"] = None

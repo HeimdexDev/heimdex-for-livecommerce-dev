@@ -57,6 +57,7 @@ class SyncCheckpointRequest(BaseModel):
     last_sync_at: Optional[datetime] = None
     last_full_sync_at: Optional[datetime] = None
     error_message: Optional[str] = Field(default=None, max_length=2000)
+    drive_id: Optional[str] = Field(default=None, max_length=256)
     release: bool = True
 
 

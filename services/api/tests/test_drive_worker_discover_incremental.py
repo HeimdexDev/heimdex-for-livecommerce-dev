@@ -206,8 +206,11 @@ def test_folder_incremental_sync_routes_correctly(monkeypatch):
         drive_id=None,
     )
 
-    monkeypatch.setattr(discover, "_incremental_sync_folder", lambda *_: 7)
-    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_: (_ for _ in ()).throw(RuntimeError("should not full scan")))
+    # Mock drive_id detection (My Drive folder, no driveId)
+    service.files.return_value.get.return_value.execute.return_value = {}
+
+    monkeypatch.setattr(discover, "_incremental_sync_folder", lambda *_, **__: 7)
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_, **__: (_ for _ in ()).throw(RuntimeError("should not full scan")))
 
     result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
     assert result == 7
@@ -218,7 +221,10 @@ def test_folder_full_scan_when_no_change_token(monkeypatch):
     service = MagicMock()
     conn = _make_folder_conn(change_token=None, last_full_sync_at=None, drive_id=None)
 
-    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_: 3)
+    # Mock drive_id detection (My Drive folder, no driveId)
+    service.files.return_value.get.return_value.execute.return_value = {}
+
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_, **__: 3)
     service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
         "startPageToken": "start-token"
     }
@@ -238,8 +244,8 @@ def test_folder_full_scan_when_stale(monkeypatch):
         drive_id="shared-drive-1",
     )
 
-    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_: 2)
-    monkeypatch.setattr(discover, "_incremental_sync_folder", lambda *_: (_ for _ in ()).throw(RuntimeError("should not incremental")))
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_, **__: 2)
+    monkeypatch.setattr(discover, "_incremental_sync_folder", lambda *_, **__: (_ for _ in ()).throw(RuntimeError("should not incremental")))
     service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
         "startPageToken": "fresh-token"
     }
@@ -364,12 +370,163 @@ def test_folder_410_recovery(monkeypatch):
         drive_id=None,
     )
 
+    # Mock drive_id detection (My Drive folder, no driveId)
+    service.files.return_value.get.return_value.execute.return_value = {}
+
     expired_error = HttpError(resp=MagicMock(status=410, reason="Gone"), content=b"expired", uri="https://drive")
-    monkeypatch.setattr(discover, "_incremental_sync_folder", lambda *_: (_ for _ in ()).throw(expired_error))
-    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_: 5)
+    monkeypatch.setattr(discover, "_incremental_sync_folder", lambda *_, **__: (_ for _ in ()).throw(expired_error))
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_, **__: 5)
     service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
         "startPageToken": "fresh-token"
     }
 
     result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
     assert result == 5
+
+
+def test_folder_drive_id_backfill_shared_drive(monkeypatch):
+    """Existing folder connection in Shared Drive gets drive_id auto-detected."""
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(change_token=None, last_full_sync_at=None, drive_id=None)
+
+    # Detection returns a Shared Drive ID
+    service.files.return_value.get.return_value.execute.return_value = {"driveId": "shared-drive-99"}
+
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_, **__: 3)
+    service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
+        "startPageToken": "start-token"
+    }
+
+    result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
+    assert result == 3
+
+    # Verify detection API call
+    service.files.return_value.get.assert_called_once_with(
+        fileId="folder-root",
+        fields="driveId",
+        supportsAllDrives=True,
+    )
+
+    # drive_id should be backfilled on conn
+    assert conn.drive_id == "shared-drive-99"
+
+    # getStartPageToken should use the detected driveId
+    service.changes.return_value.getStartPageToken.assert_called_once_with(
+        supportsAllDrives=True,
+        driveId="shared-drive-99",
+    )
+
+    # checkpoint should persist the detected drive_id
+    checkpoint_call = api_client.checkpoint.call_args
+    assert checkpoint_call.kwargs["drive_id"] == "shared-drive-99"
+
+
+def test_folder_drive_id_backfill_my_drive(monkeypatch):
+    """My Drive folder returns no driveId — drive_id stays None."""
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(change_token=None, last_full_sync_at=None, drive_id=None)
+
+    # Detection returns no driveId (My Drive folder)
+    service.files.return_value.get.return_value.execute.return_value = {}
+
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_, **__: 2)
+    service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
+        "startPageToken": "start-token"
+    }
+
+    result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
+    assert result == 2
+
+    # drive_id stays None
+    assert conn.drive_id is None
+
+    # getStartPageToken should NOT have driveId
+    service.changes.return_value.getStartPageToken.assert_called_once_with(supportsAllDrives=True)
+
+    # checkpoint should not have drive_id
+    checkpoint_call = api_client.checkpoint.call_args
+    assert checkpoint_call.kwargs.get("drive_id") is None
+
+
+def test_folder_drive_id_backfill_already_set(monkeypatch):
+    """drive_id already populated — no detection API call made."""
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(change_token=None, last_full_sync_at=None, drive_id="existing-drive")
+
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_, **__: 1)
+    service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
+        "startPageToken": "start-token"
+    }
+
+    result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
+    assert result == 1
+
+    # files().get() should NOT have been called for detection
+    service.files.return_value.get.return_value.execute.assert_not_called()
+
+    # checkpoint should not pass drive_id (no backfill needed)
+    checkpoint_call = api_client.checkpoint.call_args
+    assert checkpoint_call.kwargs.get("drive_id") is None
+
+
+def test_folder_drive_id_backfill_api_failure(monkeypatch):
+    """Detection API failure does not crash the sync."""
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(change_token=None, last_full_sync_at=None, drive_id=None)
+
+    # Detection raises an exception
+    service.files.return_value.get.return_value.execute.side_effect = Exception("API error")
+
+    monkeypatch.setattr(discover, "_full_scan_folder", lambda *_, **__: 4)
+    service.changes.return_value.getStartPageToken.return_value.execute.return_value = {
+        "startPageToken": "start-token"
+    }
+
+    # Should not crash
+    result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
+    assert result == 4
+
+    # drive_id stays None
+    assert conn.drive_id is None
+
+
+def test_folder_drive_id_backfill_incremental_path(monkeypatch):
+    """drive_id detected and persisted via incremental sync checkpoint."""
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_folder_conn(
+        change_token="token-1",
+        last_full_sync_at=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        drive_id=None,
+    )
+
+    # Detection returns a Shared Drive ID
+    service.files.return_value.get.return_value.execute.return_value = {"driveId": "shared-drive-99"}
+
+    monkeypatch.setattr(discover, "_list_subfolders", lambda *_: [])
+    monkeypatch.setattr(discover, "_batch_upsert", lambda *_: (0, []))
+    monkeypatch.setattr(discover, "_batch_delete", lambda *_: 0)
+
+    service.changes.return_value.list.return_value.execute.return_value = {
+        "changes": [],
+        "newStartPageToken": "token-2",
+    }
+
+    result = discover._discover_folder_connection(api_client, service, conn, settings=MagicMock())
+    assert result == 0
+
+    # conn.drive_id should be backfilled
+    assert conn.drive_id == "shared-drive-99"
+
+    # changes().list() should use the detected driveId (not restrictToMyDrive)
+    list_kwargs = service.changes.return_value.list.call_args.kwargs
+    assert list_kwargs["driveId"] == "shared-drive-99"
+    assert "restrictToMyDrive" not in list_kwargs
+
+    # checkpoint should persist the detected drive_id
+    checkpoint_call = api_client.checkpoint.call_args
+    assert checkpoint_call.kwargs["drive_id"] == "shared-drive-99"

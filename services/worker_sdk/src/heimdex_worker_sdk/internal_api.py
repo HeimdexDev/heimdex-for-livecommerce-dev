@@ -277,6 +277,7 @@ class InternalAPIClient:
         last_sync_at: Optional[str] = None,
         last_full_sync_at: Optional[str] = None,
         error_message: Optional[str] = None,
+        drive_id: Optional[str] = None,
         release: bool = True,
     ) -> bool:
         """Update sync cursor and optionally release connection lease."""
@@ -290,6 +291,8 @@ class InternalAPIClient:
             payload["last_full_sync_at"] = last_full_sync_at
         if error_message is not None:
             payload["error_message"] = error_message
+        if drive_id is not None:
+            payload["drive_id"] = drive_id
         data = self._request_with_retry("PATCH", url, json=payload)
         return data.get("ok", False)
 

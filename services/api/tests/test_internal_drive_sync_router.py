@@ -420,6 +420,30 @@ class TestCheckpointConnection:
         )
         assert result.ok is True
 
+    @pytest.mark.asyncio
+    async def test_checkpoint_persists_drive_id(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_select_then_update(conn)
+
+        request = SyncCheckpointRequest(
+            lease_token=token,
+            change_token="new_page_token",
+            drive_id="shared-drive-99",
+            release=False,
+        )
+        result = await checkpoint_connection(
+            connection_id=conn.id, request=request, _token="valid", db=db,
+        )
+
+        assert result.ok is True
+        # Verify the update statement was executed with drive_id
+        assert db.execute.await_count == 2
+        db.flush.assert_awaited_once()
+
 
 # ── Lease enforcement helper tests ────────────────────────────────────
 
