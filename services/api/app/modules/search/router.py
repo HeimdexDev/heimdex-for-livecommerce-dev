@@ -44,6 +44,7 @@ async def search(
         user_id=str(user.id),
         org_id=str(org_ctx.org_id),
         mode=settings.search_default_mode,
+        search_mode=request.search_mode,
     )
 
     user_id = cast(UUID, user.id)
@@ -57,6 +58,7 @@ async def search(
             include_ocr=request.include_ocr,
             user_id=user_id,
             group_by=request.group_by,
+            search_mode=request.search_mode,
         )
 
     return await search_service.search(
@@ -84,6 +86,7 @@ async def search_scenes(
         "scene_search_request",
         user_id=str(user.id),
         org_id=str(org_ctx.org_id),
+        search_mode=request.search_mode,
     )
     user_id = cast(UUID, user.id)
     return await scene_search_service.search(
@@ -94,4 +97,5 @@ async def search_scenes(
         include_ocr=request.include_ocr,
         user_id=user_id,
         group_by=request.group_by,
+        search_mode=request.search_mode,
     )

@@ -32,6 +32,7 @@ def mock_scene_opensearch_client():
     client = MagicMock()
     client.search_lexical = AsyncMock(return_value=[])
     client.search_vector = AsyncMock(return_value=[])
+    client.search_metadata = AsyncMock(return_value=[])
     client.get_facets = AsyncMock(return_value={"libraries": [], "source_types": [], "people": []})
     client.close = AsyncMock()
     return client

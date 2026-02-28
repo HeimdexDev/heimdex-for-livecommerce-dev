@@ -245,6 +245,8 @@ class SceneSearchClient:
                 "source_path": {"type": "keyword"},
                 "capture_time": {"type": "date"},
                 "ingest_time": {"type": "date"},
+                # Embedding metadata (for blue-green migration tracking)
+                "embedding_version": {"type": "keyword"},
             }
         }
 
@@ -456,6 +458,107 @@ class SceneSearchClient:
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
+    async def search_metadata(
+        self,
+        query: str,
+        org_id: str,
+        filters: dict[str, Any],
+        size: int = 200,
+    ) -> list[dict[str, Any]]:
+        """BM25 search on video metadata fields only (title, source path).
+
+        Used by the 'metadata' search mode. Searches video_title.nori with
+        phrase boost for short queries. Does NOT touch transcript, OCR, or
+        caption fields. Does NOT use embedding vectors.
+        """
+        filter_clauses, must_not_clauses = self._build_filter_clauses(filters)
+
+        query_word_count = len(query.split())
+
+        if query_word_count <= 3:
+            should_clauses: list[dict[str, Any]] = [
+                {
+                    "match": {
+                        "video_title.nori": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": 2.0,
+                        }
+                    }
+                },
+                {
+                    "match_phrase": {
+                        "video_title.nori": {
+                            "query": query,
+                            "boost": 4.0,
+                            "slop": 1,
+                        }
+                    }
+                },
+                {
+                    "match": {
+                        "source_path": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": 0.5,
+                        }
+                    }
+                },
+            ]
+            search_query: dict[str, Any] = {
+                "bool": {
+                    "must": [{"term": {"org_id": org_id}}],
+                    "should": should_clauses,
+                    "minimum_should_match": 1,
+                    "filter": filter_clauses,
+                }
+            }
+        else:
+            search_query = {
+                "bool": {
+                    "must": [
+                        {"term": {"org_id": org_id}},
+                        {
+                            "match": {
+                                "video_title.nori": {
+                                    "query": query,
+                                    "operator": "or",
+                                    "minimum_should_match": "50%",
+                                    "boost": 2.0,
+                                }
+                            }
+                        },
+                    ],
+                    "should": [
+                        {
+                            "match": {
+                                "source_path": {
+                                    "query": query,
+                                    "operator": "or",
+                                    "minimum_should_match": "50%",
+                                    "boost": 0.5,
+                                }
+                            }
+                        },
+                    ],
+                    "filter": filter_clauses,
+                }
+            }
+
+        if must_not_clauses:
+            search_query["bool"]["must_not"] = must_not_clauses
+
+        body: dict[str, Any] = {
+            "query": search_query,
+            "size": size,
+            "_source": True,
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        return response["hits"]["hits"]
+
     async def search_lexical(
         self,
         query: str,

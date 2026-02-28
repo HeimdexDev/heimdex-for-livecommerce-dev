@@ -119,13 +119,13 @@ class TestSceneSearchService:
         assert r.debug.fused_score > 0
 
     # ------------------------------------------------------------------
-    # Alpha blending extremes
+    # Mode-specific search behavior
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    async def test_alpha_zero_favors_lexical(
+    async def test_lexical_mode_only_runs_lexical(
         self, scene_search_service, mock_scene_opensearch_client, _patch_db_session
     ):
-        """alpha=0 (pure lexical) should rank lexical-only hits highest."""
+        """Lexical mode should only call search_lexical, not search_vector."""
         org_id = uuid4()
 
         mock_scene_opensearch_client.search_lexical.return_value = [
@@ -136,17 +136,20 @@ class TestSceneSearchService:
         ]
 
         response = await scene_search_service.search(
-            query="test", org_id=org_id, alpha=0.0, filters=SearchFilters()
+            query="test", org_id=org_id, alpha=0.0, filters=SearchFilters(),
+            search_mode="lexical",
         )
 
-        assert len(response.results) == 2
+        # Lexical mode: only lexical results returned
+        assert len(response.results) == 1
         assert response.results[0].scene_id == "lex_scene"
+        mock_scene_opensearch_client.search_vector.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_alpha_one_favors_vector(
+    async def test_semantic_mode_only_runs_vector(
         self, scene_search_service, mock_scene_opensearch_client, _patch_db_session
     ):
-        """alpha=1 (pure vector) should rank vector-only hits highest."""
+        """Semantic mode should only call search_vector, not search_lexical."""
         org_id = uuid4()
 
         mock_scene_opensearch_client.search_lexical.return_value = [
@@ -156,39 +159,40 @@ class TestSceneSearchService:
             _make_scene_hit("vec_scene", "v2", score=0.95),
         ]
 
-        response = await scene_search_service.search(
-            query="test", org_id=org_id, alpha=1.0, filters=SearchFilters()
-        )
+        with patch("app.modules.search.scene_service.get_query_embedding", new_callable=AsyncMock) as mock_embed:
+            mock_embed.return_value = [0.1] * 1024
+            response = await scene_search_service.search(
+                query="test", org_id=org_id, alpha=1.0, filters=SearchFilters(),
+                search_mode="semantic",
+            )
 
-        assert len(response.results) == 2
+        # Semantic mode: only vector results returned
+        assert len(response.results) == 1
         assert response.results[0].scene_id == "vec_scene"
+        mock_scene_opensearch_client.search_lexical.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_balanced_alpha_returns_both(
+    async def test_default_mode_is_lexical(
         self, scene_search_service, mock_scene_opensearch_client, _patch_db_session
     ):
-        """alpha=0.5 should include results from both retrieval paths."""
+        """Default search_mode should be lexical for backward compatibility."""
         org_id = uuid4()
 
         mock_scene_opensearch_client.search_lexical.return_value = [
-            _make_scene_hit("shared_scene", "v1", score=8.0),
-        ]
-        mock_scene_opensearch_client.search_vector.return_value = [
-            _make_scene_hit("shared_scene", "v1", score=0.85),
+            _make_scene_hit("lex_scene", "v1", score=8.0),
         ]
 
         response = await scene_search_service.search(
             query="test", org_id=org_id, alpha=0.5, filters=SearchFilters()
+            # no search_mode → defaults to lexical
         )
 
-        # Same scene from both paths -> fused into single result
         assert len(response.results) == 1
         r = response.results[0]
         assert r.debug.lexical_rank is not None
-        assert r.debug.vector_rank is not None
-        assert r.debug.lexical_contribution > 0
-        assert r.debug.vector_contribution > 0
-
+        # Vector contributions should be zero in lexical mode
+        assert r.debug.vector_rank is None
+        assert r.debug.vector_contribution == 0.0
     # ------------------------------------------------------------------
     # Diversification
     # ------------------------------------------------------------------

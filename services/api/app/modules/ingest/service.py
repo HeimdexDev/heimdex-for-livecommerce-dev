@@ -4,7 +4,7 @@ Scene ingestion service.
 Orchestrates the full ingest pipeline:
 1. Validate library_id belongs to the resolved org
 2. Normalize transcript_raw → transcript_norm (SaaS-side)
-3. Generate E5 embedding for non-empty transcripts (SaaS-side)
+3. Generate E5 embedding for non-empty text (SaaS-side)
 4. Stamp org_id, ingest_time, compute transcript_char_count
 5. Build composite doc_id = "{org_id}:{scene_id}"
 6. Bulk index into the scenes OpenSearch index
@@ -15,6 +15,10 @@ Design decisions (from Oracle review):
   (kNN search implicitly filters scenes without embedding)
 - Doc ID "{org_id}:{scene_id}" prevents cross-tenant overwrites
 - SaaS applies its own normalize_transcript() on the raw text
+
+Embedding text construction (AD-2):
+  caption (full) + transcript (first 500 chars) + ocr (first 200 chars)
+  See ``build_embedding_text()`` for details.
 """
 import time as _time
 from datetime import datetime, timezone
@@ -32,6 +36,32 @@ from app.modules.search.normalize import normalize_transcript
 from app.modules.search.scene_client import SceneSearchClient
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Embedding text construction (AD-2: single vector, caption-first priority)
+# ---------------------------------------------------------------------------
+_TRANSCRIPT_EMBED_LIMIT = 500
+_OCR_EMBED_LIMIT = 200
+
+
+def build_embedding_text(
+    transcript_norm: str,
+    ocr_norm: str,
+    caption_norm: str,
+) -> str:
+    """Build embedding input text with caption-first priority.
+
+    Order: caption (full) → transcript (first 500 chars) → ocr (first 200 chars).
+    Empty parts are skipped.  Returns empty string when all inputs are empty.
+    """
+    parts: list[str] = []
+    if caption_norm:
+        parts.append(caption_norm)
+    if transcript_norm:
+        parts.append(transcript_norm[:_TRANSCRIPT_EMBED_LIMIT])
+    if ocr_norm:
+        parts.append(ocr_norm[:_OCR_EMBED_LIMIT])
+    return " ".join(parts)
 
 
 class SceneIngestService:
@@ -101,24 +131,19 @@ class SceneIngestService:
             caption_norm = normalize_transcript(scene.scene_caption) if scene.scene_caption else ""
             normalized.append((transcript_norm, ocr_norm, ocr_char_count, caption_norm))
 
-        transcripts_to_embed: list[tuple[int, str]] = []
-        for idx, (transcript_norm, ocr_norm, _, _caption_norm) in enumerate(normalized):
-            embedding_text = transcript_norm
-            if ocr_norm:
-                embedding_text = (
-                    f"{transcript_norm} {ocr_norm}".strip() if transcript_norm else ocr_norm
-                )
+        texts_to_embed: list[tuple[int, str]] = []
+        for idx, (transcript_norm, ocr_norm, _, caption_norm) in enumerate(normalized):
+            embedding_text = build_embedding_text(transcript_norm, ocr_norm, caption_norm)
             if embedding_text:
-                transcripts_to_embed.append((idx, embedding_text))
+                texts_to_embed.append((idx, embedding_text))
 
-        # 3. Batch embed non-empty transcripts
+        # 3. Batch embed non-empty text (caption + transcript + ocr)
         embeddings: dict[int, list[float]] = {}
-        if transcripts_to_embed:
-            texts = [t for _, t in transcripts_to_embed]
+        if texts_to_embed:
+            texts = [t for _, t in texts_to_embed]
             vectors = get_passage_embeddings_batch(texts)
-            for (idx, _), vec in zip(transcripts_to_embed, vectors):
+            for (idx, _), vec in zip(texts_to_embed, vectors):
                 embeddings[idx] = vec
-
         t_after_embedding = _time.monotonic()
 
         # 4. Build bulk index payload (reuse cached normalized transcripts)
@@ -156,7 +181,7 @@ class SceneIngestService:
                 "source_path": request.source_path,
             }
 
-            # Only add embedding if transcript is non-empty
+            # Only add embedding if text is non-empty
             if idx in embeddings:
                 doc["embedding_vector"] = embeddings[idx]
 
@@ -276,19 +301,20 @@ class SceneIngestService:
             if enrichment.scene_caption is not None:
                 caption_norm = normalize_transcript(enrichment.scene_caption) if enrichment.scene_caption else ""
                 partial["scene_caption"] = caption_norm
+                needs_embedding_update = True
             if enrichment.people_cluster_ids is not None:
                 partial["people_cluster_ids"] = enrichment.people_cluster_ids
 
             if needs_embedding_update:
-                # Embedding uses transcript + OCR.  Merge newly enriched
-                # values with existing doc values for full embedding text.
+                # Merge newly enriched values with existing doc values
+                # for full embedding text using caption-first priority (AD-2).
                 t_raw = partial.get("transcript_raw", existing.get("transcript_raw", ""))
                 o_raw = partial.get("ocr_text_raw", existing.get("ocr_text_raw", ""))
+                c_raw = partial.get("scene_caption", existing.get("scene_caption", ""))
                 t_norm = normalize_transcript(t_raw) if t_raw else ""
                 o_norm = normalize_transcript(o_raw) if o_raw else ""
-                embedding_text = t_norm
-                if o_norm:
-                    embedding_text = f"{t_norm} {o_norm}".strip() if t_norm else o_norm
+                c_norm = normalize_transcript(c_raw) if c_raw else ""
+                embedding_text = build_embedding_text(t_norm, o_norm, c_norm)
                 if embedding_text:
                     embedding_inputs.append((len(partial_updates), embedding_text))
 

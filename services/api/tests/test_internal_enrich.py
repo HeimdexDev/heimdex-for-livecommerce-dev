@@ -101,16 +101,18 @@ class TestInternalEnrichService:
             }
         }
 
-        result = await service.enrich_scenes(request, org_id)
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.7] * 1024]) as mock_embed:
+            result = await service.enrich_scenes(request, org_id)
 
         updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
         _, partial = updates[0]
         assert partial["scene_caption"] == "a person holding product"
-        # Caption-only enrichment should NOT touch transcript, OCR, or embedding
+        # Caption-only enrichment should NOT touch transcript or OCR raw fields
         assert "transcript_raw" not in partial
         assert "ocr_text_raw" not in partial
-        assert "embedding_vector" not in partial
-
+        # AD-2: caption triggers embedding recomputation
+        assert "embedding_vector" in partial
+        mock_embed.assert_called_once()
     @pytest.mark.asyncio
     async def test_partial_update_only_contains_enriched_fields(self, service, mock_scene_client):
         """Partial updates should contain ONLY fields from this enrichment,
@@ -198,6 +200,9 @@ class TestInternalEnrichService:
         If STT ran concurrently, it could overwrite caption data with stale
         values from its own read.  With partial updates, each worker only
         writes its own fields.
+
+        AD-2 update: caption enrichment now triggers embedding recomputation
+        (caption-first: caption + transcript[:500] + ocr[:200]).
         """
         org_id = uuid4()
         scene_id = "vid1_scene_0"
@@ -221,22 +226,27 @@ class TestInternalEnrichService:
             }
         }
 
-        result = await service.enrich_scenes(request, org_id)
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.9] * 1024]) as mock_embed:
+            result = await service.enrich_scenes(request, org_id)
 
         assert result["updated_count"] == 1
         updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
         _, partial = updates[0]
 
-        # Caption enrichment writes only caption + ingest_time
+        # Caption enrichment writes caption + ingest_time + recomputed embedding
         assert partial["scene_caption"] == "라이브 방송 중 상품 소개"
         assert "ingest_time" in partial
 
-        # Must NOT touch transcript, OCR, or embedding
+        # Must NOT touch transcript or OCR raw fields (those belong to other workers)
         assert "transcript_raw" not in partial
         assert "transcript_norm" not in partial
         assert "ocr_text_raw" not in partial
-        assert "embedding_vector" not in partial
 
+        # AD-2: caption triggers embedding recomputation with caption-first ordering
+        assert "embedding_vector" in partial
+        assert partial["embedding_vector"] == [0.9] * 1024
+        # Embedding text should be: caption + transcript + ocr
+        mock_embed.assert_called_once()
 
 class TestInternalEnrichEndpoint:
     @pytest.mark.asyncio

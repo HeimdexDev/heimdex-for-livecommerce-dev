@@ -56,6 +56,15 @@ class SearchFilters(BaseModel):
 class SearchRequest(BaseModel):
     q: str = Field(..., min_length=1, max_length=1000)
     alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+    search_mode: Literal["metadata", "lexical", "semantic"] = Field(
+        default="lexical",
+        description=(
+            "Search strategy. 'metadata'=file properties (title, source), "
+            "'lexical'=exact words in content (transcript/OCR/caption), "
+            "'semantic'=meaning-based vector search. "
+            "When search_mode is set, it takes precedence over alpha."
+        ),
+    )
     filters: SearchFilters = Field(default_factory=lambda: SearchFilters())
     include_ocr: bool | None = Field(
         default=None,
