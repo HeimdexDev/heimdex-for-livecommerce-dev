@@ -418,6 +418,25 @@ class SceneSearchClient:
                 result[doc["_id"]] = doc["_source"]
         return result
 
+    async def delete_scenes_by_video_id(self, org_id: str, video_id: str) -> int:
+        """Delete all scenes for a video from OpenSearch. Returns deleted count."""
+        body = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"video_id": video_id}},
+                    ]
+                }
+            }
+        }
+        response = await self.client.delete_by_query(
+            index=self.alias_name,
+            body=body,
+            params={"refresh": True},
+        )
+        return int(response.get("deleted", 0))
+
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------

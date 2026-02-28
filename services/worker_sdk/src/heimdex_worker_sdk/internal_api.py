@@ -71,6 +71,14 @@ class UpsertResult:
 
 
 @dataclass(frozen=True)
+class DeleteResult:
+    """Result of a batch file delete operation."""
+
+    deleted_count: int
+    not_found_count: int
+
+
+@dataclass(frozen=True)
 class AccessToken:
     """Short-lived Google access token returned by the token broker."""
 
@@ -253,6 +261,22 @@ class InternalAPIClient:
             payload["error_message"] = error_message
         data = self._request_with_retry("PATCH", url, json=payload)
         return data.get("ok", False)
+
+    def delete_files(
+        self,
+        connection_id: UUID,
+        *,
+        lease_token: str,
+        google_file_ids: list[str],
+    ) -> DeleteResult:
+        """Soft-delete files by their Google file IDs."""
+        url = f"{self.base_url.rstrip('/')}/internal/drive/sync/connections/{connection_id}/delete_files"
+        payload = {"lease_token": lease_token, "google_file_ids": google_file_ids}
+        data = self._request_with_retry("POST", url, json=payload)
+        return DeleteResult(
+            deleted_count=data.get("deleted_count", 0),
+            not_found_count=data.get("not_found_count", 0),
+        )
 
     def get_drive_token(self, connection_id: UUID, *, lease_token: Optional[str] = None) -> AccessToken:
         """Get a short-lived Google access token for a connection.

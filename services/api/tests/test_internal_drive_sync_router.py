@@ -24,11 +24,13 @@ from app.modules.drive.internal_sync_router import (
     _MAX_UPSERT_ITEMS,
     claim_sync_connection,
     checkpoint_connection,
+    delete_files,
     get_connection_token,
     upsert_files,
 )
 from app.modules.drive.internal_sync_schemas import (
     ClaimSyncConnectionRequest,
+    DeleteFilesRequest,
     DriveDiscoveredFile,
     SyncCheckpointRequest,
     TokenRequest,
@@ -44,7 +46,7 @@ def _make_connection(
     org_id=None,
     library_id=None,
     scope_type="drive",
-    drive_id="shared-drive-001",
+    drive_id: str | None = "shared-drive-001",
     folder_id=None,
     folder_name=None,
     folder_path=None,
@@ -101,10 +103,39 @@ def _mock_db_for_upsert(connection, existing_google_ids):
     conn_result = MagicMock()
     conn_result.scalar_one_or_none.return_value = connection
     file_result = MagicMock()
-    file_result.all.return_value = [(gid,) for gid in existing_google_ids]
+    existing_files = []
+    existing_files_map = {}
+    for gid in existing_google_ids:
+        f = MagicMock()
+        f.google_file_id = gid
+        f.file_name = "video.mp4"
+        f.md5_checksum = None
+        f.file_size_bytes = None
+        f.google_modified_time = None
+        f.processing_status = "indexed"
+        f.enrichment_state = "done"
+        f.stt_status = "done"
+        f.ocr_status = "done"
+        f.caption_status = "done"
+        f.face_status = "done"
+        f.proxy_s3_key = "proxy"
+        f.scene_count = 10
+        f.retry_count = 1
+        f.last_error = "old"
+        f.drive_path = None
+        f.web_view_link = None
+        f.video_id = f"vid_{gid}"
+        f.id = uuid4()
+        f.mime_type = "video/mp4"
+        existing_files.append(f)
+        existing_files_map[gid] = f
+    file_scalars = MagicMock()
+    file_scalars.all.return_value = existing_files
+    file_result.scalars.return_value = file_scalars
     db.execute = AsyncMock(side_effect=[conn_result, file_result])
     db.add = MagicMock()
     db.flush = AsyncMock()
+    db._existing_files_map = existing_files_map
     return db
 
 
@@ -113,11 +144,21 @@ def _make_discovered_file(
     provider_file_id=None,
     name="video.mp4",
     mime_type="video/mp4",
+    size=None,
+    md5_checksum=None,
+    drive_path=None,
+    web_view_link=None,
+    modified_time=None,
 ):
     return DriveDiscoveredFile(
         provider_file_id=provider_file_id or f"gfile_{uuid4().hex[:8]}",
         name=name,
         mime_type=mime_type,
+        size=size,
+        md5_checksum=md5_checksum,
+        drive_path=drive_path,
+        web_view_link=web_view_link,
+        modified_time=modified_time,
     )
 
 
@@ -662,6 +703,185 @@ class TestUpsertFiles:
         total = result.created_count + result.updated_count + result.unchanged_count
         assert total == len(items)
 
+    @pytest.mark.asyncio
+    async def test_upsert_detects_md5_change(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_for_upsert(conn, existing_google_ids={"gf_md5"})
+        existing_file = db._existing_files_map["gf_md5"]
+        existing_file.md5_checksum = "old-md5"
+
+        request = UpsertFilesRequest(
+            lease_token=token,
+            items=[
+                _make_discovered_file(
+                    provider_file_id="gf_md5",
+                    md5_checksum="new-md5",
+                    size=2048,
+                    modified_time=datetime.now(timezone.utc),
+                )
+            ],
+        )
+
+        result = await upsert_files(connection_id=conn.id, request=request, _token="valid", db=db)
+
+        assert result.updated_count == 1
+        assert result.created_count == 0
+        assert existing_file.md5_checksum == "new-md5"
+        assert existing_file.processing_status == "pending"
+        assert existing_file.scene_count == 0
+        assert result.enqueued_jobs == {"processing": 1}
+
+    @pytest.mark.asyncio
+    async def test_upsert_detects_rename(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_for_upsert(conn, existing_google_ids={"gf_rename"})
+        existing_file = db._existing_files_map["gf_rename"]
+
+        request = UpsertFilesRequest(
+            lease_token=token,
+            items=[_make_discovered_file(provider_file_id="gf_rename", name="new_name.mp4")],
+        )
+
+        result = await upsert_files(connection_id=conn.id, request=request, _token="valid", db=db)
+
+        assert result.updated_count == 1
+        assert existing_file.file_name == "new_name.mp4"
+
+    @pytest.mark.asyncio
+    async def test_upsert_detects_move(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_for_upsert(conn, existing_google_ids={"gf_move"})
+        existing_file = db._existing_files_map["gf_move"]
+        existing_file.drive_path = "old/path.mp4"
+
+        request = UpsertFilesRequest(
+            lease_token=token,
+            items=[_make_discovered_file(provider_file_id="gf_move", drive_path="new/path.mp4")],
+        )
+
+        result = await upsert_files(connection_id=conn.id, request=request, _token="valid", db=db)
+
+        assert result.updated_count == 1
+        assert existing_file.drive_path == "new/path.mp4"
+
+    @pytest.mark.asyncio
+    async def test_upsert_unchanged(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_for_upsert(conn, existing_google_ids={"gf_same"})
+
+        request = UpsertFilesRequest(
+            lease_token=token,
+            items=[_make_discovered_file(provider_file_id="gf_same")],
+        )
+
+        result = await upsert_files(connection_id=conn.id, request=request, _token="valid", db=db)
+
+        assert result.updated_count == 0
+        assert result.unchanged_count == 1
+
+
+class TestDeleteFiles:
+    @pytest.mark.asyncio
+    async def test_delete_files_soft_deletes(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+
+        file1 = MagicMock()
+        file1.google_file_id = "gf_1"
+        file1.video_id = "vid_1"
+        file2 = MagicMock()
+        file2.google_file_id = "gf_2"
+        file2.video_id = "vid_2"
+
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        files_result = MagicMock()
+        files_scalars = MagicMock()
+        files_scalars.all.return_value = [file1, file2]
+        files_result.scalars.return_value = files_scalars
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[conn_result, files_result, MagicMock()])
+        db.flush = AsyncMock()
+
+        scene_client = MagicMock()
+        scene_client.delete_scenes_by_video_id = AsyncMock(return_value=3)
+
+        request = DeleteFilesRequest(
+            lease_token=token,
+            google_file_ids=["gf_1", "gf_2"],
+        )
+        result = await delete_files(
+            connection_id=conn.id,
+            request=request,
+            _token="valid",
+            db=db,
+            scene_client=scene_client,
+        )
+
+        assert result.deleted_count == 2
+        assert result.not_found_count == 0
+        db.flush.assert_awaited_once()
+        assert scene_client.delete_scenes_by_video_id.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_files_not_found(self):
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+
+        conn_result = MagicMock()
+        conn_result.scalar_one_or_none.return_value = conn
+        files_result = MagicMock()
+        files_scalars = MagicMock()
+        files_scalars.all.return_value = []
+        files_result.scalars.return_value = files_scalars
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[conn_result, files_result])
+        db.flush = AsyncMock()
+
+        scene_client = MagicMock()
+        scene_client.delete_scenes_by_video_id = AsyncMock(return_value=0)
+
+        request = DeleteFilesRequest(
+            lease_token=token,
+            google_file_ids=["missing_1", "missing_2"],
+        )
+        result = await delete_files(
+            connection_id=conn.id,
+            request=request,
+            _token="valid",
+            db=db,
+            scene_client=scene_client,
+        )
+
+        assert result.deleted_count == 0
+        assert result.not_found_count == 2
+        db.flush.assert_not_awaited()
+        scene_client.delete_scenes_by_video_id.assert_not_awaited()
+
 
 class TestTokenEndpoint:
     @pytest.mark.asyncio
@@ -857,7 +1077,7 @@ class TestClaimConcurrency:
     @pytest.mark.asyncio
     async def test_10_concurrent_claims_no_duplicates(self):
         all_conns = [_make_connection(drive_id=f"drive_{i}") for i in range(10)]
-        claimed_ids: list = []
+        claimed_ids: list[object] = []
 
         async def _do_claim(conn):
             db = _mock_db_with_connections([conn])
@@ -873,7 +1093,7 @@ class TestClaimConcurrency:
 
     @pytest.mark.asyncio
     async def test_concurrent_claims_empty_db(self):
-        results = []
+        results: list[int] = []
 
         async def _do_claim():
             db = _mock_db_with_connections([])
@@ -888,7 +1108,7 @@ class TestClaimConcurrency:
     @pytest.mark.asyncio
     async def test_concurrent_claims_unique_leases(self):
         all_conns = [_make_connection(drive_id=f"drive_{i}") for i in range(10)]
-        lease_tokens: list = []
+        lease_tokens: list[str] = []
 
         async def _do_claim(conn):
             db = _mock_db_with_connections([conn])
@@ -922,7 +1142,7 @@ class TestSchemaValidation:
     def test_checkpoint_requires_lease_token(self):
         from pydantic import ValidationError
         with pytest.raises(ValidationError):
-            SyncCheckpointRequest()
+            SyncCheckpointRequest.model_validate({})
 
     def test_checkpoint_defaults(self):
         req = SyncCheckpointRequest(lease_token="abc")
@@ -934,14 +1154,14 @@ class TestSchemaValidation:
     def test_upsert_requires_lease_token(self):
         from pydantic import ValidationError
         with pytest.raises(ValidationError):
-            UpsertFilesRequest(items=[])
+            UpsertFilesRequest.model_validate({"items": []})
 
     def test_discovered_file_requires_fields(self):
         from pydantic import ValidationError
         with pytest.raises(ValidationError):
-            DriveDiscoveredFile(provider_file_id="abc")
+            DriveDiscoveredFile.model_validate({"provider_file_id": "abc"})
         with pytest.raises(ValidationError):
-            DriveDiscoveredFile(provider_file_id="abc", name="test")
+            DriveDiscoveredFile.model_validate({"provider_file_id": "abc", "name": "test"})
         f = DriveDiscoveredFile(
             provider_file_id="abc", name="test.mp4", mime_type="video/mp4",
         )

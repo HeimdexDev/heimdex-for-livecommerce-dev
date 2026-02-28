@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
 from app.config import get_settings
-from app.dependencies import get_db_session
+from app.dependencies import get_db_session, get_scene_opensearch_client
 from app.logging_config import get_logger
 from app.modules.drive.internal_router import (
     LEASE_DURATION_SECONDS,
@@ -42,6 +42,8 @@ from app.modules.drive.internal_sync_schemas import (
     ClaimedConnectionInfo,
     ClaimSyncConnectionRequest,
     ClaimSyncConnectionResponse,
+    DeleteFilesRequest,
+    DeleteFilesResponse,
     SyncCheckpointRequest,
     SyncCheckpointResponse,
     TokenRequest,
@@ -50,6 +52,7 @@ from app.modules.drive.internal_sync_schemas import (
     UpsertFilesResponse,
 )
 from app.modules.drive.models import DriveConnection, DriveFile, DriveSecret
+from app.modules.search.scene_client import SceneSearchClient
 from app.sqs_producer import publish_processing_job
 
 logger = get_logger(__name__)
@@ -395,26 +398,75 @@ async def upsert_files(
 
     provider_ids = [item.provider_file_id for item in request.items]
     existing_result = await db.execute(
-        select(DriveFile.google_file_id).where(
+        select(DriveFile).where(
             DriveFile.org_id == org_id,
             DriveFile.google_file_id.in_(provider_ids),
+            DriveFile.is_deleted.is_(False),
         )
     )
-    existing_google_ids: set[str] = {row[0] for row in existing_result.all()}
+    existing_files = existing_result.scalars().all()
+    existing_files_map: dict[str, DriveFile] = {f.google_file_id: f for f in existing_files}
+    existing_google_ids: set[str] = set(existing_files_map.keys())
 
     created_count = 0
+    updated_count = 0
     new_files: list[DriveFile] = []
+    modified_files: list[DriveFile] = []
+    metadata_updates: list[dict[str, str]] = []
     unchanged_count = 0
     seen_in_batch: set[str] = set()
 
     for item in request.items:
-        if item.provider_file_id in existing_google_ids:
-            unchanged_count += 1
-            continue
         if item.provider_file_id in seen_in_batch:
             unchanged_count += 1
             continue
         seen_in_batch.add(item.provider_file_id)
+
+        if item.provider_file_id in existing_google_ids:
+            existing_file = existing_files_map[item.provider_file_id]
+
+            changes_made = False
+
+            if (
+                item.md5_checksum
+                and existing_file.md5_checksum
+                and item.md5_checksum != existing_file.md5_checksum
+            ):
+                existing_file.md5_checksum = item.md5_checksum
+                existing_file.file_size_bytes = item.size
+                existing_file.google_modified_time = item.modified_time
+                existing_file.processing_status = "pending"
+                existing_file.enrichment_state = "pending"
+                existing_file.stt_status = "pending"
+                existing_file.ocr_status = "pending"
+                existing_file.caption_status = "pending"
+                existing_file.face_status = "pending"
+                existing_file.proxy_s3_key = None
+                existing_file.scene_count = 0
+                existing_file.retry_count = 0
+                existing_file.last_error = None
+                modified_files.append(existing_file)
+                changes_made = True
+
+            if item.name != existing_file.file_name:
+                existing_file.file_name = item.name
+                metadata_updates.append({"video_id": existing_file.video_id, "video_title": item.name})
+                changes_made = True
+
+            if item.drive_path and item.drive_path != existing_file.drive_path:
+                existing_file.drive_path = item.drive_path
+                metadata_updates.append({"video_id": existing_file.video_id, "source_path": item.drive_path})
+                changes_made = True
+
+            if item.web_view_link and item.web_view_link != existing_file.web_view_link:
+                existing_file.web_view_link = item.web_view_link
+                changes_made = True
+
+            if changes_made:
+                updated_count += 1
+            else:
+                unchanged_count += 1
+            continue
 
         video_id = _drive_video_id(org_id_str, item.provider_file_id)
         drive_file = DriveFile(
@@ -438,7 +490,7 @@ async def upsert_files(
         new_files.append(drive_file)
         created_count += 1
 
-    if created_count > 0:
+    if created_count > 0 or updated_count > 0:
         await db.flush()
 
 
@@ -459,24 +511,100 @@ async def upsert_files(
             drive_id=connection.drive_id,
         )
 
+    for f in modified_files:
+        publish_processing_job(
+            file_id=f.id,
+            org_id=org_id,
+            connection_id=connection_id,
+            video_id=f.video_id,
+            google_file_id=f.google_file_id,
+            file_name=f.file_name,
+            mime_type=f.mime_type,
+            file_size_bytes=f.file_size_bytes,
+            library_id=connection.library_id,
+            scope_type=connection.scope_type,
+            drive_id=connection.drive_id,
+        )
+
     latency_ms = int((time.monotonic() - t0) * 1000)
     logger.info(
         "internal_sync_files_upserted",
         connection_id=str(connection_id),
         created_count=created_count,
+        updated_count=updated_count,
         unchanged_count=unchanged_count,
+        metadata_updates_count=len(metadata_updates),
         total_items=len(request.items),
         latency_ms=latency_ms,
         lease_token=_mask_lease_token(request.lease_token),
     )
 
     enqueued_jobs: dict[str, int] = {}
-    if created_count > 0:
-        enqueued_jobs = {"processing": created_count}
+    if created_count + len(modified_files) > 0:
+        enqueued_jobs = {"processing": created_count + len(modified_files)}
 
     return UpsertFilesResponse(
         created_count=created_count,
-        updated_count=0,
+        updated_count=updated_count,
         unchanged_count=unchanged_count,
         enqueued_jobs=enqueued_jobs,
+    )
+
+
+@router.post(
+    "/connections/{connection_id}/delete_files",
+    response_model=DeleteFilesResponse,
+)
+async def delete_files(
+    connection_id: UUID,
+    request: DeleteFilesRequest,
+    _token: str = Depends(_verify_internal_token),
+    db: AsyncSession = Depends(get_db_session),
+    scene_client: SceneSearchClient = Depends(get_scene_opensearch_client),
+):
+    """Soft-delete files by Google file IDs. Removes scenes from OpenSearch."""
+    conn_result = await db.execute(
+        select(DriveConnection).where(DriveConnection.id == connection_id)
+    )
+    connection = conn_result.scalar_one_or_none()
+    if connection is None:
+        raise HTTPException(status_code=404, detail=f"Connection not found: {connection_id}")
+    _enforce_connection_lease(connection, request.lease_token)
+
+    org_id = connection.org_id
+
+    result = await db.execute(
+        select(DriveFile).where(
+            DriveFile.org_id == org_id,
+            DriveFile.google_file_id.in_(request.google_file_ids),
+            DriveFile.is_deleted.is_(False),
+        )
+    )
+    files_to_delete = result.scalars().all()
+
+    found_ids = {f.google_file_id for f in files_to_delete}
+    not_found_count = len(request.google_file_ids) - len(found_ids)
+
+    if files_to_delete:
+        video_ids = list({f.video_id for f in files_to_delete})
+        await db.execute(
+            update(DriveFile)
+            .where(
+                DriveFile.org_id == org_id,
+                DriveFile.google_file_id.in_(list(found_ids)),
+                DriveFile.is_deleted.is_(False),
+            )
+            .values(is_deleted=True, deleted_at=func.now(), processing_status="deleted")
+        )
+        await db.flush()
+
+        for vid in video_ids:
+            try:
+                await scene_client.delete_scenes_by_video_id(str(org_id), vid)
+            except Exception:
+                logger.warning("delete_scenes_from_opensearch_failed", extra={"video_id": vid})
+
+    return DeleteFilesResponse(
+        deleted_count=len(files_to_delete),
+        not_found_count=not_found_count,
     )

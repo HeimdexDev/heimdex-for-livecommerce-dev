@@ -7,6 +7,7 @@ No direct database access — all state managed via InternalAPIClient.
 """
 # pyright: reportMissingImports=false
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from google.oauth2.credentials import Credentials
@@ -109,7 +110,47 @@ def _discover_drive_connection(
     conn: Any,
     settings: Any,
 ) -> int:
-    """Discover files from a Shared Drive connection."""
+    """Discover files from a Shared Drive connection.
+
+    Strategy:
+    - If change_token exists AND last_full_sync_at < 7 days: incremental via changes().list()
+    - Otherwise: full re-scan via files().list() + obtain initial change_token
+    """
+    now = datetime.now(timezone.utc)
+    seven_days_ago = now - timedelta(days=7)
+
+    last_full = None
+    if conn.last_full_sync_at:
+        try:
+            last_full = datetime.fromisoformat(conn.last_full_sync_at)
+        except (ValueError, TypeError):
+            last_full = None
+
+    use_incremental = (
+        conn.change_token is not None
+        and last_full is not None
+        and last_full > seven_days_ago
+    )
+
+    if use_incremental:
+        return _incremental_sync_drive(api_client, service, conn)
+
+    count = _full_scan_drive(api_client, service, conn)
+    start_token = service.changes().getStartPageToken(
+        driveId=conn.drive_id, supportsAllDrives=True,
+    ).execute()["startPageToken"]
+    api_client.checkpoint(
+        conn.connection_id,
+        lease_token=conn.lease_token,
+        change_token=start_token,
+        last_full_sync_at=now.isoformat(),
+        release=False,
+    )
+    return count
+
+
+def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> int:
+    """Full file listing from Shared Drive (existing logic, extracted)."""
     items: list[dict[str, Any]] = []
     page_token: str | None = None
 
@@ -152,6 +193,78 @@ def _discover_drive_connection(
             break
 
     return _batch_upsert(api_client, conn, items)
+
+
+def _incremental_sync_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> int:
+    """Incremental sync using changes().list() for a Shared Drive."""
+    page_token = conn.change_token
+    items_to_upsert: list[dict[str, Any]] = []
+    file_ids_to_delete: list[str] = []
+
+    while True:
+        response = service.changes().list(
+            pageToken=page_token,
+            driveId=conn.drive_id,
+            includeItemsFromAllDrives=True,
+            supportsAllDrives=True,
+            fields="nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,size,md5Checksum,modifiedTime,trashed,parents,webViewLink))",
+            spaces="drive",
+        ).execute()
+
+        for change in response.get("changes", []):
+            file_id = change.get("fileId")
+            is_removed = change.get("removed", False)
+            file_data = change.get("file", {})
+            is_trashed = file_data.get("trashed", False)
+
+            if is_removed or is_trashed:
+                if file_id:
+                    file_ids_to_delete.append(file_id)
+                continue
+
+            mime_type = file_data.get("mimeType", "")
+            if not mime_type.startswith("video/"):
+                continue
+
+            path_map: dict[str, str] = {}
+            try:
+                path_map = _resolve_folder_paths(service, [file_data], conn.drive_id)
+            except Exception:
+                logger.warning("incremental_path_resolve_failed", exc_info=True)
+
+            drive_path = path_map.get(file_data.get("id"))
+            items_to_upsert.append(_file_to_upsert_item(file_data, drive_path))
+
+        if "newStartPageToken" in response:
+            new_token = response["newStartPageToken"]
+            break
+        page_token = response["nextPageToken"]
+
+    upsert_count = _batch_upsert(api_client, conn, items_to_upsert) if items_to_upsert else 0
+
+    delete_count = 0
+    if file_ids_to_delete:
+        delete_count = _batch_delete(api_client, conn, file_ids_to_delete)
+
+    api_client.checkpoint(
+        conn.connection_id,
+        lease_token=conn.lease_token,
+        change_token=new_token,
+        release=False,
+    )
+
+    logger.info(
+        "incremental_sync_drive_complete",
+        extra={
+            "org_id": str(conn.org_id),
+            "connection_id": str(conn.connection_id),
+            "upserted": upsert_count,
+            "deleted": delete_count,
+            "changes_processed": len(items_to_upsert) + len(file_ids_to_delete),
+        },
+    )
+
+    return upsert_count + delete_count
 
 
 def _discover_folder_connection(
@@ -273,6 +386,20 @@ def _batch_upsert(
         total_created += result.created_count
 
     return total_created
+
+
+def _batch_delete(api_client: InternalAPIClient, conn: Any, google_file_ids: list[str]) -> int:
+    """Soft-delete files in batches."""
+    total_deleted = 0
+    for i in range(0, len(google_file_ids), _MAX_UPSERT_BATCH):
+        batch = google_file_ids[i : i + _MAX_UPSERT_BATCH]
+        result = api_client.delete_files(
+            conn.connection_id,
+            lease_token=conn.lease_token,
+            google_file_ids=batch,
+        )
+        total_deleted += result.deleted_count
+    return total_deleted
 
 
 def _resolve_folder_paths(

@@ -114,3 +114,17 @@ class UpsertFilesResponse(BaseModel):
     updated_count: int
     unchanged_count: int
     enqueued_jobs: dict[str, int]
+
+
+class DeleteFilesRequest(BaseModel):
+    """Request to soft-delete files by Google file IDs."""
+
+    lease_token: str
+    google_file_ids: list[str] = Field(..., max_length=500)
+
+
+class DeleteFilesResponse(BaseModel):
+    """Response for soft-delete files."""
+
+    deleted_count: int
+    not_found_count: int
