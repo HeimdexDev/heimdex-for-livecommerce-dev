@@ -34,7 +34,7 @@ def test_incremental_sync_uses_change_token(monkeypatch):
         last_full_sync_at=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
     )
 
-    monkeypatch.setattr(discover, "_batch_upsert", lambda *_: 0)
+    monkeypatch.setattr(discover, "_batch_upsert", lambda *_: (0, []))
     monkeypatch.setattr(discover, "_batch_delete", lambda *_: 0)
 
     changes_resource = service.changes.return_value
@@ -54,6 +54,7 @@ def test_full_scan_when_no_token():
     api_client = MagicMock()
     service = MagicMock()
     conn = _make_conn(change_token=None, last_full_sync_at=None)
+    api_client.list_connection_file_ids.return_value = set()
 
     files_resource = service.files.return_value
     files_resource.list.return_value.execute.return_value = {"files": []}
@@ -74,6 +75,7 @@ def test_full_scan_when_token_stale():
         change_token="old-token",
         last_full_sync_at=(datetime.now(timezone.utc) - timedelta(days=8)).isoformat(),
     )
+    api_client.list_connection_file_ids.return_value = set()
 
     files_resource = service.files.return_value
     files_resource.list.return_value.execute.return_value = {"files": []}
@@ -86,3 +88,96 @@ def test_full_scan_when_token_stale():
     assert result == 0
     assert files_resource.list.call_count == 1
     assert service.changes.return_value.list.call_count == 0
+
+
+def test_reconcile_detects_deletions(monkeypatch):
+    api_client = MagicMock()
+    conn = _make_conn(change_token=None, last_full_sync_at=None)
+    api_client.list_connection_file_ids.return_value = {"keep", "delete_1", "delete_2"}
+
+    captured: dict[str, list[str]] = {}
+
+    def _fake_batch_delete(_api_client, _conn, file_ids):
+        captured["ids"] = list(file_ids)
+        return len(file_ids)
+
+    monkeypatch.setattr(discover, "_batch_delete", _fake_batch_delete)
+
+    deleted_count = discover._reconcile_deleted_files(
+        api_client,
+        conn,
+        {"keep"},
+    )
+
+    assert deleted_count == 2
+    assert set(captured["ids"]) == {"delete_1", "delete_2"}
+
+
+def test_reconcile_no_deletions(monkeypatch):
+    api_client = MagicMock()
+    conn = _make_conn(change_token=None, last_full_sync_at=None)
+    api_client.list_connection_file_ids.return_value = {"a", "b"}
+
+    monkeypatch.setattr(discover, "_batch_delete", lambda *_: 99)
+
+    deleted_count = discover._reconcile_deleted_files(
+        api_client,
+        conn,
+        {"a", "b"},
+    )
+
+    assert deleted_count == 0
+
+
+def test_full_scan_with_reconciliation(monkeypatch):
+    api_client = MagicMock()
+    service = MagicMock()
+    conn = _make_conn(change_token=None, last_full_sync_at=None)
+
+    service.files.return_value.list.return_value.execute.return_value = {
+        "files": [
+            {
+                "id": "file_a",
+                "name": "video_a.mp4",
+                "mimeType": "video/mp4",
+                "size": "100",
+                "md5Checksum": "md5-a",
+                "modifiedTime": "2026-02-26T00:00:00Z",
+            },
+            {
+                "id": "file_b",
+                "name": "video_b.mp4",
+                "mimeType": "video/mp4",
+                "size": "200",
+                "md5Checksum": "md5-b",
+                "modifiedTime": "2026-02-26T00:00:00Z",
+            },
+        ]
+    }
+
+    monkeypatch.setattr(discover, "_resolve_folder_paths", lambda *_: {})
+
+    def _fake_batch_upsert(_api_client, _conn, items):
+        assert len(items) == 2
+        return 2, [{"video_id": "vid_1", "video_title": "renamed.mp4"}]
+
+    monkeypatch.setattr(discover, "_batch_upsert", _fake_batch_upsert)
+
+    captured_updates: dict[str, object] = {}
+
+    def _fake_update_metadata(connection_id, *, lease_token, updates):
+        captured_updates["connection_id"] = connection_id
+        captured_updates["lease_token"] = lease_token
+        captured_updates["updates"] = updates
+        return MagicMock(updated_scene_count=3, skipped_count=0)
+
+    api_client.update_metadata.side_effect = _fake_update_metadata
+    api_client.list_connection_file_ids.return_value = {"file_a", "file_b", "file_c"}
+    monkeypatch.setattr(discover, "_batch_delete", lambda *_: 1)
+
+    result = discover._full_scan_drive(api_client, service, conn)
+
+    assert result == 3
+    assert captured_updates["connection_id"] == conn.connection_id
+    assert captured_updates["lease_token"] == conn.lease_token
+    assert captured_updates["updates"] == [{"video_id": "vid_1", "video_title": "renamed.mp4"}]

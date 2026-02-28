@@ -152,6 +152,7 @@ def _discover_drive_connection(
 def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> int:
     """Full file listing from Shared Drive (existing logic, extracted)."""
     items: list[dict[str, Any]] = []
+    scanned_google_file_ids: set[str] = set()
     page_token: str | None = None
 
     while True:
@@ -186,13 +187,23 @@ def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> 
             google_file_id = file.get("id")
             if not google_file_id:
                 continue
+            scanned_google_file_ids.add(google_file_id)
             items.append(_file_to_upsert_item(file, path_map.get(google_file_id)))
 
         page_token = response.get("nextPageToken")
         if not page_token:
             break
 
-    return _batch_upsert(api_client, conn, items)
+    upsert_count, metadata_updates = _batch_upsert(api_client, conn, items)
+    if metadata_updates:
+        api_client.update_metadata(
+            conn.connection_id,
+            lease_token=conn.lease_token,
+            updates=metadata_updates,
+        )
+
+    reconcile_count = _reconcile_deleted_files(api_client, conn, scanned_google_file_ids)
+    return upsert_count + reconcile_count
 
 
 def _incremental_sync_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> int:
@@ -240,7 +251,15 @@ def _incremental_sync_drive(api_client: InternalAPIClient, service: Any, conn: A
             break
         page_token = response["nextPageToken"]
 
-    upsert_count = _batch_upsert(api_client, conn, items_to_upsert) if items_to_upsert else 0
+    upsert_count = 0
+    if items_to_upsert:
+        upsert_count, metadata_updates = _batch_upsert(api_client, conn, items_to_upsert)
+        if metadata_updates:
+            api_client.update_metadata(
+                conn.connection_id,
+                lease_token=conn.lease_token,
+                updates=metadata_updates,
+            )
 
     delete_count = 0
     if file_ids_to_delete:
@@ -306,6 +325,7 @@ def _discover_folder_connection(
 
     folder_path_prefix = conn.folder_path or conn.folder_name or ""
     items: list[dict[str, Any]] = []
+    scanned_google_file_ids: set[str] = set()
 
     for current_folder_id in all_folder_ids:
         page_token: str | None = None
@@ -325,6 +345,7 @@ def _discover_folder_connection(
                 google_file_id = file.get("id")
                 if not google_file_id:
                     continue
+                scanned_google_file_ids.add(google_file_id)
                 file_name = file.get("name", "")
                 drive_path = f"{folder_path_prefix}/{file_name}" if folder_path_prefix else file_name
                 items.append(_file_to_upsert_item(file, drive_path))
@@ -333,7 +354,16 @@ def _discover_folder_connection(
             if not page_token:
                 break
 
-    return _batch_upsert(api_client, conn, items)
+    upsert_count, metadata_updates = _batch_upsert(api_client, conn, items)
+    if metadata_updates:
+        api_client.update_metadata(
+            conn.connection_id,
+            lease_token=conn.lease_token,
+            updates=metadata_updates,
+        )
+
+    reconcile_count = _reconcile_deleted_files(api_client, conn, scanned_google_file_ids)
+    return upsert_count + reconcile_count
 
 
 def _file_to_upsert_item(file: dict[str, Any], drive_path: str | None = None) -> dict[str, Any]:
@@ -370,12 +400,12 @@ def _batch_upsert(
     api_client: InternalAPIClient,
     conn: Any,
     items: list[dict[str, Any]],
-) -> int:
-    """Upsert items in batches of _MAX_UPSERT_BATCH. Returns total created count."""
+) -> tuple[int, list[dict[str, str]]]:
     if not items:
-        return 0
+        return 0, []
 
     total_created = 0
+    all_metadata_updates: list[dict[str, str]] = []
     for i in range(0, len(items), _MAX_UPSERT_BATCH):
         batch = items[i : i + _MAX_UPSERT_BATCH]
         result = api_client.upsert_files(
@@ -384,8 +414,39 @@ def _batch_upsert(
             items=batch,
         )
         total_created += result.created_count
+        all_metadata_updates.extend(result.metadata_updates)
 
-    return total_created
+    return total_created, all_metadata_updates
+
+
+def _reconcile_deleted_files(
+    api_client: InternalAPIClient,
+    conn: Any,
+    scanned_google_file_ids: set[str],
+) -> int:
+    existing_file_ids = api_client.list_connection_file_ids(conn.connection_id)
+    deleted_ids = existing_file_ids - scanned_google_file_ids
+
+    if not deleted_ids:
+        logger.info(
+            "reconcile_no_deletions",
+            extra={
+                "connection_id": str(conn.connection_id),
+                "scanned": len(scanned_google_file_ids),
+            },
+        )
+        return 0
+
+    logger.info(
+        "reconcile_detected_deletions",
+        extra={
+            "connection_id": str(conn.connection_id),
+            "scanned": len(scanned_google_file_ids),
+            "existing": len(existing_file_ids),
+            "to_delete": len(deleted_ids),
+        },
+    )
+    return _batch_delete(api_client, conn, list(deleted_ids))
 
 
 def _batch_delete(api_client: InternalAPIClient, conn: Any, google_file_ids: list[str]) -> int:
