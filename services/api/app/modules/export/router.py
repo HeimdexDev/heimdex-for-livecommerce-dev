@@ -5,9 +5,11 @@ import re
 import shutil
 import tempfile
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
-from typing import Annotated
+from typing import Annotated, cast
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse, Response
@@ -30,11 +32,27 @@ from app.modules.export.packager import (
     package_premiere_export,
 )
 from app.modules.drive.models import DriveConnection, DriveFile
-from app.modules.export.schemas import ExportClipRequest, ExportEdlRequest, ExportEdlResponse, ExportPremierePackageRequest, ExportPremiereRequest
+from app.modules.export.schemas import (
+    ExportClipRequest,
+    ExportEdlRequest,
+    ExportEdlResponse,
+    ExportPremierePackageRequest,
+    ExportPremiereRequest,
+    ProxyPackRequest,
+    ProxyPackInitResponse,
+    ProxyPackStatusResponse,
+)
+from app.modules.export.hashing import compute_export_hash
+from app.modules.export.limits import deduplicate_proxies, estimate_export_size
+from app.modules.export.models import ExportRecord
+from app.modules.export.repository import ExportRecordRepository
+from app.sqs_producer import publish_export_job
 from app.modules.tenancy.context import OrgContext
 from app.modules.tenancy.middleware import get_current_org
 from app.config import get_settings
 from app.storage.s3 import S3Client
+from app.modules.auth.service import get_current_user
+from app.modules.users.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -598,3 +616,175 @@ def _relative_drive_path(conn: DriveConnection | None, df: DriveFile) -> str:
         return f"{conn.folder_path}/{df.drive_path}"
     else:
         return df.drive_path or df.file_name
+
+
+# --- Proxy Pack Export (async via SQS) ---
+
+
+@router.post("/proxy-pack", response_model=ProxyPackInitResponse)
+async def initiate_proxy_pack(
+    body: ProxyPackRequest,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    settings = get_settings()
+    file_repo = DriveFileRepository(db)
+    export_repo = ExportRecordRepository(db)
+
+    if len(body.clips) > settings.export_max_clips:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Clip count ({len(body.clips)}) exceeds limit ({settings.export_max_clips})",
+        )
+
+    video_ids = list({clip.video_id for clip in body.clips})
+    drive_files_by_vid: dict[str, DriveFile] = {}
+    for vid in video_ids:
+        if not vid.startswith("gd_"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"video_id must start with 'gd_': {vid}",
+            )
+        df = await file_repo.get_by_video_id(org_ctx.org_id, vid)
+        if df is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Video not found: {vid}",
+            )
+        if not df.proxy_s3_key:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Proxy not available for video: {vid}",
+            )
+        drive_files_by_vid[vid] = df
+
+    clip_dicts = [
+        {"scene_id": c.scene_id, "video_id": c.video_id, "start_ms": c.start_ms, "end_ms": c.end_ms}
+        for c in body.clips
+    ]
+    deduped = deduplicate_proxies(clip_dicts, drive_files_by_vid)
+
+    if len(deduped) > settings.export_max_proxies:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Proxy count ({len(deduped)}) exceeds limit ({settings.export_max_proxies})",
+        )
+
+    estimate = estimate_export_size(deduplicated_files=deduped, clip_count=len(body.clips))
+
+    if estimate.total_bytes > settings.export_max_size_bytes:
+        size_gb = estimate.total_bytes / (1024 ** 3)
+        limit_gb = settings.export_max_size_bytes / (1024 ** 3)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Estimated export size ({size_gb:.1f} GB) exceeds limit ({limit_gb:.1f} GB)",
+        )
+
+    export_hash = compute_export_hash(
+        org_id=str(org_ctx.org_id),
+        clips=clip_dicts,
+        include_markers=body.include_markers,
+        include_transcript_markers=body.include_transcript_markers,
+        clip_gap_ms=body.clip_gap_ms,
+    )
+
+    cached = await export_repo.find_cached(org_id=org_ctx.org_id, export_hash=export_hash)
+    if cached:
+        return ProxyPackInitResponse(
+            job_id=str(cached.id),
+            status="ready",
+            estimated_size_bytes=cached.size_bytes or estimate.total_bytes,
+            proxy_count=cached.proxy_count,
+            clip_count=cached.clip_count,
+        )
+
+    expires_at = datetime.now(timezone.utc) + timedelta(days=settings.export_expiry_days)
+
+    request_snapshot = {
+        "sequence_name": body.sequence_name,
+        "clips": [c.model_dump() for c in body.clips],
+        "clip_gap_ms": body.clip_gap_ms,
+        "include_markers": body.include_markers,
+        "include_transcript_markers": body.include_transcript_markers,
+    }
+
+    record = await export_repo.create(
+        org_id=org_ctx.org_id,
+        user_id=cast(UUID, user.id),
+        export_hash=export_hash,
+        clip_count=len(body.clips),
+        proxy_count=len(deduped),
+        sequence_name=body.sequence_name,
+        request_body=request_snapshot,
+        expires_at=expires_at,
+    )
+
+    publish_export_job(
+        export_id=record.id,
+        org_id=org_ctx.org_id,
+        user_id=cast(UUID, user.id),
+        export_hash=export_hash,
+    )
+
+    logger.info(
+        "proxy_pack_initiated",
+        extra={
+            "org_id": str(org_ctx.org_id),
+            "export_id": str(record.id),
+            "export_hash": export_hash,
+            "clip_count": len(body.clips),
+            "proxy_count": len(deduped),
+            "estimated_bytes": estimate.total_bytes,
+        },
+    )
+
+    return ProxyPackInitResponse(
+        job_id=str(record.id),
+        status="pending",
+        estimated_size_bytes=estimate.total_bytes,
+        proxy_count=len(deduped),
+        clip_count=len(body.clips),
+    )
+
+
+@router.get("/proxy-pack/{job_id}", response_model=ProxyPackStatusResponse)
+async def get_proxy_pack_status(
+    job_id: str,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    export_repo = ExportRecordRepository(db)
+
+    try:
+        export_uuid = UUID(job_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid job_id format",
+        )
+
+    record = await export_repo.get(export_uuid, org_ctx.org_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Export job not found",
+        )
+
+    download_url: str | None = None
+    expires_at_str: str | None = None
+
+    if record.status == "ready" and record.s3_key:
+        settings = get_settings()
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        download_url = s3.generate_presigned_url(record.s3_key, expires_in=3600)
+        expires_at_str = record.expires_at.isoformat()
+
+    return ProxyPackStatusResponse(
+        job_id=str(record.id),
+        status=record.status,
+        download_url=download_url,
+        size_bytes=record.size_bytes,
+        error=record.error_message,
+        expires_at=expires_at_str,
+    )

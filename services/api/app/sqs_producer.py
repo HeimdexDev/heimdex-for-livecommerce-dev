@@ -34,8 +34,8 @@ _QUEUE_URL_ATTRS = {
     "transcode": "sqs_transcode_queue_url",
     "face": "sqs_face_queue_url",
     "visual_embed": "sqs_visual_embed_queue_url",
+    "export": "sqs_export_queue_url",
 }
-
 
 # ── Internal helpers ───────────────────────────────────────────────────
 
@@ -246,3 +246,29 @@ def publish_transcode_job(
     }
     dedup_id = f"{file_id}:transcode:{now.strftime('%Y%m%dT%H%M')}"
     _publish("transcode", body, dedup_id)
+
+
+def publish_export_job(
+    *,
+    export_id: UUID,
+    org_id: UUID,
+    user_id: UUID,
+    export_hash: str,
+) -> None:
+    """Publish an export job to the export queue.
+
+    Called from the proxy-pack endpoint after creating an ExportRecord.
+    The drive-worker consumes this and assembles the ZIP bundle.
+    """
+    now = datetime.now(timezone.utc)
+    body = {
+        "version": "1",
+        "type": "export.proxy_pack",
+        "timestamp": now.isoformat(),
+        "export_id": str(export_id),
+        "org_id": str(org_id),
+        "user_id": str(user_id),
+        "export_hash": export_hash,
+    }
+    dedup_id = f"{export_id}:export:{now.strftime('%Y%m%dT%H%M')}"
+    _publish("export", body, dedup_id)

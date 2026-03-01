@@ -125,6 +125,19 @@ def _path_to_file_url(path: str) -> str:
     return f"file://{encoded}"
 
 
+def _media_src(path: str) -> str:
+    """Convert a media path to an FCPXML src attribute value.
+
+    Absolute paths become file:// URLs (backward-compatible).
+    Relative paths are URL-encoded as-is (for bundled proxy media).
+    """
+    normalized = path.replace("\\", "/")
+    is_abs = normalized.startswith("/") or (len(normalized) >= 3 and normalized[1] == ":")
+    if is_abs:
+        return _path_to_file_url(path)
+    components = normalized.split("/")
+    return "/".join(quote(component, safe="") for component in components)
+
 def _uid_from_path(path: str) -> str:
     return md5(path.encode("utf-8")).hexdigest().upper()
 
@@ -195,7 +208,7 @@ def generate_fcpxml(
 
     for clip in clips:
         fmt_id = ensure_format(clip)
-        src = _path_to_file_url(clip.file_path)
+        src = _media_src(clip.file_path)
         asset_key = clip.file_path
         if asset_key in asset_by_key:
             continue

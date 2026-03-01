@@ -173,6 +173,34 @@ def main() -> None:
     )
     sqs_consumer.start()
 
+    # ── SQS Consumer (export proxy-pack jobs) ─────────────────────
+    export_consumer = None
+    if settings.sqs_export_queue_url:
+        from src.tasks.export import handle_export_proxy_pack
+
+        def _export_callback(message):
+            import json as _json
+            body = _json.loads(message.get("Body", "{}"))
+            handle_export_proxy_pack(body, api_client, settings)
+
+        export_sqs_client = SQSJobClient(
+            queue_url=settings.sqs_export_queue_url,
+            region=settings.sqs_region,
+            endpoint_url=settings.sqs_endpoint_url or None,
+        )
+        export_consumer = SQSConsumerLoop(
+            sqs_client=export_sqs_client,
+            process_callback=_export_callback,
+            semaphore=semaphore,
+            visibility_timeout=600,
+            heartbeat_interval=300,
+            worker_name="export",
+        )
+        export_consumer.start()
+        logger.info("export_sqs_consumer_started", extra={"queue_url": settings.sqs_export_queue_url})
+    else:
+        logger.info("export_sqs_consumer_disabled")
+
     # ── HTTP Poll (discovery only — no processing claims) ─────────
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -192,6 +220,8 @@ def main() -> None:
             logger.info("shutdown_signal_received")
             scheduler.shutdown(wait=False)
             sqs_consumer.stop(timeout=30.0)
+            if export_consumer:
+                export_consumer.stop(timeout=30.0)
             stop_event.set()
 
         loop.add_signal_handler(signal.SIGTERM, shutdown)

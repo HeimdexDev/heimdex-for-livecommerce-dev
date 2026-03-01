@@ -310,6 +310,9 @@ if get_settings().drive_connector_enabled:
     from app.modules.face.router import router as internal_face_router
     app.include_router(internal_face_router)
 
+    from app.modules.export.internal_router import router as internal_export_router
+    app.include_router(internal_export_router)
+
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

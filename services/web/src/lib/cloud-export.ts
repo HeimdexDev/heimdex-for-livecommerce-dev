@@ -294,3 +294,97 @@ export async function exportPremierePackage(
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+
+// --- Proxy Pack Export (async via SQS worker) ---
+
+export interface ProxyPackClipInput {
+  scene_id: string;
+  video_id: string;
+  video_title: string;
+  start_ms: number;
+  end_ms: number;
+  label?: string;
+  keyword_tags?: string[];
+  transcript_raw?: string;
+}
+
+export interface ProxyPackRequest {
+  sequence_name: string;
+  clips: ProxyPackClipInput[];
+  clip_gap_ms: number;
+  include_markers: boolean;
+  include_transcript_markers: boolean;
+}
+
+export interface ProxyPackInitResponse {
+  job_id: string;
+  status: string;
+  estimated_size_bytes: number;
+  proxy_count: number;
+  clip_count: number;
+}
+
+export interface ProxyPackStatusResponse {
+  job_id: string;
+  /** pending | generating | uploading | ready | failed | expired */
+  status: string;
+  download_url: string | null;
+  size_bytes: number | null;
+  error: string | null;
+  expires_at: string | null;
+}
+
+/**
+ * Initiate a proxy-pack export job. Returns immediately with a job_id
+ * for polling. If a cached export exists, status will be "ready" with
+ * the download_url already available.
+ */
+export async function initiateProxyPack(
+  request: ProxyPackRequest,
+  getToken?: TokenGetter,
+): Promise<ProxyPackInitResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (getToken) {
+    try {
+      const token = await getToken();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+    } catch { /* proceed without auth */ }
+  }
+  const response = await fetch(`${API_BASE_URL}/api/export/proxy-pack`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail ?? `Proxy pack initiation failed (${response.status})`);
+  }
+  return response.json();
+}
+
+/**
+ * Poll the status of a proxy-pack export job.
+ * Terminal states: ready, failed, expired.
+ */
+export async function pollProxyPackStatus(
+  jobId: string,
+  getToken?: TokenGetter,
+): Promise<ProxyPackStatusResponse> {
+  const headers: Record<string, string> = {};
+  if (getToken) {
+    try {
+      const token = await getToken();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+    } catch { /* proceed without auth */ }
+  }
+  const response = await fetch(`${API_BASE_URL}/api/export/proxy-pack/${jobId}`, {
+    method: "GET",
+    headers,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail ?? `Status check failed (${response.status})`);
+  }
+  return response.json();
+}

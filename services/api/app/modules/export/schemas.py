@@ -103,3 +103,39 @@ class ExportPremierePackageRequest(BaseModel):
         default=False,
         description="Include transcript text in clip markers",
     )
+
+
+# --- Proxy Pack Export ---
+
+
+class ProxyPackRequest(BaseModel):
+    sequence_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+    )
+    clips: list[ExportPackageClipInput] = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+    )
+    clip_gap_ms: int = Field(default=0, ge=0, le=5000)
+    include_markers: bool = Field(default=True)
+    include_transcript_markers: bool = Field(default=False)
+
+
+class ProxyPackInitResponse(BaseModel):
+    job_id: str
+    status: str = "pending"
+    estimated_size_bytes: int
+    proxy_count: int
+    clip_count: int
+
+
+class ProxyPackStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    download_url: str | None = None
+    size_bytes: int | None = None
+    error: str | None = None
+    expires_at: str | None = None

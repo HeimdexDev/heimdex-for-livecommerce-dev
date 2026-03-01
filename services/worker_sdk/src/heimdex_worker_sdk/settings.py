@@ -88,6 +88,13 @@ class WorkerSettings(BaseSettings):
     sqs_transcode_queue_url: str = ""
     sqs_face_queue_url: str = ""
     sqs_visual_embed_queue_url: str = ""
+    sqs_export_queue_url: str = ""
+
+    # --- Proxy-pack export ---
+    export_max_size_bytes: int = 2_147_483_648
+    export_max_clips: int = 100
+    export_max_proxies: int = 20
+    export_expiry_days: int = 3
 
 
     # --- GPU acceleration (AirCloud+ remote workers) ---
