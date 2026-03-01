@@ -66,6 +66,8 @@ def sqs_to_claimed_processing_file(message: SQSMessage) -> ClaimedProcessingFile
             library_id=UUID(body["library_id"]) if body.get("library_id") else None,
             scope_type=body.get("scope_type"),
             drive_id=body.get("drive_id"),
+            google_created_time=body.get("google_created_time"),
+            google_modified_time=body.get("google_modified_time"),
             lease_token=None,
         )
     except (KeyError, ValueError, TypeError) as e:

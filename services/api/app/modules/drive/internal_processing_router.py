@@ -92,6 +92,8 @@ async def claim_processing(
                 library_id=connection.library_id,
                 scope_type=connection.scope_type,
                 drive_id=connection.drive_id,
+                google_created_time=drive_file.google_created_time,
+                google_modified_time=drive_file.google_modified_time,
                 lease_token=token,
                 lease_expires_at=lease_expires_at,
             )

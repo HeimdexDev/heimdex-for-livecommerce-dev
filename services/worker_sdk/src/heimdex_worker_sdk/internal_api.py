@@ -113,6 +113,8 @@ class ClaimedProcessingFile:
     library_id: Optional[UUID] = None
     scope_type: Optional[str] = None
     drive_id: Optional[str] = None
+    google_created_time: Optional[str] = None
+    google_modified_time: Optional[str] = None
     lease_token: Optional[str] = None
     lease_expires_at: Optional[str] = None
 
@@ -352,6 +354,8 @@ class InternalAPIClient:
                 library_id=UUID(f["library_id"]) if f.get("library_id") else None,
                 scope_type=f.get("scope_type"),
                 drive_id=f.get("drive_id"),
+                google_created_time=f.get("google_created_time"),
+                google_modified_time=f.get("google_modified_time"),
                 lease_token=f.get("lease_token"),
                 lease_expires_at=f.get("lease_expires_at"),
             )

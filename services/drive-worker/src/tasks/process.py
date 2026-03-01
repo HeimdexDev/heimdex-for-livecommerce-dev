@@ -249,12 +249,12 @@ def _process_single_file(
         )
 
         # Build scene dicts for ingest
-        # Note: ClaimedProcessingFile doesn't have google_created_time,
-        # so we pass None for capture_time
+        # Use Google Drive creation time (preferred) or modification time (fallback)
+        google_capture_time = claimed_file.google_created_time or claimed_file.google_modified_time
         scene_dicts = _build_ingest_scene_dicts(
             scene_result.scenes,
             source_type="gdrive",
-            capture_time=None,
+            capture_time=google_capture_time,
             web_view_link=claimed_file.web_view_link,
         )
 

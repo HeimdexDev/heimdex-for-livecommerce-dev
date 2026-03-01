@@ -578,6 +578,9 @@ def _file_to_upsert_item(file: dict[str, Any], drive_path: str | None = None) ->
     modified_time = file.get("modifiedTime")
     if modified_time:
         item["modified_time"] = modified_time
+    created_time = file.get("createdTime")
+    if created_time:
+        item["created_time"] = created_time
     web_view_link = file.get("webViewLink")
     if web_view_link:
         item["web_view_link"] = web_view_link

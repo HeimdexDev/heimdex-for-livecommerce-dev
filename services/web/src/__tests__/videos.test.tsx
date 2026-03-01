@@ -39,6 +39,7 @@ const sampleVideo: VideoSummary = {
   last_scene_end_ms: 120000,
   earliest_ingest_time: "2025-02-10T10:00:00Z",
   latest_ingest_time: "2025-02-10T12:00:00Z",
+  capture_time: null,
   keyword_tags: ["fashion", "unboxing"],
   product_tags: ["product-a"],
   people_count: 2,
@@ -53,6 +54,7 @@ const sampleStats: VideoStats = {
   total_libraries: 3,
   source_breakdown: { gdrive: 30, removable_disk: 12 },
   latest_ingest_time: "2025-02-10T12:00:00Z",
+  latest_capture_time: null,
   scenes_last_24h: 15,
   scenes_last_7d: 100,
 };

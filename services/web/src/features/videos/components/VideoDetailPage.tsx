@@ -185,7 +185,7 @@ function VideoInfoPanel({
     ["폴더 제목", folderName],
     ["재생 시간", durationMs > 0 ? formatHms(durationMs) : "-"],
     ["촬영 장소", "-"],
-    ["촬영 일자 및 시간", captureDate],
+    ["업로드 일자", captureDate],
   ];
 
   useEffect(() => {

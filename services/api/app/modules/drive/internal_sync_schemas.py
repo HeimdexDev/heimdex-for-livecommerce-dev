@@ -91,6 +91,7 @@ class DriveDiscoveredFile(BaseModel):
     name: str = Field(..., max_length=500)
     mime_type: str = Field(..., max_length=128)
     modified_time: Optional[datetime] = None
+    created_time: Optional[datetime] = None
     size: Optional[int] = Field(default=None, ge=0)
     md5_checksum: Optional[str] = Field(default=None, max_length=64)
     drive_path: Optional[str] = None

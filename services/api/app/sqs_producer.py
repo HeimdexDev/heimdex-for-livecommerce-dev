@@ -122,6 +122,8 @@ def publish_processing_job(
     library_id: UUID,
     scope_type: str,
     drive_id: Optional[str],
+    google_created_time: Optional[str] = None,
+    google_modified_time: Optional[str] = None,
 ) -> None:
     """Publish a processing-job-created event to the processing queue.
 
@@ -143,6 +145,8 @@ def publish_processing_job(
         "library_id": str(library_id),
         "scope_type": scope_type,
         "drive_id": drive_id,
+        "google_created_time": google_created_time,
+        "google_modified_time": google_modified_time,
     }
     dedup_id = f"{file_id}:processing:{now.strftime('%Y%m%dT%H%M')}"
     _publish("processing", body, dedup_id)

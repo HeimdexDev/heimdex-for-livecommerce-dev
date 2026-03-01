@@ -102,7 +102,7 @@ export function VideoDetailDrawer({
             )}
             {(video.capture_time || video.latest_ingest_time) && (
               <div>
-                <span className="text-gray-500">{video.capture_time ? "촬영일" : "등록일"}</span>
+                <span className="text-gray-500">{video.capture_time ? "업로드일" : "등록일"}</span>
                 <p className="font-medium text-gray-900">
                   {new Date(video.capture_time || video.latest_ingest_time!).toLocaleString("ko-KR")}
                 </p>

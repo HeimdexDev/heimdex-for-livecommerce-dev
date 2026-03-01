@@ -37,6 +37,8 @@ class ClaimedProcessingFileInfo(BaseModel):
     library_id: Optional[UUID] = None
     scope_type: Optional[str] = None
     drive_id: Optional[str] = None
+    google_created_time: Optional[datetime] = None
+    google_modified_time: Optional[datetime] = None
     lease_token: str
     lease_expires_at: datetime
 

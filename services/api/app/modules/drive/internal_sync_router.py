@@ -467,6 +467,11 @@ async def upsert_files(
                 existing_file.web_view_link = item.web_view_link
                 changes_made = True
 
+            # Backfill google_created_time if not yet set (write-once)
+            if item.created_time and existing_file.google_created_time is None:
+                existing_file.google_created_time = item.created_time
+                changes_made = True
+
             if changes_made:
                 updated_count += 1
             else:
@@ -483,6 +488,7 @@ async def upsert_files(
             file_size_bytes=item.size,
             md5_checksum=item.md5_checksum,
             google_modified_time=item.modified_time,
+            google_created_time=item.created_time,
             drive_path=item.drive_path,
             web_view_link=item.web_view_link,
             video_id=video_id,
@@ -514,6 +520,8 @@ async def upsert_files(
             library_id=connection.library_id,
             scope_type=connection.scope_type,
             drive_id=connection.drive_id,
+            google_created_time=f.google_created_time.isoformat() if f.google_created_time else None,
+            google_modified_time=f.google_modified_time.isoformat() if f.google_modified_time else None,
         )
 
     for f in modified_files:
@@ -529,6 +537,8 @@ async def upsert_files(
             library_id=connection.library_id,
             scope_type=connection.scope_type,
             drive_id=connection.drive_id,
+            google_created_time=f.google_created_time.isoformat() if f.google_created_time else None,
+            google_modified_time=f.google_modified_time.isoformat() if f.google_modified_time else None,
         )
 
     latency_ms = int((time.monotonic() - t0) * 1000)
