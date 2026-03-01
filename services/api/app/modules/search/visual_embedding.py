@@ -47,7 +47,7 @@ from app.logging_config import get_logger
 
 if TYPE_CHECKING:
     import torch
-    from transformers import Siglip2TextModel
+    from transformers import SiglipTextModel
 logger = get_logger(__name__)
 
 VISUAL_EMBEDDING_DIMENSION = 768
@@ -69,7 +69,7 @@ class VisualEmbeddingService:
 
     def __init__(self) -> None:
         self.settings = get_settings()
-        self._model: "Siglip2TextModel | None" = None
+        self._model: "SiglipTextModel | None" = None
         self._tokenizer: Any = None
         self._dtype: "torch.dtype | None" = None
         self._query_cache: dict[str, list[float]] = {}
@@ -93,11 +93,11 @@ class VisualEmbeddingService:
         )
 
         import torch
-        from transformers import AutoTokenizer, Siglip2TextModel
+        from transformers import AutoTokenizer, SiglipTextModel
 
         self._dtype = torch.bfloat16
         self._tokenizer = AutoTokenizer.from_pretrained(_SIGLIP2_MODEL_NAME)
-        self._model = Siglip2TextModel.from_pretrained(
+        self._model = SiglipTextModel.from_pretrained(
             _SIGLIP2_MODEL_NAME,
             torch_dtype=self._dtype,
             low_cpu_mem_usage=True,

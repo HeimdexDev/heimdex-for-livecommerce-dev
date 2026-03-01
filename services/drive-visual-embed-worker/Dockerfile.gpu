@@ -54,8 +54,8 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu12
 # This downloads both the vision encoder and tokenizer (~600MB).
 RUN mkdir -p "${HF_HOME}" \
     && python -c "\
-from transformers import Siglip2VisionModel, AutoProcessor; \
-Siglip2VisionModel.from_pretrained('google/siglip2-base-patch16-256'); \
+from transformers import SiglipVisionModel, AutoProcessor; \
+SiglipVisionModel.from_pretrained('google/siglip2-base-patch16-256'); \
 AutoProcessor.from_pretrained('google/siglip2-base-patch16-256')"
 
 COPY dev-heimdex-for-livecommerce/services/drive-visual-embed-worker/src/ src/
