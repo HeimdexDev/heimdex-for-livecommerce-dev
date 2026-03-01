@@ -305,6 +305,8 @@ class SceneIngestService:
             if enrichment.people_cluster_ids is not None:
                 partial["people_cluster_ids"] = enrichment.people_cluster_ids
 
+            if enrichment.visual_embedding is not None:
+                partial["visual_embedding"] = enrichment.visual_embedding
             if needs_embedding_update:
                 # Merge newly enriched values with existing doc values
                 # for full embedding text using caption-first priority (AD-2).

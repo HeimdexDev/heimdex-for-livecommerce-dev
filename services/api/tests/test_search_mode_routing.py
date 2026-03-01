@@ -160,7 +160,11 @@ class TestSearchModeRouting:
 
     @pytest.mark.asyncio
     async def test_semantic_mode_calls_search_vector(self, mock_search_service, org_id):
-        """Semantic mode should compute embedding and call search_vector()."""
+        """Semantic mode should compute embedding and call search_vector().
+
+        With intent-aware routing, semantic mode may also call search_lexical()
+        for queries classified as metadata/factual/general intent.
+        """
         svc, os_client, mock_embed = mock_search_service
 
         await svc.search(
@@ -173,9 +177,7 @@ class TestSearchModeRouting:
 
         os_client.search_vector.assert_called_once()
         mock_embed.assert_called_once()
-        os_client.search_lexical.assert_not_called()
         os_client.search_metadata.assert_not_called()
-
     @pytest.mark.asyncio
     async def test_default_mode_is_lexical(self, mock_search_service, org_id):
         """Default search_mode should be 'lexical' for backward compatibility."""
@@ -307,8 +309,12 @@ class TestSearchModeEfficiency:
         mock_embed.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_semantic_no_bm25_query(self, mock_search_service, org_id):
-        """Semantic mode should NOT run any BM25 query."""
+    async def test_semantic_blends_bm25_for_general_intent(self, mock_search_service, org_id):
+        """Semantic mode with general intent blends BM25 via intent classification.
+
+        Intent-aware routing uses alpha < 1.0 for general queries, which
+        triggers BM25 alongside kNN for better result quality.
+        """
         svc, os_client, _ = mock_search_service
 
         await svc.search(
@@ -319,9 +325,10 @@ class TestSearchModeEfficiency:
             search_mode="semantic",
         )
 
-        os_client.search_lexical.assert_not_called()
+        # General intent uses alpha=0.7 which triggers BM25 blend
+        os_client.search_vector.assert_called_once()
+        os_client.search_lexical.assert_called_once()
         os_client.search_metadata.assert_not_called()
-
 
 # ---------------------------------------------------------------------------
 # Test: Schema validation

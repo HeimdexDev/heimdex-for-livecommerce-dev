@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     embedding_dimension: int = 1024  # multilingual-e5-large uses 1024 dimensions
     embedding_device: str = "cpu"  # "cpu", "cuda", or "mps" for Apple Silicon
     embedding_use_mock: bool = False  # Set to True to use mock embeddings for testing
+
+    # Visual embedding (SigLIP2) configuration
+    visual_embedding_enabled: bool = False  # Enable SigLIP2 visual search at query time
+    visual_embedding_model: str = "google/siglip2-base-patch16-256"
+    visual_embedding_dimension: int = 768
     
     search_lexical_top_k: int = 200
     search_vector_top_k: int = 200
@@ -166,6 +171,7 @@ class Settings(BaseSettings):
     sqs_ocr_queue_url: str = ""
     sqs_transcode_queue_url: str = ""
     sqs_face_queue_url: str = ""
+    sqs_visual_embed_queue_url: str = ""
 
     # --- CORS ---
     cors_allow_origin_regex: str = (

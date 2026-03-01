@@ -32,7 +32,8 @@ class SceneSearchClient:
     """
 
     EMBEDDING_DIMENSION = 1024
-    INDEX_VERSION = "v2"
+    VISUAL_EMBEDDING_DIMENSION = 768
+    INDEX_VERSION = "v3"
 
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -226,6 +227,17 @@ class SceneSearchClient:
                         "space_type": "cosinesimil",
                         "engine": "lucene",
                         "parameters": {"ef_construction": 128, "m": 24},
+                    },
+                },
+                # Visual embedding (SigLIP2 768-dim)
+                "visual_embedding": {
+                    "type": "knn_vector",
+                    "dimension": self.VISUAL_EMBEDDING_DIMENSION,
+                    "method": {
+                        "name": "hnsw",
+                        "space_type": "cosinesimil",
+                        "engine": "lucene",
+                        "parameters": {"ef_construction": 128, "m": 16},
                     },
                 },
                 # People
@@ -792,6 +804,43 @@ class SceneSearchClient:
                 "knn": {
                     "embedding_vector": {
                         "vector": embedding,
+                        "k": size,
+                        "filter": knn_filter,
+                    }
+                }
+            },
+            "size": size,
+            "_source": True,
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        return response["hits"]["hits"]
+
+    async def search_visual_vector(
+        self,
+        visual_embedding: list[float],
+        org_id: str,
+        filters: dict[str, Any],
+        size: int = 200,
+    ) -> list[dict[str, Any]]:
+        """kNN vector search on SigLIP2 visual embeddings.
+
+        Searches the ``visual_embedding`` field (768-dim) which lives in
+        the same vector space as keyframe visual embeddings produced by the
+        GPU vision worker.  Used at query time with text-encoded queries.
+        """
+        pos_clauses, must_not_clauses = self._build_filter_clauses(filters)
+        filter_clauses = [{"term": {"org_id": org_id}}] + pos_clauses
+
+        knn_filter: dict[str, Any] = {"bool": {"must": filter_clauses}}
+        if must_not_clauses:
+            knn_filter["bool"]["must_not"] = must_not_clauses
+
+        body: dict[str, Any] = {
+            "query": {
+                "knn": {
+                    "visual_embedding": {
+                        "vector": visual_embedding,
                         "k": size,
                         "filter": knn_filter,
                     }

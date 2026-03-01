@@ -87,6 +87,7 @@ class WorkerSettings(BaseSettings):
     sqs_ocr_queue_url: str = ""
     sqs_transcode_queue_url: str = ""
     sqs_face_queue_url: str = ""
+    sqs_visual_embed_queue_url: str = ""
 
 
     # --- GPU acceleration (AirCloud+ remote workers) ---
@@ -97,6 +98,10 @@ class WorkerSettings(BaseSettings):
     # --- Face detection ---
     face_match_threshold: float = 0.55
     drive_face_concurrency: int = 1
+
+    # --- Visual embedding worker ---
+    visual_embed_enabled: bool = False
+    visual_embed_concurrency: int = 1
     class Config:
         env_file: str = ".env"
         env_file_encoding: str = "utf-8"

@@ -21,9 +21,9 @@ from scripts.reembed_scenes import EMBEDDING_VERSION
 class TestReembedMigration:
     """Tests for Phase 3 migration configuration and logic."""
 
-    def test_index_version_is_v2(self):
-        """INDEX_VERSION should be v2 after the migration code change."""
-        assert SceneSearchClient.INDEX_VERSION == "v2"
+    def test_index_version_is_v3(self):
+        """INDEX_VERSION should be v3 after adding visual_embedding field."""
+        assert SceneSearchClient.INDEX_VERSION == "v3"
 
     def test_embedding_version_constant(self):
         """Migration stamps docs with v2_caption."""
@@ -31,8 +31,8 @@ class TestReembedMigration:
 
     @patch("app.modules.search.scene_client.get_opensearch_client")
     @patch("app.modules.search.scene_client.get_settings")
-    def test_scene_client_index_name_v2(self, mock_settings, mock_get_client):
-        """SceneSearchClient should construct v2 index name."""
+    def test_scene_client_index_name_v3(self, mock_settings, mock_get_client):
+        """SceneSearchClient should construct v3 index name."""
         settings = MagicMock()
         settings.opensearch_index_prefix = "heimdex"
         mock_settings.return_value = settings
@@ -40,7 +40,7 @@ class TestReembedMigration:
 
         client = SceneSearchClient()
         assert client.alias_name == "heimdex_scenes"
-        assert client.index_name == "heimdex_scenes_v2"
+        assert client.index_name == "heimdex_scenes_v3"
 
     def test_build_embedding_text_for_migration(self):
         """build_embedding_text produces expected output for typical scene data."""

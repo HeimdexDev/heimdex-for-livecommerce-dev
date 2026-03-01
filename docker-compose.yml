@@ -74,7 +74,7 @@ services:
       context: ./services/api
       dockerfile: Dockerfile
     container_name: heimdex-api
-    mem_limit: 4g
+    mem_limit: 6g  # Increased from 4g for SigLIP2 text encoder (~200MB BF16) alongside E5-large
     cpus: "4.0"
     environment:
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}
@@ -406,6 +406,51 @@ services:
              pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
              python -m src.worker"
 
+  # Visual embedding worker (SigLIP2 vision encoder).
+  # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-visual-embed-worker-gpu:latest on Aircloud+.
+  # Model: google/siglip2-base-patch16-256 — 768-dim visual embeddings.
+  # Guarded by profiles: ["ec2-legacy"] — requires --profile ec2-legacy to start.
+  drive-visual-embed-worker:
+    profiles: ["ec2-legacy"]
+    build:
+      context: .
+      dockerfile: services/drive-visual-embed-worker/Dockerfile
+    container_name: heimdex-drive-visual-embed-worker
+    mem_limit: 4g
+    cpus: "2.0"
+    environment:
+      - PYTHONPATH=/app
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - VISUAL_EMBED_ENABLED=${VISUAL_EMBED_ENABLED:-false}
+      - VISUAL_EMBED_CONCURRENCY=${VISUAL_EMBED_CONCURRENCY:-1}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HF_HOME=/data/huggingface
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
+      # SQS configuration
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_VISUAL_EMBED_QUEUE_URL=${SQS_VISUAL_EMBED_QUEUE_URL:-}
+    volumes:
+      - ./services/drive-visual-embed-worker:/app
+      - huggingface_cache:/data/huggingface
+    networks:
+      - default
+    depends_on:
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "python -m src.worker"
   # DEPRECATED (2026-02-26): STT enrichment worker migrated to Aircloud+ GPU.
   # This CPU service definition is kept for local dev only.
   # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-stt-worker-gpu:latest on Aircloud+.

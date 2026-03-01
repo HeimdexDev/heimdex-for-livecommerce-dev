@@ -51,7 +51,7 @@ class TestSceneSearchClient:
         """Index names follow {prefix}_scenes / {prefix}_scenes_{version} pattern."""
         client, _ = mock_scene_client
         assert client.alias_name == "test_scenes_scenes"
-        assert client.index_name == "test_scenes_scenes_v2"
+        assert client.index_name == "test_scenes_scenes_v3"
         assert client.EMBEDDING_DIMENSION == 1024
 
     # ------------------------------------------------------------------
@@ -151,6 +151,16 @@ class TestSceneSearchClient:
         assert emb["method"]["engine"] == "lucene"
         assert emb["method"]["parameters"]["ef_construction"] == 128
         assert emb["method"]["parameters"]["m"] == 24
+
+        # SigLIP2 visual kNN vector
+        vis_emb = props["visual_embedding"]
+        assert vis_emb["type"] == "knn_vector"
+        assert vis_emb["dimension"] == 768
+        assert vis_emb["method"]["name"] == "hnsw"
+        assert vis_emb["method"]["space_type"] == "cosinesimil"
+        assert vis_emb["method"]["engine"] == "lucene"
+        assert vis_emb["method"]["parameters"]["ef_construction"] == 128
+        assert vis_emb["method"]["parameters"]["m"] == 16
 
         # People + metadata
         assert props["people_cluster_ids"]["type"] == "keyword"

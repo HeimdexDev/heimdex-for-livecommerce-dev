@@ -1,0 +1,67 @@
+FROM python:3.11-slim AS sdk-builder
+WORKDIR /build
+COPY dev-heimdex-for-livecommerce/services/worker_sdk/pyproject.toml .
+COPY dev-heimdex-for-livecommerce/services/worker_sdk/src/ src/
+RUN pip install --no-cache-dir build && python -m build --wheel --outdir /dist
+
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV HF_HOME=/models/huggingface
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    ca-certificates \
+    curl \
+    gnupg \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    git \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      python3.11 \
+      python3.11-distutils \
+      python3.11-venv \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3.11 /tmp/get-pip.py \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip \
+    && rm -f /tmp/get-pip.py \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=sdk-builder /dist/heimdex_worker_sdk-*.whl /tmp/
+RUN pip install --no-cache-dir /tmp/heimdex_worker_sdk-*.whl && rm -f /tmp/*.whl
+
+# PyTorch with CUDA 12.1 support
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
+      "torch>=2.0" "torchvision>=0.15" \
+    && pip install --no-cache-dir \
+      "transformers>=4.49.0" "Pillow>=9.0" \
+      "boto3>=1.34" "pydantic-settings>=2.0" \
+      "structlog>=23.0" "requests>=2.31"
+
+# Pre-download SigLIP2 model into container image for fast cold starts.
+# This downloads both the vision encoder and tokenizer (~600MB).
+RUN mkdir -p "${HF_HOME}" \
+    && python -c "\
+from transformers import Siglip2VisionModel, AutoProcessor; \
+Siglip2VisionModel.from_pretrained('google/siglip2-base-patch16-256'); \
+AutoProcessor.from_pretrained('google/siglip2-base-patch16-256')"
+
+COPY dev-heimdex-for-livecommerce/services/drive-visual-embed-worker/src/ src/
+
+RUN useradd -m -u 1000 appuser \
+    && chown -R appuser:appuser /app /models
+USER appuser
+
+CMD ["python", "-m", "src.worker"]

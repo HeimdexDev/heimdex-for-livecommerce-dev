@@ -28,6 +28,7 @@ from app.modules.people.repository import (
 )
 from app.modules.search.embedding import get_query_embedding
 from app.modules.search.fusion import compute_weighted_rrf, diversify_results
+from app.modules.search.intent import classify_intent
 from app.modules.search.scene_client import SceneSearchClient
 from app.modules.search.schemas import (
     DebugInfo,
@@ -223,7 +224,7 @@ class SceneSearchService:
         )
 
     # ------------------------------------------------------------------
-    # Mode: semantic  (KNN vector search — no BM25)
+    # Mode: semantic  (intent-aware hybrid: kNN + optional BM25)
     # ------------------------------------------------------------------
     async def _search_semantic(
         self,
@@ -232,8 +233,24 @@ class SceneSearchService:
     ) -> SceneSearchResponse | VideoSearchResponse:
         """Semantic mode: meaning-based search via embedding vector.
 
-        Computes query embedding and runs KNN only. No BM25 queries.
+        Uses intent classification to intelligently blend BM25 when the
+        query contains metadata/factual signals. Pure kNN queries (general/
+        visual intent) run without BM25 overhead.
         """
+        intent = classify_intent(ctx.query)
+
+        # Intent-determined alpha overrides the fixed 1.0 when BM25 is beneficial
+        effective_alpha = intent.alpha if intent.intent_type != "general" else alpha
+
+        logger.info(
+            "semantic_search_with_intent",
+            query=ctx.query[:50],
+            intent_type=intent.intent_type,
+            effective_alpha=effective_alpha,
+            matched_patterns=intent.matched_patterns,
+        )
+
+        # Always run kNN
         query_embedding = await get_query_embedding(ctx.query)
 
         vector_results = await self.scene_opensearch.search_vector(
@@ -243,7 +260,19 @@ class SceneSearchService:
             size=self.settings.search_vector_top_k,
         )
 
-        ranked_items = compute_weighted_rrf([], vector_results, 1.0)
+        # Run BM25 when intent suggests lexical signals are valuable
+        lexical_results: list[dict[str, Any]] = []
+        if effective_alpha < 1.0:
+            lexical_results = await self.scene_opensearch.search_lexical(
+                query=ctx.query,
+                org_id=ctx.org_id_str,
+                filters=ctx.filter_dict,
+                size=self.settings.search_lexical_top_k,
+                include_ocr=ctx.include_ocr,
+                matched_person_cluster_ids=ctx.matched_person_cluster_ids or None,
+            )
+
+        ranked_items = compute_weighted_rrf(lexical_results, vector_results, effective_alpha)
 
         diversified = diversify_results(
             ranked_items,
@@ -259,11 +288,10 @@ class SceneSearchService:
             ranked_items=ranked_items,
             facets=facets,
             query=ctx.query,
-            alpha=alpha,
+            alpha=effective_alpha,
             org_id=ctx.org_id,
             group_by=ctx.group_by,
         )
-
     # ------------------------------------------------------------------
     # Shared helpers
     # ------------------------------------------------------------------
