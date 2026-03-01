@@ -37,7 +37,7 @@ def _load_vision_model(use_gpu: bool = False) -> None:
         return
 
     import torch
-    from transformers import AutoProcessor, SiglipVisionModel
+    from transformers import AutoImageProcessor, SiglipVisionModel
 
     _device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
     dtype = torch.float16 if _device.type == "cuda" else torch.bfloat16
@@ -51,7 +51,7 @@ def _load_vision_model(use_gpu: bool = False) -> None:
         },
     )
 
-    _processor = AutoProcessor.from_pretrained("google/siglip2-base-patch16-256")
+    _processor = AutoImageProcessor.from_pretrained("google/siglip2-base-patch16-256")
     _vision_model = SiglipVisionModel.from_pretrained(
         "google/siglip2-base-patch16-256",
         torch_dtype=dtype,

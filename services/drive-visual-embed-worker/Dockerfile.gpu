@@ -51,12 +51,12 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu12
       "structlog>=23.0" "requests>=2.31"
 
 # Pre-download SigLIP2 model into container image for fast cold starts.
-# This downloads both the vision encoder and tokenizer (~600MB).
+# Downloads vision encoder weights + image processor config (~350MB).
 RUN mkdir -p "${HF_HOME}" \
     && python -c "\
-from transformers import SiglipVisionModel, AutoProcessor; \
+from transformers import SiglipVisionModel, AutoImageProcessor; \
 SiglipVisionModel.from_pretrained('google/siglip2-base-patch16-256'); \
-AutoProcessor.from_pretrained('google/siglip2-base-patch16-256')"
+AutoImageProcessor.from_pretrained('google/siglip2-base-patch16-256')"
 
 COPY dev-heimdex-for-livecommerce/services/drive-visual-embed-worker/src/ src/
 
