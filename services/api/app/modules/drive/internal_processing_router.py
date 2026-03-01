@@ -199,6 +199,13 @@ async def update_processing_status(
             values["audio_s3_key"] = request.audio_s3_key
         if request.keyframe_s3_prefix is not None:
             values["keyframe_s3_prefix"] = request.keyframe_s3_prefix
+        # Video metadata from ffprobe (for FCPXML export)
+        if request.video_fps is not None:
+            values["video_fps"] = request.video_fps
+        if request.video_width is not None:
+            values["video_width"] = request.video_width
+        if request.video_height is not None:
+            values["video_height"] = request.video_height
     elif request.status == "awaiting_transcode":
         values["processing_status"] = "awaiting_transcode"
         if request.original_s3_key is not None:

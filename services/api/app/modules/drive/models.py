@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Optional, final
 from uuid import UUID as PyUUID
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -130,6 +130,10 @@ class DriveFile(Base, UUIDMixin, TimestampMixin):
     proxy_s3_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     proxy_duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     proxy_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    # --- Video metadata from ffprobe (export features) ---
+    video_fps: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    video_width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    video_height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     original_s3_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     original_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     thumbnail_s3_prefix: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

@@ -60,6 +60,10 @@ class UpdateProcessingStatusRequest(BaseModel):
     keyframe_s3_prefix: Optional[str] = None
     original_s3_key: Optional[str] = None
     original_size_bytes: Optional[int] = None
+    # Video metadata from ffprobe — used by FCPXML export.
+    video_fps: Optional[float] = None
+    video_width: Optional[int] = None
+    video_height: Optional[int] = None
 
 
 class UpdateProcessingStatusResponse(BaseModel):
