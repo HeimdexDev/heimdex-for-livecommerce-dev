@@ -57,7 +57,8 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu12
       "boto3>=1.34" "pydantic-settings>=2.0" \
       "structlog>=23.0" "requests>=2.31"
 
-RUN mkdir -p "${HF_HOME}" \
+RUN --mount=type=secret,id=hf_token mkdir -p "${HF_HOME}" \
+    && export HF_TOKEN=$(cat /run/secrets/hf_token 2>/dev/null) \
     && python -c "from transformers import Qwen2VLForConditionalGeneration, AutoProcessor; Qwen2VLForConditionalGeneration.from_pretrained('Qwen/Qwen2-VL-2B-Instruct', trust_remote_code=True); AutoProcessor.from_pretrained('Qwen/Qwen2-VL-2B-Instruct', trust_remote_code=True)"
 
 COPY dev-heimdex-for-livecommerce/services/drive-caption-worker/src/ src/

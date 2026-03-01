@@ -88,6 +88,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.worker }}-worker-gpu:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.worker }}-worker-gpu:${{ github.sha }}
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
           cache-from: type=gha,scope=${{ matrix.worker }}
           cache-to: type=gha,scope=${{ matrix.worker }},mode=max
 
