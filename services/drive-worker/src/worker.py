@@ -179,9 +179,7 @@ def main() -> None:
         from src.tasks.export import handle_export_proxy_pack
 
         def _export_callback(message):
-            import json as _json
-            body = _json.loads(message.get("Body", "{}"))
-            handle_export_proxy_pack(body, api_client, settings)
+            handle_export_proxy_pack(message.body, api_client, settings)
 
         export_sqs_client = SQSJobClient(
             queue_url=settings.sqs_export_queue_url,
