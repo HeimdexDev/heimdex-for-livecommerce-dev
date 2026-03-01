@@ -707,6 +707,7 @@ async def initiate_proxy_pack(
         "clip_gap_ms": body.clip_gap_ms,
         "include_markers": body.include_markers,
         "include_transcript_markers": body.include_transcript_markers,
+        "proxy_keys": {vid: df.proxy_s3_key for vid, df in drive_files_by_vid.items()},
     }
 
     record = await export_repo.create(

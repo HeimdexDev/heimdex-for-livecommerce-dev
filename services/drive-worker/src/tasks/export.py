@@ -73,11 +73,13 @@ def handle_export_proxy_pack(
             return
 
         deduped_video_ids = list({c.video_id for c in clips})
+        proxy_keys = request_body.get("proxy_keys", {})
         proxy_map = _download_proxies(
             tmp_dir=tmp_dir,
             video_ids=deduped_video_ids,
             org_id=org_id,
             settings=settings,
+            proxy_keys=proxy_keys,
         )
 
         if not proxy_map:
@@ -213,8 +215,13 @@ def _download_proxies(
     video_ids: list[str],
     org_id: str,
     settings: Any,
+    proxy_keys: dict[str, str] | None = None,
 ) -> dict[str, Path]:
-    """Download deduplicated proxy files from S3. Returns {video_id: local_path}."""
+    """Download deduplicated proxy files from S3. Returns {video_id: local_path}.
+
+    Uses pre-resolved proxy_keys from the export record when available.
+    Falls back to S3 listing search (legacy, unreliable for gd_ video IDs).
+    """
     import boto3
     from botocore.config import Config as BotoConfig
 
@@ -247,9 +254,10 @@ def _download_proxies(
 
     proxy_map: dict[str, Path] = {}
     for video_id in video_ids:
-        proxy_key = _find_proxy_key(s3, bucket, org_id, video_id)
+        # Use pre-resolved key from API (reliable), fall back to S3 search (legacy)
+        proxy_key = (proxy_keys or {}).get(video_id) or _find_proxy_key(s3, bucket, org_id, video_id)
         if proxy_key is None:
-            logger.warning("export_proxy_not_found", extra={"video_id": video_id})
+            logger.warning("export_proxy_not_found", extra={"video_id": video_id, "had_proxy_key": video_id in (proxy_keys or {})})
             continue
 
         filename = f"proxy_{video_id}.mp4"
