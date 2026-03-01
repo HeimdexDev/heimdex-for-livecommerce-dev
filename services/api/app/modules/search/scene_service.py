@@ -4,12 +4,16 @@ Scene search service.
 Orchestrates three search modes over the scenes index:
 - **metadata**: BM25 on video title / source path (file-level search)
 - **lexical**: BM25 on transcript, OCR, caption, title (content search)
-- **semantic**: KNN vector search on embedding_vector (meaning search)
+- **semantic**: 3-way weighted RRF fusion (text kNN + visual kNN + BM25)
 
 The public ``search()`` method routes to the appropriate internal method
 based on ``search_mode``. Shared logic (people matching, filter building,
 result construction, facets, video grouping) is extracted into reusable
 helpers to avoid duplication across modes.
+
+Visual search (SigLIP2 kNN) is semantic-mode-only, gated by both the
+``visual_embedding_enabled`` setting and per-query intent classification.
+Metadata and lexical modes are pure BM25 — no embeddings, no kNN.
 """
 import asyncio
 import html
@@ -27,6 +31,7 @@ from app.modules.people.repository import (
     PeopleExcludePreferenceRepository,
 )
 from app.modules.search.embedding import get_query_embedding
+from app.modules.search.visual_embedding import get_visual_query_embedding
 from app.modules.search.fusion import compute_weighted_rrf, diversify_results
 from app.modules.search.intent import classify_intent
 from app.modules.search.scene_client import SceneSearchClient
@@ -158,8 +163,11 @@ class SceneSearchService:
             size=self.settings.search_lexical_top_k,
         )
 
-        # Build ranked items using RRF with alpha=0 (pure lexical)
-        ranked_items = compute_weighted_rrf(metadata_results, [], 0.0)
+        # Pure BM25 — no embeddings, no kNN
+        ranked_items = compute_weighted_rrf(
+            metadata_results, [], [],
+            bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0,
+        )
 
         diversified = diversify_results(
             ranked_items,
@@ -202,7 +210,10 @@ class SceneSearchService:
             matched_person_cluster_ids=ctx.matched_person_cluster_ids or None,
         )
 
-        ranked_items = compute_weighted_rrf(lexical_results, [], 0.0)
+        ranked_items = compute_weighted_rrf(
+            lexical_results, [], [],
+            bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0,
+        )
 
         diversified = diversify_results(
             ranked_items,
@@ -224,60 +235,130 @@ class SceneSearchService:
         )
 
     # ------------------------------------------------------------------
-    # Mode: semantic  (intent-aware hybrid: kNN + optional BM25)
+    # Mode: semantic  (3-way weighted RRF: text kNN + visual kNN + BM25)
     # ------------------------------------------------------------------
     async def _search_semantic(
         self,
         ctx: _SearchContext,
         alpha: float,
     ) -> SceneSearchResponse | VideoSearchResponse:
-        """Semantic mode: meaning-based search via embedding vector.
+        """Semantic mode: meaning-based search via 3-way weighted RRF.
 
-        Uses intent classification to intelligently blend BM25 when the
-        query contains metadata/factual signals. Pure kNN queries (general/
-        visual intent) run without BM25 overhead.
+        Uses intent classification to determine per-signal weights:
+        - BM25 (lexical): exact Korean term matching on transcript/OCR/caption
+        - Text kNN (E5): semantic meaning via text embeddings
+        - Visual kNN (SigLIP2): visual similarity via cross-modal embeddings
+
+        Visual kNN is gated by ``visual_embedding_enabled``.  When disabled,
+        the visual weight is redistributed proportionally to BM25 and text kNN
+        so search behaviour degrades gracefully.
+
+        All embedding generation and OpenSearch queries run in parallel via
+        ``asyncio.gather()`` for minimal latency overhead.
         """
         intent = classify_intent(ctx.query)
+        settings = self.settings
 
-        # Intent-determined alpha overrides the fixed 1.0 when BM25 is beneficial
-        effective_alpha = intent.alpha if intent.intent_type != "general" else alpha
+        # --- Determine effective 3-way weights ---
+        visual_enabled = settings.visual_embedding_enabled
+
+        if visual_enabled and intent.visual_weight > 0:
+            bm25_w = intent.bm25_weight
+            text_w = intent.text_knn_weight
+            vis_w = intent.visual_weight
+        else:
+            # Redistribute visual weight proportionally to BM25 + text kNN
+            remaining = intent.bm25_weight + intent.text_knn_weight
+            if remaining > 0:
+                bm25_w = intent.bm25_weight / remaining
+                text_w = intent.text_knn_weight / remaining
+            else:
+                bm25_w = 0.5
+                text_w = 0.5
+            vis_w = 0.0
 
         logger.info(
             "semantic_search_with_intent",
             query=ctx.query[:50],
             intent_type=intent.intent_type,
-            effective_alpha=effective_alpha,
+            visual_enabled=visual_enabled,
+            bm25_weight=round(bm25_w, 3),
+            text_knn_weight=round(text_w, 3),
+            visual_weight=round(vis_w, 3),
             matched_patterns=intent.matched_patterns,
         )
 
-        # Always run kNN
-        query_embedding = await get_query_embedding(ctx.query)
+        # --- Generate embeddings in parallel ---
+        embed_coros: list[Any] = [get_query_embedding(ctx.query)]
+        if vis_w > 0:
+            embed_coros.append(get_visual_query_embedding(ctx.query))
 
-        vector_results = await self.scene_opensearch.search_vector(
-            embedding=query_embedding,
-            org_id=ctx.org_id_str,
-            filters=ctx.filter_dict,
-            size=self.settings.search_vector_top_k,
-        )
+        embed_results = await asyncio.gather(*embed_coros)
+        query_embedding = embed_results[0]
+        visual_embedding = embed_results[1] if len(embed_results) > 1 else None
 
-        # Run BM25 when intent suggests lexical signals are valuable
-        lexical_results: list[dict[str, Any]] = []
-        if effective_alpha < 1.0:
-            lexical_results = await self.scene_opensearch.search_lexical(
-                query=ctx.query,
+        # --- Dispatch OpenSearch queries in parallel (intent-gated) ---
+        search_coros: list[Any] = []
+        search_keys: list[str] = []
+
+        # Text kNN — always runs in semantic mode
+        search_keys.append("text_knn")
+        search_coros.append(
+            self.scene_opensearch.search_vector(
+                embedding=query_embedding,
                 org_id=ctx.org_id_str,
                 filters=ctx.filter_dict,
-                size=self.settings.search_lexical_top_k,
-                include_ocr=ctx.include_ocr,
-                matched_person_cluster_ids=ctx.matched_person_cluster_ids or None,
+                size=settings.search_vector_top_k,
+            )
+        )
+
+        # Visual kNN — only when weight > 0 and embedding available
+        if vis_w > 0 and visual_embedding is not None:
+            search_keys.append("visual_knn")
+            search_coros.append(
+                self.scene_opensearch.search_visual_vector(
+                    visual_embedding=visual_embedding,
+                    org_id=ctx.org_id_str,
+                    filters=ctx.filter_dict,
+                    size=settings.search_vector_top_k,
+                )
             )
 
-        ranked_items = compute_weighted_rrf(lexical_results, vector_results, effective_alpha)
+        # BM25 — only when weight > 0
+        if bm25_w > 0:
+            search_keys.append("bm25")
+            search_coros.append(
+                self.scene_opensearch.search_lexical(
+                    query=ctx.query,
+                    org_id=ctx.org_id_str,
+                    filters=ctx.filter_dict,
+                    size=settings.search_lexical_top_k,
+                    include_ocr=ctx.include_ocr,
+                    matched_person_cluster_ids=ctx.matched_person_cluster_ids or None,
+                )
+            )
+
+        search_results = await asyncio.gather(*search_coros)
+        result_map = dict(zip(search_keys, search_results))
+
+        vector_results = result_map["text_knn"]
+        visual_results = result_map.get("visual_knn", [])
+        lexical_results = result_map.get("bm25", [])
+
+        # --- 3-way weighted RRF fusion ---
+        ranked_items = compute_weighted_rrf(
+            lexical_results=lexical_results,
+            vector_results=vector_results,
+            visual_results=visual_results,
+            bm25_weight=bm25_w,
+            text_knn_weight=text_w,
+            visual_weight=vis_w,
+        )
 
         diversified = diversify_results(
             ranked_items,
-            max_per_video=self.settings.search_max_scenes_per_video,
-            target_count=self.settings.search_page_size,
+            max_per_video=settings.search_max_scenes_per_video,
+            target_count=settings.search_page_size,
         )
 
         results = self._build_scene_results(diversified, ctx.library_map)
@@ -288,7 +369,7 @@ class SceneSearchService:
             ranked_items=ranked_items,
             facets=facets,
             query=ctx.query,
-            alpha=effective_alpha,
+            alpha=alpha,
             org_id=ctx.org_id,
             group_by=ctx.group_by,
         )
@@ -424,8 +505,11 @@ class SceneSearchService:
                         lexical_score=item.lexical_score,
                         vector_rank=item.vector_rank,
                         vector_score=item.vector_score,
+                        visual_rank=item.visual_rank,
+                        visual_score=item.visual_score,
                         lexical_contribution=item.lexical_contribution,
                         vector_contribution=item.vector_contribution,
+                        visual_contribution=item.visual_contribution,
                         ocr_contribution=0.0,
                         fused_score=item.fused_score,
                         quality_factor=item.quality_factor,

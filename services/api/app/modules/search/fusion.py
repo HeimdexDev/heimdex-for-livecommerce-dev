@@ -24,13 +24,15 @@ class RankedItem:
     lexical_score: float | None = None
     vector_rank: int | None = None
     vector_score: float | None = None
+    visual_rank: int | None = None
+    visual_score: float | None = None
     lexical_contribution: float = 0.0
     vector_contribution: float = 0.0
+    visual_contribution: float = 0.0
     quality_factor: float = 1.0
     fused_score: float = 0.0
     adjusted_score: float = 0.0
     diversification_penalty: bool = False
-
 
 def rrf_score(rank: int | None, k: int = 60) -> float:
     if rank is None:
@@ -102,71 +104,127 @@ def compute_quality_factor(source: dict[str, Any]) -> float:
 def compute_weighted_rrf(
     lexical_results: list[dict[str, Any]],
     vector_results: list[dict[str, Any]],
-    alpha: float,
+    visual_results: list[dict[str, Any]],
+    *,
+    bm25_weight: float,
+    text_knn_weight: float,
+    visual_weight: float,
 ) -> list[RankedItem]:
+    """Compute 3-way weighted Reciprocal Rank Fusion.
+
+    Merges up to three ranked result lists (BM25, text kNN, visual kNN)
+    using the RRF formula: score = weight * 1/(k + rank).  Documents absent
+    from a list contribute 0 for that signal — they are not penalized, just
+    not boosted.
+
+    The three weights should sum to 1.0.  When a signal is disabled (e.g.
+    visual search off), its weight should be 0.0 and its results list empty.
+
+    After RRF scoring, a quality factor (0.85–1.0) based on content length
+    (transcript + OCR + caption) is multiplied in to demote very-short scenes.
+
+    Args:
+        lexical_results: BM25 hits from OpenSearch.
+        vector_results: Text kNN hits (E5 embedding).
+        visual_results: Visual kNN hits (SigLIP2 embedding).
+        bm25_weight: Weight for BM25 signal (0.0–1.0).
+        text_knn_weight: Weight for text kNN signal (0.0–1.0).
+        visual_weight: Weight for visual kNN signal (0.0–1.0).
+
+    Returns:
+        Ranked list of RankedItem sorted by adjusted_score descending.
+    """
     settings = get_settings()
     k = settings.search_rrf_k
-    
+
     items: dict[str, RankedItem] = {}
-    
+
+    # --- Pass 1: BM25 (lexical) results ---
     for rank, hit in enumerate(lexical_results, start=1):
         doc_id = str(hit.get("_id", ""))
         source_raw = hit.get("_source", {})
         source = source_raw if isinstance(source_raw, dict) else {}
         video_id = str(source.get("video_id", ""))
-        
+
         if doc_id not in items:
             items[doc_id] = RankedItem(
                 doc_id=doc_id,
                 video_id=video_id,
                 source=source,
             )
-        
+
         items[doc_id].lexical_rank = rank
         lexical_score = hit.get("_score", 0.0)
         items[doc_id].lexical_score = (
             float(lexical_score) if isinstance(lexical_score, (int, float)) else 0.0
         )
-    
+
+    # --- Pass 2: Text kNN (vector) results ---
     for rank, hit in enumerate(vector_results, start=1):
         doc_id = str(hit.get("_id", ""))
         source_raw = hit.get("_source", {})
         source = source_raw if isinstance(source_raw, dict) else {}
         video_id = str(source.get("video_id", ""))
-        
+
         if doc_id not in items:
             items[doc_id] = RankedItem(
                 doc_id=doc_id,
                 video_id=video_id,
                 source=source,
             )
-        
+
         items[doc_id].vector_rank = rank
         vector_score = hit.get("_score", 0.0)
         items[doc_id].vector_score = (
             float(vector_score) if isinstance(vector_score, (int, float)) else 0.0
         )
-    
+
+    # --- Pass 3: Visual kNN results ---
+    for rank, hit in enumerate(visual_results, start=1):
+        doc_id = str(hit.get("_id", ""))
+        source_raw = hit.get("_source", {})
+        source = source_raw if isinstance(source_raw, dict) else {}
+        video_id = str(source.get("video_id", ""))
+
+        if doc_id not in items:
+            items[doc_id] = RankedItem(
+                doc_id=doc_id,
+                video_id=video_id,
+                source=source,
+            )
+
+        items[doc_id].visual_rank = rank
+        vis_score = hit.get("_score", 0.0)
+        items[doc_id].visual_score = (
+            float(vis_score) if isinstance(vis_score, (int, float)) else 0.0
+        )
+
+    # --- Compute weighted RRF scores ---
     for item in items.values():
-        lex_contribution = (1 - alpha) * rrf_score(item.lexical_rank, k)
-        vec_contribution = alpha * rrf_score(item.vector_rank, k)
+        lex_contribution = bm25_weight * rrf_score(item.lexical_rank, k)
+        vec_contribution = text_knn_weight * rrf_score(item.vector_rank, k)
+        vis_contribution = visual_weight * rrf_score(item.visual_rank, k)
         item.lexical_contribution = lex_contribution
         item.vector_contribution = vec_contribution
-        item.fused_score = lex_contribution + vec_contribution
-        
+        item.visual_contribution = vis_contribution
+        item.fused_score = lex_contribution + vec_contribution + vis_contribution
+
         item.quality_factor = compute_quality_factor(item.source)
         item.adjusted_score = item.fused_score * item.quality_factor
-    
+
     ranked = sorted(items.values(), key=lambda x: x.adjusted_score, reverse=True)
-    
+
     logger.debug(
         "rrf_fusion_computed",
         total_candidates=len(ranked),
         lexical_count=len(lexical_results),
         vector_count=len(vector_results),
-        alpha=alpha,
+        visual_count=len(visual_results),
+        bm25_weight=bm25_weight,
+        text_knn_weight=text_knn_weight,
+        visual_weight=visual_weight,
     )
-    
+
     return ranked
 
 

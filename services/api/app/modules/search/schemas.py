@@ -81,14 +81,16 @@ class DebugInfo(BaseModel):
     lexical_score: float | None = None
     vector_rank: int | None = None
     vector_score: float | None = None
+    visual_rank: int | None = None
+    visual_score: float | None = None
     lexical_contribution: float = 0.0
     vector_contribution: float = 0.0
+    visual_contribution: float = 0.0
     ocr_contribution: float = 0.0
     fused_score: float
     quality_factor: float = 1.0
     adjusted_score: float
     diversification_penalty: bool = False
-
 
 class SegmentResult(BaseModel):
     segment_id: str

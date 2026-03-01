@@ -98,7 +98,14 @@ class SearchService:
             size=self.settings.search_vector_top_k,
         )
         
-        ranked_items = compute_weighted_rrf(lexical_results, vector_results, alpha)
+        ranked_items = compute_weighted_rrf(
+            lexical_results,
+            vector_results,
+            [],  # no visual results in legacy segment search
+            bm25_weight=1.0 - alpha,
+            text_knn_weight=alpha,
+            visual_weight=0.0,
+        )
         
         diversified = diversify_results(
             ranked_items,

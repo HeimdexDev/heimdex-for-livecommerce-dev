@@ -146,10 +146,10 @@ class TestSceneSearchService:
         mock_scene_opensearch_client.search_vector.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_semantic_mode_only_runs_vector(
+    async def test_semantic_mode_runs_rrf_fusion(
         self, scene_search_service, mock_scene_opensearch_client, _patch_db_session
     ):
-        """Semantic mode should only call search_vector, not search_lexical."""
+        """Semantic mode should fuse lexical + vector results via 3-way RRF."""
         org_id = uuid4()
 
         mock_scene_opensearch_client.search_lexical.return_value = [
@@ -166,11 +166,14 @@ class TestSceneSearchService:
                 search_mode="semantic",
             )
 
-        # Semantic mode: only vector results returned
-        assert len(response.results) == 1
-        assert response.results[0].scene_id == "vec_scene"
-        mock_scene_opensearch_client.search_lexical.assert_not_called()
-
+        # Semantic mode fuses both lexical and vector via RRF
+        assert len(response.results) == 2
+        scene_ids = {r.scene_id for r in response.results}
+        assert "lex_scene" in scene_ids
+        assert "vec_scene" in scene_ids
+        # Both lexical and vector should be called
+        mock_scene_opensearch_client.search_lexical.assert_called_once()
+        mock_scene_opensearch_client.search_vector.assert_called_once()
     @pytest.mark.asyncio
     async def test_default_mode_is_lexical(
         self, scene_search_service, mock_scene_opensearch_client, _patch_db_session

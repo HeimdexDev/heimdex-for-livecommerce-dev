@@ -18,6 +18,7 @@ Tests verify:
 Run with: pytest tests/test_search_mode_routing.py -v
 """
 import pytest
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -80,6 +81,7 @@ def mock_scene_opensearch():
     client.search_metadata = AsyncMock(return_value=[])
     client.search_lexical = AsyncMock(return_value=[])
     client.search_vector = AsyncMock(return_value=[])
+    client.search_visual_vector = AsyncMock(return_value=[])
     client.get_facets = AsyncMock(return_value={
         "libraries": [],
         "source_types": [],
@@ -96,7 +98,8 @@ def mock_search_service(mock_session, mock_scene_opensearch):
     with patch("app.modules.search.scene_service.PeopleClusterLabelRepository") as mock_people_repo, \
          patch("app.modules.search.scene_service.PeopleExcludePreferenceRepository"), \
          patch("app.modules.search.scene_service.LibraryRepository") as mock_lib_repo, \
-         patch("app.modules.search.scene_service.get_query_embedding", new_callable=AsyncMock) as mock_embed:
+         patch("app.modules.search.scene_service.get_query_embedding", new_callable=AsyncMock) as mock_embed, \
+         patch("app.modules.search.scene_service.get_visual_query_embedding", new_callable=AsyncMock) as mock_visual_embed:
 
         # People repo returns empty
         mock_people_instance = MagicMock()
@@ -110,9 +113,10 @@ def mock_search_service(mock_session, mock_scene_opensearch):
 
         # Embedding returns a dummy vector
         mock_embed.return_value = [0.1] * 1024
+        mock_visual_embed.return_value = [0.2] * 768
 
         svc = SceneSearchService(mock_session, mock_scene_opensearch)
-        yield svc, mock_scene_opensearch, mock_embed
+        yield svc, mock_scene_opensearch, mock_embed, mock_visual_embed
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +129,7 @@ class TestSearchModeRouting:
     @pytest.mark.asyncio
     async def test_metadata_mode_calls_search_metadata(self, mock_search_service, org_id):
         """Metadata mode should call scene_opensearch.search_metadata()."""
-        svc, os_client, mock_embed = mock_search_service
+        svc, os_client, mock_embed, mock_visual_embed = mock_search_service
 
         await svc.search(
             query="test query",
@@ -138,12 +142,14 @@ class TestSearchModeRouting:
         os_client.search_metadata.assert_called_once()
         os_client.search_lexical.assert_not_called()
         os_client.search_vector.assert_not_called()
+        os_client.search_visual_vector.assert_not_called()
         mock_embed.assert_not_called()
+        mock_visual_embed.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_lexical_mode_calls_search_lexical(self, mock_search_service, org_id):
         """Lexical mode should call scene_opensearch.search_lexical() only."""
-        svc, os_client, mock_embed = mock_search_service
+        svc, os_client, mock_embed, mock_visual_embed = mock_search_service
 
         await svc.search(
             query="test query",
@@ -156,7 +162,9 @@ class TestSearchModeRouting:
         os_client.search_lexical.assert_called_once()
         os_client.search_metadata.assert_not_called()
         os_client.search_vector.assert_not_called()
+        os_client.search_visual_vector.assert_not_called()
         mock_embed.assert_not_called()
+        mock_visual_embed.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_semantic_mode_calls_search_vector(self, mock_search_service, org_id):
@@ -165,7 +173,7 @@ class TestSearchModeRouting:
         With intent-aware routing, semantic mode may also call search_lexical()
         for queries classified as metadata/factual/general intent.
         """
-        svc, os_client, mock_embed = mock_search_service
+        svc, os_client, mock_embed, _ = mock_search_service
 
         await svc.search(
             query="test query",
@@ -181,7 +189,7 @@ class TestSearchModeRouting:
     @pytest.mark.asyncio
     async def test_default_mode_is_lexical(self, mock_search_service, org_id):
         """Default search_mode should be 'lexical' for backward compatibility."""
-        svc, os_client, mock_embed = mock_search_service
+        svc, os_client, mock_embed, _ = mock_search_service
 
         await svc.search(
             query="test query",
@@ -206,7 +214,7 @@ class TestSearchModeResponses:
     @pytest.mark.asyncio
     async def test_metadata_mode_always_returns_video_response(self, mock_search_service, org_id):
         """Metadata mode should always return VideoSearchResponse."""
-        svc, os_client, _ = mock_search_service
+        svc, os_client, _, _ = mock_search_service
 
         result = await svc.search(
             query="test",
@@ -222,7 +230,7 @@ class TestSearchModeResponses:
     @pytest.mark.asyncio
     async def test_lexical_mode_returns_scene_response_by_default(self, mock_search_service, org_id):
         """Lexical mode with group_by='scene' returns SceneSearchResponse."""
-        svc, _, _ = mock_search_service
+        svc, _, _, _ = mock_search_service
 
         result = await svc.search(
             query="test",
@@ -239,7 +247,7 @@ class TestSearchModeResponses:
     @pytest.mark.asyncio
     async def test_lexical_mode_with_video_grouping(self, mock_search_service, org_id):
         """Lexical mode with group_by='video' returns VideoSearchResponse."""
-        svc, _, _ = mock_search_service
+        svc, _, _, _ = mock_search_service
 
         result = await svc.search(
             query="test",
@@ -256,7 +264,7 @@ class TestSearchModeResponses:
     @pytest.mark.asyncio
     async def test_semantic_mode_returns_scene_response_by_default(self, mock_search_service, org_id):
         """Semantic mode with group_by='scene' returns SceneSearchResponse."""
-        svc, _, _ = mock_search_service
+        svc, _, _, _ = mock_search_service
 
         result = await svc.search(
             query="test",
@@ -281,7 +289,7 @@ class TestSearchModeEfficiency:
     @pytest.mark.asyncio
     async def test_metadata_no_embedding_computation(self, mock_search_service, org_id):
         """Metadata mode should NOT compute query embedding."""
-        svc, _, mock_embed = mock_search_service
+        svc, _, mock_embed, _ = mock_search_service
 
         await svc.search(
             query="some file",
@@ -296,7 +304,7 @@ class TestSearchModeEfficiency:
     @pytest.mark.asyncio
     async def test_lexical_no_embedding_computation(self, mock_search_service, org_id):
         """Lexical mode should NOT compute query embedding."""
-        svc, _, mock_embed = mock_search_service
+        svc, _, mock_embed, _ = mock_search_service
 
         await svc.search(
             query="exact words here",
@@ -315,7 +323,7 @@ class TestSearchModeEfficiency:
         Intent-aware routing uses alpha < 1.0 for general queries, which
         triggers BM25 alongside kNN for better result quality.
         """
-        svc, os_client, _ = mock_search_service
+        svc, os_client, _, _ = mock_search_service
 
         await svc.search(
             query="meaning based search",
@@ -329,6 +337,40 @@ class TestSearchModeEfficiency:
         os_client.search_vector.assert_called_once()
         os_client.search_lexical.assert_called_once()
         os_client.search_metadata.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_metadata_mode_never_calls_visual_search(self, mock_search_service, org_id):
+        svc, os_client, mock_embed, mock_visual_embed = mock_search_service
+
+        await svc.search(
+            query="metadata only query",
+            org_id=org_id,
+            alpha=0.5,
+            filters=SearchFilters(),
+            search_mode="metadata",
+        )
+
+        mock_embed.assert_not_called()
+        mock_visual_embed.assert_not_called()
+        os_client.search_vector.assert_not_called()
+        os_client.search_visual_vector.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_lexical_mode_never_calls_visual_search(self, mock_search_service, org_id):
+        svc, os_client, mock_embed, mock_visual_embed = mock_search_service
+
+        await svc.search(
+            query="exact lexical query",
+            org_id=org_id,
+            alpha=0.5,
+            filters=SearchFilters(),
+            search_mode="lexical",
+        )
+
+        mock_embed.assert_not_called()
+        mock_visual_embed.assert_not_called()
+        os_client.search_vector.assert_not_called()
+        os_client.search_visual_vector.assert_not_called()
 
 # ---------------------------------------------------------------------------
 # Test: Schema validation
@@ -346,7 +388,7 @@ class TestSearchModeSchema:
     def test_invalid_mode_rejected(self):
         """Invalid search_mode values should be rejected."""
         with pytest.raises(ValidationError):
-            SearchRequest(q="test", search_mode="hybrid")
+            SearchRequest(q="test", search_mode=cast(Any, "hybrid"))
 
     def test_default_mode_is_lexical(self):
         """Default search_mode should be 'lexical'."""
@@ -469,7 +511,7 @@ class TestSearchModeFilters:
         """Metadata mode should pass date filters to search_metadata()."""
         from datetime import datetime
 
-        svc, os_client, _ = mock_search_service
+        svc, os_client, _, _ = mock_search_service
         filters = SearchFilters(date_from=datetime(2026, 1, 1))
 
         await svc.search(
@@ -486,7 +528,7 @@ class TestSearchModeFilters:
     @pytest.mark.asyncio
     async def test_lexical_mode_applies_source_type_filter(self, mock_search_service, org_id):
         """Lexical mode should pass source_type filters to search_lexical()."""
-        svc, os_client, _ = mock_search_service
+        svc, os_client, _, _ = mock_search_service
         filters = SearchFilters(source_types=["gdrive"])
 
         await svc.search(
@@ -505,7 +547,7 @@ class TestSearchModeFilters:
         """Semantic mode should pass date filters to search_vector()."""
         from datetime import datetime
 
-        svc, os_client, _ = mock_search_service
+        svc, os_client, _, _ = mock_search_service
         filters = SearchFilters(date_from=datetime(2026, 2, 1))
 
         await svc.search(

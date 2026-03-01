@@ -39,7 +39,7 @@ class TestComputeWeightedRRF:
             {"_id": "doc3", "_score": 0.8, "_source": {"video_id": "v3"}},
         ]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=0.0)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         
         assert results[0].doc_id == "doc1"
         assert results[0].lexical_rank == 1
@@ -54,7 +54,7 @@ class TestComputeWeightedRRF:
             {"_id": "doc1", "_score": 0.5, "_source": {"video_id": "v1"}},
         ]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=1.0)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.0, text_knn_weight=1.0, visual_weight=0.0)
         
         assert results[0].doc_id == "doc2"
         assert results[0].vector_rank == 1
@@ -69,7 +69,7 @@ class TestComputeWeightedRRF:
             {"_id": "doc1", "_score": 0.5, "_source": {"video_id": "v1"}},
         ]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=0.5)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         
         doc2 = next(r for r in results if r.doc_id == "doc2")
         assert doc2.lexical_rank == 2
@@ -77,15 +77,15 @@ class TestComputeWeightedRRF:
         assert doc2.fused_score > 0
     
     def test_empty_results(self):
-        results = compute_weighted_rrf([], [], alpha=0.5)
+        results = compute_weighted_rrf([], [], [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         assert results == []
     
     def test_deterministic_ordering(self):
         lexical = [{"_id": f"doc{i}", "_score": 10 - i, "_source": {"video_id": f"v{i}"}} for i in range(10)]
         vector = [{"_id": f"doc{i}", "_score": 1 - i * 0.1, "_source": {"video_id": f"v{i}"}} for i in range(10)]
         
-        results1 = compute_weighted_rrf(lexical, vector, alpha=0.5)
-        results2 = compute_weighted_rrf(lexical, vector, alpha=0.5)
+        results1 = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
+        results2 = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         
         assert [r.doc_id for r in results1] == [r.doc_id for r in results2]
 
@@ -246,7 +246,7 @@ class TestRRFContributions:
         lexical = [{"_id": "doc1", "_score": 10.0, "_source": {"video_id": "v1"}}]
         vector = [{"_id": "doc1", "_score": 0.9, "_source": {"video_id": "v1"}}]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=0.5)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         
         assert results[0].lexical_contribution > 0
         assert results[0].vector_contribution > 0
@@ -258,7 +258,7 @@ class TestRRFContributions:
         lexical = [{"_id": "doc1", "_score": 10.0, "_source": {"video_id": "v1"}}]
         vector = [{"_id": "doc1", "_score": 0.9, "_source": {"video_id": "v1"}}]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=0.0)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         
         assert results[0].lexical_contribution > 0
         assert results[0].vector_contribution == 0
@@ -267,7 +267,7 @@ class TestRRFContributions:
         lexical = [{"_id": "doc1", "_score": 10.0, "_source": {"video_id": "v1"}}]
         vector = [{"_id": "doc1", "_score": 0.9, "_source": {"video_id": "v1"}}]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=1.0)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.0, text_knn_weight=1.0, visual_weight=0.0)
         
         assert results[0].lexical_contribution == 0
         assert results[0].vector_contribution > 0
@@ -278,7 +278,7 @@ class TestRRFContributions:
             {"_id": "doc2", "_score": 9.0, "_source": {"video_id": "v2", "transcript_raw": "b" * 10}},
         ]
         
-        results = compute_weighted_rrf(lexical, [], alpha=0.0)
+        results = compute_weighted_rrf(lexical, [], [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         
         doc1 = next(r for r in results if r.doc_id == "doc1")
         doc2 = next(r for r in results if r.doc_id == "doc2")

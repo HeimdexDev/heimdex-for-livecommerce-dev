@@ -138,7 +138,7 @@ class TestRRFQualitySignals:
             {"_id": "vec2", "_score": 0.90, "_source": {"video_id": "v4", "transcript_char_count": 100}},
         ]
         
-        ranked = compute_weighted_rrf(lexical_hits, vector_hits, alpha=0.0)
+        ranked = compute_weighted_rrf(lexical_hits, vector_hits, [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         
         # Top results should be lexical (lex1, lex2)
         assert ranked[0].doc_id == "lex1"
@@ -156,7 +156,7 @@ class TestRRFQualitySignals:
             {"_id": "vec1", "_score": 0.95, "_source": {"video_id": "v2", "transcript_char_count": 100}},
         ]
         
-        ranked = compute_weighted_rrf(lexical_hits, vector_hits, alpha=1.0)
+        ranked = compute_weighted_rrf(lexical_hits, vector_hits, [], bm25_weight=0.0, text_knn_weight=1.0, visual_weight=0.0)
         
         # Top result should be vector
         assert ranked[0].doc_id == "vec1"
@@ -174,7 +174,7 @@ class TestRRFQualitySignals:
             {"_id": "both", "_score": 0.95, "_source": {"video_id": "v1", "transcript_char_count": 100}},
         ]
         
-        ranked = compute_weighted_rrf(lexical_hits, vector_hits, alpha=0.5)
+        ranked = compute_weighted_rrf(lexical_hits, vector_hits, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         
         # Document appearing in both should have contributions from each
         assert ranked[0].lexical_contribution > 0
@@ -189,7 +189,7 @@ class TestRRFQualitySignals:
             {"_id": "short", "_score": 10.0, "_source": {"video_id": "v2", "transcript_char_count": 10}},
         ]
         
-        ranked = compute_weighted_rrf(hits, [], alpha=0.0)
+        ranked = compute_weighted_rrf(hits, [], [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         
         long_item = next(r for r in ranked if r.doc_id == "long")
         short_item = next(r for r in ranked if r.doc_id == "short")
@@ -421,11 +421,11 @@ class TestPropertyBasedQuality:
         lexical = [{"_id": "lex", "_score": 10.0, "_source": {"video_id": "v1"}}]
         vector = [{"_id": "vec", "_score": 0.9, "_source": {"video_id": "v2"}}]
         
-        results_lex = compute_weighted_rrf(lexical, vector, alpha=0.0)
+        results_lex = compute_weighted_rrf(lexical, vector, [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         assert results_lex[0].doc_id == "lex"
         assert results_lex[0].vector_contribution == 0.0
         
-        results_vec = compute_weighted_rrf(lexical, vector, alpha=1.0)
+        results_vec = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.0, text_knn_weight=1.0, visual_weight=0.0)
         assert results_vec[0].doc_id == "vec"
         assert results_vec[0].lexical_contribution == 0.0
 

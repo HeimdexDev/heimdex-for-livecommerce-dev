@@ -162,7 +162,14 @@ async def evaluate_query(
         size=200,
     )
 
-    ranked = compute_weighted_rrf(lexical_results, vector_results, alpha=alpha)
+    ranked = compute_weighted_rrf(
+        lexical_results,
+        vector_results,
+        [],  # no visual results in eval pipeline
+        bm25_weight=1.0 - alpha,
+        text_knn_weight=alpha,
+        visual_weight=0.0,
+    )
     diversified = diversify_results(
         ranked,
         max_per_video=settings.search_max_scenes_per_video,
