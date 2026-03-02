@@ -35,7 +35,7 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
   const { getAccessToken } = useAuth();
 
   // --- Shared state ---
-  const [activeTab, setActiveTab] = useState<ExportTab>("fcpxml");
+  const [activeTab, setActiveTab] = useState<ExportTab>("proxy-pack");
   const [sequenceName, setSequenceName] = useState("Heimdex Export");
   const [clipGapMs, setClipGapMs] = useState(0);
   const [includeMarkers, setIncludeMarkers] = useState(true);
@@ -273,7 +273,8 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
           </button>
         </div>
 
-        {/* Tab selector */}
+        {/* Tab selector — hidden while FCPXML tab is disabled for customers */}
+        {false && (
         <div className="bg-gray-50 p-1 rounded-xl flex gap-2 mb-4">
           <button
             type="button"
@@ -298,6 +299,7 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
             프록시 팩
           </button>
         </div>
+        )}
 
         <div className="space-y-4">
           {/* Proxy Pack info banner */}
