@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useAuth } from "@/lib/auth";
 import { CandidateCard } from "./CandidateCard";
-import { ExportDialog } from "./ExportDialog";
+import { ExportModal } from "@/features/basket/ExportModal";
+import type { BasketItem } from "@/features/basket/useSceneBasket";
 import { useShortsPlan } from "../hooks/useShortsPlan";
 
 interface ShortsPlanPanelProps {
@@ -24,20 +24,12 @@ export function ShortsPlanPanel({
     totalScenes,
     eligibleScenes,
     selectedIds,
-    isExporting,
-    exportError,
-    exportWarning,
-    exportResult,
     generatePlan,
     toggleCandidate,
     selectAll,
     deselectAll,
-    isCloudExport,
-    exportSelectedToPremiere,
-    clearExportResult,
     reset,
   } = useShortsPlan();
-  const { getAccessToken } = useAuth();
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
 
   useEffect(() => {
@@ -51,13 +43,22 @@ export function ShortsPlanPanel({
     () => candidates.filter((candidate) => selectedIds.has(candidate.candidate_id)),
     [candidates, selectedIds],
   );
-  const hasNoCloudClips = selectedCandidates.length > 0
-    && selectedCandidates.every((candidate) => !candidate.video_id.startsWith("gd_"));
-  const allSelectedLocalAndAgentOffline = selectedCandidates.length > 0 && hasNoCloudClips && !agentAvailable;
-  const defaultProjectName = useMemo(() => {
-    const baseName = (videoTitle || videoId).trim();
-    return `${baseName} Shorts`;
-  }, [videoTitle, videoId]);
+
+  // Map selected candidates to BasketItem[] for the ExportModal
+  const exportItems: BasketItem[] = useMemo(
+    () =>
+      selectedCandidates.map((c) => ({
+        scene_id: c.scene_ids[0] ?? c.candidate_id,
+        video_id: c.video_id,
+        video_title: c.title_suggestion || videoTitle || videoId,
+        start_ms: c.start_ms,
+        end_ms: c.end_ms,
+        label: c.title_suggestion || undefined,
+        keyword_tags: c.tags,
+        transcript_raw: c.transcript_snippet || undefined,
+      })),
+    [selectedCandidates, videoTitle, videoId],
+  );
 
   return (
     <div className="border-t border-gray-100 px-6 py-4">
@@ -134,77 +135,20 @@ export function ShortsPlanPanel({
               <button
                 type="button"
                 className="btn-primary text-sm px-3 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={selectedCount === 0 || (hasNoCloudClips && !agentAvailable) || isExporting}
+                disabled={selectedCount === 0}
                 onClick={() => setIsExportDialogOpen(true)}
               >
-                {isExporting ? "Exporting..." : "Export to Premiere"}
+                Export to Premiere
               </button>
-              {allSelectedLocalAndAgentOffline && <span className="text-xs text-gray-500">(Agent offline)</span>}
             </div>
           </div>
-
-          {exportResult && (
-            <div className="mt-3 p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm flex items-start justify-between gap-2">
-              <p className="min-w-0 break-words">
-                {(exportResult.output_path.endsWith(".edl") || exportResult.output_path.endsWith(".xml")) && !exportResult.output_path.includes("/")
-                  ? `${exportResult.output_path} 다운로드 완료`
-                  : `Exported to ${exportResult.output_path}`}
-              </p>
-              <button
-                type="button"
-                className="text-green-700 hover:text-green-800 font-medium"
-                onClick={clearExportResult}
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
-
-          {exportError && (
-            <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-start justify-between gap-2">
-              <p className="min-w-0 break-words">{exportError}</p>
-              <button
-                type="button"
-                className="text-red-700 hover:text-red-800 font-medium"
-                onClick={clearExportResult}
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
-
-          {exportWarning && (
-            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-sm flex items-start justify-between gap-2">
-              <p className="min-w-0 break-words">{exportWarning}</p>
-              <button
-                type="button"
-                className="text-amber-700 hover:text-amber-800 font-medium"
-                onClick={clearExportResult}
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
         </>
       )}
 
-      <ExportDialog
+      <ExportModal
         isOpen={isExportDialogOpen}
-        onClose={() => {
-          if (!isExporting) {
-            setIsExportDialogOpen(false);
-          }
-        }}
-        onExport={(config) => {
-          void exportSelectedToPremiere({ ...config, agentAvailable });
-          setIsExportDialogOpen(false);
-        }}
-        selectedCount={selectedCount}
-        isExporting={isExporting}
-        defaultProjectName={defaultProjectName}
-        agentAvailable={agentAvailable}
-        isCloudExport={isCloudExport}
-        getAccessToken={getAccessToken}
+        onClose={() => setIsExportDialogOpen(false)}
+        overrideItems={exportItems}
       />
     </div>
   );
