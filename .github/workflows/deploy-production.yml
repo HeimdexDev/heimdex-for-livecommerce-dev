@@ -139,12 +139,13 @@ jobs:
                   DEPLOY_WEB=true
                   DEPLOY_WORKER=true
                 else
-                  echo "$DIFF_FILES" | grep -qE '^services/api/|^services/worker_sdk/' && DEPLOY_API=true || true
-                  echo "$DIFF_FILES" | grep -q '^services/web/' && DEPLOY_WEB=true || true
-                  echo "$DIFF_FILES" | grep -qE '^services/drive-worker/|^services/worker_sdk/' && DEPLOY_WORKER=true || true
+                  # Use if-statements instead of `echo|grep && ... || true` to avoid
+                  # pipefail + set -e interaction in appleboy/ssh-action (script_stop: true).
+                  if echo "$DIFF_FILES" | grep -qE '^services/api/|^services/worker_sdk/'; then DEPLOY_API=true; fi
+                  if echo "$DIFF_FILES" | grep -q '^services/web/'; then DEPLOY_WEB=true; fi
+                  if echo "$DIFF_FILES" | grep -qE '^services/drive-worker/|^services/worker_sdk/'; then DEPLOY_WORKER=true; fi
                   # Shared config changes trigger all
-                  echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example|requirements)' && DEPLOY_API=true && DEPLOY_WEB=true && DEPLOY_WORKER=true || true
-                fi
+                  if echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example|requirements)'; then DEPLOY_API=true; DEPLOY_WEB=true; DEPLOY_WORKER=true; fi
               else
                 echo "No new commits. Force-deploying all services."
                 DEPLOY_API=true
@@ -153,10 +154,9 @@ jobs:
               fi
             else
               # Deploy only specified services
-              echo "$SERVICES" | grep -q "api" && DEPLOY_API=true || true
-              echo "$SERVICES" | grep -q "web" && DEPLOY_WEB=true || true
-              echo "$SERVICES" | grep -q "drive-worker" && DEPLOY_WORKER=true || true
-            fi
+              if echo "$SERVICES" | grep -q "api"; then DEPLOY_API=true; fi
+              if echo "$SERVICES" | grep -q "web"; then DEPLOY_WEB=true; fi
+              if echo "$SERVICES" | grep -q "drive-worker"; then DEPLOY_WORKER=true; fi
 
             echo "Deploy API:          $DEPLOY_API"
             echo "Deploy Web:          $DEPLOY_WEB"
