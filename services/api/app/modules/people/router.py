@@ -126,12 +126,8 @@ async def rename_person(
         person_cluster_id=person_cluster_id,
     )
 
-    existing = await people_repo.get_by_cluster_id(org_ctx.org_id, person_cluster_id)
-    if existing is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Person cluster not found",
-        )
+    # set_label does upsert — no need to check existence first.
+    # Clusters can exist in OpenSearch facets without a Postgres label row.
 
     updated = await people_repo.set_label(org_ctx.org_id, person_cluster_id, request.label)
     await db.commit()
@@ -206,10 +202,13 @@ async def delete_person(
             person_cluster_id=person_cluster_id,
         )
 
+    # Idempotent: if cluster was already gone, that's the same outcome as delete.
+    # Log for diagnostics but don't error.
     if not deleted_label and scenes_updated == 0:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Person cluster not found",
+        logger.warning(
+            "delete_person_already_absent",
+            org_id=org_id_str,
+            person_cluster_id=person_cluster_id,
         )
 
     logger.info(

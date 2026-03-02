@@ -5,10 +5,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 
+from app.logging_config import get_logger
+
 from app.config import get_settings
 from app.modules.ingest.auth import verify_agent_token
 from app.modules.tenancy.context import OrgContext
 from app.modules.tenancy.middleware import get_current_org
+
+logger = get_logger(__name__)
 
 upload_router = APIRouter(prefix="/ingest/thumbnails", tags=["ingest"])
 public_router = APIRouter(prefix="/thumbnails", tags=["thumbnails"])
@@ -109,6 +113,12 @@ async def get_face_thumbnail(
     thumbnail_path = root / str(org_ctx.org_id) / "faces" / f"{person_cluster_id}.jpg"
     _validate_resolved_path(thumbnail_path, root)
     if not thumbnail_path.exists():
+        logger.warning(
+            "face_thumbnail_missing",
+            org_id=str(org_ctx.org_id),
+            person_cluster_id=person_cluster_id,
+            expected_path=str(thumbnail_path),
+        )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found")
 
     return FileResponse(
