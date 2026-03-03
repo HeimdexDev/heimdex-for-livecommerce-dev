@@ -161,19 +161,22 @@ def publish_enrichment_jobs(
     keyframe_s3_prefix: Optional[str],
     audio_s3_key: Optional[str],
 ) -> None:
-    """Publish enrichment-job-created events based on available S3 artifacts.
+    """Publish per-video (v1) enrichment-job-created events.
 
     Called from ``update_processing_status`` when status transitions to 'indexed'.
 
-    * Caption + OCR + Face + Visual Embed published when ``keyframe_s3_prefix`` is set.
+    * OCR + Face published when ``keyframe_s3_prefix`` is set.
     * STT published when ``audio_s3_key`` is set.
+
+    Note: Caption and visual-embed are published as per-scene (v2) messages
+    by ``publish_scene_enrichment_jobs()`` instead.
     """
     now = datetime.now(timezone.utc)
     timestamp = now.isoformat()
     minute = now.strftime("%Y%m%dT%H%M")
 
     if keyframe_s3_prefix:
-        for job_type in ("caption", "ocr", "face", "visual_embed"):
+        for job_type in ("ocr", "face"):
             _publish(
                 job_type,
                 {
@@ -272,3 +275,106 @@ def publish_export_job(
     }
     dedup_id = f"{export_id}:export:{now.strftime('%Y%m%dT%H%M')}"
     _publish("export", body, dedup_id)
+
+
+def publish_scene_enrichment_jobs(
+    *,
+    file_id: UUID,
+    org_id: UUID,
+    video_id: str,
+    scenes: list[dict[str, Any]],
+) -> None:
+    """Publish per-scene (v2) enrichment jobs for caption and visual-embed.
+
+    Each scene produces one SQS message per job_type, published via
+    ``send_message_batch`` (10 msgs/call) for throughput.
+
+    Args:
+        scenes: List of dicts with keys: scene_id, scene_index, keyframe_s3_key.
+
+    Called asynchronously from the PATCH status handler after status='indexed'.
+    Fire-and-forget — errors are logged but never raised to the caller.
+    """
+    settings = get_settings()
+    if not settings.sqs_enabled:
+        return
+
+    if not scenes:
+        return
+
+    now = datetime.now(timezone.utc)
+    timestamp = now.isoformat()
+    client = _get_sqs_client()
+
+    for job_type in ("caption", "visual_embed"):
+        queue_attr = _QUEUE_URL_ATTRS.get(job_type)
+        if queue_attr is None:
+            continue
+        queue_url = getattr(settings, queue_attr, "")
+        if not queue_url:
+            continue
+
+        # Build all message entries for this job_type
+        entries: list[dict[str, Any]] = []
+        for scene in scenes:
+            entries.append({
+                "Id": f"{scene['scene_id']}_{job_type}",
+                "MessageBody": json.dumps({
+                    "version": "2",
+                    "type": "enrichment.scene_job_created",
+                    "timestamp": timestamp,
+                    "job_type": job_type,
+                    "file_id": str(file_id),
+                    "org_id": str(org_id),
+                    "video_id": video_id,
+                    "scene_id": scene["scene_id"],
+                    "scene_index": scene["scene_index"],
+                    "keyframe_s3_key": scene["keyframe_s3_key"],
+                    "audio_s3_key": None,
+                }, default=str),
+                "MessageAttributes": {
+                    "job_type": {"StringValue": job_type, "DataType": "String"},
+                    "org_id": {"StringValue": str(org_id), "DataType": "String"},
+                    "source": {"StringValue": "api", "DataType": "String"},
+                    "version": {"StringValue": "2", "DataType": "String"},
+                },
+            })
+
+        # Send in batches of 10 (SQS maximum per send_message_batch call)
+        sqs_batch_size = 10
+        published = 0
+        failed = 0
+        for i in range(0, len(entries), sqs_batch_size):
+            batch = entries[i : i + sqs_batch_size]
+            try:
+                resp = client.send_message_batch(
+                    QueueUrl=queue_url, Entries=batch
+                )
+                published += len(resp.get("Successful", []))
+                batch_failed = resp.get("Failed", [])
+                if batch_failed:
+                    failed += len(batch_failed)
+                    logger.warning(
+                        "sqs_scene_batch_partial_failure",
+                        job_type=job_type,
+                        video_id=video_id,
+                        batch_start=i,
+                        failed_count=len(batch_failed),
+                    )
+            except Exception:
+                failed += len(batch)
+                logger.exception(
+                    "sqs_scene_batch_send_failed",
+                    job_type=job_type,
+                    video_id=video_id,
+                    batch_start=i,
+                )
+
+        logger.info(
+            "sqs_scene_jobs_published",
+            job_type=job_type,
+            video_id=video_id,
+            published=published,
+            failed=failed,
+            total_scenes=len(scenes),
+        )

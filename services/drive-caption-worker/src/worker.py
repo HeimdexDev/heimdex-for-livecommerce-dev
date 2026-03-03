@@ -20,21 +20,41 @@ def _init_semaphore(max_concurrent: int) -> threading.Semaphore:
 
 
 def _make_sqs_callback(api_client, settings, caption_engine):
-    """Create the SQS message callback for caption processing."""
-    from heimdex_worker_sdk.message_adapters import sqs_to_claimed_file
-    _process_single_caption = importlib.import_module("src.tasks.caption")._process_single_caption
+    """Create the SQS message callback for caption processing.
+
+    Dispatches to v1 (per-video) or v2 (per-scene) handler based on
+    the message version field.  Backward-compatible: v1 messages from
+    before Phase 2 deployment continue to work.
+    """
+    from heimdex_worker_sdk.message_adapters import (
+        get_message_version,
+        sqs_to_claimed_file,
+        sqs_to_scene_job,
+    )
+    caption_mod = importlib.import_module("src.tasks.caption")
+    _process_single_caption = caption_mod._process_single_caption
+    _process_single_scene_caption = caption_mod._process_single_scene_caption
 
     def callback(message):
-        claimed_file = sqs_to_claimed_file(message)
-        _process_single_caption(
-            api_client=api_client,
-            settings=settings,
-            claimed_file=claimed_file,
-            caption_engine=caption_engine,
-        )
+        version = get_message_version(message)
+        if version == "2":
+            scene_job = sqs_to_scene_job(message)
+            _process_single_scene_caption(
+                api_client=api_client,
+                settings=settings,
+                scene_job=scene_job,
+                caption_engine=caption_engine,
+            )
+        else:
+            claimed_file = sqs_to_claimed_file(message)
+            _process_single_caption(
+                api_client=api_client,
+                settings=settings,
+                claimed_file=claimed_file,
+                caption_engine=caption_engine,
+            )
 
     return callback
-
 
 def main() -> None:
     get_settings = importlib.import_module("heimdex_worker_sdk.settings").get_worker_settings

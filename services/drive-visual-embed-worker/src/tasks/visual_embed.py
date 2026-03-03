@@ -327,3 +327,84 @@ def _post_enrich_to_api(
         )
 
     return resp.json()
+
+
+def _process_single_scene_visual_embed(
+    api_client: Any,
+    settings: Any,
+    scene_job: Any,
+) -> None:
+    """Process a single scene from a v2 per-scene SQS message.
+
+    Unlike ``_process_single_visual_embed`` (v1, per-video), this:
+    - Downloads ONE keyframe directly via ``scene_job.keyframe_s3_key``
+    - Encodes it with SigLIP2 vision encoder → 768-dim vector
+    - Posts the embedding to the enrich API for that scene only
+    - Does NOT update per-video job status (SQS handles per-scene retries)
+    """
+    S3Client = importlib.import_module("heimdex_worker_sdk.s3").S3Client
+
+    org_id = scene_job.org_id
+    org_id_str = str(org_id)
+    video_id = scene_job.video_id
+    scene_id = scene_job.scene_id
+    keyframe_s3_key = scene_job.keyframe_s3_key
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"visual_embed_scene_{scene_id}_"))
+
+    try:
+        # 1. Load model on first call (cached for worker lifetime)
+        _load_vision_model(use_gpu=getattr(settings, "use_gpu", False))
+
+        # 2. Download single keyframe from S3
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        keyframe_path = temp_dir / f"{scene_id}.jpg"
+        try:
+            s3.download_file(keyframe_s3_key, keyframe_path)
+        except Exception:
+            logger.warning(
+                "scene_visual_embed_keyframe_download_failed",
+                extra={
+                    "org_id": org_id_str,
+                    "video_id": video_id,
+                    "scene_id": scene_id,
+                    "s3_key": keyframe_s3_key,
+                },
+                exc_info=True,
+            )
+            raise  # Let SQS retry via visibility timeout
+
+        # 3. Encode keyframe → 768-dim vector
+        embed_started = time.monotonic()
+        embedding = _embed_keyframe(keyframe_path)
+        embed_duration_ms = int((time.monotonic() - embed_started) * 1000)
+
+        # 4. Post visual embedding to enrich API
+        _post_enrich_to_api(
+            settings=settings,
+            org_id=org_id,
+            video_id=video_id,
+            scenes=[{"scene_id": scene_id, "visual_embedding": embedding}],
+        )
+
+        logger.info(
+            "scene_visual_embed_complete",
+            extra={
+                "org_id": org_id_str,
+                "video_id": video_id,
+                "scene_id": scene_id,
+                "scene_index": scene_job.scene_index,
+                "embed_duration_ms": embed_duration_ms,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "scene_visual_embed_failed",
+            extra={
+                "org_id": org_id_str,
+                "video_id": video_id,
+                "scene_id": scene_id,
+            },
+        )
+        raise  # Re-raise so SQS consumer treats this as failure (retry)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)

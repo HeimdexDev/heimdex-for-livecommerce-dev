@@ -174,8 +174,8 @@ class TestSQSEnabled:
             audio_s3_key=None,
         )
 
-        # Caption + OCR + Face + Visual Embed = 4 calls
-        assert mock_client.send_message.call_count == 4
+        # OCR + Face = 2 calls (caption + visual_embed moved to per-scene v2)
+        assert mock_client.send_message.call_count == 2
         calls = mock_client.send_message.call_args_list
         job_types_sent = []
         for call in calls:
@@ -185,7 +185,7 @@ class TestSQSEnabled:
             assert body["keyframe_s3_prefix"] == "drive/org/video/keyframes/"
             assert body["audio_s3_key"] is None
             job_types_sent.append(body["job_type"])
-        assert set(job_types_sent) == {"caption", "ocr", "face", "visual_embed"}
+        assert set(job_types_sent) == {"ocr", "face"}
 
     @patch("app.sqs_producer._get_sqs_client")
     @patch("app.sqs_producer.get_settings")
@@ -226,8 +226,8 @@ class TestSQSEnabled:
             audio_s3_key="drive/org/video/audio.wav",
         )
 
-        # Caption + OCR + Face + Visual Embed + STT = 5 calls
-        assert mock_client.send_message.call_count == 5
+        # OCR + Face + STT = 3 calls (caption + visual_embed moved to per-scene v2)
+        assert mock_client.send_message.call_count == 3
 
     @patch("app.sqs_producer._get_sqs_client")
     @patch("app.sqs_producer.get_settings")
@@ -323,16 +323,14 @@ class TestSQSFailure:
     @patch("app.sqs_producer._get_sqs_client")
     @patch("app.sqs_producer.get_settings")
     def test_partial_failure_continues(self, mock_settings, mock_get_client):
-        """If caption SQS send fails, OCR and STT sends should still be attempted."""
+        """If first SQS send fails, remaining sends should still be attempted."""
         mock_settings.return_value = _make_settings(sqs_enabled=True)
         mock_client = MagicMock()
-        # First call (caption) fails, second (ocr) and third (stt) succeed
+        # First call (ocr) fails, second (face) and third (stt) succeed
         mock_client.send_message.side_effect = [
             Exception("SQS error"),
             {"MessageId": "msg-ok-1"},
             {"MessageId": "msg-ok-2"},
-            {"MessageId": "msg-ok-3"},
-            {"MessageId": "msg-ok-4"},
         ]
         mock_get_client.return_value = mock_client
 
@@ -345,8 +343,8 @@ class TestSQSFailure:
             audio_s3_key="s3://audio.wav",
         )
 
-        # All 5 sends attempted despite first failure
-        assert mock_client.send_message.call_count == 5
+        # All 3 sends attempted despite first failure (ocr + face + stt)
+        assert mock_client.send_message.call_count == 3
 
 
 # ── Edge cases ────────────────────────────────────────────────────────────────

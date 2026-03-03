@@ -31,22 +31,39 @@ def _init_semaphore(max_concurrent: int) -> threading.Semaphore:
 
 
 def _make_sqs_callback(api_client, settings):
-    """Create the SQS message callback for visual embedding processing."""
-    from heimdex_worker_sdk.message_adapters import sqs_to_claimed_file
-    _process_single_visual_embed = importlib.import_module(
-        "src.tasks.visual_embed"
-    )._process_single_visual_embed
+    """Create the SQS message callback for visual embedding processing.
+
+    Dispatches to v1 (per-video) or v2 (per-scene) handler based on
+    the message version field.  Backward-compatible: v1 messages from
+    before Phase 2 deployment continue to work.
+    """
+    from heimdex_worker_sdk.message_adapters import (
+        get_message_version,
+        sqs_to_claimed_file,
+        sqs_to_scene_job,
+    )
+    ve_mod = importlib.import_module("src.tasks.visual_embed")
+    _process_single_visual_embed = ve_mod._process_single_visual_embed
+    _process_single_scene_visual_embed = ve_mod._process_single_scene_visual_embed
 
     def callback(message):
-        claimed_file = sqs_to_claimed_file(message)
-        _process_single_visual_embed(
-            api_client=api_client,
-            settings=settings,
-            claimed_file=claimed_file,
-        )
+        version = get_message_version(message)
+        if version == "2":
+            scene_job = sqs_to_scene_job(message)
+            _process_single_scene_visual_embed(
+                api_client=api_client,
+                settings=settings,
+                scene_job=scene_job,
+            )
+        else:
+            claimed_file = sqs_to_claimed_file(message)
+            _process_single_visual_embed(
+                api_client=api_client,
+                settings=settings,
+                claimed_file=claimed_file,
+            )
 
     return callback
-
 
 def main() -> None:
     get_settings = importlib.import_module("heimdex_worker_sdk.settings").get_worker_settings

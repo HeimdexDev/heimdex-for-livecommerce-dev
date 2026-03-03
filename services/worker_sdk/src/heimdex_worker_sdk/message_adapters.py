@@ -1,21 +1,43 @@
 """
-Adapters that convert SQS message bodies into the same dataclasses used by
-the HTTP polling path, so existing task functions work unchanged.
+Adapters that convert SQS message bodies into typed dataclasses so existing
+task functions work unchanged.
 
-The SQS producer (``sqs_producer.py`` in the API) publishes messages whose
-body fields are a superset of what ``ClaimedFile`` and ``ClaimedProcessingFile``
-need.  These adapters extract the relevant fields and set ``lease_token=None``
-because the SQS receipt handle serves as the lease in the SQS path.
+v1 messages (per-video): converted to ``ClaimedFile`` for enrichment workers
+  that process entire videos (STT, OCR, face, and legacy caption/visual-embed).
+v2 messages (per-scene): converted to ``SceneJob`` for workers that process
+  individual scenes (caption, visual-embed after Phase 2 deployment).
 
-See ``docs/queue_arch/02_message_contracts.md`` for full message schemas.
+The SQS producer (``sqs_producer.py`` in the API) publishes both v1 and v2
+messages. Workers dispatch to the appropriate handler based on message version.
+
+See ``docs/PIPELINE_SCENE_SPLIT_PLAN.md`` for architecture details.
 """
 
 import logging
+from dataclasses import dataclass
 from uuid import UUID
 
 from heimdex_worker_sdk.internal_api import ClaimedFile, ClaimedProcessingFile
 from heimdex_worker_sdk.sqs_client import SQSMessage
 from heimdex_worker_sdk.sqs_consumer import InvalidMessageError
+
+
+@dataclass(frozen=True)
+class SceneJob:
+    """Represents a single-scene enrichment job from a v2 SQS message.
+
+    Unlike ``ClaimedFile`` (per-video), this provides a direct S3 key for one
+    keyframe and the ``scene_id`` to target for the enrich API call.
+    No manifest download needed — the message carries everything.
+    """
+
+    file_id: UUID
+    org_id: UUID
+    video_id: str
+    scene_id: str
+    scene_index: int
+    keyframe_s3_key: str
+    audio_s3_key: str | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -73,4 +95,39 @@ def sqs_to_claimed_processing_file(message: SQSMessage) -> ClaimedProcessingFile
     except (KeyError, ValueError, TypeError) as e:
         raise InvalidMessageError(
             f"Cannot parse processing message {message.message_id}: {e}"
+        ) from e
+
+
+def get_message_version(message: SQSMessage) -> str:
+    """Extract the message version from an SQS message body.
+
+    Returns ``"1"`` for legacy per-video messages (default),
+    ``"2"`` for per-scene messages.
+    """
+    return message.body.get("version", "1")
+
+
+def sqs_to_scene_job(message: SQSMessage) -> SceneJob:
+    """Convert a v2 per-scene SQS message to ``SceneJob``.
+
+    v2 messages carry a direct keyframe S3 key and scene_id, eliminating
+    the need to download and parse the scene manifest.
+
+    Raises:
+        InvalidMessageError: If required fields are missing or malformed.
+    """
+    body = message.body
+    try:
+        return SceneJob(
+            file_id=UUID(body["file_id"]),
+            org_id=UUID(body["org_id"]),
+            video_id=body["video_id"],
+            scene_id=body["scene_id"],
+            scene_index=body.get("scene_index", 0),
+            keyframe_s3_key=body["keyframe_s3_key"],
+            audio_s3_key=body.get("audio_s3_key"),
+        )
+    except (KeyError, ValueError, TypeError) as e:
+        raise InvalidMessageError(
+            f"Cannot parse v2 scene message {message.message_id}: {e}"
         ) from e

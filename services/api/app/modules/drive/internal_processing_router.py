@@ -1,8 +1,10 @@
 """Internal drive processing management router for drive-worker."""
 
+import asyncio
 import time
 import uuid as _uuid
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status as http_status
@@ -26,13 +28,53 @@ from app.modules.drive.internal_router import (
 )
 from app.modules.drive.models import DriveConnection, DriveFile
 from app.config import get_settings
-from app.sqs_producer import publish_enrichment_jobs, publish_transcode_job
+from app.sqs_producer import (
+    publish_enrichment_jobs,
+    publish_scene_enrichment_jobs,
+    publish_transcode_job,
+)
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/internal/drive/processing", tags=["internal-drive-processing"])
 
 _TERMINAL_PROCESSING_STATUSES = frozenset({"indexed", "failed"})
+
+async def _publish_scene_jobs_in_background(
+    *,
+    file_id: UUID,
+    org_id: UUID,
+    video_id: str,
+    scenes: list[dict[str, Any]],
+) -> None:
+    """Publish per-scene SQS messages in a background thread.
+
+    Runs ``publish_scene_enrichment_jobs`` via ``run_in_executor`` so the
+    synchronous boto3 ``send_message_batch`` calls don't block the event loop.
+    Called from ``asyncio.create_task()`` after the PATCH response is sent.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: publish_scene_enrichment_jobs(
+                file_id=file_id,
+                org_id=org_id,
+                video_id=video_id,
+                scenes=scenes,
+            ),
+        )
+        logger.info(
+            "scene_enrichment_jobs_dispatched",
+            video_id=video_id,
+            scene_count=len(scenes),
+        )
+    except Exception:
+        logger.exception(
+            "scene_enrichment_jobs_dispatch_failed",
+            video_id=video_id,
+            scene_count=len(scenes),
+        )
 
 
 def _build_drive_web_view_link(google_file_id: str) -> str:
@@ -237,6 +279,7 @@ async def update_processing_status(
             if request.audio_s3_key is not None
             else drive_file.audio_s3_key
         )
+        # v1: per-video enrichment for STT, OCR, face
         publish_enrichment_jobs(
             file_id=file_id,
             org_id=drive_file.org_id,
@@ -244,6 +287,28 @@ async def update_processing_status(
             keyframe_s3_prefix=_eff_keyframe,
             audio_s3_key=_eff_audio,
         )
+
+        # v2: per-scene enrichment for caption + visual-embed (async,
+        # runs in background thread to avoid blocking the PATCH response)
+        _scene_count = request.scene_count or 0
+        if _scene_count > 0 and _eff_keyframe:
+            _vid = drive_file.video_id
+            scenes_for_publish = [
+                {
+                    "scene_id": f"{_vid}_scene_{i:03d}",
+                    "scene_index": i,
+                    "keyframe_s3_key": f"{_eff_keyframe}{_vid}_scene_{i:03d}.jpg",
+                }
+                for i in range(_scene_count)
+            ]
+            asyncio.create_task(
+                _publish_scene_jobs_in_background(
+                    file_id=file_id,
+                    org_id=drive_file.org_id,
+                    video_id=_vid,
+                    scenes=scenes_for_publish,
+                )
+            )
 
     # SQS: publish transcode job when drive-worker finishes original upload.
     # Only fires when drive_transcode_mode='gpu' and status is 'awaiting_transcode'.
