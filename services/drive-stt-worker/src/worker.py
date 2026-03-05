@@ -7,7 +7,10 @@ import sys
 import threading
 from typing import Optional
 
-os.environ.setdefault("TORCH_HOME", "/models/torch")
+# Unify TORCH_HOME with HF_HOME — pyannote's internal Model.from_pretrained()
+# uses torch.hub.get_dir() (TORCH_HOME/hub) as cache_dir for hf_hub_download.
+# Pointing both at the same directory avoids cache misses at runtime.
+os.environ.setdefault("TORCH_HOME", "/models/huggingface")
 os.environ.setdefault("HF_HOME", "/models/huggingface")
 
 logger = logging.getLogger(__name__)

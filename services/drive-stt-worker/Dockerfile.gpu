@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 FROM python:3.11-slim AS sdk-builder
 WORKDIR /build
 COPY dev-heimdex-for-livecommerce/services/worker_sdk/pyproject.toml .
@@ -11,7 +12,11 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 ENV WHISPER_CACHE_DIR=/models/whisper
 ENV HF_HOME=/models/huggingface
-ENV TORCH_HOME=/models/torch
+# Unify TORCH_HOME with HF_HOME so pyannote's internal Model.from_pretrained()
+# (which uses torch.hub.get_dir() → TORCH_HOME/hub as cache_dir) finds models
+# pre-downloaded by snapshot_download (which uses HF_HOME/hub).
+ENV TORCH_HOME=/models/huggingface
+ENV MPLCONFIGDIR=/models/matplotlib
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
@@ -65,28 +70,31 @@ RUN pip install --no-cache-dir \
 
 RUN python -c "from pyannote.audio import Pipeline; print('pyannote import OK')"
 
-RUN mkdir -p "${WHISPER_CACHE_DIR}" "${HF_HOME}" "${TORCH_HOME}" \
+# Pre-download Whisper model
+RUN mkdir -p "${WHISPER_CACHE_DIR}" "${HF_HOME}" "${MPLCONFIGDIR}" \
     && python -c "from faster_whisper import WhisperModel; WhisperModel('turbo', device='cpu', compute_type='int8')"
 
-# syntax=docker/dockerfile:1.4
-# Pre-download pyannote diarization models at build time (optional).
+# Pre-download pyannote diarization models at build time.
 # Build secret "hf_token" is passed by build-gpu-images.yml via --secret.
-RUN --mount=type=secret,id=hf_token \
-    if [ -f /run/secrets/hf_token ]; then \
-      HF_TOKEN=$(cat /run/secrets/hf_token) python -c "\
-from huggingface_hub import snapshot_download, login; \
+# Pattern matches caption worker: always mount, cat with 2>/dev/null fallback.
+RUN --mount=type=secret,id=hf_token mkdir -p "${HF_HOME}" \
+    && export HF_TOKEN=$(cat /run/secrets/hf_token 2>/dev/null) \
+    && if [ -n "$HF_TOKEN" ]; then \
+         python -c "\
 import os; \
+from huggingface_hub import snapshot_download, login; \
 login(token=os.environ['HF_TOKEN']); \
-[snapshot_download(repo_id=r, local_dir_use_symlinks=False) \
+[snapshot_download(repo_id=r) \
  for r in ['pyannote/speaker-diarization-3.1', \
            'pyannote/wespeaker-voxceleb-resnet34-LM', \
-           'pyannote/segmentation-3.0']]"; \
-    fi
+           'pyannote/segmentation-3.0']]; \
+print('pyannote models pre-downloaded')"; \
+       else echo 'No HF token provided — pyannote models will download at runtime'; fi
 
 COPY dev-heimdex-for-livecommerce/services/drive-stt-worker/src/ src/
 
 RUN useradd -m -u 1000 appuser \
-    && chown -R appuser:appuser /app /models
+    && chown -R appuser:appuser /app /models /home/appuser
 USER appuser
 
 CMD ["python", "-m", "src.worker"]
