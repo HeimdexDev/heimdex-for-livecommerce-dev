@@ -540,6 +540,9 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
                   <span className={cn("inline-flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold mt-0.5", turn.color.bg, turn.color.text)}>
                     {turn.label}
                   </span>
+                  {turn.timestamp && (
+                    <span className="text-gray-400 font-mono text-[10px] flex-shrink-0 mt-0.5">{turn.timestamp}</span>
+                  )}
                   <span className="text-gray-600 line-clamp-1">{turn.text}</span>
                 </div>
               ))}

@@ -362,13 +362,15 @@ function OverviewPanel({
           <div className="mt-4 max-h-[500px] overflow-y-auto space-y-3">
             {diarizedScenes.map((ds, si) => (
               <div key={si}>
-                <span className="text-gray-400 font-mono text-xs">[{formatTimestamp(ds.startMs)}]</span>
-                <div className="mt-1 space-y-1">
+                <div className="space-y-1">
                   {ds.turns.map((turn, ti) => (
                     <div key={ti} className={cn("flex gap-2 text-sm leading-relaxed", turn.color.border, "border-l-2 pl-2")}>
                       <span className={cn("inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold mt-0.5", turn.color.bg, turn.color.text)}>
                         {turn.label}
                       </span>
+                      {turn.timestamp && (
+                        <span className="text-gray-400 font-mono text-xs flex-shrink-0 mt-0.5">{turn.timestamp}</span>
+                      )}
                       <span className="text-gray-700">{turn.text}</span>
                     </div>
                   ))}
@@ -557,6 +559,9 @@ function SceneCard({
                     <span className={cn("inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold mt-0.5", turn.color.bg, turn.color.text)}>
                       {turn.label}
                     </span>
+                    {turn.timestamp && (
+                      <span className="text-gray-400 font-mono text-xs flex-shrink-0 mt-0.5">{turn.timestamp}</span>
+                    )}
                     <span className="text-gray-700">{turn.text}</span>
                   </div>
                 ))}
