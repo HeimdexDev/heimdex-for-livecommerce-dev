@@ -12,6 +12,7 @@ import { formatTimestamp } from "@/lib/api/utils";
 import type { VideoScene, VideoScenesResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
+import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
 
 type ViewMode = "overview" | "scenes";
 
@@ -268,6 +269,14 @@ function OverviewPanel({
     [scenes],
   );
 
+  const diarizedScenes = useMemo(
+    () => scenes
+      .map((s) => ({ startMs: s.start_ms, turns: parseSpeakerTranscript(s.speaker_transcript) }))
+      .filter((s) => s.turns.length > 0),
+    [scenes],
+  );
+  const hasDiarization = diarizedScenes.length > 0;
+
   const captionSummary = useMemo(() => {
     const captions = scenes
       .map((s) => s.scene_caption?.trim())
@@ -349,9 +358,29 @@ function OverviewPanel({
 
       <div className="mt-8">
         <h3 className="text-lg font-bold text-gray-900">스크립트</h3>
-        <div className="mt-4 max-h-[500px] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
-          {fullTranscript || "스크립트가 없습니다."}
-        </div>
+        {hasDiarization ? (
+          <div className="mt-4 max-h-[500px] overflow-y-auto space-y-3">
+            {diarizedScenes.map((ds, si) => (
+              <div key={si}>
+                <span className="text-gray-400 font-mono text-xs">[{formatTimestamp(ds.startMs)}]</span>
+                <div className="mt-1 space-y-1">
+                  {ds.turns.map((turn, ti) => (
+                    <div key={ti} className={cn("flex gap-2 text-sm leading-relaxed", turn.color.border, "border-l-2 pl-2")}>
+                      <span className={cn("inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold mt-0.5", turn.color.bg, turn.color.text)}>
+                        {turn.label}
+                      </span>
+                      <span className="text-gray-700">{turn.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-4 max-h-[500px] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+            {fullTranscript || "스크립트가 없습니다."}
+          </div>
+        )}
         <button
           type="button"
           onClick={() => handleCopy(fullTranscript, "script")}
@@ -401,10 +430,8 @@ function SceneCard({
   const transcriptPreview = scene.transcript_raw.length > 100
     ? scene.transcript_raw.slice(0, 100) + "..."
     : scene.transcript_raw;
-  const speakerText = scene.speaker_transcript?.trim() || "";
-  const speakerPreview = speakerText.length > 100
-    ? speakerText.slice(0, 100) + "..."
-    : speakerText;
+  const speakerTurns = useMemo(() => parseSpeakerTranscript(scene.speaker_transcript), [scene.speaker_transcript]);
+  const hasSpeakers = speakerTurns.length > 0;
   const captionText = scene.scene_caption?.trim() || "";
   const captionPreview = captionText.length > 100
     ? captionText.slice(0, 100) + "..."
@@ -506,28 +533,7 @@ function SceneCard({
             </p>
           </div>
 
-          <div className="mt-3 border-t border-gray-100 pt-3">
-            <button
-              type="button"
-              onClick={() => setSubtitleExpanded((v) => !v)}
-              className="flex w-full items-center justify-between"
-            >
-              <div className="flex items-center gap-2 text-sm text-gray-700">
-                <CcIcon />
-                <span className="font-medium">자막</span>
-              </div>
-              {subtitleExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
-            </button>
-            <p className={cn(
-              "mt-2 text-sm leading-relaxed text-gray-600",
-              !subtitleExpanded && "line-clamp-2",
-            )}>
-              <span className="text-gray-400 font-mono text-xs">[{formatTimestamp(scene.start_ms)}]</span>{" "}
-              {subtitleExpanded ? scene.transcript_raw : transcriptPreview}
-            </p>
-          </div>
-
-          {speakerText && (
+          {hasSpeakers ? (
             <div className="mt-3 border-t border-gray-100 pt-3">
               <button
                 type="button"
@@ -535,13 +541,8 @@ function SceneCard({
                 className="flex w-full items-center justify-between"
               >
                 <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                    <circle cx="9" cy="7" r="4" />
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-                  </svg>
-                  <span className="font-medium">화자 대본</span>
+                  <CcIcon />
+                  <span className="font-medium">자막</span>
                   {(scene.speaker_count ?? 0) > 1 && (
                     <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
                       화자 {scene.speaker_count}명
@@ -550,11 +551,36 @@ function SceneCard({
                 </div>
                 {speakerExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
               </button>
+              <div className={cn("mt-2 space-y-1", !speakerExpanded && "max-h-[4.5rem] overflow-hidden")}>
+                {speakerTurns.map((turn, i) => (
+                  <div key={i} className={cn("flex gap-2 text-sm leading-relaxed", turn.color.border, "border-l-2 pl-2")}>
+                    <span className={cn("inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold mt-0.5", turn.color.bg, turn.color.text)}>
+                      {turn.label}
+                    </span>
+                    <span className="text-gray-700">{turn.text}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-3 border-t border-gray-100 pt-3">
+              <button
+                type="button"
+                onClick={() => setSubtitleExpanded((v) => !v)}
+                className="flex w-full items-center justify-between"
+              >
+                <div className="flex items-center gap-2 text-sm text-gray-700">
+                  <CcIcon />
+                  <span className="font-medium">자막</span>
+                </div>
+                {subtitleExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
+              </button>
               <p className={cn(
-                "mt-2 text-sm leading-relaxed text-gray-600 whitespace-pre-line",
-                !speakerExpanded && "line-clamp-2",
+                "mt-2 text-sm leading-relaxed text-gray-600",
+                !subtitleExpanded && "line-clamp-2",
               )}>
-                {speakerExpanded ? speakerText : speakerPreview}
+                <span className="text-gray-400 font-mono text-xs">[{formatTimestamp(scene.start_ms)}]</span>{" "}
+                {subtitleExpanded ? scene.transcript_raw : transcriptPreview}
               </p>
             </div>
           )}

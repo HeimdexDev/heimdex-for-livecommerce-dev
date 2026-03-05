@@ -12,9 +12,10 @@ import {
 import { getAgentPlaybackUrl, getCloudPlaybackUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { cn } from "@/lib/utils";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { AddToBasketButton } from "@/features/basket/AddToBasketButton";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
+import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
 
 function playbackUrl(videoId: string, sourceType: string, startMs?: number): string {
   return sourceType === "gdrive"
@@ -475,6 +476,7 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
   const [expanded, setExpanded] = useState(false);
   const isRemovable = result.source_type === "removable_disk";
   const matchSignal = getMatchSignal(result.debug);
+  const speakerTurns = useMemo(() => parseSpeakerTranscript(result.speaker_transcript), [result.speaker_transcript]);
 
   return (
     <div className="p-4 hover:bg-gray-50 transition-colors">
@@ -531,13 +533,20 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
             </p>
           )}
 
-          {result.speaker_count != null && result.speaker_count > 1 && (
-            <p className="text-sm text-gray-500 mt-0.5 mb-2 line-clamp-1">
-              <span className="text-gray-400">🎤 화자 {result.speaker_count}명</span>
-              {result.speaker_transcript && result.speaker_transcript.trim() && (
-                <> {result.speaker_transcript}</>
+          {speakerTurns.length > 0 && (
+            <div className="mt-0.5 mb-2 space-y-0.5">
+              {speakerTurns.slice(0, 2).map((turn, i) => (
+                <div key={i} className="flex items-start gap-1.5 text-sm">
+                  <span className={cn("inline-flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold mt-0.5", turn.color.bg, turn.color.text)}>
+                    {turn.label}
+                  </span>
+                  <span className="text-gray-600 line-clamp-1">{turn.text}</span>
+                </div>
+              ))}
+              {speakerTurns.length > 2 && (
+                <span className="text-xs text-gray-400 pl-5">+{speakerTurns.length - 2}개 더</span>
               )}
-            </p>
+            </div>
           )}
 
           <div className="flex items-center gap-2 mb-2">
