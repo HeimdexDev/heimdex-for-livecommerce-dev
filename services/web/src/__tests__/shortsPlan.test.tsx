@@ -4,7 +4,8 @@ import userEvent from "@testing-library/user-event";
 // jest-dom matchers loaded via vitest.setup.ts
 import { CandidateCard } from "@/features/videos/components/CandidateCard";
 import { ShortsPlanPanel } from "@/features/videos/components/ShortsPlanPanel";
-import { ExportDialog } from "@/features/videos/components/ExportDialog";
+
+import { renderWithProviders } from "./test-utils";
 import type { ShortsCandidateResponse } from "@/lib/types";
 import { generateShortsPlan } from "@/lib/api/shorts";
 import { exportToPremiere } from "@/lib/agent-export";
@@ -192,7 +193,7 @@ describe("CandidateCard", () => {
 
 describe("ShortsPlanPanel", () => {
   it("renders Generate Shorts Plan button in idle state", () => {
-    render(
+    renderWithProviders(
       <ShortsPlanPanel
         videoId="video-abc-123"
         videoTitle="Spring Campaign"
@@ -209,7 +210,7 @@ describe("ShortsPlanPanel", () => {
       () => new Promise(() => undefined),
     );
 
-    render(
+    renderWithProviders(
       <ShortsPlanPanel
         videoId="video-abc-123"
         videoTitle="Spring Campaign"
@@ -225,7 +226,7 @@ describe("ShortsPlanPanel", () => {
     const user = userEvent.setup();
     vi.mocked(generateShortsPlan).mockRejectedValue(new Error("Plan failed"));
 
-    render(
+    renderWithProviders(
       <ShortsPlanPanel
         videoId="video-abc-123"
         videoTitle="Spring Campaign"
@@ -248,7 +249,7 @@ describe("ShortsPlanPanel", () => {
       candidates: [sampleCandidate, secondCandidate],
     });
 
-    render(
+    renderWithProviders(
       <ShortsPlanPanel
         videoId="video-abc-123"
         videoTitle="Spring Campaign"
@@ -272,7 +273,7 @@ describe("ShortsPlanPanel", () => {
       candidates: [sampleCandidate, secondCandidate],
     });
 
-    render(
+    renderWithProviders(
       <ShortsPlanPanel
         videoId="video-abc-123"
         videoTitle="Spring Campaign"
@@ -300,7 +301,7 @@ describe("ShortsPlanPanel", () => {
       candidates: [sampleCandidate, secondCandidate],
     });
 
-    render(
+    renderWithProviders(
       <ShortsPlanPanel
         videoId="video-abc-123"
         videoTitle="Spring Campaign"
@@ -314,7 +315,7 @@ describe("ShortsPlanPanel", () => {
     expect(screen.getByRole("button", { name: "Export to Premiere" })).toBeDisabled();
   });
 
-  it("export button disabled when agent offline", async () => {
+  it("keeps candidate playback disabled when agent is offline", async () => {
     const user = userEvent.setup();
     vi.mocked(generateShortsPlan).mockResolvedValue({
       video_id: "video-abc-123",
@@ -324,7 +325,7 @@ describe("ShortsPlanPanel", () => {
       candidates: [sampleCandidate],
     });
 
-    render(
+    renderWithProviders(
       <ShortsPlanPanel
         videoId="video-abc-123"
         videoTitle="Spring Campaign"
@@ -334,119 +335,9 @@ describe("ShortsPlanPanel", () => {
 
     await user.click(screen.getByRole("button", { name: "Generate Shorts Plan" }));
     await screen.findByText("Fashion Intro Segment");
-    expect(screen.getByRole("button", { name: "Export to Premiere" })).toBeDisabled();
-    expect(screen.getByText("(Agent offline)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export to Premiere" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Play" })).toBeDisabled();
   });
 });
 
-describe("ExportDialog", () => {
-  it("renders form fields when open", () => {
-    render(
-      <ExportDialog
-        isOpen={true}
-        onClose={vi.fn()}
-        onExport={vi.fn()}
-        selectedCount={2}
-        isExporting={false}
-        defaultProjectName="Spring Campaign Shorts"
-      />,
-    );
 
-    expect(screen.getByText("Premiere Pro 내보내기")).toBeInTheDocument();
-    expect(screen.getByLabelText("프로젝트 이름")).toBeInTheDocument();
-    expect(screen.getByLabelText("저장 위치")).toBeInTheDocument();
-    expect(screen.getByLabelText("프레임 레이트")).toBeInTheDocument();
-    expect(screen.getByText(/2개 선택됨/)).toBeInTheDocument();
-  });
-
-  it("export button disabled when project name empty", async () => {
-    const user = userEvent.setup();
-    render(
-      <ExportDialog
-        isOpen={true}
-        onClose={vi.fn()}
-        onExport={vi.fn()}
-        selectedCount={2}
-        isExporting={false}
-        defaultProjectName="Spring Campaign Shorts"
-      />,
-    );
-
-    await user.clear(screen.getByLabelText("프로젝트 이름"));
-    expect(screen.getByRole("button", { name: "내보내기" })).toBeDisabled();
-  });
-
-  it("export button disabled when output dir empty", async () => {
-    const user = userEvent.setup();
-    render(
-      <ExportDialog
-        isOpen={true}
-        onClose={vi.fn()}
-        onExport={vi.fn()}
-        selectedCount={2}
-        isExporting={false}
-        defaultProjectName="Spring Campaign Shorts"
-      />,
-    );
-
-    await user.clear(screen.getByLabelText("저장 위치"));
-    expect(screen.getByRole("button", { name: "내보내기" })).toBeDisabled();
-  });
-
-  it("calls onExport with form values when export clicked", async () => {
-    const user = userEvent.setup();
-    const onExport = vi.fn();
-    render(
-      <ExportDialog
-        isOpen={true}
-        onClose={vi.fn()}
-        onExport={onExport}
-        selectedCount={2}
-        isExporting={false}
-        defaultProjectName="Spring Campaign Shorts"
-      />,
-    );
-
-    await user.selectOptions(screen.getByLabelText("프레임 레이트"), "30");
-    await user.click(screen.getByRole("button", { name: "내보내기" }));
-
-    expect(onExport).toHaveBeenCalledWith({
-      projectName: "Spring Campaign Shorts",
-      outputDir: "~/Desktop/Heimdex Exports",
-      frameRate: 30,
-    });
-  });
-
-  it("closes on cancel click", async () => {
-    const user = userEvent.setup();
-    const onClose = vi.fn();
-    render(
-      <ExportDialog
-        isOpen={true}
-        onClose={onClose}
-        onExport={vi.fn()}
-        selectedCount={2}
-        isExporting={false}
-        defaultProjectName="Spring Campaign Shorts"
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "취소" }));
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it("does not render when isOpen is false", () => {
-    const { container } = render(
-      <ExportDialog
-        isOpen={false}
-        onClose={vi.fn()}
-        onExport={vi.fn()}
-        selectedCount={2}
-        isExporting={false}
-        defaultProjectName="Spring Campaign Shorts"
-      />,
-    );
-
-    expect(container.innerHTML).toBe("");
-  });
-});

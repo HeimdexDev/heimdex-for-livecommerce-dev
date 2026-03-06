@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { SearchResults } from "@/features/search/components/SearchResults";
+import { renderWithProviders } from "./test-utils";
 import type {
   SearchResponse,
   SceneSearchResponse,
@@ -89,27 +90,21 @@ const emptyResponse: SearchResponse = {
 
 describe("SearchResults with segment response", () => {
   it("renders segment snippet and video title", () => {
-    render(
-      <SearchResults response={segmentResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={segmentResponse} showDebug={false} agentAvailable={false} />);
 
     expect(screen.getByText("Segment snippet text")).toBeInTheDocument();
     expect(screen.getByText("Quarterly Results Presentation")).toBeInTheDocument();
   });
 
   it("renders disabled playback button for segments", () => {
-    render(
-      <SearchResults response={segmentResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={segmentResponse} showDebug={false} agentAvailable={false} />);
 
     const playButton = screen.getByRole("button", { name: /play \(not available\)/i });
     expect(playButton).toBeDisabled();
   });
 
   it("renders empty state message when no results", () => {
-    render(
-      <SearchResults response={emptyResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={emptyResponse} showDebug={false} agentAvailable={false} />);
 
     expect(
       screen.getByText("No results found. Try a different search query.")
@@ -119,9 +114,7 @@ describe("SearchResults with segment response", () => {
 
 describe("SearchResults with scene response", () => {
   it("renders scene snippet and video title", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
 
     expect(screen.getByText("Scene transcript text")).toBeInTheDocument();
     const titles = screen.getAllByText("Live Commerce Highlight");
@@ -129,34 +122,26 @@ describe("SearchResults with scene response", () => {
   });
 
   it("renders speech segment count badge", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
 
     expect(screen.getByText("3 segments")).toBeInTheDocument();
   });
 
   it("renders scene results badge", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
 
     expect(screen.getByText("Scene results")).toBeInTheDocument();
   });
 
   it("renders enabled play button when agent is available", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={true} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={true} />);
 
     const playButton = screen.getByRole("button", { name: /^play$/i });
     expect(playButton).not.toBeDisabled();
   });
 
   it("renders disabled play button when agent is offline", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
 
     const playButtons = screen.getAllByRole("button", { name: /play/i });
     const mainPlayButton = playButtons.find((btn) => btn.textContent?.trim() === "Play");
@@ -166,9 +151,7 @@ describe("SearchResults with scene response", () => {
 
 describe("SceneCard match signal indicator", () => {
   it("renders 'Hybrid match' for equal lexical/vector contributions", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
     expect(screen.getByText("Hybrid match")).toBeInTheDocument();
   });
 
@@ -182,7 +165,7 @@ describe("SceneCard match signal indicator", () => {
       ...sceneResponse,
       results: [keywordScene],
     };
-    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
     expect(screen.getByText("Keyword match")).toBeInTheDocument();
   });
 
@@ -196,24 +179,20 @@ describe("SceneCard match signal indicator", () => {
       ...sceneResponse,
       results: [vectorScene],
     };
-    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
     expect(screen.getByText("Semantic match")).toBeInTheDocument();
   });
 });
 
 describe("SceneCard quality indicator", () => {
   it("renders quality factor value", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
     expect(screen.getByText("1.00")).toBeInTheDocument();
     expect(screen.getByText("Quality:")).toBeInTheDocument();
   });
 
   it("renders quality bar with tooltip containing speech segment count", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
     const qualityValue = screen.getByTitle(/Quality factor: 1\.00, 3 speech segments/);
     expect(qualityValue).toBeInTheDocument();
   });
@@ -221,17 +200,13 @@ describe("SceneCard quality indicator", () => {
 
 describe("SceneCard context play buttons", () => {
   it("renders -5s context button", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={true} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={true} />);
     const contextBtn = screen.getByRole("button", { name: "-5s" });
     expect(contextBtn).not.toBeDisabled();
   });
 
   it("disables context buttons when agent offline", () => {
-    render(
-      <SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
     const contextBtn = screen.getByRole("button", { name: "-5s" });
     expect(contextBtn).toBeDisabled();
   });
@@ -252,9 +227,7 @@ describe("Video grouping", () => {
   };
 
   it("groups scenes by video and shows group headers with video titles", () => {
-    render(
-      <SearchResults response={multiVideoResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={multiVideoResponse} showDebug={false} agentAvailable={false} />);
     const videoAlphas = screen.getAllByText("Video Alpha");
     expect(videoAlphas.length).toBeGreaterThanOrEqual(1);
     const videoBetas = screen.getAllByText("Video Beta");
@@ -264,18 +237,14 @@ describe("Video grouping", () => {
   });
 
   it("expands first group by default and collapses others", () => {
-    render(
-      <SearchResults response={multiVideoResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={multiVideoResponse} showDebug={false} agentAvailable={false} />);
     const snippets = screen.getAllByText("Scene transcript text");
     expect(snippets).toHaveLength(2);
   });
 
   it("toggles group expansion on header click", async () => {
     const user = userEvent.setup();
-    render(
-      <SearchResults response={multiVideoResponse} showDebug={false} agentAvailable={false} />
-    );
+    renderWithProviders(<SearchResults response={multiVideoResponse} showDebug={false} agentAvailable={false} />);
 
     const videoBetaHeader = screen.getByText("Video Beta").closest("button")!;
     await user.click(videoBetaHeader);
@@ -300,7 +269,7 @@ describe("SceneCard OCR features", () => {
       ...sceneResponse,
       results: [ocrScene],
     };
-    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
     expect(screen.getByText("On-screen match")).toBeInTheDocument();
   });
 
@@ -318,7 +287,7 @@ describe("SceneCard OCR features", () => {
       ...sceneResponse,
       results: [lowOcrScene],
     };
-    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
     expect(screen.queryByText("On-screen match")).not.toBeInTheDocument();
   });
 
@@ -331,7 +300,7 @@ describe("SceneCard OCR features", () => {
       ...sceneResponse,
       results: [ocrScene],
     };
-    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
     expect(screen.getByText(/\u20A939,900 PRODUCT X/)).toBeInTheDocument();
   });
 
@@ -344,12 +313,12 @@ describe("SceneCard OCR features", () => {
       ...sceneResponse,
       results: [noOcrScene],
     };
-    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
     expect(screen.queryByText(/\uD83D\uDCFA/)).not.toBeInTheDocument();
   });
 
   it("does not render OCR snippet when ocr_snippet is undefined", () => {
-    render(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={sceneResponse} showDebug={false} agentAvailable={false} />);
     expect(screen.queryByText(/\uD83D\uDCFA/)).not.toBeInTheDocument();
   });
 
@@ -366,7 +335,7 @@ describe("SceneCard OCR features", () => {
       ...sceneResponse,
       results: [ocrScene],
     };
-    render(<SearchResults response={resp} showDebug={true} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={resp} showDebug={true} agentAvailable={false} />);
 
     const debugToggle = screen.getByText("Debug Info");
     await user.click(debugToggle);
@@ -377,7 +346,7 @@ describe("SceneCard OCR features", () => {
 
    it("does not render OCR contribution in debug panel when 0", async () => {
      const user = userEvent.setup();
-     render(<SearchResults response={sceneResponse} showDebug={true} agentAvailable={false} />);
+     renderWithProviders(<SearchResults response={sceneResponse} showDebug={true} agentAvailable={false} />);
 
      const debugToggle = screen.getByText("Debug Info");
      await user.click(debugToggle);
@@ -396,7 +365,7 @@ describe("SceneCard scene_caption features", () => {
       ...sceneResponse,
       results: [captionScene],
     };
-    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
     expect(screen.getByText("테스트 캡션")).toBeInTheDocument();
   });
 
@@ -409,7 +378,7 @@ describe("SceneCard scene_caption features", () => {
       ...sceneResponse,
       results: [noCaptionScene],
     };
-    render(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
+    renderWithProviders(<SearchResults response={resp} showDebug={false} agentAvailable={false} />);
     expect(screen.queryByText("AI 캡션")).not.toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@ import { VideoCard } from "@/features/videos/components/VideoCard";
 import { VideoList } from "@/features/videos/components/VideoList";
 import { VideoFilterPanel } from "@/features/videos/components/VideoFilterPanel";
 import { VideoDetailDrawer } from "@/features/videos/components/VideoDetailDrawer";
+import { renderWithProviders } from "./test-utils";
 import type {
   VideoSummary,
   VideoScene,
@@ -236,7 +237,8 @@ describe("VideoFilterPanel", () => {
       />,
     );
     expect(screen.getByText("Newest first")).toBeInTheDocument();
-    expect(screen.getByText("Oldest first")).toBeInTheDocument();
+    expect(screen.getByText("A → Z")).toBeInTheDocument();
+    expect(screen.getByText("Z → A")).toBeInTheDocument();
   });
 
   it("renders library filter options", () => {
@@ -300,40 +302,40 @@ describe("VideoDetailDrawer", () => {
   });
 
   it("renders video id and library name", () => {
-    render(<VideoDetailDrawer {...defaultProps} />);
+    renderWithProviders(<VideoDetailDrawer {...defaultProps} />);
     expect(screen.getByText("Spring Campaign")).toBeInTheDocument();
     expect(screen.getByText("Main Library")).toBeInTheDocument();
   });
 
   it("renders scene list with transcript", () => {
-    render(<VideoDetailDrawer {...defaultProps} />);
+    renderWithProviders(<VideoDetailDrawer {...defaultProps} />);
     expect(
       screen.getByText("Hello everyone, welcome to the live show."),
     ).toBeInTheDocument();
   });
 
   it("renders scene time range", () => {
-    render(<VideoDetailDrawer {...defaultProps} />);
+    renderWithProviders(<VideoDetailDrawer {...defaultProps} />);
     expect(screen.getByText("0:00 - 0:30")).toBeInTheDocument();
   });
 
   it("calls onClose when close button clicked", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
-    render(<VideoDetailDrawer {...defaultProps} onClose={onClose} />);
+    renderWithProviders(<VideoDetailDrawer {...defaultProps} onClose={onClose} />);
     await user.click(screen.getByLabelText("Close"));
     expect(onClose).toHaveBeenCalled();
   });
 
   it("renders nothing when isOpen is false", () => {
-    const { container } = render(
+    const { container } = renderWithProviders(
       <VideoDetailDrawer {...defaultProps} isOpen={false} />,
     );
     expect(container.innerHTML).toBe("");
   });
 
   it("renders loading state for scenes", () => {
-    const { container } = render(
+    const { container } = renderWithProviders(
       <VideoDetailDrawer {...defaultProps} scenes={[]} isLoading={true} />,
     );
     const pulseElements = container.querySelectorAll(".animate-pulse");
@@ -341,7 +343,7 @@ describe("VideoDetailDrawer", () => {
   });
 
   it("shows scene tags", () => {
-    render(<VideoDetailDrawer {...defaultProps} />);
+    renderWithProviders(<VideoDetailDrawer {...defaultProps} />);
     expect(screen.getByText("greeting")).toBeInTheDocument();
   });
 });
