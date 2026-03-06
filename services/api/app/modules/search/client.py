@@ -318,7 +318,7 @@ class OpenSearchClient:
                     count_result = await self.client.count(index=self.alias_name)
                     doc_count = count_result.get("count", 0)
                 except Exception:
-                    pass
+                    logger.warning("opensearch_count_failed", exc_info=True)
             
             # Extract embedding dimension from mapping
             props = mapping.get(self.index_name, {}).get("mappings", {}).get("properties", {})

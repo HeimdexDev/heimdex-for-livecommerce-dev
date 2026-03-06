@@ -7,7 +7,7 @@ import time
 from typing import Annotated
 from urllib.parse import urlencode
 
-import requests as http_requests
+import httpx
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
@@ -105,44 +105,45 @@ async def callback(
     settings = get_settings()
     org_id_str = _verify_state(state, settings.drive_sa_encryption_key)
 
-    # Exchange authorization code for tokens
-    token_response = http_requests.post(
-        GOOGLE_TOKEN_URL,
-        data={
-            "code": code,
-            "client_id": settings.google_oauth_client_id,
-            "client_secret": settings.google_oauth_client_secret,
-            "redirect_uri": settings.google_oauth_redirect_uri,
-            "grant_type": "authorization_code",
-        },
-        timeout=30,
-    )
-    if token_response.status_code != 200:
-        logger.error(
-            "oauth_token_exchange_failed",
-            extra={"status": token_response.status_code, "body": token_response.text[:500]},
+    async with httpx.AsyncClient() as http_client:
+        # Exchange authorization code for tokens
+        token_response = await http_client.post(
+            GOOGLE_TOKEN_URL,
+            data={
+                "code": code,
+                "client_id": settings.google_oauth_client_id,
+                "client_secret": settings.google_oauth_client_secret,
+                "redirect_uri": settings.google_oauth_redirect_uri,
+                "grant_type": "authorization_code",
+            },
+            timeout=30,
         )
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Failed to exchange authorization code",
+        if token_response.status_code != 200:
+            logger.error(
+                "oauth_token_exchange_failed",
+                extra={"status": token_response.status_code, "body": token_response.text[:500]},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to exchange authorization code",
+            )
+
+        token_data = token_response.json()
+        access_token = token_data.get("access_token")
+        refresh_token = token_data.get("refresh_token")
+
+        if not refresh_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No refresh token received. Try revoking access and reconnecting.",
+            )
+
+        # Get user email from userinfo
+        userinfo_response = await http_client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15,
         )
-
-    token_data = token_response.json()
-    access_token = token_data.get("access_token")
-    refresh_token = token_data.get("refresh_token")
-
-    if not refresh_token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No refresh token received. Try revoking access and reconnecting.",
-        )
-
-    # Get user email from userinfo
-    userinfo_response = http_requests.get(
-        GOOGLE_USERINFO_URL,
-        headers={"Authorization": f"Bearer {access_token}"},
-        timeout=15,
-    )
     google_email = "unknown"
     if userinfo_response.status_code == 200:
         google_email = userinfo_response.json().get("email", "unknown")
@@ -215,11 +216,12 @@ async def disconnect(
             token_data = json.loads(decrypted)
             refresh_token = token_data.get("refresh_token")
             if refresh_token:
-                http_requests.post(
-                    GOOGLE_REVOKE_URL,
-                    params={"token": refresh_token},
-                    timeout=10,
-                )
+                async with httpx.AsyncClient() as http_client:
+                    await http_client.post(
+                        GOOGLE_REVOKE_URL,
+                        params={"token": refresh_token},
+                        timeout=10,
+                    )
         except Exception:
             logger.warning("oauth_revoke_failed", exc_info=True)
 

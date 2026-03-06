@@ -149,12 +149,12 @@ async def get_thumbnail(
         )
 
     if video_id.startswith("gd_") and settings.drive_connector_enabled:
-        return _get_s3_thumbnail(str(org_ctx.org_id), video_id, scene_id)
+        return await _get_s3_thumbnail(str(org_ctx.org_id), video_id, scene_id)
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thumbnail not found")
 
 
-def _get_s3_thumbnail(org_id: str, video_id: str, scene_id: str):
+async def _get_s3_thumbnail(org_id: str, video_id: str, scene_id: str):
     from fastapi.responses import Response
 
     from app.config import get_settings as _get_settings
@@ -162,7 +162,7 @@ def _get_s3_thumbnail(org_id: str, video_id: str, scene_id: str):
     from app.storage.s3 import S3Client
 
     s3 = S3Client(bucket=_get_settings().drive_s3_bucket)
-    data = s3.get_object_bytes(thumbnail_s3_key(org_id, video_id, scene_id))
+    data = await s3.get_object_bytes_async(thumbnail_s3_key(org_id, video_id, scene_id))
     if data:
         return Response(
             content=data,

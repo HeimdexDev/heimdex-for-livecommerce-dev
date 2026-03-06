@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import json
@@ -496,7 +497,10 @@ async def stream_playback(
     s3 = S3Client(bucket=settings.drive_s3_bucket)
 
     try:
-        head = s3._client.head_object(Bucket=s3.bucket, Key=drive_file.proxy_s3_key)
+        loop = asyncio.get_running_loop()
+        head = await loop.run_in_executor(
+            None, lambda: s3._client.head_object(Bucket=s3.bucket, Key=drive_file.proxy_s3_key)
+        )
     except Exception:
         logger.warning("playback_head_failed", extra={"key": drive_file.proxy_s3_key}, exc_info=True)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video proxy not found")

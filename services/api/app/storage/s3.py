@@ -6,8 +6,9 @@ Supports two modes based on ``Settings.minio_endpoint``:
   - **AWS S3 mode**: ``minio_endpoint`` is empty → uses the default boto3
     credential chain (env vars, IAM role) and the real AWS S3 endpoint.
 """
+import asyncio
 import logging
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Optional
 
@@ -121,23 +122,36 @@ class S3Client:
         self._client.download_file(self._bucket, s3_key, str(local_path))
 
     def get_object_bytes(self, s3_key: str) -> Optional[bytes]:
-        """Return object contents as bytes, or ``None`` if missing."""
+        """Return object contents as bytes, or ``None`` if the key does not exist.
+
+        Raises on S3 connectivity or permission errors so callers can
+        distinguish "key missing" from "S3 unavailable".
+        """
         try:
             response = self._client.get_object(Bucket=self._bucket, Key=s3_key)
             return response["Body"].read()
         except self._client.exceptions.NoSuchKey:
             return None
-        except Exception:
-            logger.warning("s3_get_failed", extra={"key": s3_key}, exc_info=True)
-            return None
+        except self._client.exceptions.ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code", "")
+            if error_code in ("404", "NoSuchKey"):
+                return None
+            raise
 
     def exists(self, s3_key: str) -> bool:
-        """Check whether an S3 key exists."""
+        """Check whether an S3 key exists.
+
+        Returns False only when the key genuinely does not exist (404).
+        Raises on S3 connectivity or permission errors.
+        """
         try:
             self._client.head_object(Bucket=self._bucket, Key=s3_key)
             return True
-        except Exception:
-            return False
+        except self._client.exceptions.ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code", "")
+            if error_code in ("404", "NoSuchKey"):
+                return False
+            raise
 
     def generate_presigned_url(self, s3_key: str, expires_in: int = 3600) -> str:
         """Generate a presigned GET URL."""
@@ -150,6 +164,34 @@ class S3Client:
     def delete(self, s3_key: str) -> None:
         """Delete a single object."""
         self._client.delete_object(Bucket=self._bucket, Key=s3_key)
+
+    # --- Async wrappers for use in FastAPI endpoints ---
+
+    async def get_object_bytes_async(self, s3_key: str) -> Optional[bytes]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.get_object_bytes, s3_key)
+
+    async def download_file_async(self, s3_key: str, local_path: Path) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.download_file, s3_key, local_path)
+
+    async def exists_async(self, s3_key: str) -> bool:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.exists, s3_key)
+
+    async def generate_presigned_url_async(self, s3_key: str, expires_in: int = 3600) -> str:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, partial(self.generate_presigned_url, s3_key, expires_in)
+        )
+
+    async def upload_file_async(
+        self, local_path: Path, s3_key: str, content_type: str = "application/octet-stream"
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, partial(self.upload_file, local_path, s3_key, content_type)
+        )
 
     def delete_prefix(self, prefix: str) -> int:
         """Delete all objects under *prefix*. Returns count of deleted objects."""

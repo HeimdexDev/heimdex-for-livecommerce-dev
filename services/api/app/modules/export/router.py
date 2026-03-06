@@ -130,6 +130,9 @@ async def export_edl(
 ):
     file_repo = DriveFileRepository(db)
 
+    gd_video_ids = [c.video_id for c in body.clips if c.video_id.startswith("gd_")]
+    drive_files_map = await file_repo.get_by_video_ids(org_ctx.org_id, gd_video_ids)
+
     resolved_clips: list[EdlClip] = []
     unresolved_clips: list[str] = []
 
@@ -138,7 +141,7 @@ async def export_edl(
             unresolved_clips.append(clip.video_id)
             continue
 
-        drive_file = await file_repo.get_by_video_id(org_ctx.org_id, clip.video_id)
+        drive_file = drive_files_map.get(clip.video_id)
         if drive_file is None:
             unresolved_clips.append(clip.video_id)
             continue
@@ -256,7 +259,7 @@ async def export_clip(
     try:
         # Download proxy video from S3
         input_path = tmp_dir / "source.mp4"
-        s3.download_file(drive_file.proxy_s3_key, input_path)
+        await s3.download_file_async(drive_file.proxy_s3_key, input_path)
 
         # Extract clip with ffmpeg
         output_path = tmp_dir / "clip.mp4"
@@ -320,6 +323,9 @@ async def export_premiere(
     # Normalize mount path: strip trailing slashes
     mount = body.drive_mount_path.rstrip("/").rstrip("\\")
 
+    gd_video_ids = [c.video_id for c in body.clips if c.video_id.startswith("gd_")]
+    drive_files_map = await file_repo.get_by_video_ids(org_ctx.org_id, gd_video_ids)
+
     resolved_clips: list[FcpClip] = []
     unresolved_clips: list[str] = []
 
@@ -328,7 +334,7 @@ async def export_premiere(
             unresolved_clips.append(clip.video_id)
             continue
 
-        drive_file = await file_repo.get_by_video_id(org_ctx.org_id, clip.video_id)
+        drive_file = drive_files_map.get(clip.video_id)
         if drive_file is None:
             unresolved_clips.append(clip.video_id)
             continue
@@ -435,24 +441,25 @@ async def export_premiere_package(
     # Normalize mount path
     mount = body.drive_mount_path.rstrip("/").rstrip("\\")
 
-    # Collect unique video_ids and fetch DriveFile records
+    # Collect unique video_ids and fetch DriveFile records in one query
     video_ids = list({clip.video_id for clip in body.clips})
-    drive_files_by_video_id: dict[str, DriveFile] = {}
-    connections_by_id: dict[object, DriveConnection] = {}
+    non_gd = [v for v in video_ids if not v.startswith("gd_")]
+    if non_gd:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"video_id must start with 'gd_': {non_gd[0]}",
+        )
 
-    for vid in video_ids:
-        if not vid.startswith("gd_"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"video_id must start with 'gd_': {vid}",
-            )
-        df = await file_repo.get_by_video_id(org_ctx.org_id, vid)
-        if df is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Video not found: {vid}",
-            )
-        drive_files_by_video_id[vid] = df
+    drive_files_by_video_id = await file_repo.get_by_video_ids(org_ctx.org_id, video_ids)
+    missing = [v for v in video_ids if v not in drive_files_by_video_id]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video not found: {missing[0]}",
+        )
+
+    connections_by_id: dict[object, DriveConnection] = {}
+    for df in drive_files_by_video_id.values():
         if df.connection_id not in connections_by_id:
             conn = await db.get(DriveConnection, df.connection_id)
             if conn:
@@ -639,25 +646,26 @@ async def initiate_proxy_pack(
         )
 
     video_ids = list({clip.video_id for clip in body.clips})
-    drive_files_by_vid: dict[str, DriveFile] = {}
-    for vid in video_ids:
-        if not vid.startswith("gd_"):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"video_id must start with 'gd_': {vid}",
-            )
-        df = await file_repo.get_by_video_id(org_ctx.org_id, vid)
-        if df is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Video not found: {vid}",
-            )
-        if not df.proxy_s3_key:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Proxy not available for video: {vid}",
-            )
-        drive_files_by_vid[vid] = df
+    non_gd = [v for v in video_ids if not v.startswith("gd_")]
+    if non_gd:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"video_id must start with 'gd_': {non_gd[0]}",
+        )
+
+    drive_files_by_vid = await file_repo.get_by_video_ids(org_ctx.org_id, video_ids)
+    missing = [v for v in video_ids if v not in drive_files_by_vid]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video not found: {missing[0]}",
+        )
+    no_proxy = [v for v, df in drive_files_by_vid.items() if not df.proxy_s3_key]
+    if no_proxy:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Proxy not available for video: {no_proxy[0]}",
+        )
 
     clip_dicts = [
         {"scene_id": c.scene_id, "video_id": c.video_id, "start_ms": c.start_ms, "end_ms": c.end_ms}
@@ -778,7 +786,7 @@ async def get_proxy_pack_status(
     if record.status == "ready" and record.s3_key:
         settings = get_settings()
         s3 = S3Client(bucket=settings.drive_s3_bucket)
-        download_url = s3.generate_presigned_url(record.s3_key, expires_in=3600)
+        download_url = await s3.generate_presigned_url_async(record.s3_key, expires_in=3600)
         expires_at_str = record.expires_at.isoformat()
 
     return ProxyPackStatusResponse(
