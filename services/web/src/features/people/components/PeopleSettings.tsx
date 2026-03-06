@@ -464,6 +464,8 @@ export function PeopleSettings() {
     excludedIds,
     toggleExclude,
     isSavingExcludes,
+    selectedIds,
+    toggleSelection,
     deletePerson,
     isDeleting,
     mergePeople,
@@ -500,8 +502,8 @@ export function PeopleSettings() {
   }, [people, searchQuery]);
 
   const selectedPeople = useMemo(
-    () => people.filter((p) => excludedIds.has(p.person_cluster_id)),
-    [people, excludedIds],
+    () => people.filter((p) => selectedIds.has(p.person_cluster_id)),
+    [people, selectedIds],
   );
 
   const hasPeople = people.length > 0;
@@ -613,10 +615,7 @@ export function PeopleSettings() {
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-bold text-gray-900">인물 검색</h2>
               <span className="text-sm text-gray-500">
-                {excludedIds.size}명 선택됨
-                {isSavingExcludes && (
-                  <span className="ml-2 inline-block h-3 w-3 animate-spin rounded-full border border-gray-300 border-t-indigo-500" />
-                )}
+                {selectedIds.size}명 선택됨
               </span>
             </div>
 
@@ -684,8 +683,8 @@ export function PeopleSettings() {
                       <PersonAvatar
                         key={person.person_cluster_id}
                         person={person}
-                        isSelected={excludedIds.has(person.person_cluster_id)}
-                        onToggle={toggleExclude}
+                        isSelected={selectedIds.has(person.person_cluster_id)}
+                        onToggle={toggleSelection}
                         onDelete={setDeleteTargetId}
                         agentAvailable={agentAvailable}
                         isDragActive={activeDragPerson !== null}

@@ -23,6 +23,8 @@ export interface UsePeopleReturn {
   excludedIds: Set<string>;
   toggleExclude: (personClusterId: string) => void;
   isSavingExcludes: boolean;
+  selectedIds: Set<string>;
+  toggleSelection: (personClusterId: string) => void;
   deletePerson: (personClusterId: string) => Promise<void>;
   isDeleting: boolean;
   mergePeople: (request: MergePersonRequest) => Promise<MergePersonResponse | null>;
@@ -38,6 +40,7 @@ export function usePeople(): UsePeopleReturn {
   const [isRenaming, setIsRenaming] = useState(false);
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
   const [isSavingExcludes, setIsSavingExcludes] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   const [isMerging, setIsMerging] = useState(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -106,6 +109,18 @@ export function usePeople(): UsePeopleReturn {
     [persistExcludes],
   );
 
+  const toggleSelection = useCallback((personClusterId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(personClusterId)) {
+        next.delete(personClusterId);
+      } else {
+        next.add(personClusterId);
+      }
+      return next;
+    });
+  }, []);
+
   const rename = useCallback(
     async (personClusterId: string, label: string | null) => {
       setIsRenaming(true);
@@ -141,6 +156,11 @@ export function usePeople(): UsePeopleReturn {
           const next = new Set(prev);
           next.delete(personClusterId);
           latestExcludedRef.current = next;
+          return next;
+        });
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(personClusterId);
           return next;
         });
       } catch (err) {
@@ -208,6 +228,8 @@ export function usePeople(): UsePeopleReturn {
     excludedIds,
     toggleExclude,
     isSavingExcludes,
+    selectedIds,
+    toggleSelection,
     deletePerson: remove,
     isDeleting,
     mergePeople: merge,
