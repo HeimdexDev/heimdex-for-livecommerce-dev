@@ -64,6 +64,7 @@ async def lifespan(app: FastAPI):
     
     await _startup_search_checks(opensearch_client)
     await _startup_scene_search_checks(scene_opensearch_client)
+    await _ensure_search_event_partitions(engine)
 
     if settings.embedding_use_mock:
         logger.warning(
@@ -165,6 +166,30 @@ async def _startup_scene_search_checks(client):
             "startup_scene_search_check_failed",
             error=str(e),
             message="Scene search infrastructure check failed. Scene search may not work.",
+        )
+
+
+async def _ensure_search_event_partitions(engine) -> None:
+    """Create search_events partitions for the current and next 2 months.
+
+    Uses a short-lived session independent of the request lifecycle.
+    Safe to call on every startup — all DDL is IF NOT EXISTS.
+    """
+    from app.modules.search.search_event_repository import SearchEventRepository
+
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            repo = SearchEventRepository(session)
+            partitions = await repo.ensure_partitions(months_ahead=2)
+            await session.commit()
+            logger.info("search_event_partitions_ready", partitions=partitions)
+    except Exception as e:
+        logger.warning(
+            "search_event_partition_setup_failed",
+            error=str(e),
+            message="Search analytics will fail until partitions are created. "
+                    "This is non-fatal — the API will start normally.",
         )
 
 

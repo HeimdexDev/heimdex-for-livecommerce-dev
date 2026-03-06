@@ -1,0 +1,178 @@
+"""Nightly export: search_events partition → Parquet → S3.
+
+Usage:
+    python -m app.cli.export_analytics                   # exports yesterday
+    python -m app.cli.export_analytics --date 2026-03-06 # exports specific date
+    python -m app.cli.export_analytics --dry-run         # print what would be exported
+
+Requires pyarrow (optional dependency — only needed for export, not at API runtime).
+"""
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import logging
+import sys
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Export search analytics to S3 as Parquet")
+    parser.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help="Date to export (YYYY-MM-DD). Defaults to yesterday.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be exported without writing to S3.",
+    )
+    return parser.parse_args()
+
+
+def _export_date(target: date) -> tuple[datetime, datetime]:
+    start = datetime(target.year, target.month, target.day, tzinfo=timezone.utc)
+    end = start + timedelta(days=1)
+    return start, end
+
+
+def _rows_to_parquet(rows: list[dict[str, Any]]) -> bytes:
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ImportError:
+        logger.error(
+            "pyarrow is required for Parquet export. "
+            "Install with: pip install pyarrow"
+        )
+        sys.exit(1)
+
+    if not rows:
+        return b""
+
+    schema = pa.schema([
+        ("id", pa.int64()),
+        ("org_id", pa.string()),
+        ("user_id", pa.string()),
+        ("query_text", pa.string()),
+        ("search_mode", pa.string()),
+        ("result_count", pa.int32()),
+        ("response_ms", pa.int32()),
+        ("metadata", pa.string()),
+        ("created_at", pa.timestamp("us", tz="UTC")),
+    ])
+
+    arrays = [
+        pa.array([r["id"] for r in rows], type=pa.int64()),
+        pa.array([str(r["org_id"]) for r in rows], type=pa.string()),
+        pa.array([str(r["user_id"]) for r in rows], type=pa.string()),
+        pa.array([r["query_text"] for r in rows], type=pa.string()),
+        pa.array([r["search_mode"] for r in rows], type=pa.string()),
+        pa.array([r.get("result_count") for r in rows], type=pa.int32()),
+        pa.array([r.get("response_ms") for r in rows], type=pa.int32()),
+        pa.array([json.dumps(r.get("metadata", {})) for r in rows], type=pa.string()),
+        pa.array([r["created_at"] for r in rows], type=pa.timestamp("us", tz="UTC")),
+    ]
+
+    table = pa.table(arrays, schema=schema)
+    buf = io.BytesIO()
+    pq.write_table(table, buf, compression="snappy")
+    return buf.getvalue()
+
+
+def _upload_to_s3(data: bytes, bucket: str, key: str, region: str) -> None:
+    import boto3
+    from botocore.config import Config as BotoConfig
+
+    client = boto3.client(
+        "s3",
+        region_name=region,
+        config=BotoConfig(retries={"max_attempts": 3, "mode": "adaptive"}),
+    )
+    client.put_object(Bucket=bucket, Key=key, Body=data, ContentType="application/octet-stream")
+    logger.info("uploaded_to_s3", extra={"bucket": bucket, "key": key, "size_bytes": len(data)})
+
+
+def main() -> None:
+    args = _parse_args()
+
+    if args.date:
+        target = date.fromisoformat(args.date)
+    else:
+        target = date.today() - timedelta(days=1)
+
+    date_from, date_to = _export_date(target)
+    logger.info(f"Exporting search events for {target.isoformat()}")
+
+    from app.config import get_settings
+    settings = get_settings()
+
+    if not settings.analytics_export_enabled:
+        logger.info("ANALYTICS_EXPORT_ENABLED=false — skipping export.")
+        return
+
+    bucket = settings.analytics_s3_bucket or settings.drive_s3_bucket
+    prefix = settings.analytics_s3_prefix
+    s3_key = (
+        f"{prefix}/search_events/"
+        f"year={target.year}/month={target.month:02d}/day={target.day:02d}/"
+        f"{target.isoformat()}.parquet"
+    )
+
+    if args.dry_run:
+        logger.info(f"[DRY RUN] Would export to s3://{bucket}/{s3_key}")
+        return
+
+    import asyncio
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from app.db.base import get_async_engine
+    from app.modules.search.search_event_repository import SearchEventRepository
+
+    async def _fetch_events() -> list[dict[str, Any]]:
+        engine = get_async_engine()
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as session:
+            repo = SearchEventRepository(session)
+            events = await repo.list_by_date_range(
+                date_from=date_from,
+                date_to=date_to,
+                limit=100_000,
+            )
+            return [
+                {
+                    "id": e.id,
+                    "org_id": e.org_id,
+                    "user_id": e.user_id,
+                    "query_text": e.query_text,
+                    "search_mode": e.search_mode,
+                    "result_count": e.result_count,
+                    "response_ms": e.response_ms,
+                    "metadata": e.metadata_,
+                    "created_at": e.created_at,
+                }
+                for e in events
+            ]
+
+    rows = asyncio.run(_fetch_events())
+    logger.info(f"Fetched {len(rows)} events for {target.isoformat()}")
+
+    if not rows:
+        logger.info("No events to export — skipping S3 upload.")
+        return
+
+    parquet_data = _rows_to_parquet(rows)
+    logger.info(f"Parquet size: {len(parquet_data):,} bytes ({len(rows)} rows)")
+
+    _upload_to_s3(parquet_data, bucket, s3_key, settings.s3_region)
+    logger.info(f"Export complete: s3://{bucket}/{s3_key}")
+
+
+if __name__ == "__main__":
+    main()

@@ -174,6 +174,12 @@ class Settings(BaseSettings):
     sqs_visual_embed_queue_url: str = ""
     sqs_export_queue_url: str = ""
 
+    # --- Search analytics ---
+    analytics_enabled: bool = True  # Record search events to Postgres
+    analytics_export_enabled: bool = False  # Nightly S3 Parquet export
+    analytics_s3_bucket: str = ""  # Defaults to drive_s3_bucket if empty
+    analytics_s3_prefix: str = "analytics"
+
     # --- Proxy-pack export ---
     export_max_size_bytes: int = 2_147_483_648  # 2 GB
     export_max_clips: int = 100

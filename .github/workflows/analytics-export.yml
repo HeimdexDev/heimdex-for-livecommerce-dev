@@ -1,0 +1,44 @@
+name: Analytics Export
+
+on:
+  schedule:
+    # Run daily at 01:00 UTC (10:00 KST)
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Export date (YYYY-MM-DD). Defaults to yesterday."
+        required: false
+
+concurrency:
+  group: analytics-export
+  cancel-in-progress: false
+
+jobs:
+  export:
+    name: Export search analytics to S3
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run export via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ec2-user
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script_stop: true
+          command_timeout: 8m
+          script: |
+            set -euo pipefail
+
+            APP_DIR=/opt/heimdex/dev-heimdex-for-livecommerce
+
+            DATE_ARG="${{ github.event.inputs.date }}"
+            if [ -n "$DATE_ARG" ]; then
+              DATE_FLAG="--date $DATE_ARG"
+            else
+              DATE_FLAG=""
+            fi
+
+            cd "$APP_DIR"
+            docker compose exec -T api python -m app.cli.export_analytics $DATE_FLAG

@@ -127,6 +127,12 @@ def get_device_repository(db: AsyncSession = Depends(get_db_session)):
     return DeviceRepository(db)
 
 
+def get_search_event_repository(db: AsyncSession = Depends(get_db_session)):
+    """Search event analytics repository factory."""
+    from app.modules.search.search_event_repository import SearchEventRepository
+    return SearchEventRepository(db)
+
+
 def get_auth_service(db: AsyncSession = Depends(get_db_session)):
     """Auth service factory."""
     from app.modules.auth.service import AuthService

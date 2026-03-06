@@ -1,4 +1,6 @@
-from typing import cast
+import asyncio
+import time
+from typing import Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -21,6 +23,64 @@ from app.modules.users.models import User
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+async def _record_search_event(
+    *,
+    org_id: UUID,
+    user_id: UUID,
+    query_text: str,
+    search_mode: str,
+    result_count: int | None,
+    response_ms: int | None,
+    extra_metadata: dict[str, Any] | None = None,
+) -> None:
+    """Fire-and-forget search event recording.
+
+    Creates its own short-lived DB session — the request session may already
+    be closed by the time this background task runs.
+    Failures are logged and swallowed — analytics must never block search.
+    """
+    try:
+        from app.db.base import get_async_session_factory
+        from app.modules.search.search_event_repository import SearchEventRepository
+
+        factory = get_async_session_factory()
+        async with factory() as session:
+            repo = SearchEventRepository(session)
+            await repo.create(
+                org_id=org_id,
+                user_id=user_id,
+                query_text=query_text,
+                search_mode=search_mode,
+                result_count=result_count,
+                response_ms=response_ms,
+                metadata=extra_metadata,
+            )
+            await session.commit()
+    except Exception:
+        logger.warning("search_event_recording_failed", exc_info=True)
+
+
+def _extract_result_count(response: Any) -> int | None:
+    if hasattr(response, "total_candidates"):
+        return response.total_candidates
+    return None
+
+
+def _build_metadata(request: SearchRequest) -> dict[str, Any]:
+    meta: dict[str, Any] = {"alpha": request.alpha, "group_by": request.group_by}
+    if request.filters.date_from:
+        meta["date_from"] = request.filters.date_from.isoformat()
+    if request.filters.date_to:
+        meta["date_to"] = request.filters.date_to.isoformat()
+    if request.filters.source_types:
+        meta["source_types"] = list(request.filters.source_types)
+    if request.filters.person_cluster_ids:
+        meta["person_cluster_ids"] = request.filters.person_cluster_ids
+    if request.include_ocr is not None:
+        meta["include_ocr"] = request.include_ocr
+    return meta
 
 
 @router.post("")
@@ -48,9 +108,10 @@ async def search(
     )
 
     user_id = cast(UUID, user.id)
+    t0 = time.monotonic()
 
     if settings.search_default_mode == "scenes":
-        return await scene_search_service.search(
+        result = await scene_search_service.search(
             query=request.q,
             org_id=org_ctx.org_id,
             alpha=request.alpha,
@@ -60,14 +121,31 @@ async def search(
             group_by=request.group_by,
             search_mode=request.search_mode,
         )
+    else:
+        result = await search_service.search(
+            query=request.q,
+            org_id=org_ctx.org_id,
+            alpha=request.alpha,
+            filters=request.filters,
+            user_id=user_id,
+        )
 
-    return await search_service.search(
-        query=request.q,
-        org_id=org_ctx.org_id,
-        alpha=request.alpha,
-        filters=request.filters,
-        user_id=user_id,
-    )
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+    if settings.analytics_enabled:
+        asyncio.create_task(
+            _record_search_event(
+                org_id=org_ctx.org_id,
+                user_id=user_id,
+                query_text=request.q,
+                search_mode=request.search_mode,
+                result_count=_extract_result_count(result),
+                response_ms=elapsed_ms,
+                extra_metadata=_build_metadata(request),
+            )
+        )
+
+    return result
 
 
 @router.post("/scenes", response_model=SceneSearchResponse | VideoSearchResponse)
@@ -82,6 +160,7 @@ async def search_scenes(
 
     Always returns scene results regardless of ``SEARCH_DEFAULT_MODE``.
     """
+    settings = get_settings()
     logger.debug(
         "scene_search_request",
         user_id=str(user.id),
@@ -89,7 +168,9 @@ async def search_scenes(
         search_mode=request.search_mode,
     )
     user_id = cast(UUID, user.id)
-    return await scene_search_service.search(
+    t0 = time.monotonic()
+
+    result = await scene_search_service.search(
         query=request.q,
         org_id=org_ctx.org_id,
         alpha=request.alpha,
@@ -99,3 +180,20 @@ async def search_scenes(
         group_by=request.group_by,
         search_mode=request.search_mode,
     )
+
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+    if settings.analytics_enabled:
+        asyncio.create_task(
+            _record_search_event(
+                org_id=org_ctx.org_id,
+                user_id=user_id,
+                query_text=request.q,
+                search_mode=request.search_mode,
+                result_count=_extract_result_count(result),
+                response_ms=elapsed_ms,
+                extra_metadata=_build_metadata(request),
+            )
+        )
+
+    return result
