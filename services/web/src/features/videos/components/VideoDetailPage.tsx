@@ -787,6 +787,7 @@ function ScenesPanel({
 }
 
 export function VideoDetailPage({ videoId }: { videoId: string }) {
+  const router = useRouter();
   const { getAccessToken } = useAuth();
   const { isAvailable: agentAvailable } = useAgent();
   const searchParams = useSearchParams();
@@ -849,10 +850,10 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
   return (
     <div className="mx-auto max-w-6xl pt-4">
       <div className="mb-6 flex items-center gap-3 text-sm text-gray-500">
-        <Link href="/" className="rounded-full p-1 hover:bg-gray-200">
+        <button type="button" onClick={() => router.back()} className="rounded-full p-1 hover:bg-gray-200">
           <BackArrowIcon />
-        </Link>
-        <Link href="/" className="hover:text-gray-700">전체 아카이브 검색</Link>
+        </button>
+        <button type="button" onClick={() => router.back()} className="hover:text-gray-700">전체 아카이브 검색</button>
         <span>&gt;</span>
         {view === "scenes" ? (
           <>
