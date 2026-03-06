@@ -138,6 +138,7 @@ class TestProductionGuards:
             agent_api_key=_DEV_AGENT,
             auth0_enabled=False,
             embedding_use_mock=True,
+            device_secret_pepper=_DEV_PEPPER,
         )
         with pytest.raises(ProductionGuardError) as exc_info:
             settings.validate_production_guards()

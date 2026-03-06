@@ -33,7 +33,7 @@ def _startup_patches():
 
 
 def test_health_reports_mock_mode():
-    mock_settings = Settings(embedding_use_mock=True)
+    mock_settings = Settings(embedding_use_mock=True, environment="development")
 
     startup_patchers = _startup_patches()
     with startup_patchers[0], startup_patchers[1], startup_patchers[2], startup_patchers[3], startup_patchers[4], startup_patchers[5], startup_patchers[6]:
@@ -69,7 +69,7 @@ def test_health_reports_real_mode():
 
 
 def test_search_returns_results_in_mock_mode():
-    mock_settings = Settings(embedding_use_mock=True)
+    mock_settings = Settings(embedding_use_mock=True, environment="development")
 
     mock_search_service = MagicMock()
     mock_search_service.search = AsyncMock(

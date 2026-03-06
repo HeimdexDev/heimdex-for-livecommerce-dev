@@ -1,12 +1,35 @@
+import os
+
 import pytest
 from unittest.mock import patch
 
 from app.config import Settings
 
+# Env vars that staging Docker sets which override code defaults.
+# We clear them so tests see the real code defaults.
+_DRIVE_ENV_KEYS = [
+    "DRIVE_CONNECTOR_ENABLED",
+    "DRIVE_S3_BUCKET",
+    "DRIVE_ENRICHMENT_ENABLED",
+    "DRIVE_WORKER_GLOBAL_CONCURRENCY",
+    "DRIVE_WORKER_PER_ORG_CONCURRENCY",
+    "DRIVE_TEMP_DISK_BUDGET_GB",
+    "DRIVE_PROXY_MAX_HEIGHT",
+    "DRIVE_PROXY_CRF",
+    "DRIVE_PROXY_PRESET",
+    "DRIVE_PROXY_AUDIO_BITRATE",
+    "DRIVE_PROXY_MAX_BITRATE",
+    "DRIVE_PROXY_BUFSIZE",
+    "DRIVE_DOWNLOAD_CHUNK_SIZE",
+    "DRIVE_DOWNLOAD_MAX_RETRIES",
+]
+
 
 def _isolated_settings(**kwargs):
-    """Create Settings without reading .env file (avoids staging env leakage)."""
-    return Settings(_env_file="", **kwargs)
+    """Create Settings without reading .env file and with drive env vars cleared."""
+    clean_env = {k: v for k, v in os.environ.items() if k not in _DRIVE_ENV_KEYS}
+    with patch.dict("os.environ", clean_env, clear=True):
+        return Settings(_env_file="", **kwargs)
 
 
 class TestDriveConfig:
