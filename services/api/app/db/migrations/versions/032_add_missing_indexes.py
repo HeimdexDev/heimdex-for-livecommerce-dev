@@ -26,20 +26,23 @@ def upgrade() -> None:
         "ix_drive_files_is_deleted",
         "drive_files",
         ["is_deleted"],
+        if_not_exists=True,
     )
     op.create_index(
         "ix_drive_files_org_google_file",
         "drive_files",
         ["org_id", "google_file_id"],
+        if_not_exists=True,
     )
     op.create_index(
         "ix_export_records_status",
         "export_records",
         ["status"],
+        if_not_exists=True,
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_export_records_status", table_name="export_records")
-    op.drop_index("ix_drive_files_org_google_file", table_name="drive_files")
-    op.drop_index("ix_drive_files_is_deleted", table_name="drive_files")
+    op.drop_index("ix_export_records_status", table_name="export_records", if_exists=True)
+    op.drop_index("ix_drive_files_org_google_file", table_name="drive_files", if_exists=True)
+    op.drop_index("ix_drive_files_is_deleted", table_name="drive_files", if_exists=True)
