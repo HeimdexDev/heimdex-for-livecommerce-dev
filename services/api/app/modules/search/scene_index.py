@@ -19,15 +19,6 @@ class SceneIndexMixin:
     VISUAL_EMBEDDING_DIMENSION: int = 0
     INDEX_VERSION: str = ""
 
-    def __init__(self) -> None:
-        self.settings = get_settings()
-        self.client = get_opensearch_client()
-        self.alias_name = f"{self.settings.opensearch_index_prefix}_scenes"
-        self.index_name = f"{self.alias_name}_{self.INDEX_VERSION}"
-
-    async def close(self) -> None:
-        await self.client.close()
-
     async def _check_nori_available(self) -> bool:
         """Check if the Nori analyzer plugin is installed."""
         try:

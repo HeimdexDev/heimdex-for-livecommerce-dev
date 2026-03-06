@@ -15,3 +15,12 @@ class SceneSearchClient(
     EMBEDDING_DIMENSION: int = 1024
     VISUAL_EMBEDDING_DIMENSION: int = 768
     INDEX_VERSION: str = "v3"
+
+    def __init__(self) -> None:
+        self.settings = get_settings()
+        self.client = get_opensearch_client()
+        self.alias_name = f"{self.settings.opensearch_index_prefix}_scenes"
+        self.index_name = f"{self.alias_name}_{self.INDEX_VERSION}"
+
+    async def close(self) -> None:
+        await self.client.close()
