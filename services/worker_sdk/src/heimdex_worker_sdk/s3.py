@@ -102,13 +102,18 @@ class S3Client:
         local_path: Path,
         s3_key: str,
         content_type: str = "application/octet-stream",
+        tags: dict[str, str] | None = None,
     ) -> None:
         """Upload a local file to S3."""
+        extra_args: dict[str, str] = {"ContentType": content_type}
+        if tags:
+            from urllib.parse import urlencode
+            extra_args["Tagging"] = urlencode(tags)
         self._client.upload_file(
             str(local_path),
             self._bucket,
             s3_key,
-            ExtraArgs={"ContentType": content_type},
+            ExtraArgs=extra_args,
         )
         logger.info(
             "s3_uploaded",

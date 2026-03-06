@@ -379,6 +379,7 @@ def _handle_gpu_mode(
         original_path,
         s3_key,
         content_type=claimed_file.mime_type or "application/octet-stream",
+        tags={"lifecycle": "auto-delete"},
     )
 
     update_processing_status = getattr(api_client, "update_processing_status")
