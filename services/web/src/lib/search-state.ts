@@ -9,7 +9,7 @@
  *   q       = search query text
  *   mode    = lexical | semantic | metadata
  *   group   = scene | video
- *   sort    = latest | alpha_asc | alpha_desc
+ *   sort    = relevance | latest | alpha_asc | alpha_desc
  *   page    = page number (1-based)
  *   sources = comma-separated source types (gdrive,local,removable_disk)
  *   ds      = date start (YYYY-MM-DD)
@@ -22,7 +22,7 @@ import type { SearchMode } from "@/lib/types/search";
 // ── Types ────────────────────────────────────────────────────────────────
 
 export type GroupBy = "video" | "scene";
-export type SortOption = "latest" | "alpha_asc" | "alpha_desc";
+export type SortOption = "relevance" | "latest" | "alpha_asc" | "alpha_desc";
 export type SourceType = "gdrive" | "removable_disk" | "local";
 
 export interface DashboardSearchState {
@@ -51,6 +51,7 @@ const VALID_SEARCH_MODES: readonly SearchMode[] = [
 ];
 const VALID_GROUP_BY: readonly GroupBy[] = ["video", "scene"];
 const VALID_SORT_OPTIONS: readonly SortOption[] = [
+  "relevance",
   "latest",
   "alpha_asc",
   "alpha_desc",

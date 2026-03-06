@@ -401,22 +401,31 @@ function DateRangeCalendar({
 // ---------------------------------------------------------------------------
 // SortDropdown
 // ---------------------------------------------------------------------------
-type SortOption = "latest" | "alpha_asc" | "alpha_desc";
+type SortOption = "relevance" | "latest" | "alpha_asc" | "alpha_desc";
 
 interface SortDropdownProps {
   value: SortOption;
   onChange: (v: SortOption) => void;
+  /** Sort options to display. Defaults to all options. */
+  options?: SortOption[];
 }
 
 const SORT_LABELS: Record<SortOption, string> = {
+  relevance: "관련도순",
   latest: "생성 일자순",
   alpha_asc: "이름순 (ㄱ→ㅎ)",
   alpha_desc: "이름순 (ㅎ→ㄱ)",
 };
 
-function SortDropdown({ value, onChange }: SortDropdownProps) {
+/** Sort options shown in non-search (browse) mode — relevance is meaningless without a query. */
+const BROWSE_SORT_OPTIONS: SortOption[] = ["latest", "alpha_asc", "alpha_desc"];
+/** Sort options shown in search mode — relevance is the default. */
+const SEARCH_SORT_OPTIONS: SortOption[] = ["relevance", "latest", "alpha_asc", "alpha_desc"];
+
+function SortDropdown({ value, onChange, options }: SortDropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const visibleOptions = options ?? (Object.keys(SORT_LABELS) as SortOption[]);
 
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -440,7 +449,7 @@ function SortDropdown({ value, onChange }: SortDropdownProps) {
       </button>
       {open && (
         <div className="absolute right-0 top-full z-40 mt-1 w-44 rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
-          {(Object.keys(SORT_LABELS) as SortOption[]).map((opt) => (
+          {visibleOptions.map((opt) => (
             <button
               key={opt}
               type="button"
@@ -760,6 +769,7 @@ export default function DashboardContent() {
   const [searchResponse, setSearchResponse] = useState<AnySearchResponse | null>(null);
   const [activeQuery, setActiveQuery] = useState(initialState.query);
   const isSearchMode = searchResponse !== null;
+  const sortBeforeSearchRef = useRef<SortOption>(sortBy);
 
   // ── Sync state → URL (replace, not push, to avoid polluting history) ───
   const isInitialRender = useRef(true);
@@ -788,6 +798,8 @@ export default function DashboardContent() {
   // ── Auto-search on mount if URL had a query ────────────────────────────
   const hasTriggeredInitialSearch = useRef(false);
 
+  const videoSortBy = sortBy === "relevance" ? "latest" : sortBy;
+
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     setNextCursor(null);
@@ -796,7 +808,7 @@ export default function DashboardContent() {
       const [videosRes, statsRes] = await Promise.all([
         getVideos(
           {
-            sort: sortBy,
+            sort: videoSortBy,
             page_size: 20,
             date_from: dateStart ? formatDateKr(dateStart) : undefined,
             date_to: dateEnd ? formatDateKr(dateEnd) : undefined,
@@ -816,7 +828,7 @@ export default function DashboardContent() {
     } finally {
       setIsLoading(false);
     }
-  }, [getAccessToken, sortBy, dateStart, dateEnd]);
+  }, [getAccessToken, videoSortBy, dateStart, dateEnd]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || isLoadingMore) return;
@@ -825,7 +837,7 @@ export default function DashboardContent() {
       const tokenGetter = () => getAccessToken();
       const videosRes = await getVideos(
         {
-          sort: sortBy,
+          sort: videoSortBy,
           page_size: 20,
           date_from: dateStart ? formatDateKr(dateStart) : undefined,
           date_to: dateEnd ? formatDateKr(dateEnd) : undefined,
@@ -841,7 +853,7 @@ export default function DashboardContent() {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [getAccessToken, nextCursor, isLoadingMore, sortBy, dateStart, dateEnd]);
+  }, [getAccessToken, nextCursor, isLoadingMore, videoSortBy, dateStart, dateEnd]);
 
   useEffect(() => {
     if (!isSearchMode) {
@@ -849,15 +861,40 @@ export default function DashboardContent() {
     }
   }, [fetchData, isSearchMode]);
 
-  const searchTotalPages = Math.max(1, Math.ceil((searchResponse?.results.length ?? 0) / PAGE_SIZE));
-
-  const totalPages = isSearchMode ? searchTotalPages : 1;
+  const sortedSearchResults = useMemo(() => {
+    if (!searchResponse) return [];
+    if (sortBy === "relevance") return searchResponse.results;
+    const results = [...searchResponse.results];
+    if (searchResponse.result_type === "video") {
+      const items = results as VideoResult[];
+      if (sortBy === "latest") {
+        items.sort((a, b) => (b.best_scene.capture_time ?? "").localeCompare(a.best_scene.capture_time ?? ""));
+      } else if (sortBy === "alpha_asc") {
+        items.sort((a, b) => (a.video_title ?? "").localeCompare(b.video_title ?? ""));
+      } else if (sortBy === "alpha_desc") {
+        items.sort((a, b) => (b.video_title ?? "").localeCompare(a.video_title ?? ""));
+      }
+      return items;
+    }
+    const items = results as SceneResult[];
+    if (sortBy === "latest") {
+      items.sort((a, b) => (b.capture_time ?? "").localeCompare(a.capture_time ?? ""));
+    } else if (sortBy === "alpha_asc") {
+      items.sort((a, b) => (a.video_title ?? "").localeCompare(b.video_title ?? ""));
+    } else if (sortBy === "alpha_desc") {
+      items.sort((a, b) => (b.video_title ?? "").localeCompare(a.video_title ?? ""));
+    }
+    return items;
+  }, [searchResponse, sortBy]);
 
   const paginatedResults = useMemo(() => {
-    if (!searchResponse) return [];
+    if (!sortedSearchResults.length) return [];
     const start = (currentPage - 1) * PAGE_SIZE;
-    return searchResponse.results.slice(start, start + PAGE_SIZE);
-  }, [searchResponse, currentPage]);
+    return sortedSearchResults.slice(start, start + PAGE_SIZE);
+  }, [sortedSearchResults, currentPage]);
+
+  const searchTotalPages = Math.max(1, Math.ceil(sortedSearchResults.length / PAGE_SIZE));
+  const totalPages = isSearchMode ? searchTotalPages : 1;
 
   useEffect(() => {
     setCurrentPage(1);
@@ -882,10 +919,13 @@ export default function DashboardContent() {
       setCurrentPage(1);
       try {
         const tokenGetter = () => getAccessToken();
-        const filters: SearchFilters =
-          sourceFilters.size === ALL_SOURCES.length
-            ? {}
-            : { source_types: Array.from(sourceFilters) };
+        const filters: SearchFilters = {};
+        if (sourceFilters.size !== ALL_SOURCES.length) {
+          filters.source_types = Array.from(sourceFilters);
+        }
+        if (dateStart) filters.date_from = formatDateKr(dateStart);
+        if (dateEnd) filters.date_to = formatDateKr(dateEnd);
+
         const res = await searchScenes(
           { q, alpha: 0.5, filters, group_by: groupBy, search_mode: searchMode },
           tokenGetter,
@@ -907,7 +947,7 @@ export default function DashboardContent() {
         setIsLoading(false);
       }
     },
-    [getAccessToken, groupBy, searchMode, sourceFilters],
+    [getAccessToken, groupBy, searchMode, sourceFilters, dateStart, dateEnd],
   );
 
   const handleSearch = useCallback(
@@ -915,9 +955,13 @@ export default function DashboardContent() {
       e.preventDefault();
       const q = query.trim();
       if (!q) return;
+      if (!isSearchMode) {
+        sortBeforeSearchRef.current = sortBy;
+        setSortBy("relevance");
+      }
       await performSearch(q);
     },
-    [query, performSearch],
+    [query, performSearch, isSearchMode, sortBy],
   );
 
   // Re-execute search from URL params on mount (e.g. browser back-navigation)
@@ -934,13 +978,14 @@ export default function DashboardContent() {
       performSearch(activeQuery);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupBy, searchMode, sourceFilters]);
+  }, [groupBy, searchMode, sourceFilters, dateStart, dateEnd]);
 
   const handleClearSearch = useCallback(() => {
     setSearchResponse(null);
     setActiveQuery("");
     setQuery("");
     setCurrentPage(1);
+    setSortBy(sortBeforeSearchRef.current);
   }, []);
 
   const handleDateSelect = useCallback((start: Date, end: Date) => {
@@ -950,10 +995,10 @@ export default function DashboardContent() {
     setCurrentPage(1);
   }, []);
 
-  const videoCount = isSearchMode ? (searchResponse?.results.length ?? 0) : totalVideos;
+  const videoCount = isSearchMode ? sortedSearchResults.length : totalVideos;
   const libraryCount = stats?.total_libraries ?? 0;
   const hasResults = isSearchMode
-    ? (searchResponse?.results.length ?? 0) > 0
+    ? sortedSearchResults.length > 0
     : videos.length > 0;
 
   const dateLabel = useMemo(() => {
@@ -1043,26 +1088,24 @@ export default function DashboardContent() {
               </button>
             )}
           </div>
-          {!isSearchMode && (
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setShowCalendar((v) => !v)}
-                className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition-colors hover:border-gray-300"
-              >
-                <CalendarIcon />
-                <span>{dateLabel}</span>
-              </button>
-              {showCalendar && (
-                <DateRangeCalendar
-                  startDate={dateStart}
-                  endDate={dateEnd}
-                  onSelect={handleDateSelect}
-                  onClose={() => setShowCalendar(false)}
-                />
-              )}
-            </div>
-          )}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowCalendar((v) => !v)}
+              className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition-colors hover:border-gray-300"
+            >
+              <CalendarIcon />
+              <span>{dateLabel}</span>
+            </button>
+            {showCalendar && (
+              <DateRangeCalendar
+                startDate={dateStart}
+                endDate={dateEnd}
+                onSelect={handleDateSelect}
+                onClose={() => setShowCalendar(false)}
+              />
+            )}
+          </div>
         </div>
 
         {/* Info banner */}
@@ -1108,9 +1151,11 @@ export default function DashboardContent() {
               </>
             )}
           </div>
-          {!isSearchMode && (
-            <SortDropdown value={sortBy} onChange={setSortBy} />
-          )}
+          <SortDropdown
+            value={sortBy}
+            onChange={setSortBy}
+            options={isSearchMode ? SEARCH_SORT_OPTIONS : BROWSE_SORT_OPTIONS}
+          />
         </div>
 
         {/* Loading */}

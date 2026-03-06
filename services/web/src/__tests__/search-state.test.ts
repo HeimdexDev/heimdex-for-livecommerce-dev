@@ -55,6 +55,12 @@ describe("serializeSearchState", () => {
     expect(params.get("sort")).toBe("alpha_asc");
   });
 
+  it("serializes relevance sortBy", () => {
+    const state = { ...defaults(), sortBy: "relevance" as const };
+    const params = serializeSearchState(state);
+    expect(params.get("sort")).toBe("relevance");
+  });
+
   it("serializes page > 1", () => {
     const state = { ...defaults(), currentPage: 3 };
     const params = serializeSearchState(state);
@@ -140,6 +146,11 @@ describe("deserializeSearchState", () => {
   it("parses valid sortBy", () => {
     const state = deserializeSearchState(new URLSearchParams("sort=alpha_desc"));
     expect(state.sortBy).toBe("alpha_desc");
+  });
+
+  it("parses relevance sortBy", () => {
+    const state = deserializeSearchState(new URLSearchParams("sort=relevance"));
+    expect(state.sortBy).toBe("relevance");
   });
 
   it("ignores invalid sortBy", () => {
@@ -229,6 +240,24 @@ describe("round-trip", () => {
     expect(restored.sourceFilters).toEqual(original.sourceFilters);
     expect(restored.dateStart).toEqual(original.dateStart);
     expect(restored.dateEnd).toEqual(original.dateEnd);
+  });
+
+  it("serialize → deserialize preserves relevance sort", () => {
+    const original: DashboardSearchState = {
+      query: "테스트",
+      searchMode: "lexical",
+      groupBy: "scene",
+      sortBy: "relevance",
+      currentPage: 1,
+      sourceFilters: new Set(ALL_SOURCES),
+      dateStart: null,
+      dateEnd: null,
+    };
+
+    const params = serializeSearchState(original);
+    const restored = deserializeSearchState(params);
+    expect(restored.sortBy).toBe("relevance");
+    expect(restored.query).toBe("테스트");
   });
 
   it("serialize → deserialize preserves defaults", () => {
