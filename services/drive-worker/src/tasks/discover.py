@@ -14,7 +14,10 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build as build_google_service
 from googleapiclient.errors import HttpError
 
+from heimdex_worker_sdk.content_type import is_image, is_supported_mime
 from heimdex_worker_sdk.internal_api import InternalAPIClient
+
+MAX_IMAGE_BATCH = 200
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +158,7 @@ def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> 
     items: list[dict[str, Any]] = []
     scanned_google_file_ids: set[str] = set()
     page_token: str | None = None
+    image_count = 0
 
     while True:
         kwargs: dict[str, Any] = {
@@ -162,7 +166,7 @@ def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> 
             "driveId": conn.drive_id,
             "includeItemsFromAllDrives": True,
             "supportsAllDrives": True,
-            "q": "mimeType contains 'video/' and trashed = false",
+            "q": "(mimeType contains 'video/' or mimeType='image/jpeg' or mimeType='image/png' or mimeType='image/webp') and trashed = false",
             "fields": "nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,parents,webViewLink)",
             "pageSize": 100,
         }
@@ -172,7 +176,6 @@ def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> 
         response = service.files().list(**kwargs).execute()
         files = response.get("files", [])
 
-        # Build path map for new files (resolve folder paths)
         path_map: dict[str, str] = {}
         if files:
             try:
@@ -188,6 +191,11 @@ def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> 
             google_file_id = file.get("id")
             if not google_file_id:
                 continue
+            mime_type = file.get("mimeType", "")
+            if is_image(mime_type) and image_count >= MAX_IMAGE_BATCH:
+                continue
+            if is_image(mime_type):
+                image_count += 1
             scanned_google_file_ids.add(google_file_id)
             items.append(_file_to_upsert_item(file, path_map.get(google_file_id)))
 
@@ -235,7 +243,7 @@ def _incremental_sync_drive(api_client: InternalAPIClient, service: Any, conn: A
                 continue
 
             mime_type = file_data.get("mimeType", "")
-            if not mime_type.startswith("video/"):
+            if not is_supported_mime(mime_type):
                 continue
 
             path_map: dict[str, str] = {}
@@ -409,12 +417,13 @@ def _full_scan_folder(api_client: InternalAPIClient, service: Any, conn: Any) ->
     folder_path_prefix = conn.folder_path or conn.folder_name or ""
     items: list[dict[str, Any]] = []
     scanned_google_file_ids: set[str] = set()
+    image_count = 0
 
     for current_folder_id in all_folder_ids:
         page_token: str | None = None
         while True:
             kwargs: dict[str, Any] = {
-                "q": f"'{current_folder_id}' in parents and mimeType contains 'video/' and trashed = false",
+                "q": f"'{current_folder_id}' in parents and (mimeType contains 'video/' or mimeType='image/jpeg' or mimeType='image/png' or mimeType='image/webp') and trashed = false",
                 "fields": "nextPageToken,files(id,name,mimeType,size,md5Checksum,modifiedTime,createdTime,parents,webViewLink)",
                 "pageSize": 100,
                 "supportsAllDrives": True,
@@ -430,6 +439,11 @@ def _full_scan_folder(api_client: InternalAPIClient, service: Any, conn: Any) ->
                 google_file_id = file.get("id")
                 if not google_file_id:
                     continue
+                mime_type = file.get("mimeType", "")
+                if is_image(mime_type) and image_count >= MAX_IMAGE_BATCH:
+                    continue
+                if is_image(mime_type):
+                    image_count += 1
                 scanned_google_file_ids.add(google_file_id)
                 file_name = file.get("name", "")
                 drive_path = f"{folder_path_prefix}/{file_name}" if folder_path_prefix else file_name
@@ -508,7 +522,7 @@ def _incremental_sync_folder(
                 continue
 
             mime_type = file_data.get("mimeType", "")
-            if not mime_type.startswith("video/"):
+            if not is_supported_mime(mime_type):
                 continue
 
             file_name = file_data.get("name", "")
