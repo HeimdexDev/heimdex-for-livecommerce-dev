@@ -47,7 +47,7 @@ const segmentResult: SegmentResult = {
 const segmentResponse: SearchResponse = {
   results: [segmentResult],
   total_candidates: 1,
-  facets: { libraries: [], source_types: [], people_cluster_ids: [] },
+  facets: { libraries: [], source_types: [], people_cluster_ids: [], content_types: [] },
   query: "test",
   alpha: 0.5,
 };
@@ -74,7 +74,7 @@ const sceneResult: SceneResult = {
 const sceneResponse: SceneSearchResponse = {
   results: [sceneResult],
   total_candidates: 1,
-  facets: { libraries: [], source_types: [], people_cluster_ids: [] },
+  facets: { libraries: [], source_types: [], people_cluster_ids: [], content_types: [] },
   query: "test",
   alpha: 0.5,
   result_type: "scene",
@@ -83,7 +83,7 @@ const sceneResponse: SceneSearchResponse = {
 const emptyResponse: SearchResponse = {
   results: [],
   total_candidates: 0,
-  facets: { libraries: [], source_types: [], people_cluster_ids: [] },
+  facets: { libraries: [], source_types: [], people_cluster_ids: [], content_types: [] },
   query: "test",
   alpha: 0.5,
 };
@@ -214,17 +214,17 @@ describe("SceneCard context play buttons", () => {
 
 describe("Video grouping", () => {
    const multiVideoResponse: SceneSearchResponse = {
-     results: [
-       { ...sceneResult, scene_id: "s1", video_id: "v1", video_title: "Video Alpha", library_name: "Library A", start_ms: 1000, keyframe_timestamp_ms: 0 },
-       { ...sceneResult, scene_id: "s2", video_id: "v1", video_title: "Video Alpha", library_name: "Library A", start_ms: 5000, keyframe_timestamp_ms: 0 },
-       { ...sceneResult, scene_id: "s3", video_id: "v2", video_title: "Video Beta", library_name: "Library B", start_ms: 0, keyframe_timestamp_ms: 0 },
-     ],
-    total_candidates: 3,
-    facets: { libraries: [], source_types: [], people_cluster_ids: [] },
-    query: "test",
-    alpha: 0.5,
-    result_type: "scene",
-  };
+      results: [
+        { ...sceneResult, scene_id: "s1", video_id: "v1", video_title: "Video Alpha", library_name: "Library A", start_ms: 1000, keyframe_timestamp_ms: 0 },
+        { ...sceneResult, scene_id: "s2", video_id: "v1", video_title: "Video Alpha", library_name: "Library A", start_ms: 5000, keyframe_timestamp_ms: 0 },
+        { ...sceneResult, scene_id: "s3", video_id: "v2", video_title: "Video Beta", library_name: "Library B", start_ms: 0, keyframe_timestamp_ms: 0 },
+      ],
+     total_candidates: 3,
+     facets: { libraries: [], source_types: [], people_cluster_ids: [], content_types: [] },
+     query: "test",
+     alpha: 0.5,
+     result_type: "scene",
+   };
 
   it("groups scenes by video and shows group headers with video titles", () => {
     renderWithProviders(<SearchResults response={multiVideoResponse} showDebug={false} agentAvailable={false} />);

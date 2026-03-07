@@ -108,6 +108,10 @@ export interface SceneResult {
   speaker_transcript?: string;
   speaker_count?: number;
   keyframe_timestamp_ms: number;
+  content_type?: "video" | "image";
+  image_width?: number;
+  image_height?: number;
+  image_orientation?: "landscape" | "portrait" | "square";
   debug: DebugInfo;
 }
 
@@ -121,6 +125,7 @@ export interface Facets {
   libraries: FacetItem[];
   source_types: FacetItem[];
   people_cluster_ids: FacetItem[];
+  content_types: FacetItem[];
 }
 
 export interface SearchResponse {

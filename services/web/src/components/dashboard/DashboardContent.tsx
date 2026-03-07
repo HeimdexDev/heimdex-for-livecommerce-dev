@@ -936,7 +936,7 @@ export default function DashboardContent() {
         const emptyResponse: SceneSearchResponse = {
           results: [],
           total_candidates: 0,
-          facets: { libraries: [], source_types: [], people_cluster_ids: [] },
+          facets: { libraries: [], source_types: [], people_cluster_ids: [], content_types: [] },
           query: q,
           alpha: 0.5,
           result_type: "scene",

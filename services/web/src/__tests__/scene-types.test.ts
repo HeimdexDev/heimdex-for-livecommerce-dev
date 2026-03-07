@@ -76,23 +76,23 @@ describe("Scene search types", () => {
     expect(segment.segment_id).toBe("seg1");
   });
 
-  it("AnySearchResponse discriminates on result_type", () => {
-    const sceneResp: SceneSearchResponse = {
-      results: [],
-      total_candidates: 0,
-      facets: { libraries: [], source_types: [], people_cluster_ids: [] },
-      query: "test",
-      alpha: 0.5,
-      result_type: "scene",
-    };
+   it("AnySearchResponse discriminates on result_type", () => {
+     const sceneResp: SceneSearchResponse = {
+       results: [],
+       total_candidates: 0,
+       facets: { libraries: [], source_types: [], people_cluster_ids: [], content_types: [] },
+       query: "test",
+       alpha: 0.5,
+       result_type: "scene",
+     };
 
-    const segResp: SearchResponse = {
-      results: [],
-      total_candidates: 0,
-      facets: { libraries: [], source_types: [], people_cluster_ids: [] },
-      query: "test",
-      alpha: 0.5,
-    };
+     const segResp: SearchResponse = {
+       results: [],
+       total_candidates: 0,
+       facets: { libraries: [], source_types: [], people_cluster_ids: [], content_types: [] },
+       query: "test",
+       alpha: 0.5,
+     };
 
     const responses: AnySearchResponse[] = [sceneResp, segResp];
     for (const r of responses) {
@@ -104,14 +104,14 @@ describe("Scene search types", () => {
     }
   });
 
-  it("SearchResponse result_type is optional for backward compat", () => {
-    const resp: SearchResponse = {
-      results: [],
-      total_candidates: 0,
-      facets: { libraries: [], source_types: [], people_cluster_ids: [] },
-      query: "test",
-      alpha: 0.5,
-    };
-    expect(resp.result_type).toBeUndefined();
-  });
+   it("SearchResponse result_type is optional for backward compat", () => {
+     const resp: SearchResponse = {
+       results: [],
+       total_candidates: 0,
+       facets: { libraries: [], source_types: [], people_cluster_ids: [], content_types: [] },
+       query: "test",
+       alpha: 0.5,
+     };
+     expect(resp.result_type).toBeUndefined();
+   });
 });
