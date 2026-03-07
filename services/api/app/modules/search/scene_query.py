@@ -468,4 +468,8 @@ class SceneQueryMixin:
             if vals:
                 must_not.append({"terms": {os_field: vals}})
 
+        content_types = filters.get("content_types")
+        if content_types:
+            clauses.append({"terms": {"content_type": content_types}})
+
         return clauses, must_not

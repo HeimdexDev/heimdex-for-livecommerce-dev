@@ -29,6 +29,7 @@ def _clean_tag_list(values: list[str] | None) -> list[str]:
 class SearchFilters(BaseModel):
     date_from: datetime | None = None
     date_to: datetime | None = None
+    content_types: list[str] = Field(default_factory=lambda: ["video"])
     source_types: list[SourceType] | None = None
     library_ids: list[UUID] | None = None
     person_cluster_ids: list[str] | None = None
@@ -121,6 +122,7 @@ class Facets(BaseModel):
     libraries: list[FacetItem] = Field(default_factory=list)
     source_types: list[FacetItem] = Field(default_factory=list)
     people_cluster_ids: list[FacetItem] = Field(default_factory=list)
+    content_types: list[FacetItem] = Field(default_factory=list)
 
 
 class SearchResponse(BaseModel):
@@ -164,6 +166,10 @@ class SceneResult(BaseModel):
     speaker_transcript: str = ""
     speaker_count: int = 0
     keyframe_timestamp_ms: int = 0
+    content_type: str = "video"
+    image_width: int | None = None
+    image_height: int | None = None
+    image_orientation: str | None = None
     debug: DebugInfo
 
 
