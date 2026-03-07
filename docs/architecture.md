@@ -325,7 +325,7 @@ print(info)
 | `libraries` | Library CRUD (org-scoped) |
 | `profiles` | Library versioning, shadow builds, promotion |
 | `search` | Query processing, retrieval, fusion, response formatting (segments + scenes) |
-| `people` | Face cluster labels, drive nickname registry, per-person scene timeline, video exclusions |
+| `people` | Face cluster labels, drive nickname registry, per-person scene timeline (regular search, supports 400+ scenes/video), video exclusions |
 | `artifacts` | Asset storage interface (MinIO) |
 
 ## Future Considerations
