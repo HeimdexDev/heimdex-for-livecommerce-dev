@@ -341,59 +341,49 @@ class SceneFacetsMixin:
                     ],
                 }
             },
-            "size": 0,
-            "aggs": {
-                "by_video": {
-                    "terms": {"field": "video_id", "size": 200},
-                    "aggs": {
-                        "video_title": {
-                            "terms": {"field": "video_title", "size": 1},
-                        },
-                        "scenes": {
-                            "top_hits": {
-                                "size": 100,
-                                "sort": [{"start_ms": "asc"}],
-                                "_source": [
-                                    "scene_id",
-                                    "start_ms",
-                                    "end_ms",
-                                    "people_cluster_ids",
-                                ],
-                            },
-                        },
-                    },
-                },
-            },
+            "size": 10000,
+            "sort": [
+                {"video_id": "asc"},
+                {"start_ms": "asc"},
+            ],
+            "_source": [
+                "scene_id",
+                "video_id",
+                "video_title",
+                "start_ms",
+                "end_ms",
+                "people_cluster_ids",
+            ],
         }
 
         resp2 = await self.client.search(
             index=self.alias_name, body=all_scenes_body,
         )
 
-        result: list[dict[str, Any]] = []
-        for bucket in resp2["aggregations"]["by_video"]["buckets"]:
-            title_buckets = bucket["video_title"]["buckets"]
-            video_title = title_buckets[0]["key"] if title_buckets else None
+        videos_map: dict[str, dict[str, Any]] = {}
+        for hit in resp2["hits"]["hits"]:
+            src = hit["_source"]
+            vid = src["video_id"]
+            cluster_ids = src.get("people_cluster_ids") or []
 
-            scenes: list[dict[str, Any]] = []
-            for hit in bucket["scenes"]["hits"]["hits"]:
-                src = hit["_source"]
-                cluster_ids = src.get("people_cluster_ids") or []
-                scenes.append({
-                    "scene_id": src["scene_id"],
-                    "start_ms": src.get("start_ms", 0),
-                    "end_ms": src.get("end_ms", 0),
-                    "has_person": person_cluster_id in cluster_ids,
-                })
+            if vid not in videos_map:
+                videos_map[vid] = {
+                    "video_id": vid,
+                    "video_title": src.get("video_title"),
+                    "scenes": [],
+                }
 
-            result.append({
-                "video_id": bucket["key"],
-                "video_title": video_title,
-                "total_scenes": len(scenes),
-                "scenes": scenes,
+            videos_map[vid]["scenes"].append({
+                "scene_id": src["scene_id"],
+                "start_ms": src.get("start_ms", 0),
+                "end_ms": src.get("end_ms", 0),
+                "has_person": person_cluster_id in cluster_ids,
             })
 
-        return result
+        return [
+            {**v, "total_scenes": len(v["scenes"])}
+            for v in videos_map.values()
+        ]
 
     async def get_representative_scenes_for_people(
         self,
