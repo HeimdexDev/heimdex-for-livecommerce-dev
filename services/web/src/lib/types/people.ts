@@ -39,6 +39,25 @@ export interface VideoExclusionsResponse {
   excluded_video_ids: string[];
 }
 
+export interface PersonTimelineScene {
+  scene_id: string;
+  start_ms: number;
+  end_ms: number;
+  has_person: boolean;
+}
+
+export interface PersonTimelineVideo {
+  video_id: string;
+  video_title: string | null;
+  total_scenes: number;
+  scenes: PersonTimelineScene[];
+}
+
+export interface PersonTimelineResponse {
+  person_cluster_id: string;
+  videos: PersonTimelineVideo[];
+}
+
 export interface MergePersonRequest {
   source_cluster_ids: string[];
   target_cluster_id: string;

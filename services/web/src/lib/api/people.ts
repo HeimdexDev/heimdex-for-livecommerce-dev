@@ -4,6 +4,7 @@ import {
   MergePersonRequest,
   MergePersonResponse,
   PeopleListResponse,
+  PersonTimelineResponse,
   PersonVideosResponse,
   RenamePersonResponse,
   VideoExclusionsResponse,
@@ -123,6 +124,17 @@ export async function getPersonVideos(
 ): Promise<PersonVideosResponse> {
   return apiRequest<PersonVideosResponse>(
     `/api/people/${encodeURIComponent(personClusterId)}/videos`,
+    "GET",
+    getToken,
+  );
+}
+
+export async function getPersonTimeline(
+  personClusterId: string,
+  getToken?: TokenGetter,
+): Promise<PersonTimelineResponse> {
+  return apiRequest<PersonTimelineResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/timeline`,
     "GET",
     getToken,
   );
