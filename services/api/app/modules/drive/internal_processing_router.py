@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status as http_status
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, case, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
@@ -103,7 +103,13 @@ async def claim_processing(
                 DriveFile.lease_expires_at < now,
             ),
         )
-        .order_by(DriveFile.created_at.asc())
+        .order_by(
+            case(
+                (DriveFile.mime_type.like("video/%"), 0),
+                else_=1,
+            ),
+            DriveFile.created_at.asc(),
+        )
         .limit(request.limit)
         .with_for_update(skip_locked=True)
     )
