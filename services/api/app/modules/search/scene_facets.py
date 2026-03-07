@@ -351,7 +351,7 @@ class SceneFacetsMixin:
                         },
                         "scenes": {
                             "top_hits": {
-                                "size": 500,
+                                "size": 100,
                                 "sort": [{"start_ms": "asc"}],
                                 "_source": [
                                     "scene_id",
