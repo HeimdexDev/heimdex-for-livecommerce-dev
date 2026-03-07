@@ -22,6 +22,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build as build_google_service
 from googleapiclient.http import MediaIoBaseDownload
 
+from heimdex_worker_sdk.content_type import is_image
 from heimdex_worker_sdk.internal_api import InternalAPIClient
 
 logger = logging.getLogger(__name__)
@@ -92,11 +93,172 @@ def process_pending_files(
             release_slot(org_id_str)
 
 
+def _process_image(
+    api_client: InternalAPIClient,
+    settings: Any,
+    claimed_file: Any,
+) -> None:
+    from heimdex_worker_sdk.drive_keys import (
+        enrichment_keyframe_s3_key,
+        enrichment_keyframe_s3_prefix,
+        thumbnail_s3_key,
+        thumbnail_s3_prefix,
+    )
+    from heimdex_worker_sdk.s3 import S3Client
+    from tasks.image_metadata import extract_image_metadata, parse_filename
+
+    org_id_str = str(claimed_file.org_id)
+    video_id = claimed_file.video_id
+    scene_id = f"{video_id}_scene_000"
+    temp_dir = Path(settings.drive_temp_dir) / org_id_str / str(claimed_file.id)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        token_info = api_client.get_drive_token(
+            claimed_file.connection_id,
+            lease_token=None,
+        )
+        service = _build_drive_service(token_info.access_token)
+
+        original_path = temp_dir / f"original_{claimed_file.google_file_id}"
+        logger.info("image_download_started", extra={
+            "file_id": claimed_file.google_file_id,
+            "file_name": claimed_file.file_name,
+            "video_id": video_id,
+        })
+
+        api_client.update_processing_status(
+            claimed_file.id,
+            status="downloading",
+            lease_token=claimed_file.lease_token,
+        )
+
+        budget_bytes = int(settings.drive_temp_disk_budget_gb * 1024 * 1024 * 1024)
+        _download_file(
+            service=service,
+            google_file_id=claimed_file.google_file_id,
+            dest_path=original_path,
+            budget_bytes=budget_bytes,
+        )
+
+        api_client.update_processing_status(
+            claimed_file.id,
+            status="processing",
+            lease_token=claimed_file.lease_token,
+        )
+
+        meta = extract_image_metadata(original_path)
+        parsed = parse_filename(claimed_file.file_name)
+        content_type = claimed_file.mime_type or "application/octet-stream"
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3.ensure_bucket()
+
+        thumb_key = thumbnail_s3_key(org_id_str, video_id, scene_id)
+        s3.upload_file(original_path, thumb_key, content_type=content_type)
+
+        keyframe_key = enrichment_keyframe_s3_key(org_id_str, video_id, scene_id)
+        s3.upload_file(original_path, keyframe_key, content_type=content_type)
+
+        thumb_prefix = thumbnail_s3_prefix(org_id_str, video_id)
+        kf_prefix = enrichment_keyframe_s3_prefix(org_id_str, video_id)
+
+        scene = {
+            "scene_id": scene_id,
+            "index": 0,
+            "start_ms": 0,
+            "end_ms": 0,
+            "keyframe_timestamp_ms": 0,
+            "transcript_raw": "",
+            "ocr_text_raw": "",
+            "source_type": "gdrive",
+            "capture_time": claimed_file.google_created_time,
+            "web_view_link": claimed_file.web_view_link,
+            "content_type": "image",
+            "filename_text": " ".join(parsed.tokens),
+            "image_width": meta.width,
+            "image_height": meta.height,
+            "image_orientation": meta.orientation,
+        }
+
+        ingest_result = _post_scenes_to_api(
+            settings=settings,
+            org_id=claimed_file.org_id,
+            video_id=video_id,
+            video_title=claimed_file.file_name,
+            library_id=claimed_file.library_id,
+            duration_ms=0,
+            scenes=[scene],
+            source_path=claimed_file.drive_path,
+            web_view_link=(
+                claimed_file.web_view_link
+                or _build_drive_web_view_link(claimed_file.google_file_id)
+            ),
+            video_width=meta.width,
+            video_height=meta.height,
+        )
+
+        api_client.update_processing_status(
+            claimed_file.id,
+            status="indexed",
+            lease_token=claimed_file.lease_token,
+            scene_count=ingest_result.get("indexed_count", 1),
+            thumbnail_s3_prefix=thumb_prefix,
+            audio_s3_key=None,
+            keyframe_s3_prefix=kf_prefix,
+            video_width=meta.width,
+            video_height=meta.height,
+        )
+
+        logger.info(
+            "image_process_complete",
+            extra={
+                "file_id": claimed_file.google_file_id,
+                "video_id": video_id,
+                "scene_id": scene_id,
+                "format": meta.format,
+                "width": meta.width,
+                "height": meta.height,
+                "orientation": meta.orientation,
+                "thumbnail_s3_prefix": thumb_prefix,
+                "keyframe_s3_prefix": kf_prefix,
+            },
+        )
+    except Exception as e:
+        error_msg = f"{type(e).__name__}: {e}"
+        logger.error("image_processing_failed", extra={
+            "file_id": claimed_file.google_file_id,
+            "video_id": video_id,
+            "error": error_msg,
+        })
+        try:
+            api_client.update_processing_status(
+                claimed_file.id,
+                status="failed",
+                lease_token=claimed_file.lease_token,
+                error=error_msg,
+            )
+        except Exception:
+            logger.warning(
+                "image_process_status_update_failed",
+                extra={"file_id": str(claimed_file.id)},
+                exc_info=True,
+            )
+        raise
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def _process_single_file(
     api_client: InternalAPIClient,
     settings: Any,
     claimed_file: Any,
 ) -> None:
+    mime_type = getattr(claimed_file, "mime_type", "")
+    if is_image(mime_type):
+        return _process_image(api_client, settings, claimed_file)
+
     from heimdex_worker_sdk.drive_keys import (
         audio_s3_key, enrichment_keyframe_s3_key, enrichment_keyframe_s3_prefix,
         proxy_s3_key, thumbnail_s3_key, thumbnail_s3_prefix,
