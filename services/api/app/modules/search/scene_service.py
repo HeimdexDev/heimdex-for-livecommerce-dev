@@ -449,6 +449,7 @@ class SceneSearchService:
         filter_dict: dict[str, Any] = {
             "date_from": filters.date_from,
             "date_to": filters.date_to,
+            "content_types": filters.content_types,
             "source_types": filters.source_types,
             "library_ids": filters.library_ids,
             "person_cluster_ids": effective_person_ids or None,
@@ -547,6 +548,10 @@ class SceneSearchService:
                     speaker_transcript=src.get("speaker_transcript", "")[:500],
                     speaker_count=src.get("speaker_count", 0),
                     keyframe_timestamp_ms=src.get("keyframe_timestamp_ms", 0),
+                    content_type=src.get("content_type", "video"),
+                    image_width=src.get("image_width"),
+                    image_height=src.get("image_height"),
+                    image_orientation=src.get("image_orientation"),
                     debug=DebugInfo(
                         lexical_rank=item.lexical_rank,
                         lexical_score=item.lexical_score,
@@ -598,6 +603,14 @@ class SceneSearchService:
                     label=people_label_map.get(bucket["key"]),
                 )
                 for bucket in facet_data.get("people", [])
+            ],
+            content_types=[
+                FacetItem(
+                    value=bucket["key"],
+                    count=bucket["doc_count"],
+                    label=bucket["key"],
+                )
+                for bucket in facet_data.get("content_types", [])
             ],
         )
 

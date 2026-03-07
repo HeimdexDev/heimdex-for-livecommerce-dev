@@ -38,6 +38,7 @@ class SceneFacetsMixin:
                 "libraries": {"terms": {"field": "library_id", "size": self.settings.opensearch_facet_size}},
                 "source_types": {"terms": {"field": "source_type", "size": 10}},
                 "people": {"terms": {"field": "people_cluster_ids", "size": self.settings.opensearch_facet_size}},
+                "content_types": {"terms": {"field": "content_type", "size": 10}},
             },
         }
 
@@ -47,6 +48,7 @@ class SceneFacetsMixin:
             "libraries": response["aggregations"]["libraries"]["buckets"],
             "source_types": response["aggregations"]["source_types"]["buckets"],
             "people": response["aggregations"]["people"]["buckets"],
+            "content_types": response["aggregations"]["content_types"]["buckets"],
         }
 
     async def aggregate_videos(
@@ -61,7 +63,10 @@ class SceneFacetsMixin:
         page_size: int = 20,
         after_key: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        filter_clauses: list[dict[str, Any]] = [{"term": {"org_id": org_id}}]
+        filter_clauses: list[dict[str, Any]] = [
+            {"term": {"org_id": org_id}},
+            {"term": {"content_type": "video"}},
+        ]
         if library_id:
             filter_clauses.append({"term": {"library_id": library_id}})
         if source_type:
@@ -268,6 +273,7 @@ class SceneFacetsMixin:
                 "bool": {
                     "filter": [
                         {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
                         {"term": {"people_cluster_ids": person_cluster_id}},
                     ],
                 }
@@ -310,6 +316,7 @@ class SceneFacetsMixin:
                 "bool": {
                     "filter": [
                         {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
                         {"term": {"people_cluster_ids": person_cluster_id}},
                     ],
                 }
@@ -337,6 +344,7 @@ class SceneFacetsMixin:
                 "bool": {
                     "filter": [
                         {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
                         {"terms": {"video_id": video_ids}},
                     ],
                 }
@@ -521,7 +529,10 @@ class SceneFacetsMixin:
         body: dict[str, Any] = {
             "query": {
                 "bool": {
-                    "filter": [{"term": {"org_id": org_id}}],
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
+                    ],
                 }
             },
             "size": 0,
