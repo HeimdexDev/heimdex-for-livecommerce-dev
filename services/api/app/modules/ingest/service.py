@@ -179,6 +179,11 @@ class SceneIngestService:
                 "ingest_time": now.isoformat(),
                 "keyframe_timestamp_ms": scene.keyframe_timestamp_ms,
                 "source_path": request.source_path,
+                "content_type": getattr(scene, "content_type", "video"),
+                "filename_text": getattr(scene, "filename_text", ""),
+                "image_width": getattr(scene, "image_width", None),
+                "image_height": getattr(scene, "image_height", None),
+                "image_orientation": getattr(scene, "image_orientation", None),
             }
 
             # Only add embedding if text is non-empty
