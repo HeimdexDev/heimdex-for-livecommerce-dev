@@ -50,7 +50,7 @@ class YouTubeVideoResponse(BaseModel):
     publish_date: datetime | None
     processing_status: str
     has_subtitles: bool
-    enrichment_status: dict[str, str]
+    enrichment_status: dict[str, str | None]
     original_deleted: bool | None = None
     all_enrichment_complete: bool | None = None
     created_at: datetime
@@ -74,7 +74,7 @@ class UpdateYouTubeVideoStatusRequest(BaseModel):
     processing_status: YouTubeProcessingStatus
     subtitle_language: str | None = Field(default=None, max_length=10)
     has_subtitles: bool | None = None
-    enrichment_status: dict[str, str] | None = None
+    enrichment_status: dict[str, str | None] | None = None
     original_deleted: bool | None = None
 
 
