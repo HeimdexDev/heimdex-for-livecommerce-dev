@@ -251,6 +251,45 @@ def publish_transcode_job(
     _publish("transcode", body, dedup_id)
 
 
+def publish_youtube_transcode_job(
+    *,
+    file_id: UUID,
+    org_id: UUID,
+    video_id: str,
+    youtube_video_id: str,
+    file_name: str,
+    original_s3_key: str,
+    original_size_bytes: int,
+    library_id: UUID,
+    source_type: str = "youtube",
+) -> None:
+    """Publish a YouTube transcode job to the shared GPU transcode queue.
+
+    Called from the YouTube internal router after the worker uploads the
+    original video to S3.  Uses ``source_type='youtube'`` so the transcode
+    worker tags ingested scenes correctly.
+    """
+    now = datetime.now(timezone.utc)
+    body = {
+        "version": "1",
+        "type": "transcode.job_created",
+        "timestamp": now.isoformat(),
+        "file_id": str(file_id),
+        "org_id": str(org_id),
+        "video_id": video_id,
+        "google_file_id": youtube_video_id,
+        "file_name": file_name,
+        "original_s3_key": original_s3_key,
+        "original_size_bytes": original_size_bytes,
+        "library_id": str(library_id),
+        "scope_type": "youtube",
+        "drive_id": "youtube",
+        "source_type": source_type,
+    }
+    dedup_id = f"{file_id}:transcode:{now.strftime('%Y%m%dT%H%M')}"
+    _publish("transcode", body, dedup_id)
+
+
 def publish_export_job(
     *,
     export_id: UUID,
