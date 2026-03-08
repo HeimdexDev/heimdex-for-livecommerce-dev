@@ -571,6 +571,17 @@ services:
              python -m src.worker"
 
 
+  bgutil-provider:
+    profiles: ["youtube"]
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: heimdex-bgutil-provider
+    mem_limit: 512m
+    restart: unless-stopped
+    environment:
+      - TOKEN_TTL=${BGUTIL_TOKEN_TTL:-21600}
+    ports:
+      - "127.0.0.1:4416:4416"
+
   youtube-worker:
     profiles: ["youtube"]
     build:
@@ -584,6 +595,7 @@ services:
       - YOUTUBE_ENABLED=${YOUTUBE_ENABLED:-false}
       - YOUTUBE_ORG_ID=${YOUTUBE_ORG_ID:-}
       - YOUTUBE_COOKIES_PATH=${YOUTUBE_COOKIES_PATH:-}
+      - YOUTUBE_POT_PROVIDER_URL=${YOUTUBE_POT_PROVIDER_URL:-http://bgutil-provider:4416}
       - YOUTUBE_S3_BUCKET=${YOUTUBE_S3_BUCKET:-}
       - YOUTUBE_SYNC_INTERVAL_SECONDS=${YOUTUBE_SYNC_INTERVAL_SECONDS:-21600}
       - YOUTUBE_DOWNLOAD_FORMAT=${YOUTUBE_DOWNLOAD_FORMAT:-bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]}
@@ -609,6 +621,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      bgutil-provider:
+        condition: service_started
     command: >
       sh -c "python -m src.worker"
 

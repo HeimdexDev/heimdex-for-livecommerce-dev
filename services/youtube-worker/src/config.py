@@ -9,6 +9,7 @@ class YouTubeWorkerSettings(WorkerSettings):
     youtube_enabled: bool = False
     youtube_org_id: str = ""
     youtube_cookies_path: str = ""
+    youtube_pot_provider_url: str = "http://bgutil-provider:4416"
     youtube_sync_interval_seconds: int = 21600
     youtube_download_format: str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"
     youtube_rate_limit_sleep: int = 3

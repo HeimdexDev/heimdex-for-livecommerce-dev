@@ -56,6 +56,13 @@ def _yt_options(temp_dir: Path, settings: Any) -> dict[str, Any]:
     cookies = _resolve_cookies_path(settings)
     if cookies:
         opts["cookiefile"] = cookies
+
+    pot_url = getattr(settings, "youtube_pot_provider_url", "")
+    if pot_url:
+        opts["extractor_args"] = {
+            "youtube": {"player_client": ["default,mweb"]},
+            "youtubepot-bgutilhttp": {"base_url": [pot_url]},
+        }
     return opts
 
 
