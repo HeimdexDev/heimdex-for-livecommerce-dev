@@ -7,6 +7,7 @@ WorkerSettings = importlib.import_module("heimdex_worker_sdk.settings").WorkerSe
 
 class YouTubeWorkerSettings(WorkerSettings):
     youtube_enabled: bool = False
+    youtube_org_id: str = ""
     youtube_sync_interval_seconds: int = 21600
     youtube_download_format: str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"
     youtube_rate_limit_sleep: int = 3

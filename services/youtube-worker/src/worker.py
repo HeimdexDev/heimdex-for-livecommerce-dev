@@ -59,7 +59,7 @@ def main() -> None:
     api_client = YouTubeAPIClient(
         base_url=settings.drive_api_base_url,
         api_key=settings.drive_internal_api_key,
-        org_id=getattr(settings, "youtube_org_id", ""),
+        org_id=settings.youtube_org_id,
     )
 
     Path(settings.youtube_temp_dir).mkdir(parents=True, exist_ok=True)

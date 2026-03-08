@@ -582,6 +582,7 @@ services:
     environment:
       - PYTHONPATH=/app
       - YOUTUBE_ENABLED=${YOUTUBE_ENABLED:-false}
+      - YOUTUBE_ORG_ID=${YOUTUBE_ORG_ID:-}
       - YOUTUBE_S3_BUCKET=${YOUTUBE_S3_BUCKET:-}
       - YOUTUBE_SYNC_INTERVAL_SECONDS=${YOUTUBE_SYNC_INTERVAL_SECONDS:-21600}
       - YOUTUBE_DOWNLOAD_FORMAT=${YOUTUBE_DOWNLOAD_FORMAT:-bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]}
