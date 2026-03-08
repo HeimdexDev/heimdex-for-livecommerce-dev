@@ -303,6 +303,7 @@ def _build_ingest_scene_dicts(
                 "ocr_char_count": doc.ocr_char_count,
                 "source_type": source_type,
                 "capture_time": capture_time,
+                "content_type": "video",
             }
         )
     return result

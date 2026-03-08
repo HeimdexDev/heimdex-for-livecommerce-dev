@@ -716,6 +716,7 @@ def _build_ingest_scene_dicts(
             "source_type": source_type,
             "capture_time": capture_time,
             "web_view_link": web_view_link,
+            "content_type": "video",
         })
     return result
 
