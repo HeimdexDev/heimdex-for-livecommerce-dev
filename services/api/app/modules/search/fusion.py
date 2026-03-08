@@ -228,10 +228,14 @@ def compute_weighted_rrf(
     return ranked
 
 
+MAX_CONTENT_TYPE_RATIO = 0.7  # No more than 70% of results from one content type
+
+
 def diversify_results(
     ranked_items: list[RankedItem],
     max_per_video: int,
     target_count: int,
+    content_types: list[str] | None = None,
 ) -> list[RankedItem]:
     if not ranked_items:
         return []
@@ -263,7 +267,15 @@ def diversify_results(
             if len(diversified) >= target_count:
                 break
             diversified.append(item)
-    
+
+    mixed_search = (
+        content_types is not None
+        and "video" in content_types
+        and "image" in content_types
+    )
+    if mixed_search and len(diversified) > 1:
+        diversified = _balance_content_types(diversified, target_count)
+
     logger.debug(
         "diversification_applied",
         input_count=total_candidates,
@@ -275,6 +287,37 @@ def diversify_results(
     )
     
     return diversified
+
+
+def _balance_content_types(
+    items: list[RankedItem],
+    target_count: int,
+) -> list[RankedItem]:
+    """Enforce MAX_CONTENT_TYPE_RATIO cap across content types.
+
+    When one content type exceeds 70% of results, excess items are moved
+    to a deferred list and backfilled from the minority type. Items are
+    never dropped — only reordered to promote diversity.
+    """
+    max_per_type = max(1, int(target_count * MAX_CONTENT_TYPE_RATIO))
+    type_counts: dict[str, int] = defaultdict(int)
+    balanced: list[RankedItem] = []
+    deferred: list[RankedItem] = []
+
+    for item in items:
+        ct = item.source.get("content_type", "video")
+        if type_counts[ct] < max_per_type:
+            balanced.append(item)
+            type_counts[ct] += 1
+        else:
+            deferred.append(item)
+
+    for item in deferred:
+        if len(balanced) >= target_count:
+            break
+        balanced.append(item)
+
+    return balanced
 
 
 def _compute_effective_max_per_video(

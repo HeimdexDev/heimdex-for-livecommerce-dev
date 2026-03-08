@@ -165,7 +165,6 @@ class SceneSearchService:
             size=self.settings.search_lexical_top_k,
         )
 
-        # Pure BM25 — no embeddings, no kNN
         ranked_items = compute_weighted_rrf(
             metadata_results, [], [],
             bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0,
@@ -175,6 +174,7 @@ class SceneSearchService:
             ranked_items,
             max_per_video=self.settings.search_max_scenes_per_video,
             target_count=self.settings.search_page_size,
+            content_types=ctx.filter_dict.get("content_types"),
         )
 
         results = self._build_scene_results(diversified, ctx.library_map)
@@ -222,6 +222,7 @@ class SceneSearchService:
             ranked_items,
             max_per_video=self.settings.search_max_scenes_per_video,
             target_count=self.settings.search_page_size,
+            content_types=ctx.filter_dict.get("content_types"),
         )
 
         results = self._build_scene_results(diversified, ctx.library_map)
@@ -363,6 +364,7 @@ class SceneSearchService:
             ranked_items,
             max_per_video=settings.search_max_scenes_per_video,
             target_count=settings.search_page_size,
+            content_types=ctx.filter_dict.get("content_types"),
         )
 
         results = self._build_scene_results(diversified, ctx.library_map)

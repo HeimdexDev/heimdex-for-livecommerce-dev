@@ -21,6 +21,7 @@ class SceneQueryMixin:
         filter_clauses, must_not_clauses = self._build_filter_clauses(filters)
 
         query_word_count = len(query.split())
+        includes_images = "image" in (filters.get("content_types") or ["video"])
 
         if query_word_count <= 3:
             should_clauses: list[dict[str, Any]] = [
@@ -54,6 +55,28 @@ class SceneQueryMixin:
                     }
                 },
             ]
+            if includes_images:
+                should_clauses.extend([
+                    {
+                        "match": {
+                            "filename_text": {
+                                "query": query,
+                                "operator": "or",
+                                "minimum_should_match": "50%",
+                                "boost": 2.0,
+                            }
+                        }
+                    },
+                    {
+                        "match_phrase": {
+                            "filename_text": {
+                                "query": query,
+                                "boost": 4.0,
+                                "slop": 1,
+                            }
+                        }
+                    },
+                ])
             search_query: dict[str, Any] = {
                 "bool": {
                     "must": [{"term": {"org_id": org_id}}],
@@ -63,6 +86,29 @@ class SceneQueryMixin:
                 }
             }
         else:
+            long_should: list[dict[str, Any]] = [
+                {
+                    "match": {
+                        "source_path": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": 0.5,
+                        }
+                    }
+                },
+            ]
+            if includes_images:
+                long_should.append({
+                    "match": {
+                        "filename_text": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": 2.0,
+                        }
+                    }
+                })
             search_query = {
                 "bool": {
                     "must": [
@@ -78,18 +124,7 @@ class SceneQueryMixin:
                             }
                         },
                     ],
-                    "should": [
-                        {
-                            "match": {
-                                "source_path": {
-                                    "query": query,
-                                    "operator": "or",
-                                    "minimum_should_match": "50%",
-                                    "boost": 0.5,
-                                }
-                            }
-                        },
-                    ],
+                    "should": long_should,
                     "filter": filter_clauses,
                 }
             }
@@ -122,6 +157,7 @@ class SceneQueryMixin:
         ocr_bm25_boost = float(raw_ocr_bm25_boost) if isinstance(raw_ocr_bm25_boost, int | float) else 0.6
         filter_clauses, must_not_clauses = self._build_filter_clauses(filters)
         ocr_enabled = include_ocr if include_ocr is not None else default_ocr_enabled
+        includes_images = "image" in (filters.get("content_types") or ["video"])
 
         match_query: dict[str, Any] = {
             "match": {
@@ -251,6 +287,29 @@ class SceneQueryMixin:
                 ]
             )
 
+            if includes_images:
+                should_clauses.extend([
+                    {
+                        "match": {
+                            "filename_text": {
+                                "query": query,
+                                "operator": "or",
+                                "minimum_should_match": "50%",
+                                "boost": 2.0,
+                            }
+                        }
+                    },
+                    {
+                        "match_phrase": {
+                            "filename_text": {
+                                "query": query,
+                                "boost": 4.0,
+                                "slop": 1,
+                            }
+                        }
+                    },
+                ])
+
             if person_should:
                 should_clauses.append(person_should)
 
@@ -314,6 +373,18 @@ class SceneQueryMixin:
                     }
                 }
             )
+
+            if includes_images:
+                optional_should.append({
+                    "match": {
+                        "filename_text": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": 2.0,
+                        }
+                    }
+                })
 
             if person_should:
                 all_should = [match_query, person_should] + optional_should
