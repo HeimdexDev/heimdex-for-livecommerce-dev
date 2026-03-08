@@ -12,6 +12,36 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+def _update_youtube_status(
+    settings: Any,
+    file_id: Any,
+    org_id: str,
+    processing_status: str,
+) -> None:
+    """Update YouTube video processing status via the YouTube internal API.
+
+    YouTube videos live in ``youtube_videos`` (not ``drive_files``), so the
+    standard ``update_processing_status`` endpoint returns 404. This calls
+    the YouTube-specific ``PATCH /internal/youtube/videos/{id}/status``.
+    """
+    api_base = settings.drive_api_base_url.rstrip("/")
+    url = f"{api_base}/internal/youtube/videos/{file_id}/status"
+    resp = requests.patch(
+        url,
+        json={"processing_status": processing_status},
+        headers={
+            "Authorization": f"Bearer {settings.drive_internal_api_key}",
+            "X-Heimdex-Org-Id": org_id,
+            "Content-Type": "application/json",
+        },
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"YouTube status update failed ({resp.status_code}): {resp.text[:500]}"
+        )
+
+
 def _process_single_transcode(
     api_client: Any,
     settings: Any,
@@ -68,11 +98,14 @@ def _process_single_transcode(
         # (fps, width, height). Transcoding changes resolution; fps is preserved.
         original_probe = probe_video(original_path)
 
-        api_client.update_processing_status(
-            file_id,
-            status="transcoding",
-            lease_token=lease_token,
-        )
+        if source_type == "youtube":
+            _update_youtube_status(settings, file_id, org_id_str, "transcoding")
+        else:
+            api_client.update_processing_status(
+                file_id,
+                status="transcoding",
+                lease_token=lease_token,
+            )
 
         proxy_path = temp_dir / "proxy.mp4"
         cmd = [
@@ -113,11 +146,12 @@ def _process_single_transcode(
         proxy_key = proxy_s3_key(org_id_str, drive_id, google_file_id)
         s3.upload_file(proxy_path, proxy_key, content_type="video/mp4")
 
-        api_client.update_processing_status(
-            file_id,
-            status="processing",
-            lease_token=lease_token,
-        )
+        if source_type != "youtube":
+            api_client.update_processing_status(
+                file_id,
+                status="processing",
+                lease_token=lease_token,
+            )
 
         proxy_probe = probe_video(proxy_path)
         scene_boundaries = detect_scenes(video_path=str(proxy_path), video_id=video_id)
@@ -205,22 +239,24 @@ def _process_single_transcode(
             )
         logger.info("transcode_ingest_complete", extra={"indexed_count": total_indexed, "total_scenes": len(scene_dicts)})
 
-        api_client.update_processing_status(
-            file_id,
-            status="indexed",
-            lease_token=lease_token,
-            scene_count=len(scene_result.scenes),
-            proxy_s3_key=proxy_key,
-            proxy_size_bytes=proxy_path.stat().st_size,
-            proxy_duration_ms=proxy_probe.duration_ms,
-            thumbnail_s3_prefix=thumbnail_s3_prefix(org_id_str, video_id),
-            audio_s3_key=audio_key,
-            keyframe_s3_prefix=enrichment_keyframe_s3_prefix(org_id_str, video_id),
-            # Original video metadata from ffprobe (for FCPXML export).
-            video_fps=original_probe.frame_rate,
-            video_width=original_probe.width,
-            video_height=original_probe.height,
-        )
+        if source_type == "youtube":
+            _update_youtube_status(settings, file_id, org_id_str, "indexed")
+        else:
+            api_client.update_processing_status(
+                file_id,
+                status="indexed",
+                lease_token=lease_token,
+                scene_count=len(scene_result.scenes),
+                proxy_s3_key=proxy_key,
+                proxy_size_bytes=proxy_path.stat().st_size,
+                proxy_duration_ms=proxy_probe.duration_ms,
+                thumbnail_s3_prefix=thumbnail_s3_prefix(org_id_str, video_id),
+                audio_s3_key=audio_key,
+                keyframe_s3_prefix=enrichment_keyframe_s3_prefix(org_id_str, video_id),
+                video_fps=original_probe.frame_rate,
+                video_width=original_probe.width,
+                video_height=original_probe.height,
+            )
 
         try:
             s3_client = boto3.client("s3", region_name=settings.s3_region)
@@ -232,12 +268,15 @@ def _process_single_transcode(
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         try:
-            api_client.update_processing_status(
-                file_id,
-                status="failed",
-                lease_token=lease_token,
-                error=error_msg,
-            )
+            if source_type == "youtube":
+                _update_youtube_status(settings, file_id, org_id_str, "failed")
+            else:
+                api_client.update_processing_status(
+                    file_id,
+                    status="failed",
+                    lease_token=lease_token,
+                    error=error_msg,
+                )
         except Exception:
             logger.warning(
                 "transcode_status_update_failed",
