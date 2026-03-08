@@ -60,9 +60,13 @@ def _yt_options(temp_dir: Path, settings: Any) -> dict[str, Any]:
     pot_url = getattr(settings, "youtube_pot_provider_url", "")
     if pot_url:
         opts["extractor_args"] = {
-            "youtube": {"player_client": ["default,mweb"]},
+            "youtube": {
+                "player_client": ["default", "mweb"],
+                "fetch_pot": ["always"],
+            },
             "youtubepot-bgutilhttp": {"base_url": [pot_url]},
         }
+        opts["remote_components"] = {"ejs:github"}
     return opts
 
 
