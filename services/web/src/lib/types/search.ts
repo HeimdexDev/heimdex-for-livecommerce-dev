@@ -6,7 +6,7 @@ export interface SearchFilters {
   date_from?: string;
   date_to?: string;
   content_types?: ("video" | "image")[];
-  source_types?: ("gdrive" | "removable_disk" | "local")[];
+  source_types?: ("gdrive" | "removable_disk" | "local" | "youtube")[];
   library_ids?: string[];
   person_cluster_ids?: string[];
   person_cluster_ids_not_in?: string[];
@@ -79,7 +79,7 @@ export interface SegmentResult {
   snippet: string;
   thumbnail_url: string | null;
   keyframe_timestamp_ms: number;
-  source_type: "gdrive" | "removable_disk" | "local";
+  source_type: "gdrive" | "removable_disk" | "local" | "youtube";
   web_view_link?: string | null;
   required_drive_nickname: string | null;
   capture_time: string | null;
@@ -100,7 +100,7 @@ export interface SceneResult {
   ocr_char_count?: number;
   scene_caption?: string;
   thumbnail_url: string | null;
-  source_type: "gdrive" | "removable_disk" | "local";
+  source_type: "gdrive" | "removable_disk" | "local" | "youtube";
   web_view_link?: string | null;
   required_drive_nickname: string | null;
   capture_time: string | null;
@@ -152,7 +152,7 @@ export interface VideoResult {
   video_title: string | null;
   library_id: string;
   library_name: string;
-  source_type: "gdrive" | "removable_disk" | "local";
+  source_type: "gdrive" | "removable_disk" | "local" | "youtube";
   web_view_link?: string | null;
   matching_scene_count: number;
   best_scene: SceneResult;

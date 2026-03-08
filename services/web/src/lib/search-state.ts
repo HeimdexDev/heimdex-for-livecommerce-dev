@@ -23,7 +23,7 @@ import type { SearchMode } from "@/lib/types/search";
 
 export type GroupBy = "video" | "scene";
 export type SortOption = "relevance" | "latest" | "alpha_asc" | "alpha_desc";
-export type SourceType = "gdrive" | "removable_disk" | "local";
+export type SourceType = "gdrive" | "removable_disk" | "local" | "youtube";
 export type ContentTypeFilter = "all" | "video" | "image";
 
 export interface DashboardSearchState {
@@ -32,6 +32,7 @@ export interface DashboardSearchState {
   groupBy: GroupBy;
   sortBy: SortOption;
   contentType: ContentTypeFilter;
+  referenceMode: boolean;
   currentPage: number;
   sourceFilters: ReadonlySet<SourceType>;
   dateStart: Date | null;
@@ -44,6 +45,7 @@ export const ALL_SOURCES: readonly SourceType[] = [
   "gdrive",
   "removable_disk",
   "local",
+  "youtube",
 ] as const;
 
 const VALID_SEARCH_MODES: readonly SearchMode[] = [
@@ -70,6 +72,7 @@ const DEFAULT_STATE: DashboardSearchState = {
   groupBy: "scene",
   sortBy: "latest",
   contentType: "all",
+  referenceMode: false,
   currentPage: 1,
   sourceFilters: new Set(ALL_SOURCES),
   dateStart: null,
@@ -86,6 +89,7 @@ const PARAM = {
   PAGE: "page",
   SOURCES: "sources",
   TYPE: "type",
+  REF: "ref",
   DATE_START: "ds",
   DATE_END: "de",
 } as const;
@@ -138,6 +142,9 @@ export function serializeSearchState(
   if (state.contentType !== DEFAULT_STATE.contentType) {
     params.set(PARAM.TYPE, state.contentType);
   }
+  if (state.referenceMode) {
+    params.set(PARAM.REF, "1");
+  }
   if (state.currentPage > 1) {
     params.set(PARAM.PAGE, String(state.currentPage));
   }
@@ -170,6 +177,7 @@ export function deserializeSearchState(
   const groupRaw = params.get(PARAM.GROUP);
   const sortRaw = params.get(PARAM.SORT);
   const typeRaw = params.get(PARAM.TYPE);
+  const refRaw = params.get(PARAM.REF);
   const pageRaw = params.get(PARAM.PAGE);
   const sourcesRaw = params.get(PARAM.SOURCES);
   const dsRaw = params.get(PARAM.DATE_START);
@@ -213,6 +221,7 @@ export function deserializeSearchState(
     contentType: isValidEnum(typeRaw, VALID_CONTENT_TYPES)
       ? typeRaw
       : DEFAULT_STATE.contentType,
+    referenceMode: refRaw === "1",
     currentPage,
     sourceFilters,
     dateStart,

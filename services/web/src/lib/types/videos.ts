@@ -7,7 +7,7 @@ export interface VideoSummary {
   video_title: string | null;
   library_id: string | null;
   library_name: string | null;
-  source_type: "gdrive" | "removable_disk" | "local" | null;
+  source_type: "gdrive" | "removable_disk" | "local" | "youtube" | null;
   scene_count: number;
   first_scene_start_ms: number;
   last_scene_end_ms: number;
@@ -86,7 +86,7 @@ export interface VideoStats {
 
 export interface VideoFilters {
   library_id?: string;
-  source_type?: "gdrive" | "removable_disk" | "local";
+  source_type?: "gdrive" | "removable_disk" | "local" | "youtube";
   content_types?: ("video" | "image")[];
   date_from?: string;
   date_to?: string;

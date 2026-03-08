@@ -14,6 +14,7 @@ function defaults(): DashboardSearchState {
     groupBy: "scene",
     sortBy: "latest",
     contentType: "all",
+    referenceMode: false,
     currentPage: 1,
     sourceFilters: new Set(ALL_SOURCES),
     dateStart: null,
@@ -225,6 +226,7 @@ describe("round-trip", () => {
       groupBy: "video",
       sortBy: "alpha_desc",
       contentType: "image",
+      referenceMode: false,
       currentPage: 3,
       sourceFilters: new Set(["gdrive"] as const),
       dateStart: new Date("2026-02-01T00:00:00"),
@@ -252,6 +254,7 @@ describe("round-trip", () => {
       groupBy: "scene",
       sortBy: "relevance",
       contentType: "all",
+      referenceMode: false,
       currentPage: 1,
       sourceFilters: new Set(ALL_SOURCES),
       dateStart: null,
@@ -323,6 +326,41 @@ describe("contentType serialization", () => {
     const params = serializeSearchState(original);
     const restored = deserializeSearchState(params);
     expect(restored.contentType).toBe("image");
+  });
+});
+
+describe("referenceMode serialization", () => {
+  it("omits ref param when referenceMode is false", () => {
+    const params = serializeSearchState(defaults());
+    expect(params.has("ref")).toBe(false);
+  });
+
+  it("serializes ref=1 when referenceMode is true", () => {
+    const state = { ...defaults(), referenceMode: true };
+    const params = serializeSearchState(state);
+    expect(params.get("ref")).toBe("1");
+  });
+
+  it("deserializes ref=1 as referenceMode true", () => {
+    const state = deserializeSearchState(new URLSearchParams("ref=1"));
+    expect(state.referenceMode).toBe(true);
+  });
+
+  it("defaults to false for missing ref param", () => {
+    const state = deserializeSearchState(new URLSearchParams());
+    expect(state.referenceMode).toBe(false);
+  });
+
+  it("defaults to false for invalid ref param", () => {
+    const state = deserializeSearchState(new URLSearchParams("ref=invalid"));
+    expect(state.referenceMode).toBe(false);
+  });
+
+  it("round-trips referenceMode", () => {
+    const original = { ...defaults(), referenceMode: true };
+    const params = serializeSearchState(original);
+    const restored = deserializeSearchState(params);
+    expect(restored.referenceMode).toBe(true);
   });
 });
 
