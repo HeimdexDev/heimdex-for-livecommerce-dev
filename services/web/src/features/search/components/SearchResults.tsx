@@ -17,7 +17,8 @@ import { AddToBasketButton } from "@/features/basket/AddToBasketButton";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
 
-function playbackUrl(videoId: string, sourceType: string, startMs?: number): string {
+function playbackUrl(videoId: string, sourceType: string, startMs?: number, webViewLink?: string | null): string {
+  if (sourceType === "youtube" && webViewLink) return webViewLink;
   return sourceType === "gdrive"
     ? getCloudPlaybackUrl(videoId, startMs)
     : getAgentPlaybackUrl(videoId, startMs);
@@ -51,7 +52,7 @@ interface VideoGroup {
   videoId: string;
   videoTitle: string | null;
   libraryName: string;
-  sourceType: "gdrive" | "removable_disk" | "local";
+  sourceType: "gdrive" | "removable_disk" | "local" | "youtube";
   scenes: SceneResult[];
 }
 
@@ -79,7 +80,7 @@ function groupScenesByVideo(scenes: SceneResult[]): VideoGroup[] {
 }
 
 function sourceTypeLabel(sourceType: string): string {
-  return sourceType === "gdrive" ? "Drive" : sourceType === "removable_disk" ? "Disk" : "Local";
+  return sourceType === "gdrive" ? "Drive" : sourceType === "removable_disk" ? "Disk" : sourceType === "youtube" ? "YouTube" : "Local";
 }
 
 function sourceTypeBadgeClass(sourceType: string): string {
@@ -87,6 +88,8 @@ function sourceTypeBadgeClass(sourceType: string): string {
     ? "bg-blue-100 text-blue-700"
     : sourceType === "removable_disk"
     ? "bg-orange-100 text-orange-700"
+    : sourceType === "youtube"
+    ? "bg-red-100 text-red-700"
     : "bg-green-100 text-green-700";
 }
 
@@ -353,7 +356,9 @@ function VideoCard({
           <div className="flex items-start justify-between gap-2 mb-1">
             <div className="flex items-center gap-2 flex-wrap">
               <a
-                href={`/videos/${video.video_id}?t=${best.start_ms}`}
+                href={best.source_type === "youtube" && best.web_view_link ? best.web_view_link : `/videos/${video.video_id}?t=${best.start_ms}`}
+                target={best.source_type === "youtube" ? "_blank" : undefined}
+                rel={best.source_type === "youtube" ? "noopener noreferrer" : undefined}
                 className="text-sm font-medium text-gray-900 hover:text-primary-600 truncate transition-colors"
               >
                 {video.video_title || video.video_id}
@@ -382,7 +387,9 @@ function VideoCard({
 
           <div className="flex items-center gap-3">
             <a
-              href={`/videos/${video.video_id}?t=${best.start_ms}`}
+              href={best.source_type === "youtube" && best.web_view_link ? best.web_view_link : `/videos/${video.video_id}?t=${best.start_ms}`}
+              target={best.source_type === "youtube" ? "_blank" : undefined}
+              rel={best.source_type === "youtube" ? "noopener noreferrer" : undefined}
               className="text-sm flex items-center gap-1 px-2 py-1 rounded-md border text-primary-600 hover:bg-primary-50 border-primary-200"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -402,7 +409,7 @@ function VideoCard({
               disabled={!agentAvailable}
               onClick={() => {
                 if (agentAvailable) {
-                  window.open(playbackUrl(best.video_id, best.source_type, best.start_ms), "_blank");
+                  window.open(playbackUrl(best.video_id, best.source_type, best.start_ms, best.web_view_link), "_blank");
                 }
               }}
               title={agentAvailable ? "Play best matching scene" : "Playback requires the Heimdex agent"}
@@ -498,7 +505,9 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
           <div className="flex items-start justify-between gap-2 mb-1">
             <div className="flex items-center gap-2 flex-wrap">
               <a
-                href={`/videos/${result.video_id}?t=${result.start_ms}`}
+                href={result.source_type === "youtube" && result.web_view_link ? result.web_view_link : `/videos/${result.video_id}?t=${result.start_ms}`}
+                target={result.source_type === "youtube" ? "_blank" : undefined}
+                rel={result.source_type === "youtube" ? "noopener noreferrer" : undefined}
                 className="text-sm font-medium text-gray-900 hover:text-primary-600 truncate transition-colors"
               >
                 {result.video_title || result.video_id}
@@ -580,7 +589,7 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
                 disabled={!agentAvailable}
                 onClick={() => {
                   if (agentAvailable) {
-                    window.open(playbackUrl(result.video_id, result.source_type, result.start_ms), "_blank");
+                    window.open(playbackUrl(result.video_id, result.source_type, result.start_ms, result.web_view_link), "_blank");
                   }
                 }}
                 title={agentAvailable ? "Play from scene start" : "Playback requires the Heimdex agent"}
@@ -612,7 +621,7 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
                 onClick={() => {
                   if (agentAvailable) {
                     window.open(
-                      playbackUrl(result.video_id, result.source_type, Math.max(0, result.start_ms - 5000)),
+                      playbackUrl(result.video_id, result.source_type, Math.max(0, result.start_ms - 5000), result.web_view_link),
                       "_blank"
                     );
                   }
@@ -632,7 +641,7 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
                 onClick={() => {
                   if (agentAvailable) {
                     window.open(
-                      playbackUrl(result.video_id, result.source_type, result.start_ms + 5000),
+                      playbackUrl(result.video_id, result.source_type, result.start_ms + 5000, result.web_view_link),
                       "_blank"
                     );
                   }

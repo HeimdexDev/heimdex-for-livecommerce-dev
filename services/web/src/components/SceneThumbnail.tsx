@@ -11,13 +11,14 @@ interface SceneThumbnailProps {
   sceneId?: string;
   agentAvailable: boolean;
   className?: string;
-  sourceType?: "gdrive" | "removable_disk" | "local" | null;
+  sourceType?: "gdrive" | "removable_disk" | "local" | "youtube" | null;
 }
 
 const SOURCE_BADGE_CONFIG: Record<string, { label: string; bg: string }> = {
   gdrive: { label: "Drive", bg: "bg-blue-500/80" },
   removable_disk: { label: "Disk", bg: "bg-orange-500/80" },
   local: { label: "Local", bg: "bg-green-500/80" },
+  youtube: { label: "YouTube", bg: "bg-red-600/80" },
 };
 
 const VideoIcon = ({ className }: { className?: string }) => (

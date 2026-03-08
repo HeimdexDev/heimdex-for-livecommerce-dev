@@ -13,6 +13,7 @@ import type { GroupBy } from "@/features/search/hooks/useSearch";
 import type { VideoSummary, VideoStats, SceneResult, VideoResult, AnySearchResponse, SceneSearchResponse, SearchFilters, SearchMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
+import { parseSlashCommand, getSlashCommandSuggestions } from "@/lib/slash-commands";
 import {
   serializeSearchState,
   deserializeSearchState,
@@ -29,12 +30,13 @@ import {
 // ---------------------------------------------------------------------------
 const PAGE_SIZE = 16;
 const KOREAN_DAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;
-type SourceType = "gdrive" | "removable_disk" | "local";
-const ALL_SOURCES: SourceType[] = ["gdrive", "removable_disk", "local"];
+type SourceType = "gdrive" | "removable_disk" | "local" | "youtube";
+const ALL_SOURCES: SourceType[] = ["gdrive", "removable_disk", "local", "youtube"];
 const SOURCE_META: Record<SourceType, { label: string; color: string }> = {
   gdrive: { label: "Drive", color: "text-blue-600 focus:ring-blue-500" },
   removable_disk: { label: "Disk", color: "text-orange-500 focus:ring-orange-400" },
   local: { label: "Local", color: "text-green-600 focus:ring-green-500" },
+  youtube: { label: "YouTube", color: "text-red-600 focus:ring-red-500" },
 };
 
 const SEARCH_MODE_PLACEHOLDERS: Record<SearchMode, string> = {
@@ -204,6 +206,19 @@ function ChevronRightIcon({ className }: { className?: string }) {
         strokeLinejoin="round"
         d="M8.25 4.5l7.5 7.5-7.5 7.5"
       />
+    </svg>
+  );
+}
+
+
+function YouTubeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className ?? "h-4 w-4"}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+    >
+      <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
     </svg>
   );
 }
@@ -623,9 +638,17 @@ function Pagination({
 function VideoCard({ video }: { video: VideoSummary }) {
   const title = video.video_title || "제목 없음";
   const isImage = video.content_type === "image";
+  const isYouTube = video.source_type === "youtube";
   const href = isImage ? `/images/${video.video_id}` : `/videos/${video.video_id}`;
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (isYouTube && video.web_view_link) {
+      e.preventDefault();
+      window.open(video.web_view_link, '_blank');
+    }
+  };
   return (
-    <Link href={href} className="group cursor-pointer block">
+    <Link href={href} onClick={handleClick} className="group cursor-pointer block">
       <div className="relative aspect-video w-full overflow-hidden rounded-lg">
         <SceneThumbnail
           videoId={video.video_id}
@@ -637,6 +660,12 @@ function VideoCard({ video }: { video: VideoSummary }) {
         {isImage && (
           <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
             이미지
+          </span>
+        )}
+        {isYouTube && (
+          <span className="absolute top-1.5 left-1.5 rounded bg-red-600 px-1.5 py-0.5 text-xs text-white flex items-center gap-1">
+            <YouTubeIcon className="h-3 w-3" />
+            YouTube
           </span>
         )}
       </div>
@@ -657,6 +686,7 @@ function VideoCard({ video }: { video: VideoSummary }) {
 function SceneCard({ scene }: { scene: SceneResult }) {
   const title = scene.video_title || "제목 없음";
   const isImage = scene.content_type === "image";
+  const isYouTube = scene.source_type === "youtube";
   const startSec = Math.round(scene.start_ms / 1000);
   const min = Math.floor(startSec / 60);
   const sec = startSec % 60;
@@ -670,8 +700,15 @@ function SceneCard({ scene }: { scene: SceneResult }) {
     ? `/images/${scene.video_id}`
     : `/videos/${scene.video_id}?t=${scene.start_ms}`;
 
+  const handleClick = (e: React.MouseEvent) => {
+    if (isYouTube && scene.web_view_link) {
+      e.preventDefault();
+      window.open(scene.web_view_link, '_blank');
+    }
+  };
+
   return (
-    <Link href={href} className="group cursor-pointer block">
+    <Link href={href} onClick={handleClick} className="group cursor-pointer block">
       <div className="relative aspect-video w-full overflow-hidden rounded-lg">
         <SceneThumbnail
           videoId={scene.video_id}
@@ -683,6 +720,12 @@ function SceneCard({ scene }: { scene: SceneResult }) {
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
           {isImage ? (dimensions ?? "이미지") : timestamp}
         </span>
+        {isYouTube && (
+          <span className="absolute top-1.5 left-1.5 rounded bg-red-600 px-1.5 py-0.5 text-xs text-white flex items-center gap-1">
+            <YouTubeIcon className="h-3 w-3" />
+            YouTube
+          </span>
+        )}
       </div>
       <div className="mt-2 flex items-center gap-1.5">
         <p className="truncate text-sm font-medium text-gray-800 group-hover:text-indigo-600">
@@ -706,8 +749,16 @@ function SceneCard({ scene }: { scene: SceneResult }) {
 function SearchVideoCard({ video }: { video: VideoResult }) {
   const title = video.video_title || "제목 없음";
   const best = video.best_scene;
+  const isYouTube = video.source_type === "youtube";
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (isYouTube && video.web_view_link) {
+      e.preventDefault();
+      window.open(video.web_view_link, '_blank');
+    }
+  };
   return (
-    <Link href={`/videos/${video.video_id}?t=${best.start_ms}`} className="group cursor-pointer block">
+    <Link href={`/videos/${video.video_id}?t=${best.start_ms}`} onClick={handleClick} className="group cursor-pointer block">
       <div className="relative aspect-video w-full overflow-hidden rounded-lg">
         <SceneThumbnail
           videoId={best.video_id}
@@ -719,6 +770,12 @@ function SearchVideoCard({ video }: { video: VideoResult }) {
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
           {video.matching_scene_count}개 장면
         </span>
+        {isYouTube && (
+          <span className="absolute top-1.5 left-1.5 rounded bg-red-600 px-1.5 py-0.5 text-xs text-white flex items-center gap-1">
+            <YouTubeIcon className="h-3 w-3" />
+            YouTube
+          </span>
+        )}
       </div>
       <div className="mt-2 flex items-center gap-1.5">
         <p className="truncate text-sm font-medium text-gray-800 group-hover:text-indigo-600">
@@ -767,6 +824,8 @@ export default function DashboardContent() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [query, setQuery] = useState(initialState.query);
+  const [referenceMode, setReferenceMode] = useState(initialState.referenceMode);
+  const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [sortBy, setSortBy] = useState<SortOption>(initialState.sortBy);
   const [currentPage, setCurrentPage] = useState(initialState.currentPage);
   const [dateStart, setDateStart] = useState<Date | null>(() => {
@@ -805,6 +864,7 @@ export default function DashboardContent() {
       groupBy,
       sortBy,
       contentType,
+      referenceMode,
       currentPage,
       sourceFilters,
       dateStart,
@@ -814,7 +874,7 @@ export default function DashboardContent() {
     const paramString = params.toString();
     const newUrl = paramString ? `/?${paramString}` : "/";
     router.replace(newUrl, { scroll: false });
-  }, [activeQuery, searchMode, groupBy, sortBy, contentType, currentPage, sourceFilters, dateStart, dateEnd, router]);
+  }, [activeQuery, searchMode, groupBy, sortBy, contentType, referenceMode, currentPage, sourceFilters, dateStart, dateEnd, router]);
 
   // ── Auto-search on mount if URL had a query ────────────────────────────
   const hasTriggeredInitialSearch = useRef(false);
@@ -945,7 +1005,7 @@ export default function DashboardContent() {
   }, []);
 
   const performSearch = useCallback(
-    async (q: string) => {
+    async (q: string, isRefMode: boolean = referenceMode) => {
       setIsLoading(true);
       setCurrentPage(1);
       try {
@@ -958,7 +1018,10 @@ export default function DashboardContent() {
         } else {
           filters.content_types = ["video", "image"];
         }
-        if (sourceFilters.size !== ALL_SOURCES.length) {
+        
+        if (isRefMode) {
+          filters.source_types = ["youtube"];
+        } else if (sourceFilters.size !== ALL_SOURCES.length) {
           filters.source_types = Array.from(sourceFilters);
         }
         if (dateStart) filters.date_from = formatDateKr(dateStart);
@@ -985,21 +1048,35 @@ export default function DashboardContent() {
         setIsLoading(false);
       }
     },
-    [getAccessToken, groupBy, searchMode, contentType, sourceFilters, dateStart, dateEnd],
+    [getAccessToken, groupBy, searchMode, contentType, sourceFilters, dateStart, dateEnd, referenceMode],
   );
 
   const handleSearch = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
-      const q = query.trim();
-      if (!q) return;
+      const rawInput = query;
+      if (!rawInput.trim()) return;
+      
+      const slashResult = parseSlashCommand(rawInput);
+      let finalQuery = rawInput.trim();
+      let isRefMode = referenceMode;
+      
+      if (slashResult) {
+        isRefMode = true;
+        finalQuery = slashResult.query;
+        setReferenceMode(true);
+        setQuery(finalQuery);
+      }
+
+      if (!finalQuery) return;
+
       if (!isSearchMode) {
         sortBeforeSearchRef.current = sortBy;
         setSortBy("relevance");
       }
-      await performSearch(q);
+      await performSearch(finalQuery, isRefMode);
     },
-    [query, performSearch, isSearchMode, sortBy],
+    [query, performSearch, isSearchMode, sortBy, referenceMode],
   );
 
   // Re-execute search from URL params on mount (e.g. browser back-navigation)
@@ -1024,6 +1101,7 @@ export default function DashboardContent() {
     setQuery("");
     setCurrentPage(1);
     setSortBy(sortBeforeSearchRef.current);
+    setReferenceMode(false);
   }, []);
 
   const handleDateSelect = useCallback((start: Date, end: Date) => {
@@ -1055,13 +1133,57 @@ export default function DashboardContent() {
         <form onSubmit={handleSearch} className="flex items-center gap-3">
           <div className="relative flex-1">
             <SearchIcon className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+            {referenceMode && (
+              <div className="absolute left-11 top-1/2 -translate-y-1/2 flex items-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReferenceMode(false);
+                    if (query.trim()) {
+                      performSearch(query, false);
+                    } else {
+                      handleClearSearch();
+                    }
+                  }}
+                  className="rounded-full bg-red-100 px-2.5 py-0.5 text-sm font-medium text-red-700 hover:bg-red-200"
+                >
+                  레퍼런스
+                </button>
+              </div>
+            )}
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => setShowAutocomplete(true)}
+              onBlur={() => setTimeout(() => setShowAutocomplete(false), 200)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setShowAutocomplete(false);
+              }}
               placeholder={SEARCH_MODE_PLACEHOLDERS[searchMode]}
-              className="w-full rounded-lg border border-gray-200 bg-gray-50 py-3 pl-12 pr-4 text-sm text-gray-900 placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className={cn(
+                "w-full rounded-lg border border-gray-200 bg-gray-50 py-3 pr-4 text-sm text-gray-900 placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400",
+                referenceMode ? "pl-[110px]" : "pl-12"
+              )}
             />
+            {showAutocomplete && query.startsWith("/") && (
+              <div className="absolute left-0 top-full z-50 mt-1 w-full rounded-lg border border-gray-200 bg-white py-1 shadow-lg">
+                {getSlashCommandSuggestions().map((s) => (
+                  <button
+                    key={s.command}
+                    type="button"
+                    className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50"
+                    onClick={() => {
+                      setQuery(s.command + " ");
+                      setShowAutocomplete(false);
+                    }}
+                  >
+                    <span className="font-bold text-gray-900">{s.command}</span>
+                    <span className="ml-2 text-gray-500">{s.description}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <button
             type="submit"
@@ -1228,7 +1350,7 @@ export default function DashboardContent() {
             <EmptyStateIcon />
             <h3 className="mt-6 text-lg font-bold text-gray-900">
               {isSearchMode
-                ? "검색 결과가 없습니다."
+                ? referenceMode ? "레퍼런스 검색 결과가 없습니다" : "검색 결과가 없습니다."
                 : contentType === "image" ? "이미지가 없습니다."
                 : contentType === "video" ? "영상이 없습니다."
                 : "검색할 영상이 없습니다."}
