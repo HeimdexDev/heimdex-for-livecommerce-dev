@@ -84,6 +84,7 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       const qs = buildQs({
         library_id: filters?.library_id,
         source_type: filters?.source_type,
+        content_types: filters?.content_types?.join(","),
         sort: filters?.sort,
         page_size: filters?.page_size !== undefined ? String(filters.page_size) : undefined,
         after: filters?.after,

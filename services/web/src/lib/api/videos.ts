@@ -59,6 +59,7 @@ export async function getVideos(
   if (filters?.source_type) params.set("source_type", filters.source_type);
   if (filters?.date_from) params.set("date_from", filters.date_from);
   if (filters?.date_to) params.set("date_to", filters.date_to);
+  if (filters?.content_types?.length) params.set("content_types", filters.content_types.join(","));
   if (filters?.sort) params.set("sort", filters.sort);
   if (filters?.page_size) params.set("page_size", String(filters.page_size));
   if (filters?.after) params.set("after", filters.after);

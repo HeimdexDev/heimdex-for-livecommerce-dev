@@ -21,6 +21,7 @@ export interface VideoSummary {
   source_path: string | null;
   first_scene_keyframe_ms: number;
   web_view_link?: string | null;
+  content_type?: "video" | "image";
 }
 
 export interface VideoFacetItem {
@@ -86,6 +87,7 @@ export interface VideoStats {
 export interface VideoFilters {
   library_id?: string;
   source_type?: "gdrive" | "removable_disk" | "local";
+  content_types?: ("video" | "image")[];
   date_from?: string;
   date_to?: string;
   sort?: "latest" | "alpha_asc" | "alpha_desc";

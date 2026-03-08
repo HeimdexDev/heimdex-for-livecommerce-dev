@@ -622,15 +622,24 @@ function Pagination({
 // ---------------------------------------------------------------------------
 function VideoCard({ video }: { video: VideoSummary }) {
   const title = video.video_title || "제목 없음";
+  const isImage = video.content_type === "image";
+  const href = isImage ? `/images/${video.video_id}` : `/videos/${video.video_id}`;
   return (
-    <Link href={`/videos/${video.video_id}`} className="group cursor-pointer block">
-      <SceneThumbnail
-        videoId={video.video_id}
-        sceneId={video.source_type === "gdrive" ? `${video.video_id}_scene_000` : undefined}
-        agentAvailable={true}
-        className="aspect-video w-full rounded-lg"
-        sourceType={video.source_type}
-      />
+    <Link href={href} className="group cursor-pointer block">
+      <div className="relative aspect-video w-full overflow-hidden rounded-lg">
+        <SceneThumbnail
+          videoId={video.video_id}
+          sceneId={video.source_type === "gdrive" ? `${video.video_id}_scene_000` : undefined}
+          agentAvailable={true}
+          className="w-full h-full"
+          sourceType={video.source_type}
+        />
+        {isImage && (
+          <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
+            이미지
+          </span>
+        )}
+      </div>
       <div className="mt-2 flex items-center gap-1.5">
         <p className="truncate text-sm font-medium text-gray-800 group-hover:text-indigo-600">
           {title}
@@ -812,6 +821,14 @@ export default function DashboardContent() {
 
   const videoSortBy = sortBy === "relevance" ? "latest" : sortBy;
 
+  const browseContentTypes = useMemo<("video" | "image")[] | undefined>(
+    () =>
+      contentType === "video" ? ["video"]
+        : contentType === "image" ? ["image"]
+        : undefined,
+    [contentType],
+  );
+
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     setNextCursor(null);
@@ -822,6 +839,7 @@ export default function DashboardContent() {
           {
             sort: videoSortBy,
             page_size: 20,
+            content_types: browseContentTypes,
             date_from: dateStart ? formatDateKr(dateStart) : undefined,
             date_to: dateEnd ? formatDateKr(dateEnd) : undefined,
           },
@@ -840,7 +858,7 @@ export default function DashboardContent() {
     } finally {
       setIsLoading(false);
     }
-  }, [getAccessToken, videoSortBy, dateStart, dateEnd]);
+  }, [getAccessToken, videoSortBy, browseContentTypes, dateStart, dateEnd]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || isLoadingMore) return;
@@ -851,6 +869,7 @@ export default function DashboardContent() {
         {
           sort: videoSortBy,
           page_size: 20,
+          content_types: browseContentTypes,
           date_from: dateStart ? formatDateKr(dateStart) : undefined,
           date_to: dateEnd ? formatDateKr(dateEnd) : undefined,
           after: nextCursor,
@@ -865,7 +884,7 @@ export default function DashboardContent() {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [getAccessToken, nextCursor, isLoadingMore, videoSortBy, dateStart, dateEnd]);
+  }, [getAccessToken, nextCursor, isLoadingMore, videoSortBy, browseContentTypes, dateStart, dateEnd]);
 
   useEffect(() => {
     if (!isSearchMode) {
@@ -1062,25 +1081,23 @@ export default function DashboardContent() {
           <div className="flex items-center gap-2">
             <SearchModeToggle value={searchMode} onChange={setSearchMode} />
             <GroupByToggle value={groupBy} onChange={setGroupBy} />
-            {isSearchMode && (
-              <div className="ml-1 flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5">
-                {(["all", "video", "image"] as const).map((ct) => (
-                  <button
-                    key={ct}
-                    type="button"
-                    onClick={() => setContentType(ct)}
-                    className={cn(
-                      "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                      contentType === ct
-                        ? "bg-white text-gray-900 shadow-sm"
-                        : "text-gray-500 hover:text-gray-700",
-                    )}
-                  >
-                    {ct === "all" ? "전체" : ct === "video" ? "동영상" : "이미지"}
-                  </button>
-                ))}
-              </div>
-            )}
+            <div className="ml-1 flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+              {(["all", "video", "image"] as const).map((ct) => (
+                <button
+                  key={ct}
+                  type="button"
+                  onClick={() => setContentType(ct)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                    contentType === ct
+                      ? "bg-white text-gray-900 shadow-sm"
+                      : "text-gray-500 hover:text-gray-700",
+                  )}
+                >
+                  {ct === "all" ? "전체" : ct === "video" ? "동영상" : "이미지"}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="flex items-center gap-3">
             {ALL_SOURCES.map((type) => (
@@ -1114,7 +1131,9 @@ export default function DashboardContent() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-bold text-gray-900">
-              {isSearchMode ? `"${activeQuery}" 검색 결과` : "검색된 영상"}
+              {isSearchMode
+                ? `"${activeQuery}" 검색 결과`
+                : contentType === "image" ? "이미지" : contentType === "video" ? "영상" : "전체 미디어"}
             </h2>
             {isSearchMode && (
               <button
@@ -1167,7 +1186,7 @@ export default function DashboardContent() {
               <span>
                 {isSearchMode
                   ? `${videoCount} ${searchResponse?.result_type === "video" ? "videos" : "scenes"}`
-                  : `${videoCount} videos`}
+                  : `${videoCount} ${contentType === "image" ? "images" : contentType === "video" ? "videos" : "items"}`}
               </span>
             </div>
             {!isSearchMode && (
@@ -1210,11 +1229,14 @@ export default function DashboardContent() {
             <h3 className="mt-6 text-lg font-bold text-gray-900">
               {isSearchMode
                 ? "검색 결과가 없습니다."
+                : contentType === "image" ? "이미지가 없습니다."
+                : contentType === "video" ? "영상이 없습니다."
                 : "검색할 영상이 없습니다."}
             </h3>
             <p className="mt-2 text-sm text-gray-500">
               {isSearchMode
                 ? "다른 검색어로 시도해주세요."
+                : contentType !== "all" ? "다른 유형을 선택하거나 파일 동기화를 진행해주세요."
                 : "파일 동기화부터 진행해주세요."}
             </p>
             {isSearchMode ? (
