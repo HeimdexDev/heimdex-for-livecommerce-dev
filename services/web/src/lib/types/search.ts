@@ -5,6 +5,7 @@
 export interface SearchFilters {
   date_from?: string;
   date_to?: string;
+  content_types?: ("video" | "image")[];
   source_types?: ("gdrive" | "removable_disk" | "local")[];
   library_ids?: string[];
   person_cluster_ids?: string[];

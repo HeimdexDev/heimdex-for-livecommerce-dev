@@ -20,6 +20,7 @@ import {
   ALL_SOURCES as SEARCH_STATE_ALL_SOURCES,
   type SortOption as SearchStateSortOption,
   type SourceType as SearchStateSourceType,
+  type ContentTypeFilter,
   type DashboardSearchState,
 } from "@/lib/search-state";
 
@@ -646,13 +647,22 @@ function VideoCard({ video }: { video: VideoSummary }) {
 
 function SceneCard({ scene }: { scene: SceneResult }) {
   const title = scene.video_title || "제목 없음";
+  const isImage = scene.content_type === "image";
   const startSec = Math.round(scene.start_ms / 1000);
   const min = Math.floor(startSec / 60);
   const sec = startSec % 60;
   const timestamp = `${min}:${String(sec).padStart(2, "0")}`;
+  const dimensions =
+    scene.image_width && scene.image_height
+      ? `${scene.image_width} x ${scene.image_height}`
+      : null;
+
+  const href = isImage
+    ? `/images/${scene.video_id}`
+    : `/videos/${scene.video_id}?t=${scene.start_ms}`;
 
   return (
-    <Link href={`/videos/${scene.video_id}?t=${scene.start_ms}`} className="group cursor-pointer block">
+    <Link href={href} className="group cursor-pointer block">
       <div className="relative aspect-video w-full overflow-hidden rounded-lg">
         <SceneThumbnail
           videoId={scene.video_id}
@@ -662,7 +672,7 @@ function SceneCard({ scene }: { scene: SceneResult }) {
           sourceType={scene.source_type}
         />
         <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
-          {timestamp}
+          {isImage ? (dimensions ?? "이미지") : timestamp}
         </span>
       </div>
       <div className="mt-2 flex items-center gap-1.5">
@@ -675,7 +685,7 @@ function SceneCard({ scene }: { scene: SceneResult }) {
           className="flex-shrink-0 inline-flex items-center justify-center rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
         />
       </div>
-      {scene.snippet && (
+      {!isImage && scene.snippet && (
         <p className="mt-0.5 line-clamp-2 text-xs text-gray-500">
           {scene.snippet}
         </p>
@@ -763,6 +773,7 @@ export default function DashboardContent() {
 
   const [groupBy, setGroupBy] = useState<GroupBy>(initialState.groupBy);
   const [searchMode, setSearchMode] = useState<SearchMode>(initialState.searchMode);
+  const [contentType, setContentType] = useState<ContentTypeFilter>(initialState.contentType);
   const [sourceFilters, setSourceFilters] = useState<Set<SourceType>>(
     () => new Set(initialState.sourceFilters as ReadonlySet<SourceType>),
   );
@@ -784,6 +795,7 @@ export default function DashboardContent() {
       searchMode,
       groupBy,
       sortBy,
+      contentType,
       currentPage,
       sourceFilters,
       dateStart,
@@ -793,7 +805,7 @@ export default function DashboardContent() {
     const paramString = params.toString();
     const newUrl = paramString ? `/?${paramString}` : "/";
     router.replace(newUrl, { scroll: false });
-  }, [activeQuery, searchMode, groupBy, sortBy, currentPage, sourceFilters, dateStart, dateEnd, router]);
+  }, [activeQuery, searchMode, groupBy, sortBy, contentType, currentPage, sourceFilters, dateStart, dateEnd, router]);
 
   // ── Auto-search on mount if URL had a query ────────────────────────────
   const hasTriggeredInitialSearch = useRef(false);
@@ -920,6 +932,13 @@ export default function DashboardContent() {
       try {
         const tokenGetter = () => getAccessToken();
         const filters: SearchFilters = {};
+        if (contentType === "video") {
+          filters.content_types = ["video"];
+        } else if (contentType === "image") {
+          filters.content_types = ["image"];
+        } else {
+          filters.content_types = ["video", "image"];
+        }
         if (sourceFilters.size !== ALL_SOURCES.length) {
           filters.source_types = Array.from(sourceFilters);
         }
@@ -947,7 +966,7 @@ export default function DashboardContent() {
         setIsLoading(false);
       }
     },
-    [getAccessToken, groupBy, searchMode, sourceFilters, dateStart, dateEnd],
+    [getAccessToken, groupBy, searchMode, contentType, sourceFilters, dateStart, dateEnd],
   );
 
   const handleSearch = useCallback(
@@ -978,7 +997,7 @@ export default function DashboardContent() {
       performSearch(activeQuery);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupBy, searchMode, sourceFilters, dateStart, dateEnd]);
+  }, [groupBy, searchMode, contentType, sourceFilters, dateStart, dateEnd]);
 
   const handleClearSearch = useCallback(() => {
     setSearchResponse(null);
@@ -1043,6 +1062,25 @@ export default function DashboardContent() {
           <div className="flex items-center gap-2">
             <SearchModeToggle value={searchMode} onChange={setSearchMode} />
             <GroupByToggle value={groupBy} onChange={setGroupBy} />
+            {isSearchMode && (
+              <div className="ml-1 flex items-center rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+                {(["all", "video", "image"] as const).map((ct) => (
+                  <button
+                    key={ct}
+                    type="button"
+                    onClick={() => setContentType(ct)}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                      contentType === ct
+                        ? "bg-white text-gray-900 shadow-sm"
+                        : "text-gray-500 hover:text-gray-700",
+                    )}
+                  >
+                    {ct === "all" ? "전체" : ct === "video" ? "동영상" : "이미지"}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-3">
             {ALL_SOURCES.map((type) => (

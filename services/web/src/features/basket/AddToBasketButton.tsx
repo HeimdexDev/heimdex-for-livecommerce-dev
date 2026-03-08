@@ -10,6 +10,9 @@ interface AddToBasketButtonProps {
 
 export function AddToBasketButton({ scene }: AddToBasketButtonProps) {
   const { addItem, removeItem, isInBasket } = useSceneBasket();
+
+  if (scene.content_type === "image") return null;
+
   const inBasket = isInBasket(scene.scene_id);
 
   const handleToggle = () => {

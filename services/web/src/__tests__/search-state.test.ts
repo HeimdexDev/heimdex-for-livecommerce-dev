@@ -13,6 +13,7 @@ function defaults(): DashboardSearchState {
     searchMode: "lexical",
     groupBy: "scene",
     sortBy: "latest",
+    contentType: "all",
     currentPage: 1,
     sourceFilters: new Set(ALL_SOURCES),
     dateStart: null,
@@ -223,6 +224,7 @@ describe("round-trip", () => {
       searchMode: "semantic",
       groupBy: "video",
       sortBy: "alpha_desc",
+      contentType: "image",
       currentPage: 3,
       sourceFilters: new Set(["gdrive"] as const),
       dateStart: new Date("2026-02-01T00:00:00"),
@@ -236,6 +238,7 @@ describe("round-trip", () => {
     expect(restored.searchMode).toBe(original.searchMode);
     expect(restored.groupBy).toBe(original.groupBy);
     expect(restored.sortBy).toBe(original.sortBy);
+    expect(restored.contentType).toBe(original.contentType);
     expect(restored.currentPage).toBe(original.currentPage);
     expect(restored.sourceFilters).toEqual(original.sourceFilters);
     expect(restored.dateStart).toEqual(original.dateStart);
@@ -248,6 +251,7 @@ describe("round-trip", () => {
       searchMode: "lexical",
       groupBy: "scene",
       sortBy: "relevance",
+      contentType: "all",
       currentPage: 1,
       sourceFilters: new Set(ALL_SOURCES),
       dateStart: null,
@@ -273,6 +277,52 @@ describe("round-trip", () => {
     expect(restored.sourceFilters).toEqual(new Set(ALL_SOURCES));
     expect(restored.dateStart).toBeNull();
     expect(restored.dateEnd).toBeNull();
+  });
+});
+
+describe("contentType serialization", () => {
+  it("omits default contentType (all)", () => {
+    const params = serializeSearchState(defaults());
+    expect(params.has("type")).toBe(false);
+  });
+
+  it("serializes video contentType", () => {
+    const state = { ...defaults(), contentType: "video" as const };
+    const params = serializeSearchState(state);
+    expect(params.get("type")).toBe("video");
+  });
+
+  it("serializes image contentType", () => {
+    const state = { ...defaults(), contentType: "image" as const };
+    const params = serializeSearchState(state);
+    expect(params.get("type")).toBe("image");
+  });
+
+  it("deserializes valid contentType", () => {
+    const state = deserializeSearchState(new URLSearchParams("type=image"));
+    expect(state.contentType).toBe("image");
+  });
+
+  it("deserializes video contentType", () => {
+    const state = deserializeSearchState(new URLSearchParams("type=video"));
+    expect(state.contentType).toBe("video");
+  });
+
+  it("defaults to all for missing type param", () => {
+    const state = deserializeSearchState(new URLSearchParams());
+    expect(state.contentType).toBe("all");
+  });
+
+  it("defaults to all for invalid type param", () => {
+    const state = deserializeSearchState(new URLSearchParams("type=invalid"));
+    expect(state.contentType).toBe("all");
+  });
+
+  it("round-trips contentType", () => {
+    const original = { ...defaults(), contentType: "image" as const };
+    const params = serializeSearchState(original);
+    const restored = deserializeSearchState(params);
+    expect(restored.contentType).toBe("image");
   });
 });
 

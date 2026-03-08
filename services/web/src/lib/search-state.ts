@@ -24,12 +24,14 @@ import type { SearchMode } from "@/lib/types/search";
 export type GroupBy = "video" | "scene";
 export type SortOption = "relevance" | "latest" | "alpha_asc" | "alpha_desc";
 export type SourceType = "gdrive" | "removable_disk" | "local";
+export type ContentTypeFilter = "all" | "video" | "image";
 
 export interface DashboardSearchState {
   query: string;
   searchMode: SearchMode;
   groupBy: GroupBy;
   sortBy: SortOption;
+  contentType: ContentTypeFilter;
   currentPage: number;
   sourceFilters: ReadonlySet<SourceType>;
   dateStart: Date | null;
@@ -56,12 +58,18 @@ const VALID_SORT_OPTIONS: readonly SortOption[] = [
   "alpha_asc",
   "alpha_desc",
 ];
+const VALID_CONTENT_TYPES: readonly ContentTypeFilter[] = [
+  "all",
+  "video",
+  "image",
+];
 
 const DEFAULT_STATE: DashboardSearchState = {
   query: "",
   searchMode: "lexical",
   groupBy: "scene",
   sortBy: "latest",
+  contentType: "all",
   currentPage: 1,
   sourceFilters: new Set(ALL_SOURCES),
   dateStart: null,
@@ -77,6 +85,7 @@ const PARAM = {
   SORT: "sort",
   PAGE: "page",
   SOURCES: "sources",
+  TYPE: "type",
   DATE_START: "ds",
   DATE_END: "de",
 } as const;
@@ -126,6 +135,9 @@ export function serializeSearchState(
   if (state.sortBy !== DEFAULT_STATE.sortBy) {
     params.set(PARAM.SORT, state.sortBy);
   }
+  if (state.contentType !== DEFAULT_STATE.contentType) {
+    params.set(PARAM.TYPE, state.contentType);
+  }
   if (state.currentPage > 1) {
     params.set(PARAM.PAGE, String(state.currentPage));
   }
@@ -157,6 +169,7 @@ export function deserializeSearchState(
   const modeRaw = params.get(PARAM.MODE);
   const groupRaw = params.get(PARAM.GROUP);
   const sortRaw = params.get(PARAM.SORT);
+  const typeRaw = params.get(PARAM.TYPE);
   const pageRaw = params.get(PARAM.PAGE);
   const sourcesRaw = params.get(PARAM.SOURCES);
   const dsRaw = params.get(PARAM.DATE_START);
@@ -197,6 +210,9 @@ export function deserializeSearchState(
     sortBy: isValidEnum(sortRaw, VALID_SORT_OPTIONS)
       ? sortRaw
       : DEFAULT_STATE.sortBy,
+    contentType: isValidEnum(typeRaw, VALID_CONTENT_TYPES)
+      ? typeRaw
+      : DEFAULT_STATE.contentType,
     currentPage,
     sourceFilters,
     dateStart,
