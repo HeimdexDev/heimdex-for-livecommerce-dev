@@ -133,10 +133,20 @@ def _process_single_transcode(
         ]
         result = subprocess.run(nvenc_cmd, capture_output=True, timeout=7200)
         if result.returncode != 0:
-            nvenc_err = result.stderr.decode(errors="ignore")[-300:]
+            nvenc_err = result.stderr.decode(errors="ignore")[-500:]
+            # Log encoder availability for diagnostics (dlopen vs missing driver)
+            enc_check = subprocess.run(
+                ["ffmpeg", "-encoders"], capture_output=True, timeout=10,
+            )
+            nvenc_available = "h264_nvenc" in enc_check.stdout.decode(errors="ignore")
             logger.warning(
                 "ffmpeg_nvenc_failed_trying_cpu",
-                extra={"error": nvenc_err, "video_id": video_id},
+                extra={
+                    "error": nvenc_err,
+                    "video_id": video_id,
+                    "h264_nvenc_compiled_in": nvenc_available,
+                    "hint": "If compiled_in=True but failed, libnvidia-encode.so.1 is not mounted — check NVIDIA_DRIVER_CAPABILITIES=video",
+                },
             )
             # CPU fallback: libx264 with scale filter (no CUDA)
             cpu_cmd = [

@@ -13,12 +13,27 @@ ENV HF_HOME=/models/huggingface
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 
+# BtbN static ffmpeg with NVENC support (h264_nvenc via dlopen).
+# Ubuntu 22.04 apt ffmpeg (4.4.x) technically has ffnvcodec compiled in, but
+# BtbN gives us ffmpeg 7.x with better CUDA filter support (scale_cuda etc.).
+# At runtime, NVIDIA_DRIVER_CAPABILITIES must include 'video' so the container
+# runtime mounts libnvidia-encode.so.1 from the host — without it, NVENC fails
+# even though the encoder is compiled in.
+ARG FFMPEG_VERSION=7.1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common \
     ca-certificates \
     curl \
     gnupg \
-    ffmpeg \
+    xz-utils \
+    && curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n${FFMPEG_VERSION}-latest-linux64-gpl-${FFMPEG_VERSION}.tar.xz" \
+       -o /tmp/ffmpeg.tar.xz \
+    && tar -xf /tmp/ffmpeg.tar.xz -C /tmp \
+    && cp /tmp/ffmpeg-n${FFMPEG_VERSION}-latest-linux64-gpl-${FFMPEG_VERSION}/bin/ffmpeg /usr/local/bin/ffmpeg \
+    && cp /tmp/ffmpeg-n${FFMPEG_VERSION}-latest-linux64-gpl-${FFMPEG_VERSION}/bin/ffprobe /usr/local/bin/ffprobe \
+    && chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
+    && rm -rf /tmp/ffmpeg* \
+    && ffmpeg -encoders 2>/dev/null | grep -q nvenc \
     && add-apt-repository ppa:deadsnakes/ppa \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
