@@ -94,6 +94,16 @@ def get_basket_repository(db: AsyncSession = Depends(get_db_session)):
     return SceneBasketRepository(db)
 
 
+def get_youtube_channel_repository(db: AsyncSession = Depends(get_db_session)):
+    from app.modules.youtube.repository import YouTubeChannelRepository
+    return YouTubeChannelRepository(db)
+
+
+def get_youtube_video_repository(db: AsyncSession = Depends(get_db_session)):
+    from app.modules.youtube.repository import YouTubeVideoRepository
+    return YouTubeVideoRepository(db)
+
+
 async def get_search_service(
     db: AsyncSession = Depends(get_db_session),
     opensearch=Depends(get_opensearch_client),

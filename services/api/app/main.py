@@ -25,6 +25,7 @@ from app.modules.basket.router import router as basket_router
 from app.modules.thumbnails.router import public_router as thumbnails_public_router
 from app.modules.thumbnails.router import upload_router as thumbnails_upload_router
 from app.modules.videos.router import router as videos_router
+from app.modules.youtube.router import router as youtube_router
 
 setup_logging()
 logger = get_logger(__name__)
@@ -326,6 +327,13 @@ app.include_router(shorts_router, prefix="/api")
 app.include_router(basket_router, prefix="/api")
 app.include_router(thumbnails_public_router, prefix="/api")
 app.include_router(videos_router, prefix="/api")
+
+if get_settings().youtube_enabled:
+    app.include_router(youtube_router, prefix="/api")
+
+    from app.modules.youtube.internal_router import router as internal_youtube_router
+
+    app.include_router(internal_youtube_router)
 
 if get_settings().drive_connector_enabled:
     from app.modules.drive.router import router as drive_router

@@ -157,6 +157,18 @@ class Settings(BaseSettings):
 
 
 
+    # --- YouTube reference ---
+    youtube_enabled: bool = False
+    youtube_reference_library_name: str = "유튜브 레퍼런스"
+    youtube_s3_bucket: str = ""  # Defaults to drive_s3_bucket if empty
+    youtube_sync_interval_seconds: int = 21600  # 6 hours
+    youtube_download_format: str = "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"
+    youtube_rate_limit_sleep: int = 3  # seconds between downloads
+    youtube_rate_limit_max_sleep: int = 8
+    youtube_max_concurrent_downloads: int = 2
+    youtube_auto_delete_originals: bool = True
+    youtube_original_ttl_days: int = 7  # S3 lifecycle fallback
+
     # --- SQS (Phase 3 complete — enrichment workers are mandatory SQS consumers) ---
     sqs_enabled: bool = False
     sqs_endpoint_url: str = ""
