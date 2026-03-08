@@ -112,40 +112,52 @@ def _process_single_transcode(
             )
 
         proxy_path = temp_dir / "proxy.mp4"
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-hwaccel",
-            "cuda",
-            "-hwaccel_output_format",
-            "cuda",
-            "-i",
-            str(original_path),
-            "-c:v",
-            "h264_nvenc",
-            "-preset",
-            "p4",
-            "-rc",
-            "vbr",
-            "-cq",
-            str(settings.drive_proxy_crf),
-            "-maxrate",
-            settings.drive_proxy_max_bitrate,
-            "-bufsize",
-            settings.drive_proxy_bufsize,
-            "-vf",
-            f"scale_cuda=-2:{settings.drive_proxy_max_height}",
-            "-c:a",
-            "aac",
-            "-b:a",
-            settings.drive_proxy_audio_bitrate,
-            "-movflags",
-            "+faststart",
+
+        # Try NVENC (GPU) first, fall back to libx264 (CPU) if unavailable.
+        nvenc_cmd = [
+            "ffmpeg", "-y",
+            "-hwaccel", "cuda",
+            "-hwaccel_output_format", "cuda",
+            "-i", str(original_path),
+            "-c:v", "h264_nvenc",
+            "-preset", "p4",
+            "-rc", "vbr",
+            "-cq", str(settings.drive_proxy_crf),
+            "-maxrate", settings.drive_proxy_max_bitrate,
+            "-bufsize", settings.drive_proxy_bufsize,
+            "-vf", f"scale_cuda=-2:{settings.drive_proxy_max_height}",
+            "-c:a", "aac",
+            "-b:a", settings.drive_proxy_audio_bitrate,
+            "-movflags", "+faststart",
             str(proxy_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, timeout=7200)
+        result = subprocess.run(nvenc_cmd, capture_output=True, timeout=7200)
         if result.returncode != 0:
-            raise RuntimeError(f"ffmpeg NVENC failed: {result.stderr.decode(errors='ignore')[-500:]}")
+            nvenc_err = result.stderr.decode(errors="ignore")[-300:]
+            logger.warning(
+                "ffmpeg_nvenc_failed_trying_cpu",
+                extra={"error": nvenc_err, "video_id": video_id},
+            )
+            # CPU fallback: libx264 with scale filter (no CUDA)
+            cpu_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(original_path),
+                "-c:v", "libx264",
+                "-preset", "medium",
+                "-crf", str(settings.drive_proxy_crf),
+                "-maxrate", settings.drive_proxy_max_bitrate,
+                "-bufsize", settings.drive_proxy_bufsize,
+                "-vf", f"scale=-2:{settings.drive_proxy_max_height}",
+                "-c:a", "aac",
+                "-b:a", settings.drive_proxy_audio_bitrate,
+                "-movflags", "+faststart",
+                str(proxy_path),
+            ]
+            cpu_result = subprocess.run(cpu_cmd, capture_output=True, timeout=7200)
+            if cpu_result.returncode != 0:
+                raise RuntimeError(
+                    f"ffmpeg failed (NVENC + CPU): {cpu_result.stderr.decode(errors='ignore')[-500:]}"
+                )
 
         proxy_key = proxy_s3_key(org_id_str, drive_id, google_file_id)
         s3.upload_file(proxy_path, proxy_key, content_type="video/mp4")
