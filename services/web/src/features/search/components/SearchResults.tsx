@@ -356,9 +356,7 @@ function VideoCard({
           <div className="flex items-start justify-between gap-2 mb-1">
             <div className="flex items-center gap-2 flex-wrap">
               <a
-                href={best.source_type === "youtube" && best.web_view_link ? best.web_view_link : `/videos/${video.video_id}?t=${best.start_ms}`}
-                target={best.source_type === "youtube" ? "_blank" : undefined}
-                rel={best.source_type === "youtube" ? "noopener noreferrer" : undefined}
+                href={`/videos/${video.video_id}?t=${best.start_ms}`}
                 className="text-sm font-medium text-gray-900 hover:text-primary-600 truncate transition-colors"
               >
                 {video.video_title || video.video_id}
@@ -387,9 +385,7 @@ function VideoCard({
 
           <div className="flex items-center gap-3">
             <a
-              href={best.source_type === "youtube" && best.web_view_link ? best.web_view_link : `/videos/${video.video_id}?t=${best.start_ms}`}
-              target={best.source_type === "youtube" ? "_blank" : undefined}
-              rel={best.source_type === "youtube" ? "noopener noreferrer" : undefined}
+              href={`/videos/${video.video_id}?t=${best.start_ms}`}
               className="text-sm flex items-center gap-1 px-2 py-1 rounded-md border text-primary-600 hover:bg-primary-50 border-primary-200"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -505,9 +501,7 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
           <div className="flex items-start justify-between gap-2 mb-1">
             <div className="flex items-center gap-2 flex-wrap">
               <a
-                href={result.source_type === "youtube" && result.web_view_link ? result.web_view_link : `/videos/${result.video_id}?t=${result.start_ms}`}
-                target={result.source_type === "youtube" ? "_blank" : undefined}
-                rel={result.source_type === "youtube" ? "noopener noreferrer" : undefined}
+                href={`/videos/${result.video_id}?t=${result.start_ms}`}
                 className="text-sm font-medium text-gray-900 hover:text-primary-600 truncate transition-colors"
               >
                 {result.video_title || result.video_id}

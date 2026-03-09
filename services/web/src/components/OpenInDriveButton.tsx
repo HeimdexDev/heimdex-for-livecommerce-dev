@@ -1,11 +1,10 @@
 "use client";
 
-/**
- * A small icon-button that opens the original video in Google Drive.
- *
- * Renders nothing when the source is not Google Drive or when the link is
- * missing, so it can be dropped into any card or detail view without guards.
- */
+const SOURCE_CONFIG: Record<string, { title: string; ariaLabel: string }> = {
+  gdrive: { title: "Google 드라이브에서 열기", ariaLabel: "Google 드라이브에서 열기" },
+  youtube: { title: "YouTube에서 열기", ariaLabel: "YouTube에서 열기" },
+};
+
 export function OpenInDriveButton({
   sourceType,
   webViewLink,
@@ -15,7 +14,8 @@ export function OpenInDriveButton({
   webViewLink?: string | null;
   className?: string;
 }) {
-  if (sourceType !== "gdrive" || !webViewLink) {
+  const config = sourceType ? SOURCE_CONFIG[sourceType] : undefined;
+  if (!config || !webViewLink) {
     return null;
   }
 
@@ -24,8 +24,8 @@ export function OpenInDriveButton({
       href={webViewLink}
       target="_blank"
       rel="noopener noreferrer"
-      title="Google 드라이브에서 열기"
-      aria-label="Google 드라이브에서 열기"
+      title={config.title}
+      aria-label={config.ariaLabel}
       className={
         className ??
         "inline-flex items-center justify-center rounded-md border border-gray-200 p-1.5 text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-700"

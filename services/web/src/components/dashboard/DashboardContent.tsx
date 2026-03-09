@@ -641,14 +641,8 @@ function VideoCard({ video }: { video: VideoSummary }) {
   const isYouTube = video.source_type === "youtube";
   const href = isImage ? `/images/${video.video_id}` : `/videos/${video.video_id}`;
 
-  const handleClick = (e: React.MouseEvent) => {
-    if (isYouTube && video.web_view_link) {
-      e.preventDefault();
-      window.open(video.web_view_link, '_blank');
-    }
-  };
   return (
-    <Link href={href} onClick={handleClick} className="group cursor-pointer block">
+    <Link href={href} className="group cursor-pointer block">
       <div className="relative aspect-video w-full overflow-hidden rounded-lg">
         <SceneThumbnail
           videoId={video.video_id}
@@ -700,15 +694,8 @@ function SceneCard({ scene }: { scene: SceneResult }) {
     ? `/images/${scene.video_id}`
     : `/videos/${scene.video_id}?t=${scene.start_ms}`;
 
-  const handleClick = (e: React.MouseEvent) => {
-    if (isYouTube && scene.web_view_link) {
-      e.preventDefault();
-      window.open(scene.web_view_link, '_blank');
-    }
-  };
-
   return (
-    <Link href={href} onClick={handleClick} className="group cursor-pointer block">
+    <Link href={href} className="group cursor-pointer block">
       <div className="relative aspect-video w-full overflow-hidden rounded-lg">
         <SceneThumbnail
           videoId={scene.video_id}
@@ -751,14 +738,8 @@ function SearchVideoCard({ video }: { video: VideoResult }) {
   const best = video.best_scene;
   const isYouTube = video.source_type === "youtube";
 
-  const handleClick = (e: React.MouseEvent) => {
-    if (isYouTube && video.web_view_link) {
-      e.preventDefault();
-      window.open(video.web_view_link, '_blank');
-    }
-  };
   return (
-    <Link href={`/videos/${video.video_id}?t=${best.start_ms}`} onClick={handleClick} className="group cursor-pointer block">
+    <Link href={`/videos/${video.video_id}?t=${best.start_ms}`} className="group cursor-pointer block">
       <div className="relative aspect-video w-full overflow-hidden rounded-lg">
         <SceneThumbnail
           videoId={best.video_id}
