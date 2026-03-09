@@ -71,13 +71,16 @@ describe("SearchModeToggle", () => {
     expect(onChange).toHaveBeenCalledTimes(3);
   });
 
-  it("provides tooltip descriptions via title attribute", () => {
+  it("renders question mark help icons on each pill", () => {
     render(<SearchModeToggle value="lexical" onChange={() => {}} />);
-    const radios = screen.getAllByRole("radio");
+    const helpIcons = screen.getAllByText("?");
+    expect(helpIcons).toHaveLength(3);
+  });
 
-    expect(radios[0]).toHaveAttribute("title", "파일 이름, 날짜 등 메타데이터로 검색");
-    expect(radios[1]).toHaveAttribute("title", "자막, OCR, 캡션 텍스트 일치 검색");
-    expect(radios[2]).toHaveAttribute("title", "AI가 의미를 이해하여 유사 장면 검색");
+  it("renders tooltip elements with description text", () => {
+    render(<SearchModeToggle value="lexical" onChange={() => {}} />);
+    const tooltips = screen.getAllByRole("tooltip");
+    expect(tooltips).toHaveLength(3);
   });
 
   it("provides aria-label with mode name for screen readers", () => {

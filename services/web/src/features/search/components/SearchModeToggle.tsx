@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { Tooltip } from "@/components/ui/Tooltip";
 import type { SearchMode } from "@/lib/types/search";
 
 // ---------------------------------------------------------------------------
@@ -33,26 +34,37 @@ export function SearchModeToggle({ value, onChange }: SearchModeToggleProps) {
       {MODES.map(({ key, icon, label, description }) => {
         const isActive = value === key;
         return (
-          <button
-            key={key}
-            role="radio"
-            aria-checked={isActive}
-            aria-label={label}
-            title={description}
-            type="button"
-            onClick={() => onChange(key)}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all",
-              isActive
-                ? "bg-white text-gray-900 shadow-sm"
-                : "text-gray-500 hover:text-gray-700",
-            )}
-          >
-            <span className="text-sm leading-none" aria-hidden>
-              {icon}
-            </span>
-            {label}
-          </button>
+          <Tooltip key={key} content={description}>
+            <button
+              role="radio"
+              aria-checked={isActive}
+              aria-label={label}
+              type="button"
+              onClick={() => onChange(key)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all",
+                isActive
+                  ? "bg-white text-gray-900 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700",
+              )}
+            >
+              <span className="text-sm leading-none" aria-hidden>
+                {icon}
+              </span>
+              {label}
+              <span
+                aria-hidden
+                className={cn(
+                  "ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full text-[9px] font-bold",
+                  isActive
+                    ? "bg-gray-300 text-gray-600"
+                    : "bg-gray-300/60 text-gray-400",
+                )}
+              >
+                ?
+              </span>
+            </button>
+          </Tooltip>
         );
       })}
     </div>
