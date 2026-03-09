@@ -20,6 +20,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+ENRICH_BATCH_SIZE = 200
+
+
+def _safe_update_job_status(api_client: Any, video_id: str, file_id: Any, **kwargs: Any) -> None:
+    if video_id.startswith("yt_"):
+        return
+    api_client.update_job_status(file_id, **kwargs)
+
+
 # Lazy-loaded globals (initialized once per worker lifetime)
 _vision_model = None
 _processor = None
@@ -162,8 +171,8 @@ def _process_single_visual_embed(
             s3.download_file(manifest_key, manifest_path)
         except Exception as e:
             error_msg = f"manifest_download_failed: {type(e).__name__}: {e}"
-            api_client.update_job_status(
-                file_id, job_type="visual_embed", status="failed",
+            _safe_update_job_status(
+                api_client, video_id, file_id, job_type="visual_embed", status="failed",
                 error=error_msg, lease_token=lease_token,
             )
             return
@@ -173,8 +182,8 @@ def _process_single_visual_embed(
         scene_count = len(scenes)
 
         if scene_count == 0:
-            api_client.update_job_status(
-                file_id, job_type="visual_embed", status="done", lease_token=lease_token,
+            _safe_update_job_status(
+                api_client, video_id, file_id, job_type="visual_embed", status="done", lease_token=lease_token,
             )
             return
 
@@ -213,8 +222,8 @@ def _process_single_visual_embed(
                     )
 
         if not downloaded_keyframes:
-            api_client.update_job_status(
-                file_id, job_type="visual_embed", status="failed",
+            _safe_update_job_status(
+                api_client, video_id, file_id, job_type="visual_embed", status="failed",
                 error="no_keyframes_downloaded", lease_token=lease_token,
             )
             return
@@ -241,8 +250,8 @@ def _process_single_visual_embed(
             })
 
         if not enrich_scenes:
-            api_client.update_job_status(
-                file_id, job_type="visual_embed", status="done", lease_token=lease_token,
+            _safe_update_job_status(
+                api_client, video_id, file_id, job_type="visual_embed", status="done", lease_token=lease_token,
             )
             return
 
@@ -255,14 +264,14 @@ def _process_single_visual_embed(
             )
         except Exception as e:
             error_msg = f"visual_embed_enrich_failed: {type(e).__name__}: {e}"
-            api_client.update_job_status(
-                file_id, job_type="visual_embed", status="failed",
+            _safe_update_job_status(
+                api_client, video_id, file_id, job_type="visual_embed", status="failed",
                 error=error_msg, lease_token=lease_token,
             )
             return
 
-        api_client.update_job_status(
-            file_id, job_type="visual_embed", status="done", lease_token=lease_token,
+        _safe_update_job_status(
+            api_client, video_id, file_id, job_type="visual_embed", status="done", lease_token=lease_token,
         )
 
         logger.info(
@@ -281,8 +290,8 @@ def _process_single_visual_embed(
 
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
-        api_client.update_job_status(
-            file_id, job_type="visual_embed", status="failed",
+        _safe_update_job_status(
+            api_client, video_id, file_id, job_type="visual_embed", status="failed",
             error=error_msg, lease_token=lease_token,
         )
         logger.exception(
@@ -302,31 +311,30 @@ def _post_enrich_to_api(
     """Post visual embeddings to the internal enrich API."""
     requests = importlib.import_module("requests")
 
-    payload = {
-        "video_id": video_id,
-        "scenes": scenes,
-    }
+    if not scenes:
+        return {"updated_count": 0, "video_id": video_id}
 
     api_base = settings.drive_api_base_url.rstrip("/")
     url = f"{api_base}/internal/ingest/enrich"
+    headers = {
+        "Authorization": f"Bearer {settings.drive_internal_api_key}",
+        "X-Heimdex-Org-Id": str(org_id),
+        "Content-Type": "application/json",
+    }
 
-    resp = requests.post(
-        url,
-        json=payload,
-        headers={
-            "Authorization": f"Bearer {settings.drive_internal_api_key}",
-            "X-Heimdex-Org-Id": str(org_id),
-            "Content-Type": "application/json",
-        },
-        timeout=300,
-    )
+    total_updated = 0
+    for batch_start in range(0, len(scenes), ENRICH_BATCH_SIZE):
+        batch = scenes[batch_start : batch_start + ENRICH_BATCH_SIZE]
+        payload = {"video_id": video_id, "scenes": batch}
 
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"Internal enrich API returned {resp.status_code}: {resp.text[:500]}"
-        )
+        resp = requests.post(url, json=payload, headers=headers, timeout=300)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Internal enrich API returned {resp.status_code}: {resp.text[:500]}"
+            )
+        total_updated += resp.json().get("updated_count", 0)
 
-    return resp.json()
+    return {"updated_count": total_updated, "video_id": video_id}
 
 
 def _process_single_scene_visual_embed(
