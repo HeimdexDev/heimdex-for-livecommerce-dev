@@ -11,6 +11,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def _safe_update_job_status(api_client: Any, video_id: str, file_id: Any, **kwargs: Any) -> None:
+    if video_id.startswith("yt_"):
+        return
+    api_client.update_job_status(file_id, **kwargs)
+
+
 def _get_audio_duration_seconds(audio_path: Path) -> float:
     with wave.open(str(audio_path), "rb") as wf:
         frames = wf.getnframes()
@@ -56,8 +62,8 @@ def _process_single_stt(
             s3.download_file(claimed_file.audio_s3_key, audio_path)
         except Exception as e:
             error_msg = f"audio_download_failed: {type(e).__name__}: {e}"
-            api_client.update_job_status(
-                file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
+            _safe_update_job_status(
+                api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
             )
             return
 
@@ -76,8 +82,8 @@ def _process_single_stt(
                     "max_seconds": settings.drive_stt_max_audio_seconds,
                 },
             )
-            api_client.update_job_status(
-                file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
+            _safe_update_job_status(
+                api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
             )
             return
 
@@ -87,8 +93,8 @@ def _process_single_stt(
             s3.download_file(manifest_key, manifest_path)
         except Exception as e:
             error_msg = f"manifest_download_failed: {type(e).__name__}: {e}"
-            api_client.update_job_status(
-                file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
+            _safe_update_job_status(
+                api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
             )
             return
 
@@ -96,7 +102,7 @@ def _process_single_stt(
         scenes = manifest.get("scenes", [])
 
         if not scenes:
-            api_client.update_job_status(file_id, job_type="stt", status="done", lease_token=lease_token)
+            _safe_update_job_status(api_client, video_id, file_id, job_type="stt", status="done", lease_token=lease_token)
             return
 
         stt_started = time.monotonic()
@@ -141,12 +147,12 @@ def _process_single_stt(
             )
         except Exception as e:
             error_msg = f"stt_reingest_failed: {type(e).__name__}: {e}"
-            api_client.update_job_status(
-                file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
+            _safe_update_job_status(
+                api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
             )
             return
 
-        api_client.update_job_status(file_id, job_type="stt", status="done", lease_token=lease_token)
+        _safe_update_job_status(api_client, video_id, file_id, job_type="stt", status="done", lease_token=lease_token)
 
         total_segment_count = sum(
             s.get("speech_segment_count", 0) for s in updated_scenes
@@ -175,8 +181,8 @@ def _process_single_stt(
 
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
-        api_client.update_job_status(
-            file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
+        _safe_update_job_status(
+            api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
         )
         logger.exception(
             "stt_processing_failed",
@@ -238,6 +244,9 @@ def _build_scenes_no_speech(
     return updated
 
 
+ENRICH_BATCH_SIZE = 200
+
+
 def _post_enrich_to_api(
     settings: Any,
     org_id: Any,
@@ -258,28 +267,24 @@ def _post_enrich_to_api(
             entry["speaker_count"] = scene.get("speaker_count", 0)
         enrich_scenes.append(entry)
 
-    payload = {
-        "video_id": video_id,
-        "scenes": enrich_scenes,
-    }
-
     api_base = settings.drive_api_base_url.rstrip("/")
     url = f"{api_base}/internal/ingest/enrich"
+    headers = {
+        "Authorization": f"Bearer {settings.drive_internal_api_key}",
+        "X-Heimdex-Org-Id": str(org_id),
+        "Content-Type": "application/json",
+    }
 
-    resp = requests.post(
-        url,
-        json=payload,
-        headers={
-            "Authorization": f"Bearer {settings.drive_internal_api_key}",
-            "X-Heimdex-Org-Id": str(org_id),
-            "Content-Type": "application/json",
-        },
-        timeout=300,
-    )
+    total_updated = 0
+    for batch_start in range(0, len(enrich_scenes), ENRICH_BATCH_SIZE):
+        batch = enrich_scenes[batch_start : batch_start + ENRICH_BATCH_SIZE]
+        payload = {"video_id": video_id, "scenes": batch}
 
-    if resp.status_code != 200:
-        raise RuntimeError(
-            f"Internal enrich API returned {resp.status_code}: {resp.text[:500]}"
-        )
+        resp = requests.post(url, json=payload, headers=headers, timeout=300)
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Internal enrich API returned {resp.status_code}: {resp.text[:500]}"
+            )
+        total_updated += resp.json().get("updated_count", 0)
 
-    return resp.json()
+    return {"updated_count": total_updated, "video_id": video_id}
