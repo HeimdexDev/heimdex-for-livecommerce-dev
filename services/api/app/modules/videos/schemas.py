@@ -71,6 +71,8 @@ class VideoScene(BaseModel):
     speech_segment_count: int = 0
     speaker_transcript: str = ""
     speaker_count: int = 0
+    ocr_text_raw: str = ""
+    ocr_char_count: int = 0
     people_cluster_ids: list[str] = Field(default_factory=list)
     ingest_time: str | None = None
     keyframe_timestamp_ms: int = 0

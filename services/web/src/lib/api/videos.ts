@@ -72,18 +72,17 @@ export async function getVideos(
   );
 }
 
-/**
- * Get scenes for a specific video.
- */
 export async function getVideoScenes(
   videoId: string,
   pageSize?: number,
   offset?: number,
   getToken?: TokenGetter,
+  query?: string,
 ): Promise<VideoScenesResponse> {
   const params = new URLSearchParams();
   if (pageSize !== undefined) params.set("page_size", String(pageSize));
   if (offset !== undefined) params.set("offset", String(offset));
+  if (query) params.set("q", query);
 
   const qs = params.toString();
   return apiGet<VideoScenesResponse>(

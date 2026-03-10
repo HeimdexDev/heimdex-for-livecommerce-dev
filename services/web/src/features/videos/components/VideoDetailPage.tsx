@@ -596,12 +596,13 @@ function SceneCard({
 }
 
 function ScenesPanel({
-  scenes,
-  totalScenes,
+  scenes: initialScenes,
+  totalScenes: initialTotal,
   videoId,
   agentAvailable,
   onSeekToScene,
   activeSceneMs,
+  getToken,
 }: {
   scenes: VideoScene[];
   totalScenes: number;
@@ -609,30 +610,50 @@ function ScenesPanel({
   agentAvailable: boolean;
   onSeekToScene?: (startMs: number) => void;
   activeSceneMs?: number | null;
+  getToken: () => Promise<string | null>;
 }) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearch, setActiveSearch] = useState("");
+  const [searchResults, setSearchResults] = useState<VideoScene[] | null>(null);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [isSearching, setIsSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
 
-  const filteredScenes = useMemo(() => {
-    if (!activeSearch.trim()) return scenes;
-    const q = activeSearch.trim().toLowerCase();
-    return scenes.filter((s) => s.transcript_raw.toLowerCase().includes(q));
-  }, [scenes, activeSearch]);
+  const displayScenes = searchResults ?? initialScenes;
+  const displayTotal = searchResults !== null ? searchTotal : initialTotal;
 
-  const totalPages = Math.max(1, Math.ceil(filteredScenes.length / SCENES_PER_PAGE));
+  const totalPages = Math.max(1, Math.ceil(displayScenes.length / SCENES_PER_PAGE));
   const paginatedScenes = useMemo(() => {
     const start = (currentPage - 1) * SCENES_PER_PAGE;
-    return filteredScenes.slice(start, start + SCENES_PER_PAGE);
-  }, [filteredScenes, currentPage]);
+    return displayScenes.slice(start, start + SCENES_PER_PAGE);
+  }, [displayScenes, currentPage]);
 
-  const handleSearch = useCallback((e: React.FormEvent) => {
+  const handleSearch = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
-    setActiveSearch(searchQuery);
+    const q = searchQuery.trim();
+    setActiveSearch(q);
     setCurrentPage(1);
-  }, [searchQuery]);
+
+    if (!q) {
+      setSearchResults(null);
+      setSearchTotal(0);
+      return;
+    }
+
+    setIsSearching(true);
+    try {
+      const res = await getVideoScenes(videoId, 200, 0, getToken, q);
+      setSearchResults(res.scenes);
+      setSearchTotal(res.total);
+    } catch {
+      setSearchResults([]);
+      setSearchTotal(0);
+    } finally {
+      setIsSearching(false);
+    }
+  }, [searchQuery, videoId, getToken]);
 
   const toggleSelection = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -675,8 +696,25 @@ function ScenesPanel({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="파일 내에서 원하는 장면을 검색하여 찾아보세요."
-            className="w-full rounded-lg border border-gray-200 bg-gray-50 py-3 pl-12 pr-4 text-sm placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            className="w-full rounded-lg border border-gray-200 bg-gray-50 py-3 pl-12 pr-10 text-sm placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
           />
+          {activeSearch && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery("");
+                setActiveSearch("");
+                setSearchResults(null);
+                setSearchTotal(0);
+                setCurrentPage(1);
+              }}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+              </svg>
+            </button>
+          )}
         </div>
         <button
           type="submit"
@@ -689,7 +727,7 @@ function ScenesPanel({
       <div className="mt-6 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
           <h3 className="text-lg font-bold text-gray-900">결과</h3>
-          <span className="text-sm text-gray-500">{filteredScenes.length}개 장면</span>
+          <span className="text-sm text-gray-500">{displayTotal}개 장면</span>
         </div>
         <button
           type="button"
@@ -712,19 +750,29 @@ function ScenesPanel({
       </div>
 
       <div className="mt-4 space-y-4">
-        {paginatedScenes.map((scene, i) => (
-          <SceneCard
-            key={scene.scene_id}
-            scene={scene}
-            index={(currentPage - 1) * SCENES_PER_PAGE + i}
-            videoId={videoId}
-            agentAvailable={agentAvailable}
-            isSelected={selectedIds.has(scene.scene_id)}
-            onToggle={toggleSelection}
-            onSeek={onSeekToScene}
-            isPlaying={activeSceneMs === scene.start_ms}
-          />
-        ))}
+        {isSearching ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-500" />
+          </div>
+        ) : paginatedScenes.length === 0 ? (
+          <div className="py-12 text-center text-sm text-gray-400">
+            {activeSearch ? "검색 결과가 없습니다." : "장면이 없습니다."}
+          </div>
+        ) : (
+          paginatedScenes.map((scene, i) => (
+            <SceneCard
+              key={scene.scene_id}
+              scene={scene}
+              index={(currentPage - 1) * SCENES_PER_PAGE + i}
+              videoId={videoId}
+              agentAvailable={agentAvailable}
+              isSelected={selectedIds.has(scene.scene_id)}
+              onToggle={toggleSelection}
+              onSeek={onSeekToScene}
+              isPlaying={activeSceneMs === scene.start_ms}
+            />
+          ))
+        )}
       </div>
 
       {totalPages > 1 && (
@@ -913,6 +961,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               agentAvailable={agentAvailable}
               onSeekToScene={handleSeekToScene}
               activeSceneMs={seekMs}
+              getToken={getAccessToken}
             />
           )}
         </div>

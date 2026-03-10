@@ -13,7 +13,7 @@ export interface ApiClient {
   search(request: SearchRequest): Promise<SearchResponse>;
   searchScenes(request: SearchRequest): Promise<SceneSearchResponse>;
   getVideos(filters?: VideoFilters): Promise<VideoListResponse>;
-  getVideoScenes(videoId: string, pageSize?: number, offset?: number): Promise<VideoScenesResponse>;
+  getVideoScenes(videoId: string, pageSize?: number, offset?: number, query?: string): Promise<VideoScenesResponse>;
   getVideoStats(): Promise<VideoStats>;
 }
 
@@ -91,10 +91,11 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       });
       return request<VideoListResponse>(`/api/videos${qs}`, { method: "GET" });
     },
-    getVideoScenes: (videoId: string, pageSize?: number, offset?: number) => {
+    getVideoScenes: (videoId: string, pageSize?: number, offset?: number, query?: string) => {
       const qs = buildQs({
         page_size: pageSize !== undefined ? String(pageSize) : undefined,
         offset: offset !== undefined ? String(offset) : undefined,
+        q: query || undefined,
       });
       return request<VideoScenesResponse>(
         `/api/videos/${encodeURIComponent(videoId)}/scenes${qs}`,

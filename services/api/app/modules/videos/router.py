@@ -103,20 +103,23 @@ async def video_scenes(
     org_ctx: OrgContext = Depends(get_current_org),
     user: User = Depends(get_current_user),
     video_service: VideoService = Depends(get_video_service),
+    q: str | None = Query(None, description="Search query within this video's scenes (BM25 across transcript, caption, OCR, speaker)"),
     page_size: int = Query(50, ge=1, le=200, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
 ):
-    """Get all scenes for a specific video."""
+    """Get all scenes for a specific video, optionally filtered by search query."""
     logger.debug(
         "video_scenes_request",
         user_id=str(user.id),
         org_id=str(org_ctx.org_id),
         video_id=video_id,
+        search_query=q,
     )
 
     return await video_service.get_video_scenes(
         org_ctx.org_id,
         video_id,
+        query=q,
         page_size=page_size,
         offset=offset,
     )

@@ -404,6 +404,119 @@ class TestSceneClientGetVideoScenes:
         assert call_body["size"] == 10
         assert call_body["from"] == 20
 
+    @pytest.mark.asyncio
+    async def test_get_video_scenes_no_query_uses_filter_only(self, mock_scene_client):
+        client, mock_async = mock_scene_client
+        mock_async.search = AsyncMock(return_value={
+            "hits": {"total": {"value": 0}, "hits": []},
+        })
+
+        await client.get_video_scenes("org-1", "vid-1")
+
+        call_body = mock_async.search.call_args.kwargs["body"]
+        assert "should" not in call_body["query"]["bool"]
+        assert call_body["sort"] == [{"start_ms": "asc"}]
+
+    @pytest.mark.asyncio
+    async def test_get_video_scenes_with_query_adds_bm25_should(self, mock_scene_client):
+        client, mock_async = mock_scene_client
+        mock_async.search = AsyncMock(return_value={
+            "hits": {"total": {"value": 0}, "hits": []},
+        })
+
+        await client.get_video_scenes("org-1", "vid-1", query="화장품 리뷰")
+
+        call_body = mock_async.search.call_args.kwargs["body"]
+        bool_clause = call_body["query"]["bool"]
+        assert "should" in bool_clause
+        assert bool_clause["minimum_should_match"] == 1
+        should = bool_clause["should"]
+        matched_fields = set()
+        for clause in should:
+            if "match" in clause:
+                matched_fields.update(clause["match"].keys())
+            if "match_phrase" in clause:
+                matched_fields.update(clause["match_phrase"].keys())
+        assert "transcript_norm" in matched_fields
+        assert "scene_caption" in matched_fields
+        assert "ocr_text_norm" in matched_fields
+        assert "speaker_transcript" in matched_fields
+
+    @pytest.mark.asyncio
+    async def test_get_video_scenes_with_query_sorts_by_score(self, mock_scene_client):
+        client, mock_async = mock_scene_client
+        mock_async.search = AsyncMock(return_value={
+            "hits": {"total": {"value": 0}, "hits": []},
+        })
+
+        await client.get_video_scenes("org-1", "vid-1", query="검색어")
+
+        call_body = mock_async.search.call_args.kwargs["body"]
+        assert call_body["sort"][0] == {"_score": "desc"}
+        assert call_body["sort"][1] == {"start_ms": "asc"}
+
+    @pytest.mark.asyncio
+    async def test_get_video_scenes_with_query_preserves_video_filter(self, mock_scene_client):
+        client, mock_async = mock_scene_client
+        mock_async.search = AsyncMock(return_value={
+            "hits": {"total": {"value": 0}, "hits": []},
+        })
+
+        await client.get_video_scenes("org-abc", "vid-xyz", query="test")
+
+        call_body = mock_async.search.call_args.kwargs["body"]
+        filters = call_body["query"]["bool"]["filter"]
+        org_terms = [f for f in filters if "term" in f and "org_id" in f["term"]]
+        vid_terms = [f for f in filters if "term" in f and "video_id" in f["term"]]
+        assert len(org_terms) == 1
+        assert org_terms[0]["term"]["org_id"] == "org-abc"
+        assert len(vid_terms) == 1
+        assert vid_terms[0]["term"]["video_id"] == "vid-xyz"
+
+    @pytest.mark.asyncio
+    async def test_get_video_scenes_empty_query_treated_as_no_query(self, mock_scene_client):
+        client, mock_async = mock_scene_client
+        mock_async.search = AsyncMock(return_value={
+            "hits": {"total": {"value": 0}, "hits": []},
+        })
+
+        await client.get_video_scenes("org-1", "vid-1", query="  ")
+
+        call_body = mock_async.search.call_args.kwargs["body"]
+        assert "should" not in call_body["query"]["bool"]
+
+    @pytest.mark.asyncio
+    async def test_get_video_scenes_returns_ocr_fields(self, mock_scene_client):
+        client, mock_async = mock_scene_client
+        mock_async.search = AsyncMock(return_value={
+            "hits": {
+                "total": {"value": 1},
+                "hits": [{
+                    "_id": "org:scene_0",
+                    "_source": {
+                        "scene_id": "vid_scene_0",
+                        "start_ms": 0,
+                        "end_ms": 5000,
+                        "transcript_raw": "Hello",
+                        "transcript_char_count": 5,
+                        "keyword_tags": [],
+                        "product_tags": [],
+                        "product_entities": [],
+                        "speech_segment_count": 1,
+                        "people_cluster_ids": [],
+                        "ingest_time": "2026-02-10T05:00:00Z",
+                        "ocr_text_raw": "screen text",
+                        "ocr_char_count": 11,
+                    },
+                }],
+            },
+        })
+
+        result = await client.get_video_scenes("org-1", "vid-1")
+
+        assert result["scenes"][0]["ocr_text_raw"] == "screen text"
+        assert result["scenes"][0]["ocr_char_count"] == 11
+
 
 # ======================================================================
 # SceneSearchClient — get_video_stats
@@ -668,6 +781,32 @@ class TestVideoService:
         assert len(result.scenes) == 1
         assert result.scenes[0].scene_id == "vid_scene_0"
         assert result.total == 1
+
+    @pytest.mark.asyncio
+    async def test_get_video_scenes_passes_query(self, service, mock_db_session, mock_scene_client):
+        mock_scene_client.get_video_scenes.return_value = {
+            "scenes": [],
+            "total": 0,
+        }
+
+        org_id = uuid4()
+        await service.get_video_scenes(org_id, "vid-1", query="화장품")
+
+        call_kwargs = mock_scene_client.get_video_scenes.call_args.kwargs
+        assert call_kwargs["query"] == "화장품"
+
+    @pytest.mark.asyncio
+    async def test_get_video_scenes_none_query(self, service, mock_db_session, mock_scene_client):
+        mock_scene_client.get_video_scenes.return_value = {
+            "scenes": [],
+            "total": 0,
+        }
+
+        org_id = uuid4()
+        await service.get_video_scenes(org_id, "vid-1")
+
+        call_kwargs = mock_scene_client.get_video_scenes.call_args.kwargs
+        assert call_kwargs["query"] is None
 
     @pytest.mark.asyncio
     async def test_get_stats_happy_path(self, service, mock_db_session, mock_scene_client):

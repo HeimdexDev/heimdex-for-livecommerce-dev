@@ -184,13 +184,14 @@ class VideoService:
         org_id: UUID,
         video_id: str,
         *,
+        query: str | None = None,
         page_size: int = 50,
         offset: int = 0,
     ) -> VideoScenesResponse:
-        """Get scenes for a specific video."""
         result = await self.scene_client.get_video_scenes(
             str(org_id),
             video_id,
+            query=query,
             page_size=page_size,
             offset=offset,
         )

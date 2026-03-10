@@ -198,19 +198,41 @@ class SceneFacetsMixin:
         org_id: str,
         video_id: str,
         *,
+        query: str | None = None,
         page_size: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "query": {
+        filter_clauses: list[dict[str, Any]] = [
+            {"term": {"org_id": org_id}},
+            {"term": {"video_id": video_id}},
+        ]
+
+        if query and query.strip():
+            q = query.strip()
+            should_clauses: list[dict[str, Any]] = [
+                {"match": {"transcript_norm": {"query": q, "operator": "or", "minimum_should_match": "50%"}}},
+                {"match_phrase": {"transcript_norm": {"query": q, "boost": 2.0, "slop": 1}}},
+                {"match": {"scene_caption": {"query": q, "operator": "or", "minimum_should_match": "50%", "boost": 1.0}}},
+                {"match_phrase": {"scene_caption": {"query": q, "boost": 2.0, "slop": 1}}},
+                {"match": {"ocr_text_norm": {"query": q, "operator": "or", "minimum_should_match": "50%", "boost": 0.6}}},
+                {"match": {"speaker_transcript": {"query": q, "operator": "or", "minimum_should_match": "50%", "boost": 0.9}}},
+                {"match_phrase": {"speaker_transcript": {"query": q, "boost": 1.8, "slop": 1}}},
+            ]
+            search_query: dict[str, Any] = {
                 "bool": {
-                    "filter": [
-                        {"term": {"org_id": org_id}},
-                        {"term": {"video_id": video_id}},
-                    ],
+                    "filter": filter_clauses,
+                    "should": should_clauses,
+                    "minimum_should_match": 1,
                 }
-            },
-            "sort": [{"start_ms": "asc"}],
+            }
+            sort_clause: list[dict[str, Any]] = [{"_score": "desc"}, {"start_ms": "asc"}]
+        else:
+            search_query = {"bool": {"filter": filter_clauses}}
+            sort_clause = [{"start_ms": "asc"}]
+
+        body: dict[str, Any] = {
+            "query": search_query,
+            "sort": sort_clause,
             "from": offset,
             "size": page_size,
             "_source": [
@@ -219,6 +241,7 @@ class SceneFacetsMixin:
                 "product_entities", "speech_segment_count",
                 "people_cluster_ids", "ingest_time", "keyframe_timestamp_ms",
                 "speaker_transcript", "speaker_count",
+                "ocr_text_raw", "ocr_char_count",
                 "video_title", "source_type", "source_path", "capture_time",
                 "web_view_link",
                 "library_id",
@@ -246,6 +269,8 @@ class SceneFacetsMixin:
                 "keyframe_timestamp_ms": src.get("keyframe_timestamp_ms", 0),
                 "speaker_transcript": src.get("speaker_transcript", ""),
                 "speaker_count": src.get("speaker_count", 0),
+                "ocr_text_raw": src.get("ocr_text_raw", ""),
+                "ocr_char_count": src.get("ocr_char_count", 0),
                 "web_view_link": src.get("web_view_link"),
             })
 
