@@ -100,14 +100,16 @@ class TestCreateIntent:
         settings.agent_intents_enabled = True
         settings.agent_intent_ttl_minutes = 10
 
-        with (
-            patch("app.modules.agent_intents.router.get_settings", return_value=settings),
-            patch.object(AgentIntentRepository, "create", return_value=intent) as mock_create,
-        ):
+        repo = AsyncMock(spec=AgentIntentRepository)
+        repo.create.return_value = intent
+        repo.build_deep_link_url.return_value = f"heimdex://add-folder?code={intent.intent_code}"
+
+        with patch("app.modules.agent_intents.router.get_settings", return_value=settings):
             result = await create_intent(
                 body=body,
                 org_ctx=org_ctx,
                 db=db,
+                repo=repo,
                 _admin=user,
                 current_user=user,
             )
@@ -115,7 +117,7 @@ class TestCreateIntent:
         assert result.intent_code == intent.intent_code
         assert result.type == intent.type
         assert result.deep_link_url == f"heimdex://add-folder?code={intent.intent_code}"
-        mock_create.assert_called_once_with(
+        repo.create.assert_called_once_with(
             org_id=org_id,
             type="folder_add",
             created_by=user.id,
@@ -138,12 +140,15 @@ class TestCreateIntent:
         settings = MagicMock()
         settings.agent_intents_enabled = False
 
+        repo = AsyncMock(spec=AgentIntentRepository)
+
         with patch("app.modules.agent_intents.router.get_settings", return_value=settings):
             with pytest.raises(HTTPException) as exc_info:
                 await create_intent(
                     body=body,
                     org_ctx=org_ctx,
                     db=db,
+                    repo=repo,
                     _admin=user,
                     current_user=user,
                 )
@@ -169,30 +174,21 @@ class TestExchangeIntent:
         device.id = device_id
 
         body = ExchangeIntentRequest(intent_code="abcdefghijklmnopqrstuvwx")
-        db = AsyncMock()
 
         settings = MagicMock()
         settings.agent_intents_enabled = True
 
-        with (
-            patch("app.modules.agent_intents.router.get_settings", return_value=settings),
-            patch.object(
-                AgentIntentRepository,
-                "get_by_code_for_update",
-                return_value=intent,
-            ),
-            patch.object(
-                AgentIntentRepository,
-                "mark_used",
-                return_value=None,
-            ) as mock_mark_used,
-        ):
+        repo = AsyncMock(spec=AgentIntentRepository)
+        repo.get_by_code_for_update.return_value = intent
+        repo.mark_used.return_value = None
+
+        with patch("app.modules.agent_intents.router.get_settings", return_value=settings):
             result = await exchange_intent(
                 body=body,
                 verified=(org_ctx, device),
-                db=db,
+                repo=repo,
             )
-            return result, mock_mark_used, device
+            return result, repo.mark_used, device
 
     @pytest.mark.asyncio
     async def test_exchange_success(self):
@@ -309,7 +305,6 @@ class TestListIntents:
 
         org_id = uuid4()
         org_ctx = OrgContext(org_id=org_id, org_slug="test-org")
-        db = AsyncMock()
         user = MagicMock()
 
         intents = [_make_intent(org_id=org_id), _make_intent(org_id=org_id)]
@@ -317,14 +312,14 @@ class TestListIntents:
         settings = MagicMock()
         settings.agent_intents_enabled = True
 
-        with (
-            patch("app.modules.agent_intents.router.get_settings", return_value=settings),
-            patch.object(AgentIntentRepository, "list_by_org", return_value=intents) as mock_list,
-        ):
-            result = await list_intents(org_ctx=org_ctx, db=db, _admin=user)
+        repo = AsyncMock(spec=AgentIntentRepository)
+        repo.list_by_org.return_value = intents
+
+        with patch("app.modules.agent_intents.router.get_settings", return_value=settings):
+            result = await list_intents(org_ctx=org_ctx, repo=repo, _admin=user)
 
         assert len(result.intents) == 2
-        mock_list.assert_called_once_with(org_id)
+        repo.list_by_org.assert_called_once_with(org_id)
 
 
 class TestSchemaGuard:
@@ -356,12 +351,15 @@ class TestSchemaGuard:
         settings = MagicMock()
         settings.agent_intents_enabled = True
 
+        repo = AsyncMock(spec=AgentIntentRepository)
+
         with patch("app.modules.agent_intents.router.get_settings", return_value=settings):
             with pytest.raises(HTTPException) as exc_info:
                 await create_intent(
                     body=body,
                     org_ctx=org_ctx,
                     db=db,
+                    repo=repo,
                     _admin=user,
                     current_user=user,
                 )
@@ -377,15 +375,16 @@ class TestSchemaGuard:
         _reset_cache(ready=False)
 
         org_ctx = OrgContext(org_id=uuid4(), org_slug="test-org")
-        db = AsyncMock()
         user = MagicMock()
 
         settings = MagicMock()
         settings.agent_intents_enabled = True
 
+        repo = AsyncMock(spec=AgentIntentRepository)
+
         with patch("app.modules.agent_intents.router.get_settings", return_value=settings):
             with pytest.raises(HTTPException) as exc_info:
-                await list_intents(org_ctx=org_ctx, db=db, _admin=user)
+                await list_intents(org_ctx=org_ctx, repo=repo, _admin=user)
         assert exc_info.value.status_code == 503
 
     @pytest.mark.asyncio
@@ -406,12 +405,15 @@ class TestSchemaGuard:
         settings = MagicMock()
         settings.agent_intents_enabled = False
 
+        repo = AsyncMock(spec=AgentIntentRepository)
+
         with patch("app.modules.agent_intents.router.get_settings", return_value=settings):
             with pytest.raises(HTTPException) as exc_info:
                 await create_intent(
                     body=body,
                     org_ctx=org_ctx,
                     db=db,
+                    repo=repo,
                     _admin=user,
                     current_user=user,
                 )
@@ -435,12 +437,15 @@ class TestSchemaGuard:
         settings = MagicMock()
         settings.agent_intents_enabled = True
 
+        repo = AsyncMock(spec=AgentIntentRepository)
+
         with patch("app.modules.agent_intents.router.get_settings", return_value=settings):
             with pytest.raises(HTTPException) as exc_info:
                 await create_intent(
                     body=body,
                     org_ctx=org_ctx,
                     db=db,
+                    repo=repo,
                     _admin=user,
                     current_user=user,
                 )

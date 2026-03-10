@@ -104,6 +104,66 @@ def get_youtube_video_repository(db: AsyncSession = Depends(get_db_session)):
     return YouTubeVideoRepository(db)
 
 
+def get_drive_connection_repository(db: AsyncSession = Depends(get_db_session)):
+    """Drive connection repository factory."""
+    from app.modules.drive.repository import DriveConnectionRepository
+    return DriveConnectionRepository(db)
+
+
+def get_drive_file_repository(db: AsyncSession = Depends(get_db_session)):
+    """Drive file repository factory."""
+    from app.modules.drive.repository import DriveFileRepository
+    return DriveFileRepository(db)
+
+
+def get_drive_secret_repository(db: AsyncSession = Depends(get_db_session)):
+    """Drive secret repository factory."""
+    from app.modules.drive.repository import DriveSecretRepository
+    return DriveSecretRepository(db)
+
+
+def get_export_record_repository(db: AsyncSession = Depends(get_db_session)):
+    """Export record repository factory."""
+    from app.modules.export.repository import ExportRecordRepository
+    return ExportRecordRepository(db)
+
+
+def get_reprocess_repository(db: AsyncSession = Depends(get_db_session)):
+    """Reprocess repository factory."""
+    from app.modules.videos.reprocess_repository import ReprocessRepository
+    return ReprocessRepository(db)
+
+
+def get_org_repository(db: AsyncSession = Depends(get_db_session)):
+    """Organization repository factory."""
+    from app.modules.orgs.repository import OrgRepository
+    return OrgRepository(db)
+
+
+def get_agent_intent_repository(db: AsyncSession = Depends(get_db_session)):
+    """Agent intent repository factory."""
+    from app.modules.agent_intents.repository import AgentIntentRepository
+    return AgentIntentRepository(db)
+
+
+def get_saved_short_repository(db: AsyncSession = Depends(get_db_session)):
+    """Saved short repository factory."""
+    from app.modules.shorts.repository import SavedShortRepository
+    return SavedShortRepository(db)
+
+
+def get_pairing_code_repository(db: AsyncSession = Depends(get_db_session)):
+    """Pairing code repository factory."""
+    from app.modules.devices.pairing import PairingCodeRepository
+    return PairingCodeRepository(db)
+
+
+def get_library_profile_repository(db: AsyncSession = Depends(get_db_session)):
+    """Library profile repository factory."""
+    from app.modules.profiles.repository import LibraryProfileRepository
+    return LibraryProfileRepository(db)
+
+
 async def get_search_service(
     db: AsyncSession = Depends(get_db_session),
     opensearch=Depends(get_opensearch_client),
@@ -154,8 +214,8 @@ def get_search_event_repository(db: AsyncSession = Depends(get_db_session)):
 
 def get_auth_service(db: AsyncSession = Depends(get_db_session)):
     """Auth service factory."""
-    from app.modules.auth.service import AuthService
-    return AuthService(db)
+    auth_module = __import__("app.modules.auth.service", fromlist=["AuthService"])
+    return auth_module.AuthService(db)
 
 
 async def verify_internal_token(

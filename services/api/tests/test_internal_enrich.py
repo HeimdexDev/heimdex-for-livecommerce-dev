@@ -5,6 +5,7 @@ from uuid import uuid4
 from app.modules.ingest.internal_router import _verify_internal_token, internal_enrich_scenes
 from app.modules.ingest.schemas import EnrichSceneUpdate, EnrichScenesRequest
 from app.modules.ingest.service import SceneIngestService
+from app.modules.orgs.repository import OrgRepository
 
 
 class TestInternalEnrichService:
@@ -264,6 +265,8 @@ class TestInternalEnrichEndpoint:
         org_id = uuid4()
         mock_db = AsyncMock()
         mock_ingest_service = AsyncMock()
+        mock_org_repo = AsyncMock(spec=OrgRepository)
+        mock_org_repo.get_by_id.return_value = None
         request = EnrichScenesRequest(
             video_id="vid1",
             scenes=[EnrichSceneUpdate(scene_id="vid1_scene_0", transcript_raw="hello")],
@@ -271,17 +274,15 @@ class TestInternalEnrichEndpoint:
 
         with patch("app.modules.ingest.internal_router.get_settings") as mock_settings:
             mock_settings.return_value.agent_ingest_max_scenes = 100
-            with patch("app.modules.orgs.repository.OrgRepository") as mock_org_repo:
-                mock_repo = mock_org_repo.return_value
-                mock_repo.get_by_id = AsyncMock(return_value=None)
-                from fastapi import HTTPException
+            from fastapi import HTTPException
 
-                with pytest.raises(HTTPException) as exc_info:
-                    await internal_enrich_scenes(
-                        request=request,
-                        x_heimdex_org_id=str(org_id),
-                        _token="valid",
-                        db=mock_db,
-                        ingest_service=mock_ingest_service,
-                    )
-                assert exc_info.value.status_code == 404
+            with pytest.raises(HTTPException) as exc_info:
+                await internal_enrich_scenes(
+                    request=request,
+                    x_heimdex_org_id=str(org_id),
+                    _token="valid",
+                    db=mock_db,
+                    org_repo=mock_org_repo,
+                    ingest_service=mock_ingest_service,
+                )
+            assert exc_info.value.status_code == 404

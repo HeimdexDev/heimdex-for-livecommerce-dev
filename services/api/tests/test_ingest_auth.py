@@ -42,8 +42,16 @@ class TestPerOrgAgentToken:
         settings.agent_api_key = global_key
         settings.agent_api_key_mode = mode
 
+        device_repo = AsyncMock(spec=DeviceRepository)
+
         with patch("app.modules.ingest.auth.get_settings", return_value=settings):
-            return await verify_agent_token(credentials=credentials, org_ctx=org_ctx, db=db)
+            return await verify_agent_token(
+                credentials=credentials,
+                org_ctx=org_ctx,
+                db=db,
+                device_repo=device_repo,
+                x_heimdex_device_id=None,
+            )
 
     @pytest.mark.asyncio
     async def test_per_org_key_valid(self):
@@ -133,30 +141,28 @@ class TestPerOrgAgentToken:
         device = MagicMock()
         device.is_revoked = False
 
+        device_repo = AsyncMock(spec=DeviceRepository)
+        device_repo.get_by_org_and_public_id.return_value = device
+        device_repo.update_last_seen.return_value = None
+
         with (
             patch("app.modules.ingest.auth.get_settings", return_value=settings),
             patch("app.modules.ingest.auth.verify_device_secret", return_value=False),
-            patch.object(
-                DeviceRepository,
-                "get_by_org_and_public_id",
-                AsyncMock(return_value=device),
-            ) as mock_get_device,
-            patch.object(
-                DeviceRepository,
-                "update_last_seen",
-                AsyncMock(return_value=None),
-            ) as mock_update_last_seen,
         ):
             result = await verify_agent_token(
                 credentials=credentials,
                 org_ctx=org_ctx,
                 db=db,
+                device_repo=device_repo,
                 x_heimdex_device_id="device-abc123",
             )
 
         assert isinstance(result, OrgContext)
-        mock_get_device.assert_awaited_once_with(org_ctx.org_id, "device-abc123")
-        mock_update_last_seen.assert_awaited_once_with(device)
+        device_repo.get_by_org_and_public_id.assert_awaited_once_with(
+            org_ctx.org_id,
+            "device-abc123",
+        )
+        device_repo.update_last_seen.assert_awaited_once_with(device)
 
     @pytest.mark.asyncio
     async def test_per_org_mode_updates_last_seen_when_device_header_present(self):
@@ -180,27 +186,25 @@ class TestPerOrgAgentToken:
         device = MagicMock()
         device.is_revoked = False
 
+        device_repo = AsyncMock(spec=DeviceRepository)
+        device_repo.get_by_org_and_public_id.return_value = device
+        device_repo.update_last_seen.return_value = None
+
         with (
             patch("app.modules.ingest.auth.get_settings", return_value=settings),
             patch("app.modules.ingest.auth.verify_device_secret", return_value=False),
-            patch.object(
-                DeviceRepository,
-                "get_by_org_and_public_id",
-                AsyncMock(return_value=device),
-            ) as mock_get_device,
-            patch.object(
-                DeviceRepository,
-                "update_last_seen",
-                AsyncMock(return_value=None),
-            ) as mock_update_last_seen,
         ):
             result = await verify_agent_token(
                 credentials=credentials,
                 org_ctx=org_ctx,
                 db=db,
+                device_repo=device_repo,
                 x_heimdex_device_id="device-abc123",
             )
 
         assert isinstance(result, OrgContext)
-        mock_get_device.assert_awaited_once_with(org_ctx.org_id, "device-abc123")
-        mock_update_last_seen.assert_awaited_once_with(device)
+        device_repo.get_by_org_and_public_id.assert_awaited_once_with(
+            org_ctx.org_id,
+            "device-abc123",
+        )
+        device_repo.update_last_seen.assert_awaited_once_with(device)

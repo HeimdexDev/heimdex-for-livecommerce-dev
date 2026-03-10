@@ -2,10 +2,9 @@ from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.base import get_db_session
 from app.modules.auth.service import get_current_user
+from app.dependencies import get_saved_short_repository
 from app.modules.shorts.models import SavedShort
 from app.modules.shorts.repository import SavedShortRepository
 from app.modules.shorts.schemas import (
@@ -37,9 +36,8 @@ async def create_saved_short(
     body: SavedShortCreate,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    repo: Annotated[SavedShortRepository, Depends(get_saved_short_repository)],
 ):
-    repo = SavedShortRepository(db)
     user_id = cast(UUID, user.id)
     short = await repo.create(
         org_id=org_ctx.org_id,
@@ -57,9 +55,8 @@ async def create_saved_short(
 async def list_saved_shorts(
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    repo: Annotated[SavedShortRepository, Depends(get_saved_short_repository)],
 ):
-    repo = SavedShortRepository(db)
     user_id = cast(UUID, user.id)
     shorts = await repo.list_by_user(org_ctx.org_id, user_id)
     return SavedShortsListResponse(
@@ -73,9 +70,8 @@ async def delete_saved_short(
     short_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    repo: Annotated[SavedShortRepository, Depends(get_saved_short_repository)],
 ):
-    repo = SavedShortRepository(db)
     user_id = cast(UUID, user.id)
     short = await repo.get_by_id(short_id, org_ctx.org_id)
     if short is None or short.user_id != user_id:

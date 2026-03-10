@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db_session, get_scene_opensearch_client
+from app.dependencies import get_db_session, get_reprocess_repository, get_scene_opensearch_client
 from app.modules.search.scene_client import SceneSearchClient
 from app.modules.videos.reprocess_repository import ReprocessRepository
 from app.sqs_producer import (
@@ -88,8 +88,8 @@ async def update_reprocess_status(
     audio_s3_key: str | None = Body(None),
     _token: str = Depends(_verify_internal_token),
     db: AsyncSession = Depends(get_db_session),
+    repo: ReprocessRepository = Depends(get_reprocess_repository),
 ):
-    repo = ReprocessRepository(db)
     try:
         parsed_job_id = UUID(job_id)
     except ValueError:

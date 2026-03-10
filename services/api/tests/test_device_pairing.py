@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.modules.devices.pairing import PairingCode, PairingCodeRepository, generate_pairing_code
+from app.modules.devices.repository import DeviceRepository
 
 PEPPER = "test-pepper"
 
@@ -80,8 +81,6 @@ class TestPairingCodeExchange:
         org_id = uuid4()
         org_ctx = OrgContext(org_id=org_id, org_slug="test-org")
 
-        db = AsyncMock()
-
         request = MagicMock()
         request.client = MagicMock()
         request.client.host = "127.0.0.1"
@@ -98,35 +97,23 @@ class TestPairingCodeExchange:
         settings.device_secret_pepper = PEPPER
         settings.pairing_code_ttl_minutes = 10
 
-        with (
-            patch("app.modules.devices.router.get_settings", return_value=settings),
-            patch.object(
-                PairingCodeRepository,
-                "get_by_org_and_code_for_update",
-                return_value=pairing,
-            ),
-            patch.object(
-                PairingCodeRepository,
-                "mark_used",
-                return_value=None,
-            ) as mock_mark_used,
-            patch(
-                "app.modules.devices.router.DeviceRepository"
-            ) as mock_device_repo_cls,
-        ):
-            repo_instance = mock_device_repo_cls.return_value
-            repo_instance.get_by_org_and_public_id = AsyncMock(
-                return_value=existing_device,
-            )
-            repo_instance.create = AsyncMock(return_value=created_device)
+        pairing_repo = AsyncMock(spec=PairingCodeRepository)
+        pairing_repo.get_by_org_and_code_for_update.return_value = pairing
+        pairing_repo.mark_used.return_value = None
 
+        device_repo = AsyncMock(spec=DeviceRepository)
+        device_repo.get_by_org_and_public_id.return_value = existing_device
+        device_repo.create.return_value = created_device
+
+        with patch("app.modules.devices.router.get_settings", return_value=settings):
             result = await pair_device(
                 body=body,
                 request=request,
                 org_ctx=org_ctx,
-                db=db,
+                pairing_repo=pairing_repo,
+                device_repo=device_repo,
             )
-            return result, mock_mark_used
+            return result, pairing_repo.mark_used
 
     @pytest.mark.asyncio
     async def test_pair_valid_code(self):
@@ -190,28 +177,23 @@ class TestPairingCodeCreate:
 
         org_id = uuid4()
         org_ctx = OrgContext(org_id=org_id, org_slug="test-org")
-        db = AsyncMock()
 
         pairing = _make_pairing_code(org_id=org_id)
 
         settings = MagicMock()
         settings.pairing_code_ttl_minutes = 10
 
-        with (
-            patch("app.modules.devices.router.get_settings", return_value=settings),
-            patch.object(
-                PairingCodeRepository,
-                "create",
-                return_value=pairing,
-            ) as mock_create,
-        ):
+        repo = AsyncMock(spec=PairingCodeRepository)
+        repo.create.return_value = pairing
+
+        with patch("app.modules.devices.router.get_settings", return_value=settings):
             result = await create_pairing_code(
                 org_ctx=org_ctx,
-                db=db,
+                repo=repo,
             )
             assert len(result.code) == 6
             assert result.expires_at is not None
-            mock_create.assert_called_once_with(
+            repo.create.assert_called_once_with(
                 org_id=org_id,
                 ttl_minutes=10,
             )

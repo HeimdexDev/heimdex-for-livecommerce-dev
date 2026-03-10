@@ -218,6 +218,8 @@ class TestVerifyAgentToken:
             result = await verify_agent_token(
                 credentials=credentials,
                 org_ctx=org_ctx,
+                device_repo=MagicMock(),
+                x_heimdex_device_id=None,
             )
 
         assert result.org_id == org_id
@@ -243,6 +245,8 @@ class TestVerifyAgentToken:
                 await verify_agent_token(
                     credentials=credentials,
                     org_ctx=org_ctx,
+                    device_repo=MagicMock(),
+                    x_heimdex_device_id=None,
                 )
 
         assert exc_info.value.status_code == 401

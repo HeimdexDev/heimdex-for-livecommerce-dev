@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db_session
+from app.dependencies import get_drive_file_repository, get_export_record_repository
 from app.modules.drive.repository import DriveFileRepository
 from app.modules.export.edl import EdlClip, generate_edl
 from app.modules.export.fcp_xml import FcpClip, generate_fcp_xml
@@ -126,10 +127,8 @@ async def _extract_clip(
 async def export_edl(
     body: ExportEdlRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
 ):
-    file_repo = DriveFileRepository(db)
-
     gd_video_ids = [c.video_id for c in body.clips if c.video_id.startswith("gd_")]
     drive_files_map = await file_repo.get_by_video_ids(org_ctx.org_id, gd_video_ids)
 
@@ -217,7 +216,7 @@ async def export_edl(
 async def export_clip(
     body: ExportClipRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
 ):
     """Extract and download a trimmed video clip from a cloud video."""
     if not body.video_id.startswith("gd_"):
@@ -245,7 +244,6 @@ async def export_clip(
         )
 
     settings = get_settings()
-    file_repo = DriveFileRepository(db)
     drive_file = await file_repo.get_by_video_id(org_ctx.org_id, body.video_id)
     if drive_file is None or not drive_file.proxy_s3_key:
         raise HTTPException(
@@ -316,10 +314,9 @@ async def export_premiere(
     body: ExportPremiereRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
 ):
     """Generate FCP 7 XML for Premiere Pro with Google Drive local paths."""
-    file_repo = DriveFileRepository(db)
-
     # Normalize mount path: strip trailing slashes
     mount = body.drive_mount_path.rstrip("/").rstrip("\\")
 
@@ -423,6 +420,7 @@ async def export_premiere_package(
     body: ExportPremierePackageRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
 ):
     """Generate a Premiere Pro export package (ZIP) with FCPXML 1.8 timeline.
 
@@ -435,8 +433,6 @@ async def export_premiere_package(
     Clips reference original media via file:// URLs resolved from the user's
     Google Drive mount path + DriveConnection metadata. No agent required.
     """
-
-    file_repo = DriveFileRepository(db)
 
     # Normalize mount path
     mount = body.drive_mount_path.rstrip("/").rstrip("\\")
@@ -633,11 +629,10 @@ async def initiate_proxy_pack(
     body: ProxyPackRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
+    export_repo: Annotated[ExportRecordRepository, Depends(get_export_record_repository)],
 ):
     settings = get_settings()
-    file_repo = DriveFileRepository(db)
-    export_repo = ExportRecordRepository(db)
 
     if len(body.clips) > settings.export_max_clips:
         raise HTTPException(
@@ -761,10 +756,8 @@ async def initiate_proxy_pack(
 async def get_proxy_pack_status(
     job_id: str,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    export_repo: Annotated[ExportRecordRepository, Depends(get_export_record_repository)],
 ):
-    export_repo = ExportRecordRepository(db)
-
     try:
         export_uuid = UUID(job_id)
     except ValueError:

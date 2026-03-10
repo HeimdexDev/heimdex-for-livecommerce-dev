@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.dependencies import get_user_repository
 from app.db.base import get_db_session
 from app.logging_config import get_logger
 from app.modules.auth.oidc import validate_auth0_token, fetch_userinfo, Auth0TokenPayload
@@ -74,6 +75,7 @@ async def get_current_user(
     org_ctx: OrgContext = Depends(get_current_org),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: AsyncSession = Depends(get_db_session),
+    user_repo: UserRepository = Depends(get_user_repository),
 ) -> User:
     if not credentials:
         logger.warning("auth_no_credentials", org_slug=org_ctx.org_slug)
@@ -85,8 +87,7 @@ async def get_current_user(
     settings = get_settings()
     token = credentials.credentials
     logger.debug("auth_credentials_received", org_slug=org_ctx.org_slug)
-    user_repo = UserRepository(db)
-    
+
     if settings.auth0_enabled:
         return await _validate_auth0_user(token, org_ctx, user_repo)
     else:

@@ -13,7 +13,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db_session
-from app.dependencies import get_video_service
+from app.dependencies import (
+    get_drive_file_repository,
+    get_reprocess_repository,
+    get_video_service,
+    get_youtube_video_repository,
+)
 from app.logging_config import get_logger
 from app.modules.auth import get_current_user
 from app.modules.drive.models import DriveConnection
@@ -181,6 +186,9 @@ async def reprocess_video_scenes(
     org_ctx: OrgContext = Depends(get_current_org),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
+    repo: ReprocessRepository = Depends(get_reprocess_repository),
+    drive_repo: DriveFileRepository = Depends(get_drive_file_repository),
+    yt_repo: YouTubeVideoRepository = Depends(get_youtube_video_repository),
 ):
     _ = user
     if request.min_scene_duration_ms >= request.max_scene_duration_ms:
@@ -189,7 +197,6 @@ async def reprocess_video_scenes(
             detail="min_scene_duration_ms must be less than max_scene_duration_ms",
         )
 
-    repo = ReprocessRepository(db)
     active = await repo.get_active_for_video(org_ctx.org_id, video_id)
     if active is not None:
         raise HTTPException(
@@ -206,7 +213,6 @@ async def reprocess_video_scenes(
 
     if video_id.startswith("gd_"):
         source_type = "gdrive"
-        drive_repo = DriveFileRepository(db)
         drive_file = await drive_repo.get_by_video_id(org_ctx.org_id, video_id)
         if drive_file is None:
             raise HTTPException(
@@ -222,7 +228,6 @@ async def reprocess_video_scenes(
             library_id = str(connection.library_id)
     elif video_id.startswith("yt_"):
         source_type = "youtube"
-        yt_repo = YouTubeVideoRepository(db)
         yt_video = await yt_repo.get_by_video_id(org_ctx.org_id, video_id)
         if yt_video is None:
             raise HTTPException(
@@ -287,10 +292,9 @@ async def get_reprocess_status(
     video_id: str,
     org_ctx: OrgContext = Depends(get_current_org),
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
+    repo: ReprocessRepository = Depends(get_reprocess_repository),
 ):
     _ = user
-    repo = ReprocessRepository(db)
     job = await repo.get_latest_for_video(org_ctx.org_id, video_id)
     if job is None:
         return None

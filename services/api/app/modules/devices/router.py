@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.base import get_db_session
-from app.dependencies import get_device_repository
+from app.dependencies import get_device_repository, get_pairing_code_repository
 from app.logging_config import get_logger
 from app.modules.auth.dependencies import require_role
 from app.modules.auth.service import get_current_user
@@ -116,10 +116,9 @@ async def _verify_device_secret(
 async def register_device(
     body: DeviceRegisterRequest,
     org_ctx: OrgContext = Depends(_verify_org_api_key),
-    db: AsyncSession = Depends(get_db_session),
+    repo: DeviceRepository = Depends(get_device_repository),
 ):
     settings = get_settings()
-    repo = DeviceRepository(db)
 
     existing = await repo.get_by_org_and_public_id(org_ctx.org_id, body.device_public_id)
     if existing is not None:
@@ -163,10 +162,9 @@ async def register_device(
 async def rotate_device_secret(
     body: DeviceRotateRequest,
     org_ctx: OrgContext = Depends(_verify_device_secret),
-    db: AsyncSession = Depends(get_db_session),
+    repo: DeviceRepository = Depends(get_device_repository),
 ):
     settings = get_settings()
-    repo = DeviceRepository(db)
 
     device = await repo.get_by_org_and_public_id(org_ctx.org_id, body.device_public_id)
     if device is None or device.is_revoked:
@@ -199,12 +197,12 @@ async def heartbeat_device(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
     org_ctx: OrgContext = Depends(get_current_org),
     db: AsyncSession = Depends(get_db_session),
+    repo: DeviceRepository = Depends(get_device_repository),
     x_heimdex_device_id: str = Header(..., alias="X-Heimdex-Device-Id"),
 ):
     settings = get_settings()
     token = credentials.credentials
 
-    repo = DeviceRepository(db)
     device = await repo.get_by_org_and_public_id(org_ctx.org_id, x_heimdex_device_id)
     if device is None:
         raise HTTPException(
@@ -243,11 +241,9 @@ async def heartbeat_device(
 async def revoke_device(
     body: DeviceRevokeRequest,
     org_ctx: OrgContext = Depends(get_current_org),
-    db: AsyncSession = Depends(get_db_session),
+    repo: DeviceRepository = Depends(get_device_repository),
     _user=Depends(require_role(UserRole.ADMIN)),
 ):
-    repo = DeviceRepository(db)
-
     device = await repo.get_by_org_and_public_id(org_ctx.org_id, body.device_public_id)
     if device is None:
         raise HTTPException(
@@ -279,10 +275,9 @@ async def revoke_device(
 @router.get("/", response_model=DeviceListResponse)
 async def list_devices(
     org_ctx: OrgContext = Depends(get_current_org),
-    db: AsyncSession = Depends(get_db_session),
+    repo: DeviceRepository = Depends(get_device_repository),
     user: User = Depends(get_current_user),
 ):
-    repo = DeviceRepository(db)
     devices = await repo.list_by_org(org_ctx.org_id)
 
     return DeviceListResponse(
@@ -308,12 +303,10 @@ async def list_devices(
 )
 async def create_pairing_code(
     org_ctx: OrgContext = Depends(get_current_org),
-    db: AsyncSession = Depends(get_db_session),
+    repo: PairingCodeRepository = Depends(get_pairing_code_repository),
     _user=Depends(require_role(UserRole.ADMIN)),
 ):
     settings = get_settings()
-    repo = PairingCodeRepository(db)
-
     pairing = await repo.create(
         org_id=org_ctx.org_id,
         ttl_minutes=settings.pairing_code_ttl_minutes,
@@ -340,13 +333,11 @@ async def pair_device(
     body: PairingCodeExchangeRequest,
     request: Request,
     org_ctx: OrgContext = Depends(get_current_org),
-    db: AsyncSession = Depends(get_db_session),
+    pairing_repo: PairingCodeRepository = Depends(get_pairing_code_repository),
+    device_repo: DeviceRepository = Depends(get_device_repository),
     _rate_limit=Depends(require_pairing_rate_limit),
 ):
     settings = get_settings()
-    pairing_repo = PairingCodeRepository(db)
-    device_repo = DeviceRepository(db)
-
     pairing = await pairing_repo.get_by_org_and_code_for_update(
         org_ctx.org_id, body.code,
     )

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from app.modules.ingest.internal_router import internal_ingest_scenes, _verify_internal_token
+from app.modules.orgs.repository import OrgRepository
 
 
 class TestVerifyInternalToken:
@@ -48,24 +49,23 @@ class TestInternalIngestOrgValidation:
         org_id = uuid4()
         mock_db = AsyncMock()
         mock_ingest_service = AsyncMock()
+        org_repo = AsyncMock(spec=OrgRepository)
+        org_repo.get_by_id.return_value = None
 
         with patch("app.modules.ingest.internal_router.get_settings") as mock_settings:
             mock_settings.return_value.agent_ingest_max_scenes = 100
-            with patch("app.modules.orgs.repository.OrgRepository") as MockOrgRepo:
-                mock_repo = MockOrgRepo.return_value
-                mock_repo.get_by_id = AsyncMock(return_value=None)
-
-                from fastapi import HTTPException
-                with pytest.raises(HTTPException) as exc_info:
-                    await internal_ingest_scenes(
-                        request=MagicMock(scenes=[]),
-                        x_heimdex_org_id=str(org_id),
-                        _token="valid",
-                        db=mock_db,
-                        ingest_service=mock_ingest_service,
-                    )
-                assert exc_info.value.status_code == 404
-                assert "not found" in exc_info.value.detail.lower()
+            from fastapi import HTTPException
+            with pytest.raises(HTTPException) as exc_info:
+                await internal_ingest_scenes(
+                    request=MagicMock(scenes=[]),
+                    x_heimdex_org_id=str(org_id),
+                    _token="valid",
+                    db=mock_db,
+                    org_repo=org_repo,
+                    ingest_service=mock_ingest_service,
+                )
+            assert exc_info.value.status_code == 404
+            assert "not found" in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
     async def test_valid_org_proceeds_to_ingest(self):
@@ -77,6 +77,8 @@ class TestInternalIngestOrgValidation:
             "video_id": "vid1",
             "indexed_count": 1,
         }
+        org_repo = AsyncMock(spec=OrgRepository)
+        org_repo.get_by_id.return_value = MagicMock(id=org_id)
 
         from app.modules.ingest.schemas import IngestScenesRequest, IngestSceneDocument
         request = IngestScenesRequest(
@@ -95,19 +97,16 @@ class TestInternalIngestOrgValidation:
 
         with patch("app.modules.ingest.internal_router.get_settings") as mock_settings:
             mock_settings.return_value.agent_ingest_max_scenes = 100
-            with patch("app.modules.orgs.repository.OrgRepository") as MockOrgRepo:
-                mock_repo = MockOrgRepo.return_value
-                mock_repo.get_by_id = AsyncMock(return_value=MagicMock(id=org_id))
-
-                result = await internal_ingest_scenes(
-                    request=request,
-                    x_heimdex_org_id=str(org_id),
-                    _token="valid",
-                    db=mock_db,
-                    ingest_service=mock_ingest_service,
-                )
-                assert result.indexed_count == 1
-                mock_ingest_service.ingest_scenes.assert_called_once()
+            result = await internal_ingest_scenes(
+                request=request,
+                x_heimdex_org_id=str(org_id),
+                _token="valid",
+                db=mock_db,
+                org_repo=org_repo,
+                ingest_service=mock_ingest_service,
+            )
+            assert result.indexed_count == 1
+            mock_ingest_service.ingest_scenes.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_invalid_uuid_returns_400(self):

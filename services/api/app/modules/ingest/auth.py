@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.base import get_db_session
+from app.dependencies import get_device_repository
 from app.logging_config import get_logger
 from app.modules.devices.repository import DeviceRepository, verify_device_secret
 from app.modules.orgs.models import Org
@@ -35,6 +36,7 @@ async def verify_agent_token(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
     org_ctx: OrgContext = Depends(get_current_org),
     db: AsyncSession = Depends(get_db_session),
+    device_repo: DeviceRepository = Depends(get_device_repository),
     x_heimdex_device_id: str | None = Header(None, alias="X-Heimdex-Device-Id"),
 ) -> OrgContext:
     """
@@ -67,8 +69,7 @@ async def verify_agent_token(
                 detail="X-Heimdex-Device-Id header required in per-device mode",
             )
 
-        repo = DeviceRepository(db)
-        device = await repo.get_by_org_and_public_id(
+        device = await device_repo.get_by_org_and_public_id(
             org_ctx.org_id, x_heimdex_device_id
         )
 
@@ -107,7 +108,7 @@ async def verify_agent_token(
                 detail="Invalid device secret",
             )
 
-        await repo.update_last_seen(device)
+        await device_repo.update_last_seen(device)
 
         logger.debug(
             "agent_device_token_verified",
@@ -121,11 +122,9 @@ async def verify_agent_token(
     # Try device secret first if the agent sent a device header. This allows
     # registered agents to authenticate with their device secret regardless of
     # the server's configured key mode.
-    has_device_header = isinstance(x_heimdex_device_id, str) and bool(x_heimdex_device_id)
-    device_repo = DeviceRepository(db) if has_device_header else None
     device = None
 
-    if has_device_header and device_repo:
+    if x_heimdex_device_id:
         device = await device_repo.get_by_org_and_public_id(
             org_ctx.org_id, x_heimdex_device_id
         )
@@ -180,7 +179,7 @@ async def verify_agent_token(
                 detail="Invalid agent API key",
             )
 
-    if device and not device.is_revoked and device_repo:
+    if device and not device.is_revoked:
         await device_repo.update_last_seen(device)
 
     logger.debug(

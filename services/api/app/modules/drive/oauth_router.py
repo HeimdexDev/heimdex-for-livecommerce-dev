@@ -14,6 +14,10 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.dependencies import (
+    get_drive_connection_repository,
+    get_drive_secret_repository,
+)
 from app.db.base import get_db_session
 from app.modules.drive.repository import DriveConnectionRepository, DriveSecretRepository
 from app.modules.drive.schemas import DriveOAuthStatusResponse
@@ -100,6 +104,7 @@ async def callback(
     code: str,
     state: str,
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    secret_repo: Annotated[DriveSecretRepository, Depends(get_drive_secret_repository)],
     _: Annotated[None, Depends(_require_oauth_configured)],
 ):
     settings = get_settings()
@@ -162,7 +167,6 @@ async def callback(
 
     # Store in drive_secrets as oauth_token type
     from uuid import UUID
-    secret_repo = DriveSecretRepository(db)
     await secret_repo.upsert(
         org_id=UUID(org_id_str),
         encrypted_value=encrypted_value,
@@ -183,10 +187,9 @@ async def callback(
 @oauth_router.get("/status", response_model=DriveOAuthStatusResponse)
 async def oauth_status(
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    secret_repo: Annotated[DriveSecretRepository, Depends(get_drive_secret_repository)],
     _: Annotated[None, Depends(_require_oauth_configured)],
 ):
-    secret_repo = DriveSecretRepository(db)
     secret = await secret_repo.get_by_org(org_ctx.org_id, secret_type="oauth_token")
     if secret is None:
         return DriveOAuthStatusResponse(connected=False)
@@ -201,10 +204,11 @@ async def oauth_status(
 async def disconnect(
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    secret_repo: Annotated[DriveSecretRepository, Depends(get_drive_secret_repository)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
     _: Annotated[None, Depends(_require_oauth_configured)],
 ):
     settings = get_settings()
-    secret_repo = DriveSecretRepository(db)
     secret = await secret_repo.get_by_org(org_ctx.org_id, secret_type="oauth_token")
 
     if secret is not None:
@@ -228,7 +232,6 @@ async def disconnect(
         await secret_repo.delete_by_org_and_type(org_ctx.org_id, "oauth_token")
 
     # Mark all folder-scoped connections as disconnected
-    conn_repo = DriveConnectionRepository(db)
     connections = await conn_repo.list_by_org(org_ctx.org_id)
     for conn in connections:
         if conn.scope_type == "folder" and conn.status == "active":

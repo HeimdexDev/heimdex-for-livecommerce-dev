@@ -21,7 +21,7 @@ from heimdex_media_contracts.ingest import IngestScenesRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.dependencies import get_db_session, get_scene_ingest_service
+from app.dependencies import get_db_session, get_org_repository, get_scene_ingest_service
 from app.logging_config import get_logger
 from app.modules.ingest.schemas import (
     EnrichScenesRequest,
@@ -29,6 +29,7 @@ from app.modules.ingest.schemas import (
     IngestScenesResponse,
 )
 from app.modules.ingest.service import SceneIngestService
+from app.modules.orgs.repository import OrgRepository
 
 logger = get_logger(__name__)
 
@@ -44,6 +45,7 @@ async def internal_ingest_scenes(
     x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
     _token: str = Depends(_verify_internal_token),
     db: AsyncSession = Depends(get_db_session),
+    org_repo: OrgRepository = Depends(get_org_repository),
     ingest_service: SceneIngestService = Depends(get_scene_ingest_service),
 ):
     """Ingest scenes from drive-worker. Auth: internal API key. Tenancy: X-Heimdex-Org-Id header."""
@@ -55,8 +57,6 @@ async def internal_ingest_scenes(
             detail=f"Invalid X-Heimdex-Org-Id: {x_heimdex_org_id!r}",
         )
 
-    from app.modules.orgs.repository import OrgRepository
-    org_repo = OrgRepository(db)
     org = await org_repo.get_by_id(org_id)
     if org is None:
         logger.warning("internal_ingest_unknown_org", org_id=str(org_id))
@@ -111,6 +111,7 @@ async def internal_enrich_scenes(
     x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
     _token: str = Depends(_verify_internal_token),
     db: AsyncSession = Depends(get_db_session),
+    org_repo: OrgRepository = Depends(get_org_repository),
     ingest_service: SceneIngestService = Depends(get_scene_ingest_service),
 ):
     try:
@@ -121,9 +122,6 @@ async def internal_enrich_scenes(
             detail=f"Invalid X-Heimdex-Org-Id: {x_heimdex_org_id!r}",
         )
 
-    from app.modules.orgs.repository import OrgRepository
-
-    org_repo = OrgRepository(db)
     org = await org_repo.get_by_id(org_id)
     if org is None:
         logger.warning("internal_enrich_unknown_org", org_id=str(org_id))

@@ -119,23 +119,16 @@ class TestPerDeviceIngestAuth:
         settings.agent_api_key_mode = mode
         settings.device_secret_pepper = PEPPER
 
-        with (
-            patch("app.modules.ingest.auth.get_settings", return_value=settings),
-            patch.object(
-                DeviceRepository,
-                "get_by_org_and_public_id",
-                return_value=device,
-            ),
-            patch.object(
-                DeviceRepository,
-                "update_last_seen",
-                return_value=None,
-            ),
-        ):
+        device_repo = AsyncMock(spec=DeviceRepository)
+        device_repo.get_by_org_and_public_id.return_value = device
+        device_repo.update_last_seen.return_value = None
+
+        with patch("app.modules.ingest.auth.get_settings", return_value=settings):
             return await verify_agent_token(
                 credentials=credentials,
                 org_ctx=org_ctx,
                 db=db,
+                device_repo=device_repo,
                 x_heimdex_device_id=device_public_id,
             )
 

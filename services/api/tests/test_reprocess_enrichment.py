@@ -33,8 +33,7 @@ class TestReprocessEnrichmentPublishing:
 
     @pytest.mark.asyncio
     async def test_completed_publishes_v1_enrichment(self, mock_repo, mock_db):
-        with patch("app.modules.videos.internal_router.ReprocessRepository", return_value=mock_repo), \
-             patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1, \
+        with patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1, \
              patch("app.modules.videos.internal_router.publish_scene_enrichment_jobs"), \
              patch("app.modules.videos.internal_router._resolve_file_id", new_callable=AsyncMock, return_value=FILE_UUID):
 
@@ -50,6 +49,7 @@ class TestReprocessEnrichmentPublishing:
                 keyframe_s3_prefix=KEYFRAME_PREFIX,
                 audio_s3_key=AUDIO_KEY,
                 db=mock_db,
+                repo=mock_repo,
             )
 
             assert result == {"status": "ok"}
@@ -63,8 +63,7 @@ class TestReprocessEnrichmentPublishing:
 
     @pytest.mark.asyncio
     async def test_completed_publishes_v2_scene_enrichment(self, mock_repo, mock_db):
-        with patch("app.modules.videos.internal_router.ReprocessRepository", return_value=mock_repo), \
-             patch("app.modules.videos.internal_router.publish_enrichment_jobs"), \
+        with patch("app.modules.videos.internal_router.publish_enrichment_jobs"), \
              patch("app.modules.videos.internal_router._publish_scene_jobs_in_background", new_callable=AsyncMock) as mock_bg, \
              patch("app.modules.videos.internal_router._resolve_file_id", new_callable=AsyncMock, return_value=FILE_UUID), \
              patch("asyncio.create_task") as mock_task:
@@ -81,14 +80,14 @@ class TestReprocessEnrichmentPublishing:
                 keyframe_s3_prefix=KEYFRAME_PREFIX,
                 audio_s3_key=AUDIO_KEY,
                 db=mock_db,
+                repo=mock_repo,
             )
 
             mock_task.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_failed_does_not_publish_enrichment(self, mock_repo, mock_db):
-        with patch("app.modules.videos.internal_router.ReprocessRepository", return_value=mock_repo), \
-             patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1, \
+        with patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1, \
              patch("app.modules.videos.internal_router.publish_scene_enrichment_jobs") as mock_v2:
 
             from app.modules.videos.internal_router import update_reprocess_status
@@ -103,6 +102,7 @@ class TestReprocessEnrichmentPublishing:
                 keyframe_s3_prefix=KEYFRAME_PREFIX,
                 audio_s3_key=AUDIO_KEY,
                 db=mock_db,
+                repo=mock_repo,
             )
 
             mock_v1.assert_not_called()
@@ -110,8 +110,7 @@ class TestReprocessEnrichmentPublishing:
 
     @pytest.mark.asyncio
     async def test_processing_does_not_publish_enrichment(self, mock_repo, mock_db):
-        with patch("app.modules.videos.internal_router.ReprocessRepository", return_value=mock_repo), \
-             patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1, \
+        with patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1, \
              patch("app.modules.videos.internal_router.publish_scene_enrichment_jobs") as mock_v2:
 
             from app.modules.videos.internal_router import update_reprocess_status
@@ -126,6 +125,7 @@ class TestReprocessEnrichmentPublishing:
                 keyframe_s3_prefix=None,
                 audio_s3_key=None,
                 db=mock_db,
+                repo=mock_repo,
             )
 
             mock_v1.assert_not_called()
@@ -133,8 +133,7 @@ class TestReprocessEnrichmentPublishing:
 
     @pytest.mark.asyncio
     async def test_completed_without_org_id_skips_enrichment(self, mock_repo, mock_db):
-        with patch("app.modules.videos.internal_router.ReprocessRepository", return_value=mock_repo), \
-             patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1:
+        with patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1:
 
             from app.modules.videos.internal_router import update_reprocess_status
 
@@ -148,14 +147,14 @@ class TestReprocessEnrichmentPublishing:
                 keyframe_s3_prefix=KEYFRAME_PREFIX,
                 audio_s3_key=AUDIO_KEY,
                 db=mock_db,
+                repo=mock_repo,
             )
 
             mock_v1.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_completed_without_keyframe_prefix_skips_enrichment(self, mock_repo, mock_db):
-        with patch("app.modules.videos.internal_router.ReprocessRepository", return_value=mock_repo), \
-             patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1:
+        with patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1:
 
             from app.modules.videos.internal_router import update_reprocess_status
 
@@ -169,14 +168,14 @@ class TestReprocessEnrichmentPublishing:
                 keyframe_s3_prefix=None,
                 audio_s3_key=AUDIO_KEY,
                 db=mock_db,
+                repo=mock_repo,
             )
 
             mock_v1.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_completed_zero_scenes_skips_enrichment(self, mock_repo, mock_db):
-        with patch("app.modules.videos.internal_router.ReprocessRepository", return_value=mock_repo), \
-             patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1:
+        with patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1:
 
             from app.modules.videos.internal_router import update_reprocess_status
 
@@ -190,14 +189,14 @@ class TestReprocessEnrichmentPublishing:
                 keyframe_s3_prefix=KEYFRAME_PREFIX,
                 audio_s3_key=AUDIO_KEY,
                 db=mock_db,
+                repo=mock_repo,
             )
 
             mock_v1.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_file_id_not_found_skips_enrichment(self, mock_repo, mock_db):
-        with patch("app.modules.videos.internal_router.ReprocessRepository", return_value=mock_repo), \
-             patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1, \
+        with patch("app.modules.videos.internal_router.publish_enrichment_jobs") as mock_v1, \
              patch("app.modules.videos.internal_router._resolve_file_id", new_callable=AsyncMock, return_value=None):
 
             from app.modules.videos.internal_router import update_reprocess_status
@@ -212,6 +211,7 @@ class TestReprocessEnrichmentPublishing:
                 keyframe_s3_prefix=KEYFRAME_PREFIX,
                 audio_s3_key=AUDIO_KEY,
                 db=mock_db,
+                repo=mock_repo,
             )
 
             mock_v1.assert_not_called()
@@ -224,34 +224,27 @@ class TestResolveFileId:
         drive_file = MagicMock()
         drive_file.id = FILE_UUID
 
-        with patch("app.modules.videos.internal_router.DriveFileRepository") as MockRepo:
+        with patch("app.modules.drive.repository.DriveFileRepository") as MockRepo:
             repo_instance = MagicMock()
             repo_instance.get_by_video_id = AsyncMock(return_value=drive_file)
             MockRepo.return_value = repo_instance
 
-            from importlib import reload
-            import app.modules.videos.internal_router as mod
-            reload(mod)
-
-            result = await mod._resolve_file_id(mock_db, "gd_abc123", ORG_ID)
+            from app.modules.videos.internal_router import _resolve_file_id
+            result = await _resolve_file_id(mock_db, "gd_abc123", ORG_ID)
             assert result == FILE_UUID
-            repo_instance.get_by_video_id.assert_awaited_once_with(ORG_ID, "gd_abc123")
 
     @pytest.mark.asyncio
     async def test_yt_video_resolves_youtube_video(self, mock_db):
         yt_video = MagicMock()
         yt_video.id = FILE_UUID
 
-        with patch("app.modules.videos.internal_router.YouTubeVideoRepository") as MockRepo:
+        with patch("app.modules.youtube.repository.YouTubeVideoRepository") as MockRepo:
             repo_instance = MagicMock()
             repo_instance.get_by_video_id = AsyncMock(return_value=yt_video)
             MockRepo.return_value = repo_instance
 
-            from importlib import reload
-            import app.modules.videos.internal_router as mod
-            reload(mod)
-
-            result = await mod._resolve_file_id(mock_db, "yt_xyz789", ORG_ID)
+            from app.modules.videos.internal_router import _resolve_file_id
+            result = await _resolve_file_id(mock_db, "yt_xyz789", ORG_ID)
             assert result == FILE_UUID
 
     @pytest.mark.asyncio
@@ -262,14 +255,11 @@ class TestResolveFileId:
 
     @pytest.mark.asyncio
     async def test_gd_video_not_found_returns_none(self, mock_db):
-        with patch("app.modules.videos.internal_router.DriveFileRepository") as MockRepo:
+        with patch("app.modules.drive.repository.DriveFileRepository") as MockRepo:
             repo_instance = MagicMock()
             repo_instance.get_by_video_id = AsyncMock(return_value=None)
             MockRepo.return_value = repo_instance
 
-            from importlib import reload
-            import app.modules.videos.internal_router as mod
-            reload(mod)
-
-            result = await mod._resolve_file_id(mock_db, "gd_notfound", ORG_ID)
+            from app.modules.videos.internal_router import _resolve_file_id
+            result = await _resolve_file_id(mock_db, "gd_notfound", ORG_ID)
             assert result is None

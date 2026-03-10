@@ -12,7 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.dependencies import get_scene_opensearch_client
+from app.dependencies import (
+    get_drive_connection_repository,
+    get_drive_file_repository,
+    get_drive_secret_repository,
+    get_scene_opensearch_client,
+)
 from app.db.base import get_db_session
 from app.modules.drive.repository import DriveConnectionRepository, DriveFileRepository, DriveSecretRepository
 from app.modules.search.scene_client import SceneSearchClient
@@ -66,14 +71,12 @@ PROCESSING_STATUSES = frozenset({"downloading", "transcoding", "processing"})
 @router.get("/status", response_model=DriveStatusResponse)
 async def get_status(
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
 ):
     settings = get_settings()
     if not settings.drive_connector_enabled:
         return DriveStatusResponse(connected=False)
-
-    conn_repo = DriveConnectionRepository(db)
-    file_repo = DriveFileRepository(db)
 
     connections = await conn_repo.list_by_org(org_ctx.org_id)
     active = next((c for c in connections if c.status == "active"), None)
@@ -106,10 +109,9 @@ async def get_status(
 @router.get("/connections", response_model=list[DriveConnectionResponse])
 async def list_connections(
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
-    conn_repo = DriveConnectionRepository(db)
     return await conn_repo.list_by_org(org_ctx.org_id)
 
 
@@ -117,10 +119,9 @@ async def list_connections(
 async def create_connection(
     body: DriveConnectionCreate,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
-    conn_repo = DriveConnectionRepository(db)
     return await conn_repo.create(org_ctx.org_id, body)
 
 
@@ -128,10 +129,9 @@ async def create_connection(
 async def get_connection(
     connection_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
-    conn_repo = DriveConnectionRepository(db)
     conn = await conn_repo.get_by_id(connection_id, org_ctx.org_id)
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
@@ -142,10 +142,9 @@ async def get_connection(
 async def trigger_sync(
     connection_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
-    conn_repo = DriveConnectionRepository(db)
     conn = await conn_repo.set_sync_requested(connection_id, org_ctx.org_id)
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
@@ -158,11 +157,10 @@ async def trigger_sync(
 async def list_folders(
     connection_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
-    conn_repo = DriveConnectionRepository(db)
-    file_repo = DriveFileRepository(db)
     conn = await conn_repo.get_by_id(connection_id, org_ctx.org_id)
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
@@ -177,10 +175,9 @@ async def update_connection(
     connection_id: UUID,
     body: DriveConnectionUpdate,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
-    conn_repo = DriveConnectionRepository(db)
     conn = await conn_repo.update(connection_id, org_ctx.org_id, body)
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
@@ -192,12 +189,11 @@ async def delete_connection(
     connection_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
     scene_client: Annotated[SceneSearchClient, Depends(get_scene_opensearch_client)],
     _: None = Depends(_require_drive_enabled),
 ):
-    conn_repo = DriveConnectionRepository(db)
-    file_repo = DriveFileRepository(db)
-
     conn = await conn_repo.get_by_id(connection_id, org_ctx.org_id)
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
@@ -222,14 +218,13 @@ async def delete_connection(
 async def list_files(
     connection_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
     processing_status: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ):
-    conn_repo = DriveConnectionRepository(db)
-    file_repo = DriveFileRepository(db)
     conn = await conn_repo.get_by_id(connection_id, org_ctx.org_id)
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
@@ -246,10 +241,9 @@ async def list_files(
 async def get_file(
     file_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
-    file_repo = DriveFileRepository(db)
     f = await file_repo.get_by_id(file_id, org_ctx.org_id)
     if f is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
@@ -260,7 +254,7 @@ async def get_file(
 async def upsert_secret(
     body: DriveSecretCreate,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    secret_repo: Annotated[DriveSecretRepository, Depends(get_drive_secret_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
     settings = get_settings()
@@ -274,7 +268,6 @@ async def upsert_secret(
     aesgcm = AESGCM(key)
     encrypted_value = aesgcm.encrypt(nonce, body.sa_key_json.encode(), None)
 
-    secret_repo = DriveSecretRepository(db)
     secret = await secret_repo.upsert(
         org_id=org_ctx.org_id,
         encrypted_value=encrypted_value,
@@ -288,12 +281,10 @@ async def upsert_secret(
 async def get_connection_progress(
     connection_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
-    conn_repo = DriveConnectionRepository(db)
-    file_repo = DriveFileRepository(db)
-
     conn = await conn_repo.get_by_id(connection_id, org_ctx.org_id)
     if conn is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
@@ -355,6 +346,7 @@ async def create_folder_connection(
     body: DriveFolderConnectionCreate,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
+    secret_repo: Annotated[DriveSecretRepository, Depends(get_drive_secret_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
 ):
     settings = get_settings()
@@ -364,7 +356,6 @@ async def create_folder_connection(
             detail="Google Drive OAuth is not configured",
         )
 
-    secret_repo = DriveSecretRepository(db)
     secret = await secret_repo.get_by_org(org_ctx.org_id, secret_type="oauth_token")
     if secret is None:
         raise HTTPException(
@@ -429,7 +420,7 @@ async def create_folder_connection(
 @router.get("/browse-folders")
 async def browse_folders(
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    secret_repo: Annotated[DriveSecretRepository, Depends(get_drive_secret_repository)],
     _: Annotated[None, Depends(_require_drive_enabled)],
     parent_id: str = "root",
 ):
@@ -440,7 +431,6 @@ async def browse_folders(
             detail="Google Drive OAuth is not configured",
         )
 
-    secret_repo = DriveSecretRepository(db)
     secret = await secret_repo.get_by_org(org_ctx.org_id, secret_type="oauth_token")
     if secret is None:
         raise HTTPException(
@@ -469,7 +459,7 @@ async def stream_playback(
     video_id: str,
     request: Request,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
 ):
     if not video_id.startswith("gd_"):
         raise HTTPException(
@@ -484,7 +474,6 @@ async def stream_playback(
             detail="Drive connector is not enabled",
         )
 
-    file_repo = DriveFileRepository(db)
     drive_file = await file_repo.get_by_video_id(org_ctx.org_id, video_id)
     if drive_file is None or not drive_file.proxy_s3_key:
         raise HTTPException(

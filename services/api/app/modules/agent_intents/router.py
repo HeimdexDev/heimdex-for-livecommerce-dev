@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db.base import get_db_session
+from app.dependencies import get_agent_intent_repository, get_device_repository
 from app.logging_config import get_logger
 from app.modules.agent_intents.rate_limit import (
     check_create_rate_limit,
@@ -40,11 +41,10 @@ _bearer_scheme = HTTPBearer()
 async def _verify_device_secret_with_device(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
     org_ctx: OrgContext = Depends(get_current_org),
-    db: AsyncSession = Depends(get_db_session),
+    repo: DeviceRepository = Depends(get_device_repository),
     x_heimdex_device_id: str = Header(..., alias="X-Heimdex-Device-Id"),
 ) -> tuple[OrgContext, "Device"]:
     settings = get_settings()
-    repo = DeviceRepository(db)
     device = await repo.get_by_org_and_public_id(org_ctx.org_id, x_heimdex_device_id)
     if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
@@ -70,6 +70,7 @@ async def create_intent(
     body: CreateIntentRequest,
     org_ctx: OrgContext = Depends(get_current_org),
     db: AsyncSession = Depends(get_db_session),
+    repo: AgentIntentRepository = Depends(get_agent_intent_repository),
     _admin: User = Depends(require_role(UserRole.ADMIN)),
     current_user: User = Depends(get_current_user),
 ):
@@ -90,8 +91,6 @@ async def create_intent(
     device = result.scalar_one_or_none()
     if device is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Device not found")
-
-    repo = AgentIntentRepository(db)
     intent = await repo.create(
         org_id=org_ctx.org_id,
         type=body.type,
@@ -120,7 +119,7 @@ async def create_intent(
 async def exchange_intent(
     body: ExchangeIntentRequest,
     verified: tuple[OrgContext, Device] = Depends(_verify_device_secret_with_device),
-    db: AsyncSession = Depends(get_db_session),
+    repo: AgentIntentRepository = Depends(get_agent_intent_repository),
 ):
     settings = get_settings()
     if not settings.agent_intents_enabled:
@@ -129,8 +128,6 @@ async def exchange_intent(
 
     org_ctx, device = verified
     check_exchange_rate_limit(str(device.id))
-
-    repo = AgentIntentRepository(db)
     intent = await repo.get_by_code_for_update(body.intent_code)
 
     if intent is None:
@@ -168,15 +165,13 @@ async def exchange_intent(
 @router.get("/", response_model=IntentListResponse)
 async def list_intents(
     org_ctx: OrgContext = Depends(get_current_org),
-    db: AsyncSession = Depends(get_db_session),
+    repo: AgentIntentRepository = Depends(get_agent_intent_repository),
     _admin: User = Depends(require_role(UserRole.ADMIN)),
 ):
     settings = get_settings()
     if not settings.agent_intents_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     require_agent_intents_schema()
-
-    repo = AgentIntentRepository(db)
     intents = await repo.list_by_org(org_ctx.org_id)
 
     return IntentListResponse(

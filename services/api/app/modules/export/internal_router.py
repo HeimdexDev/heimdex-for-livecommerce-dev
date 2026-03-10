@@ -9,10 +9,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status as http_status
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.base import get_db_session
-from app.dependencies import verify_internal_token
+from app.dependencies import get_export_record_repository, verify_internal_token
 from app.modules.export.repository import ExportRecordRepository
 
 logger = logging.getLogger(__name__)
@@ -49,9 +47,8 @@ class UpdateExportStatusRequest(BaseModel):
 @router.get("/{export_id}")
 async def get_export_record(
     export_id: UUID,
-    db: AsyncSession = Depends(get_db_session),
+    repo: ExportRecordRepository = Depends(get_export_record_repository),
 ) -> ExportRecordResponse:
-    repo = ExportRecordRepository(db)
     record = await repo.get_by_id(export_id)
     if record is None:
         raise HTTPException(
@@ -77,9 +74,8 @@ async def get_export_record(
 async def update_export_status(
     export_id: UUID,
     body: UpdateExportStatusRequest,
-    db: AsyncSession = Depends(get_db_session),
+    repo: ExportRecordRepository = Depends(get_export_record_repository),
 ) -> dict[str, str]:
-    repo = ExportRecordRepository(db)
     record = await repo.get_by_id(export_id)
     if record is None:
         raise HTTPException(
