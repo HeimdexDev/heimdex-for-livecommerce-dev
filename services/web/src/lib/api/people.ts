@@ -1,5 +1,7 @@
 import {
   ApiError,
+  BulkDeleteRequest,
+  BulkDeleteResponse,
   ExcludePreferencesResponse,
   MergePersonRequest,
   MergePersonResponse,
@@ -116,6 +118,18 @@ export async function deletePerson(
       "Network error. Check your connection and try again.",
     );
   }
+}
+
+export async function bulkDeletePeople(
+  request: BulkDeleteRequest,
+  getToken?: TokenGetter,
+): Promise<BulkDeleteResponse> {
+  return apiRequest<BulkDeleteResponse>(
+    "/api/people/bulk-delete",
+    "POST",
+    getToken,
+    request,
+  );
 }
 
 export async function getPersonVideos(

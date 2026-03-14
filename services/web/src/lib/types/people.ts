@@ -70,3 +70,13 @@ export interface MergePersonResponse {
   scenes_updated: number;
   label: string | null;
 }
+
+export interface BulkDeleteRequest {
+  person_cluster_ids: string[];
+}
+
+export interface BulkDeleteResponse {
+  deleted_ids: string[];
+  failed_ids: string[];
+  total_deleted: number;
+}

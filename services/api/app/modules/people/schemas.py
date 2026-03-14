@@ -123,3 +123,20 @@ class MergePersonResponse(BaseModel):
     merged_source_ids: list[str]
     scenes_updated: int
     label: str | None = None
+
+
+class BulkDeleteRequest(BaseModel):
+    """Request to bulk delete multiple person clusters."""
+
+    person_cluster_ids: list[str] = Field(
+        ..., min_length=1, max_length=50,
+        description="Cluster IDs to delete (max 50)",
+    )
+
+
+class BulkDeleteResponse(BaseModel):
+    """Result of a bulk delete operation."""
+
+    deleted_ids: list[str]
+    failed_ids: list[str]
+    total_deleted: int

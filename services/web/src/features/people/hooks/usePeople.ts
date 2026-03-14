@@ -9,6 +9,7 @@ import {
   mergePeople as mergePeopleApi,
   getExcludePreferences,
   saveExcludePreferences,
+  bulkDeletePeople,
 } from "@/lib/api/people";
 import type { PersonResponse, MergePersonRequest, MergePersonResponse } from "@/lib/types";
 import { ApiError } from "@/lib/types";
@@ -25,6 +26,9 @@ export interface UsePeopleReturn {
   isSavingExcludes: boolean;
   selectedIds: Set<string>;
   toggleSelection: (personClusterId: string) => void;
+  selectAll: () => void;
+  clearSelection: () => void;
+  bulkDelete: (ids: string[]) => Promise<void>;
   deletePerson: (personClusterId: string) => Promise<void>;
   isDeleting: boolean;
   mergePeople: (request: MergePersonRequest) => Promise<MergePersonResponse | null>;
@@ -120,6 +124,45 @@ export function usePeople(): UsePeopleReturn {
       return next;
     });
   }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedIds(new Set(people.map((p) => p.person_cluster_id)));
+  }, [people]);
+
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const bulkDelete = useCallback(
+    async (ids: string[]) => {
+      setIsDeleting(true);
+      setError(null);
+      try {
+        await bulkDeletePeople({ person_cluster_ids: ids }, getAccessToken);
+        setPeople((prev) =>
+          prev.filter((p) => !ids.includes(p.person_cluster_id)),
+        );
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.delete(id));
+          return next;
+        });
+        setExcludedIds((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.delete(id));
+          latestExcludedRef.current = next;
+          return next;
+        });
+      } catch (err) {
+        const msg =
+          err instanceof ApiError ? err.detail : "인물 일괄 삭제에 실패했습니다.";
+        setError(msg);
+      } finally {
+        setIsDeleting(false);
+      }
+    },
+    [getAccessToken],
+  );
 
   const rename = useCallback(
     async (personClusterId: string, label: string | null) => {
@@ -230,6 +273,9 @@ export function usePeople(): UsePeopleReturn {
     isSavingExcludes,
     selectedIds,
     toggleSelection,
+    selectAll,
+    clearSelection,
+    bulkDelete,
     deletePerson: remove,
     isDeleting,
     mergePeople: merge,
