@@ -118,6 +118,14 @@ function EyeSlashIcon({ className }: { className?: string }) {
   );
 }
 
+function GripVerticalIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="currentColor" viewBox="0 0 20 20">
+      <path d="M7 2a1 1 0 110 2H6a1 1 0 010-2h1zm3 0a1 1 0 110 2h-1a1 1 0 010-2h1zM7 7a1 1 0 110 2H6a1 1 0 010-2h1zm3 0a1 1 0 110 2h-1a1 1 0 010-2h1zM7 12a1 1 0 110 2H6a1 1 0 010-2h1zm3 0a1 1 0 110 2h-1a1 1 0 010-2h1z" />
+    </svg>
+  );
+}
+
 /** Thumbnail content shared between PersonAvatar and DragOverlay */
 function AvatarThumbnail({
   person,
@@ -140,7 +148,7 @@ function AvatarThumbnail({
   return (
     <div
       className={cn(
-        "flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-gray-100 transition-all",
+        "flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-gray-100 transition-all group-hover:brightness-90",
         className,
       )}
     >
@@ -246,8 +254,9 @@ function PersonAvatar({
       <div
         ref={setNodeRef}
         className={cn(
-          "group relative flex flex-col items-center gap-1",
+          "group relative flex flex-col items-center gap-1 transition-opacity",
           isDragging && "opacity-30",
+          isDragActive && !isDragging && !isOver && "opacity-60",
         )}
         {...attributes}
         {...listeners}
@@ -269,6 +278,9 @@ function PersonAvatar({
             )}
           />
         </button>
+        <div className="flex justify-center opacity-0 group-hover:opacity-100 transition-opacity mt-0.5">
+          <GripVerticalIcon className="w-3 h-3 text-gray-400 cursor-grab" />
+        </div>
         <div className="absolute -right-1 -top-1 z-10">
           <button
             type="button"
