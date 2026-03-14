@@ -18,7 +18,12 @@ import { useAuth } from "@/lib/auth";
 import { useAgent } from "@/features/search/hooks/useAgent";
 import { getPersonTimeline, getPersonVideos, getVideoExclusions, saveVideoExclusions } from "@/lib/api/people";
 import { getCloudThumbnailUrl, getFaceThumbnailUrl } from "@/lib/agent";
-import type { PersonResponse, PersonTimelineVideo, PersonVideoItem } from "@/lib/types";
+import type {
+  MergePersonRequest,
+  PersonResponse,
+  PersonTimelineVideo,
+  PersonVideoItem,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { PersonIcon } from "@/components/icons";
 import { ScenePreviewTooltip } from "@/components/ScenePreviewTooltip";
@@ -696,6 +701,119 @@ function PeopleGridPagination({
   );
 }
 
+function BulkDeleteDialog({
+  count,
+  isDeleting,
+  onConfirm,
+  onCancel,
+}: {
+  count: number;
+  isDeleting: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
+      <div className="mx-4 w-full max-w-sm rounded-xl bg-white p-6 shadow-xl">
+        <h2 className="mb-2 text-lg font-semibold text-gray-900">
+          {count}명의 인물을 삭제할까요?
+        </h2>
+        <p className="mb-6 text-sm text-gray-500">이 작업은 되돌릴 수 없습니다.</p>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isDeleting}
+            className="rounded-md bg-gray-100 px-4 py-2 text-sm text-gray-700 hover:bg-gray-200 disabled:opacity-50"
+          >
+            취소
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isDeleting}
+            className="rounded-md bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            {isDeleting ? "삭제 중..." : "삭제"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BulkMergeDialog({
+  people,
+  isMerging,
+  onConfirm,
+  onCancel,
+}: {
+  people: PersonResponse[];
+  isMerging: boolean;
+  onConfirm: (targetId: string, keepLabel: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [targetId, setTargetId] = useState(people[0]?.person_cluster_id ?? "");
+  const [keepLabel, setKeepLabel] = useState<string>(people[0]?.label ?? "");
+
+  useEffect(() => {
+    setTargetId(people[0]?.person_cluster_id ?? "");
+    setKeepLabel(people[0]?.label ?? "");
+  }, [people]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
+      <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+        <h2 className="mb-4 text-lg font-semibold text-gray-900">{people.length}명 병합</h2>
+        <p className="mb-4 text-sm text-gray-500">
+          대표 인물을 선택하세요. 나머지 인물은 이 인물로 병합됩니다.
+        </p>
+        <div className="mb-4 max-h-48 space-y-2 overflow-y-auto">
+          {people.map((person) => (
+            <label
+              key={person.person_cluster_id}
+              className="flex cursor-pointer items-center gap-3 rounded-md p-2 hover:bg-gray-50"
+            >
+              <input
+                type="radio"
+                name="bulk-merge-target"
+                value={person.person_cluster_id}
+                checked={targetId === person.person_cluster_id}
+                onChange={() => {
+                  setTargetId(person.person_cluster_id);
+                  setKeepLabel(person.label ?? "");
+                }}
+                className="text-indigo-600"
+                disabled={isMerging}
+              />
+              <span className="text-sm text-gray-700">{person.label || "이름 없음"}</span>
+              <span className="text-xs text-gray-400">{person.face_count}개 장면</span>
+            </label>
+          ))}
+        </div>
+        <div className="flex justify-end gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={isMerging}
+            className="rounded-md bg-gray-100 px-4 py-2 text-sm text-gray-700 hover:bg-gray-200 disabled:opacity-50"
+          >
+            취소
+          </button>
+          <button
+            type="button"
+            onClick={() => onConfirm(targetId, keepLabel.trim() || null)}
+            disabled={!targetId || isMerging}
+            className="rounded-md bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {isMerging ? "병합 중..." : "병합"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PeopleSettings() {
   const {
     people,
@@ -703,11 +821,15 @@ export function PeopleSettings() {
     error,
     renamePerson,
     isRenaming,
+    fetchPeople,
     excludedIds,
     toggleExclude,
     isSavingExcludes,
     selectedIds,
     toggleSelection,
+    selectAll,
+    clearSelection,
+    bulkDelete,
     deletePerson,
     isDeleting,
     mergePeople,
@@ -717,6 +839,8 @@ export function PeopleSettings() {
   const { isAvailable: agentAvailable } = useAgent();
   const [searchQuery, setSearchQuery] = useState("");
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [bulkMergeOpen, setBulkMergeOpen] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
 
   // DnD merge state
   const [activeDragPerson, setActiveDragPerson] = useState<PersonResponse | null>(null);
@@ -821,6 +945,43 @@ export function PeopleSettings() {
     setMergeSource(null);
     setMergeTarget(null);
   }, []);
+
+  useEffect(() => {
+    if (selectedIds.size >= 2) return;
+    setBulkMergeOpen(false);
+    setBulkDeleteOpen(false);
+  }, [selectedIds.size]);
+
+  const handleBulkMerge = useCallback(
+    async (targetId: string, keepLabel: string | null) => {
+      const sourceIds = Array.from(selectedIds).filter((id) => id !== targetId);
+      if (sourceIds.length === 0) return;
+
+      const request: MergePersonRequest = {
+        source_cluster_ids: sourceIds,
+        target_cluster_id: targetId,
+        keep_label: keepLabel,
+      };
+      const response = await mergePeople(request);
+      if (!response) return;
+
+      clearSelection();
+      setBulkMergeOpen(false);
+      setVideoRefreshKey((k) => k + 1);
+      await fetchPeople();
+    },
+    [selectedIds, mergePeople, clearSelection, fetchPeople],
+  );
+
+  const handleBulkDelete = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+
+    await bulkDelete(ids);
+    clearSelection();
+    setBulkDeleteOpen(false);
+    await fetchPeople();
+  }, [selectedIds, bulkDelete, clearSelection, fetchPeople]);
 
   return (
     <div>
@@ -1002,6 +1163,57 @@ export function PeopleSettings() {
           isMerging={isMerging}
           onCancel={handleMergeCancel}
           onConfirm={handleMergeConfirm}
+        />
+      )}
+      {selectedIds.size >= 2 && (
+        <div className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-4 rounded-xl border border-gray-200 bg-white px-6 py-3 shadow-xl">
+          <span className="text-sm font-medium text-gray-700">
+            {selectedIds.size}명 선택됨
+          </span>
+          <button
+            type="button"
+            onClick={selectAll}
+            className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-800"
+          >
+            전체 선택
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkMergeOpen(true)}
+            className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+          >
+            병합
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkDeleteOpen(true)}
+            className="rounded-md bg-red-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-red-700"
+          >
+            삭제
+          </button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="rounded-md px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+          >
+            취소
+          </button>
+        </div>
+      )}
+      {bulkMergeOpen && (
+        <BulkMergeDialog
+          people={selectedPeople}
+          isMerging={isMerging}
+          onCancel={() => setBulkMergeOpen(false)}
+          onConfirm={handleBulkMerge}
+        />
+      )}
+      {bulkDeleteOpen && (
+        <BulkDeleteDialog
+          count={selectedIds.size}
+          isDeleting={isDeleting}
+          onCancel={() => setBulkDeleteOpen(false)}
+          onConfirm={handleBulkDelete}
         />
       )}
     </div>
