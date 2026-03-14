@@ -17,6 +17,10 @@ interface ScenePreviewTooltipProps {
   className?: string;
 }
 
+const TOOLTIP_MAX_W = 160;
+const TOOLTIP_MAX_H = 220;
+const TOOLTIP_DEFAULT_H = 90;
+
 export function ScenePreviewTooltip({
   videoId,
   sceneId,
@@ -30,6 +34,10 @@ export function ScenePreviewTooltip({
   const [visible, setVisible] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [thumbSize, setThumbSize] = useState<{ w: number; h: number }>({
+    w: TOOLTIP_MAX_W,
+    h: TOOLTIP_DEFAULT_H,
+  });
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -61,6 +69,24 @@ export function ScenePreviewTooltip({
     setVisible(false);
   }, [clearTimer]);
 
+  const handleImgLoad = useCallback(
+    (e: React.SyntheticEvent<HTMLImageElement>) => {
+      const { naturalWidth, naturalHeight } = e.currentTarget;
+      if (naturalWidth > 0 && naturalHeight > 0) {
+        const ratio = naturalWidth / naturalHeight;
+        let w = TOOLTIP_MAX_W;
+        let h = Math.round(w / ratio);
+        if (h > TOOLTIP_MAX_H) {
+          h = TOOLTIP_MAX_H;
+          w = Math.round(h * ratio);
+        }
+        setThumbSize({ w, h });
+      }
+      setImgLoaded(true);
+    },
+    [],
+  );
+
   useEffect(() => {
     return clearTimer;
   }, [clearTimer]);
@@ -69,6 +95,7 @@ export function ScenePreviewTooltip({
   useEffect(() => {
     setImgLoaded(false);
     setImgError(false);
+    setThumbSize({ w: TOOLTIP_MAX_W, h: TOOLTIP_DEFAULT_H });
   }, [videoId, sceneId]);
 
   return (
@@ -83,15 +110,18 @@ export function ScenePreviewTooltip({
       {visible && thumbnailUrl && !imgError && (
         <div className="absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 pointer-events-none">
           <div className="rounded-lg border border-gray-200 bg-white p-1.5 shadow-xl">
-            <div className="relative h-[90px] w-[160px] overflow-hidden rounded-md bg-gray-100">
+            <div
+              className="relative overflow-hidden rounded-md bg-gray-100 transition-[width,height] duration-150"
+              style={{ width: thumbSize.w, height: thumbSize.h }}
+            >
               <img
                 src={thumbnailUrl}
                 alt={label ?? ""}
                 className={cn(
-                  "h-full w-full object-cover transition-opacity duration-150",
+                  "h-full w-full object-contain transition-opacity duration-150",
                   imgLoaded ? "opacity-100" : "opacity-0",
                 )}
-                onLoad={() => setImgLoaded(true)}
+                onLoad={handleImgLoad}
                 onError={() => setImgError(true)}
               />
               {!imgLoaded && (

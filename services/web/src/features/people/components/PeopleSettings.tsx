@@ -153,7 +153,7 @@ function AvatarThumbnail({
   return (
     <div
       className={cn(
-        "flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-gray-100 transition-all group-hover:brightness-90",
+        "flex h-24 w-24 items-center justify-center overflow-hidden rounded-2xl bg-gray-100 transition-all group-hover:brightness-90",
         className,
       )}
     >
@@ -172,7 +172,7 @@ function AvatarThumbnail({
         />
       ) : (
         <div className="relative flex h-full w-full items-center justify-center">
-          <PersonIcon className="h-10 w-10 text-gray-400" />
+          <PersonIcon className="h-12 w-12 text-gray-400" />
           {!agentAvailable && (
             <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-gray-500/80 px-1.5 py-0.5 text-[8px] font-medium leading-tight text-white">
               오프라인
@@ -319,7 +319,7 @@ function PersonAvatar({
           )}
         </div>
         {person.label && (
-          <span className="max-w-[80px] truncate text-xs text-gray-600">
+           <span className="max-w-[96px] truncate text-xs text-gray-600">
             {person.label}
           </span>
         )}
@@ -1109,7 +1109,7 @@ export function PeopleSettings() {
                   onDragEnd={handleDragEnd}
                   onDragCancel={handleDragCancel}
                 >
-                  <div className="grid grid-cols-5 gap-4">
+                  <div className="grid grid-cols-4 gap-5">
                     {paginatedPeople.map((person) => (
                       <PersonAvatar
                         key={person.person_cluster_id}
@@ -1139,7 +1139,7 @@ export function PeopleSettings() {
                           className="ring-2 ring-indigo-400 shadow-lg"
                         />
                         {activeDragPerson.label && (
-                          <span className="max-w-[80px] truncate text-xs text-gray-600">
+                          <span className="max-w-[96px] truncate text-xs text-gray-600">
                             {activeDragPerson.label}
                           </span>
                         )}
