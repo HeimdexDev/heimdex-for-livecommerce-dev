@@ -110,6 +110,7 @@ async def list_people(
         if scene_info:
             person.representative_video_id = scene_info["video_id"]
             person.representative_scene_id = scene_info["scene_id"]
+            person.last_seen_scene_time = scene_info.get("ingest_time")
 
     return PeopleListResponse(people=people, total=len(people))
 

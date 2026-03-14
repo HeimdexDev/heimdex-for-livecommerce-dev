@@ -448,7 +448,7 @@ class SceneFacetsMixin:
                 },
                 "sort": [{"ingest_time": "desc"}],
                 "size": 1,
-                "_source": ["video_id", "scene_id"],
+                "_source": ["video_id", "scene_id", "ingest_time"],
             })
 
         response = await self.client.msearch(body=body_parts)
@@ -461,6 +461,7 @@ class SceneFacetsMixin:
                 result[person_cluster_ids[i]] = {
                     "video_id": src["video_id"],
                     "scene_id": src["scene_id"],
+                    "ingest_time": src.get("ingest_time"),
                 }
 
         return result
