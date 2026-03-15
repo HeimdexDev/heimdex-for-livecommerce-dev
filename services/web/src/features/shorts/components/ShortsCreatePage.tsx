@@ -7,9 +7,27 @@ import { useAuth } from "@/lib/auth";
 import { getVideoScenes } from "@/lib/api/videos";
 import { getAgentPlaybackUrl, getCloudPlaybackUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
-import { formatTimestamp } from "@/lib/api/utils";
 import { cn } from "@/lib/utils";
+import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
 import type { VideoScene, VideoScenesResponse } from "@/lib/types";
+
+const SPEAKER_BADGE_COLORS = ["bg-red-500", "bg-blue-500", "bg-green-500", "bg-amber-500"];
+
+function formatTimestampHMS(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function normalizeTimestampToHMS(ts: string): string {
+  const parts = ts.split(":");
+  if (parts.length === 2) {
+    return `00:${parts[0].padStart(2, "0")}:${parts[1]}`;
+  }
+  return `${parts[0].padStart(2, "0")}:${parts[1]}:${parts[2]}`;
+}
 
 function BackArrowIcon() {
   return (
@@ -35,7 +53,7 @@ function ChevronRightIcon() {
   );
 }
 
-function SceneCard({
+export function SceneCard({
   scene,
   index,
   videoId,
@@ -49,8 +67,9 @@ function SceneCard({
   onToggle: () => void;
 }) {
   const durationSec = Math.round((scene.end_ms - scene.start_ms) / 1000);
-  const timeRange = `${formatTimestamp(scene.start_ms)} - ${formatTimestamp(scene.end_ms)}`;
+  const timeRange = `${formatTimestampHMS(scene.start_ms)} - ${formatTimestampHMS(scene.end_ms)}`;
   const tags = [...scene.keyword_tags, ...scene.product_tags].slice(0, 2);
+  const speakerEntries = parseSpeakerTranscript(scene.speaker_transcript ?? "");
 
   return (
     <button
@@ -91,6 +110,41 @@ function SceneCard({
             <span className="text-xs text-gray-500">{durationSec}초</span>
           </div>
         </div>
+        {scene.scene_caption && (
+          <p className="mt-1.5 text-xs text-gray-600">
+            {scene.scene_caption.length > 70
+              ? scene.scene_caption.slice(0, 70) + "…"
+              : scene.scene_caption}
+          </p>
+        )}
+        {speakerEntries.length > 0 ? (
+          <div className="mt-2 space-y-2">
+            {speakerEntries.slice(0, 2).map((entry, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <span
+                  className={cn(
+                    "flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white",
+                    SPEAKER_BADGE_COLORS[entry.label.charCodeAt(0) - 65] ?? "bg-gray-400",
+                  )}
+                >
+                  {entry.label}
+                </span>
+                <span className="flex-shrink-0 text-xs text-gray-400">
+                  {entry.timestamp ? normalizeTimestampToHMS(entry.timestamp) : ""}
+                </span>
+                <span className="text-xs text-gray-600 line-clamp-3">
+                  {entry.text.length > 100 ? entry.text.slice(0, 100) + "…" : entry.text}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : scene.transcript_raw ? (
+          <p className="mt-1 text-xs text-gray-400">
+            {scene.transcript_raw.length > 100
+              ? scene.transcript_raw.slice(0, 100) + "…"
+              : scene.transcript_raw}
+          </p>
+        ) : null}
         {tags.length > 0 && (
           <div className="mt-2 flex flex-wrap justify-end gap-1.5">
             {tags.map((tag) => (
@@ -299,7 +353,7 @@ export function ShortsCreatePage() {
                   <div key={scene.scene_id} className="flex items-center gap-2 text-sm text-gray-600">
                     <span className="font-medium text-gray-900">장면{allScenes.indexOf(scene) + 1}</span>
                     <span className="text-xs text-gray-400">
-                      {formatTimestamp(scene.start_ms)} - {formatTimestamp(scene.end_ms)}
+                      {formatTimestampHMS(scene.start_ms)} - {formatTimestampHMS(scene.end_ms)}
                     </span>
                   </div>
                 ))}
