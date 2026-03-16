@@ -16,6 +16,8 @@ import { useState, useMemo } from "react";
 import { AddToBasketButton } from "@/features/basket/AddToBasketButton";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
+import { useOrgSettings } from "@/lib/orgSettings";
+import { getInlineThumbnailClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
 function playbackUrl(videoId: string, sourceType: string, startMs?: number, webViewLink?: string | null): string {
   if (sourceType === "youtube" && webViewLink) return webViewLink;
@@ -147,6 +149,9 @@ export function SearchResults({
   showDebug,
   agentAvailable,
 }: SearchResultsProps) {
+  const { settings } = useOrgSettings();
+  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
+
   if (response.results.length === 0) {
     return (
       <div className="text-center py-12 text-gray-500">
@@ -187,12 +192,14 @@ export function SearchResults({
             results={response.results as VideoResult[]}
             showDebug={showDebug}
             agentAvailable={agentAvailable}
+            aspectRatio={aspectRatio}
           />
         ) : resultType === "scene" ? (
           <VideoGroupList
             groups={groupScenesByVideo(response.results as SceneResult[])}
             showDebug={showDebug}
             agentAvailable={agentAvailable}
+            aspectRatio={aspectRatio}
           />
         ) : (
           (response.results as SegmentResult[]).map((result, index) => (
@@ -202,6 +209,7 @@ export function SearchResults({
               rank={index + 1}
               showDebug={showDebug}
               agentAvailable={agentAvailable}
+              aspectRatio={aspectRatio}
             />
           ))
         )}
@@ -218,10 +226,12 @@ function VideoGroupList({
   groups,
   showDebug,
   agentAvailable,
+  aspectRatio,
 }: {
   groups: VideoGroup[];
   showDebug: boolean;
   agentAvailable: boolean;
+  aspectRatio: ThumbnailAspectRatio;
 }) {
   const [expandedVideos, setExpandedVideos] = useState<Set<string>>(
     () => new Set(groups.length > 0 ? [groups[0].videoId] : [])
@@ -281,6 +291,7 @@ function VideoGroupList({
                       rank={globalRank}
                       showDebug={showDebug}
                       agentAvailable={agentAvailable}
+                      aspectRatio={aspectRatio}
                     />
                   );
                 })}
@@ -301,10 +312,12 @@ function VideoCardList({
   results,
   showDebug,
   agentAvailable,
+  aspectRatio,
 }: {
   results: VideoResult[];
   showDebug: boolean;
   agentAvailable: boolean;
+  aspectRatio: ThumbnailAspectRatio;
 }) {
   return (
     <div className="space-y-3">
@@ -315,6 +328,7 @@ function VideoCardList({
           rank={index + 1}
           showDebug={showDebug}
           agentAvailable={agentAvailable}
+          aspectRatio={aspectRatio}
         />
       ))}
     </div>
@@ -326,11 +340,13 @@ function VideoCard({
   rank,
   showDebug,
   agentAvailable,
+  aspectRatio,
 }: {
   video: VideoResult;
   rank: number;
   showDebug: boolean;
   agentAvailable: boolean;
+  aspectRatio: ThumbnailAspectRatio;
 }) {
   const [expanded, setExpanded] = useState(false);
   const best = video.best_scene;
@@ -344,7 +360,7 @@ function VideoCard({
             videoId={best.video_id}
             sceneId={best.scene_id}
             agentAvailable={agentAvailable}
-            className="w-32 h-20 rounded-lg"
+            className={cn("rounded-lg", getInlineThumbnailClass(aspectRatio))}
             sourceType={best.source_type}
           />
           <span className="absolute -top-2 -left-2 bg-primary-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
@@ -473,9 +489,10 @@ interface SceneCardProps {
   rank: number;
   showDebug: boolean;
   agentAvailable: boolean;
+  aspectRatio: ThumbnailAspectRatio;
 }
 
-function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) {
+function SceneCard({ result, rank, showDebug, agentAvailable, aspectRatio }: SceneCardProps) {
   const [expanded, setExpanded] = useState(false);
   const isRemovable = result.source_type === "removable_disk";
   const matchSignal = getMatchSignal(result.debug);
@@ -489,7 +506,7 @@ function SceneCard({ result, rank, showDebug, agentAvailable }: SceneCardProps) 
             videoId={result.video_id}
             sceneId={result.scene_id}
             agentAvailable={agentAvailable}
-            className="w-32 h-20 rounded-lg"
+            className={cn("rounded-lg", getInlineThumbnailClass(aspectRatio))}
             sourceType={result.source_type}
           />
           <span className="absolute -top-2 -left-2 bg-primary-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">
@@ -719,9 +736,10 @@ interface ResultCardProps {
   rank: number;
   showDebug: boolean;
   agentAvailable: boolean;
+  aspectRatio: ThumbnailAspectRatio;
 }
 
-function ResultCard({ result, rank, showDebug, agentAvailable }: ResultCardProps) {
+function ResultCard({ result, rank, showDebug, agentAvailable, aspectRatio }: ResultCardProps) {
   const [expanded, setExpanded] = useState(false);
   const isRemovable = result.source_type === "removable_disk";
 
@@ -732,7 +750,7 @@ function ResultCard({ result, rank, showDebug, agentAvailable }: ResultCardProps
           <SceneThumbnail
             videoId={result.video_id}
             agentAvailable={agentAvailable}
-            className="w-32 h-20 rounded-lg"
+            className={cn("rounded-lg", getInlineThumbnailClass(aspectRatio))}
             sourceType={result.source_type}
           />
           <span className="absolute -top-2 -left-2 bg-primary-600 text-white text-xs font-bold w-6 h-6 rounded-full flex items-center justify-center">

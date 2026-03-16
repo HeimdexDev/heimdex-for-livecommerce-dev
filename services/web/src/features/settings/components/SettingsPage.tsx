@@ -1,7 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useAuth, getOrgSlug } from "@/lib/auth";
+import { useOrgSettings } from "@/lib/orgSettings";
+import { cn } from "@/lib/utils";
 
 function BackArrowIcon() {
   return (
@@ -51,6 +54,14 @@ function OrgIcon() {
   );
 }
 
+function DisplayIcon() {
+  return (
+    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25A2.25 2.25 0 015.25 3h13.5A2.25 2.25 0 0121 5.25z" />
+    </svg>
+  );
+}
+
 interface SettingsLinkCardProps {
   href: string;
   icon: React.ReactNode;
@@ -79,9 +90,22 @@ function SettingsLinkCard({ href, icon, title, description }: SettingsLinkCardPr
 export function SettingsPage() {
   const { user } = useAuth();
   const orgSlug = getOrgSlug();
+  const { settings, updateThumbnailAspectRatio } = useOrgSettings();
+  const [isSaving, setIsSaving] = useState(false);
 
   const displayName = user?.name || user?.email || "-";
   const displayEmail = user?.email || "-";
+
+  const handleAspectRatioChange = async (ratio: "16:9" | "9:16") => {
+    setIsSaving(true);
+    try {
+      await updateThumbnailAspectRatio(ratio);
+    } catch (err) {
+      console.error("[Heimdex] Failed to update settings:", err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-3xl pt-4">
@@ -131,6 +155,47 @@ export function SettingsPage() {
               <dd className="text-sm font-medium text-gray-900">{orgSlug || "-"}</dd>
             </div>
           </dl>
+        </div>
+      </section>
+
+      {/* Display preferences */}
+      <section className="mt-8">
+        <div className="flex items-center gap-2 text-gray-700">
+          <DisplayIcon />
+          <h2 className="text-lg font-bold text-gray-900">표시 설정</h2>
+        </div>
+        <div className="mt-4 rounded-xl border border-gray-200 bg-white p-6">
+          <div className="flex items-baseline gap-4">
+            <dt className="w-[120px] flex-shrink-0 text-sm text-gray-500">썸네일 비율</dt>
+            <dd className="flex gap-2">
+              <button
+                onClick={() => handleAspectRatioChange("16:9")}
+                disabled={isSaving}
+                className={cn(
+                  "flex flex-col items-center gap-1.5 rounded-lg border-2 px-4 py-3 transition-all",
+                  settings.thumbnail_aspect_ratio === "16:9"
+                    ? "border-indigo-500 bg-indigo-50"
+                    : "border-gray-200 hover:border-gray-300"
+                )}
+              >
+                <div className="w-16 h-9 rounded border-2 border-current" />
+                <span className="text-xs font-medium">16:9</span>
+              </button>
+              <button
+                onClick={() => handleAspectRatioChange("9:16")}
+                disabled={isSaving}
+                className={cn(
+                  "flex flex-col items-center gap-1.5 rounded-lg border-2 px-4 py-3 transition-all",
+                  settings.thumbnail_aspect_ratio === "9:16"
+                    ? "border-indigo-500 bg-indigo-50"
+                    : "border-gray-200 hover:border-gray-300"
+                )}
+              >
+                <div className="w-9 h-16 rounded border-2 border-current" />
+                <span className="text-xs font-medium">9:16</span>
+              </button>
+            </dd>
+          </div>
         </div>
       </section>
 

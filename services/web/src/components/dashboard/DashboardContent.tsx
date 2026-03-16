@@ -14,6 +14,8 @@ import type { VideoSummary, VideoStats, SceneResult, VideoResult, AnySearchRespo
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { parseSlashCommand, getSlashCommandSuggestions } from "@/lib/slash-commands";
+import { useOrgSettings } from "@/lib/orgSettings";
+import { getThumbnailAspectClass, getDashboardGridClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 import {
   serializeSearchState,
   deserializeSearchState,
@@ -635,7 +637,7 @@ function Pagination({
 // ---------------------------------------------------------------------------
 // VideoCard
 // ---------------------------------------------------------------------------
-function VideoCard({ video }: { video: VideoSummary }) {
+function VideoCard({ video, aspectRatio }: { video: VideoSummary; aspectRatio: ThumbnailAspectRatio }) {
   const title = video.video_title || "제목 없음";
   const isImage = video.content_type === "image";
   const isYouTube = video.source_type === "youtube";
@@ -643,7 +645,7 @@ function VideoCard({ video }: { video: VideoSummary }) {
 
   return (
     <Link href={href} className="group cursor-pointer block">
-      <div className="relative aspect-video w-full overflow-hidden rounded-lg">
+      <div className={cn("relative w-full overflow-hidden rounded-lg", getThumbnailAspectClass(aspectRatio))}>
         <SceneThumbnail
           videoId={video.video_id}
           sceneId={video.source_type === "gdrive" || video.source_type === "youtube" ? `${video.video_id}_scene_000` : undefined}
@@ -677,7 +679,7 @@ function VideoCard({ video }: { video: VideoSummary }) {
   );
 }
 
-function SceneCard({ scene }: { scene: SceneResult }) {
+function SceneCard({ scene, aspectRatio }: { scene: SceneResult; aspectRatio: ThumbnailAspectRatio }) {
   const title = scene.video_title || "제목 없음";
   const isImage = scene.content_type === "image";
   const isYouTube = scene.source_type === "youtube";
@@ -696,7 +698,7 @@ function SceneCard({ scene }: { scene: SceneResult }) {
 
   return (
     <Link href={href} className="group cursor-pointer block">
-      <div className="relative aspect-video w-full overflow-hidden rounded-lg">
+      <div className={cn("relative w-full overflow-hidden rounded-lg", getThumbnailAspectClass(aspectRatio))}>
         <SceneThumbnail
           videoId={scene.video_id}
           sceneId={scene.scene_id}
@@ -733,14 +735,14 @@ function SceneCard({ scene }: { scene: SceneResult }) {
   );
 }
 
-function SearchVideoCard({ video }: { video: VideoResult }) {
+function SearchVideoCard({ video, aspectRatio }: { video: VideoResult; aspectRatio: ThumbnailAspectRatio }) {
   const title = video.video_title || "제목 없음";
   const best = video.best_scene;
   const isYouTube = video.source_type === "youtube";
 
   return (
     <Link href={`/videos/${video.video_id}?t=${best.start_ms}`} className="group cursor-pointer block">
-      <div className="relative aspect-video w-full overflow-hidden rounded-lg">
+      <div className={cn("relative w-full overflow-hidden rounded-lg", getThumbnailAspectClass(aspectRatio))}>
         <SceneThumbnail
           videoId={best.video_id}
           sceneId={best.scene_id}
@@ -784,6 +786,8 @@ export default function DashboardContent() {
   const { getAccessToken } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { settings } = useOrgSettings();
+  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
 
   // ── Initialize state from URL params ───────────────────────────────────
   const initialState = useMemo(
@@ -1425,17 +1429,17 @@ export default function DashboardContent() {
         {/* Results grid */}
         {!isLoading && hasResults && (
           <>
-            <div className="mt-6 grid grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4">
+            <div className={cn("mt-6 grid gap-5", getDashboardGridClass(aspectRatio))}>
               {isSearchMode
                 ? searchResponse?.result_type === "video"
                   ? (paginatedResults as VideoResult[]).map((video) => (
-                      <SearchVideoCard key={video.video_id} video={video} />
+                      <SearchVideoCard key={video.video_id} video={video} aspectRatio={aspectRatio} />
                     ))
                   : (paginatedResults as SceneResult[]).map((scene) => (
-                      <SceneCard key={scene.scene_id} scene={scene} />
+                      <SceneCard key={scene.scene_id} scene={scene} aspectRatio={aspectRatio} />
                     ))
                 : videos.map((video) => (
-                    <VideoCard key={video.video_id} video={video} />
+                    <VideoCard key={video.video_id} video={video} aspectRatio={aspectRatio} />
                   ))}
             </div>
 

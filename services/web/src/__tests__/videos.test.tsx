@@ -29,6 +29,13 @@ vi.mock("@/lib/auth", () => ({
   }),
 }));
 
+vi.mock("@/lib/orgSettings", () => ({
+  useOrgSettings: () => ({
+    settings: { thumbnail_aspect_ratio: "16:9" },
+  }),
+  OrgSettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 const sampleVideo: VideoSummary = {
   video_id: "video-abc-123",
   video_title: "Spring Campaign",

@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
 import { ReprocessDialog } from "./ReprocessDialog";
+import { useOrgSettings } from "@/lib/orgSettings";
+import { getDetailThumbnailClass, getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
 type ViewMode = "overview" | "scenes";
 
@@ -419,6 +421,7 @@ function SceneCard({
   onToggle,
   onSeek,
   isPlaying,
+  aspectRatio,
 }: {
   scene: VideoScene;
   index: number;
@@ -428,6 +431,7 @@ function SceneCard({
   onToggle: (id: string) => void;
   onSeek?: (startMs: number) => void;
   isPlaying?: boolean;
+  aspectRatio: ThumbnailAspectRatio;
 }) {
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [subtitleExpanded, setSubtitleExpanded] = useState(false);
@@ -467,7 +471,7 @@ function SceneCard({
       )}
     >
       <div className="flex gap-0">
-        <div className="w-[200px] flex-shrink-0">
+        <div className={cn("flex-shrink-0", getDetailThumbnailClass(aspectRatio))}>
           <button
             type="button"
             onClick={() => onSeek?.(scene.start_ms)}
@@ -478,7 +482,7 @@ function SceneCard({
               videoId={videoId}
               sceneId={scene.scene_id}
               agentAvailable={agentAvailable}
-              className="aspect-video w-full rounded-tl-xl"
+              className={cn("w-full rounded-tl-xl", getThumbnailAspectClass(aspectRatio))}
             />
             <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors rounded-tl-xl">
               <svg
@@ -609,6 +613,7 @@ function ScenesPanel({
   onSeekToScene,
   activeSceneMs,
   getToken,
+  aspectRatio,
 }: {
   scenes: VideoScene[];
   totalScenes: number;
@@ -617,6 +622,7 @@ function ScenesPanel({
   onSeekToScene?: (startMs: number) => void;
   activeSceneMs?: number | null;
   getToken: () => Promise<string | null>;
+  aspectRatio: ThumbnailAspectRatio;
 }) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
@@ -776,6 +782,7 @@ function ScenesPanel({
               onToggle={toggleSelection}
               onSeek={onSeekToScene}
               isPlaying={activeSceneMs === scene.start_ms}
+              aspectRatio={aspectRatio}
             />
           ))
         )}
@@ -853,6 +860,8 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
   const [isLoading, setIsLoading] = useState(true);
   const [seekMs, setSeekMs] = useState<number | null>(initialT ? Number(initialT) : null);
   const [seekKey, setSeekKey] = useState(initialT ? 1 : 0);
+  const { settings } = useOrgSettings();
+  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
 
   const [reprocessStatus, setReprocessStatus] = useState<ReprocessJobResponse | null>(null);
   const [isReprocessDialogOpen, setIsReprocessDialogOpen] = useState(false);
@@ -1024,6 +1033,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               onSeekToScene={handleSeekToScene}
               activeSceneMs={seekMs}
               getToken={getAccessToken}
+              aspectRatio={aspectRatio}
             />
           )}
         </div>

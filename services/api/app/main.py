@@ -18,6 +18,7 @@ from app.modules.agent_intents.schema_check import startup_check_agent_intents_s
 from app.modules.devices.router import router as devices_router
 from app.modules.ingest.router import router as ingest_router
 from app.modules.libraries.router import router as libraries_router
+from app.modules.orgs.router import router as org_settings_router
 from app.modules.people.router import router as people_router
 from app.modules.search.router import router as search_router
 from app.modules.shorts.router import router as shorts_router
@@ -322,6 +323,7 @@ app.include_router(agent_intents_router, prefix="/api")
 app.include_router(ingest_router, prefix="/api")
 app.include_router(thumbnails_upload_router, prefix="/api")
 app.include_router(libraries_router, prefix="/api")
+app.include_router(org_settings_router, prefix="/api")
 app.include_router(people_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
 app.include_router(shorts_router, prefix="/api")
