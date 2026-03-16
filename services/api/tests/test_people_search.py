@@ -80,7 +80,7 @@ class TestSearchPeopleByVideoTitle:
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_query_uses_nori_field(self, mock_scene_client):
+    async def test_query_uses_nori_and_wildcard(self, mock_scene_client):
         client, async_client = mock_scene_client
         async_client.search = AsyncMock(return_value={
             "aggregations": {"matching_people": {"buckets": []}}
@@ -90,8 +90,11 @@ class TestSearchPeopleByVideoTitle:
 
         call_args = async_client.search.call_args
         body = call_args.kwargs.get("body") or call_args[1].get("body")
-        must_clause = body["query"]["bool"]["must"]
-        assert any("video_title.nori" in str(c) for c in must_clause)
+        bool_clause = body["query"]["bool"]
+        should = bool_clause["should"]
+        assert bool_clause["minimum_should_match"] == 1
+        assert any("video_title.nori" in str(c) for c in should)
+        assert any("wildcard" in str(c) for c in should)
 
     @pytest.mark.asyncio
     async def test_query_filters_by_org_and_content_type(self, mock_scene_client):

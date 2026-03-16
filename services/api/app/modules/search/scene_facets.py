@@ -303,11 +303,14 @@ class SceneFacetsMixin:
     ) -> dict[str, list[str]]:
         """Find person clusters appearing in videos whose title matches *query*.
 
-        Uses BM25 on the ``video_title.nori`` sub-field so that Korean
-        tokenisation is applied.
+        Uses a dual strategy: BM25 on ``video_title.nori`` (works when Nori
+        plugin is installed) OR case-insensitive wildcard on the keyword field
+        (works everywhere, including production where Nori is absent and the
+        fallback analyzer fails to tokenize Korean filenames).
 
         Returns ``{person_cluster_id: [matched_video_title, …]}``.
         """
+        escaped = query.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
         body: dict[str, Any] = {
             "query": {
                 "bool": {
@@ -316,9 +319,11 @@ class SceneFacetsMixin:
                         {"term": {"content_type": "video"}},
                         {"exists": {"field": "people_cluster_ids"}},
                     ],
-                    "must": [
+                    "should": [
                         {"match": {"video_title.nori": query}},
+                        {"wildcard": {"video_title": {"value": f"*{escaped}*", "case_insensitive": True}}},
                     ],
+                    "minimum_should_match": 1,
                 }
             },
             "size": 0,
