@@ -22,6 +22,7 @@ class SceneQueryMixin:
 
         query_word_count = len(query.split())
         includes_images = "image" in (filters.get("content_types") or ["video"])
+        escaped = query.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
 
         if query_word_count <= 3:
             should_clauses: list[dict[str, Any]] = [
@@ -41,6 +42,15 @@ class SceneQueryMixin:
                             "query": query,
                             "boost": 4.0,
                             "slop": 1,
+                        }
+                    }
+                },
+                {
+                    "wildcard": {
+                        "video_title": {
+                            "value": f"*{escaped}*",
+                            "case_insensitive": True,
+                            "boost": 2.0,
                         }
                     }
                 },
@@ -89,6 +99,25 @@ class SceneQueryMixin:
             long_should: list[dict[str, Any]] = [
                 {
                     "match": {
+                        "video_title.nori": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": 2.0,
+                        }
+                    }
+                },
+                {
+                    "wildcard": {
+                        "video_title": {
+                            "value": f"*{escaped}*",
+                            "case_insensitive": True,
+                            "boost": 2.0,
+                        }
+                    }
+                },
+                {
+                    "match": {
                         "source_path": {
                             "query": query,
                             "operator": "or",
@@ -111,20 +140,9 @@ class SceneQueryMixin:
                 })
             search_query = {
                 "bool": {
-                    "must": [
-                        {"term": {"org_id": org_id}},
-                        {
-                            "match": {
-                                "video_title.nori": {
-                                    "query": query,
-                                    "operator": "or",
-                                    "minimum_should_match": "50%",
-                                    "boost": 2.0,
-                                }
-                            }
-                        },
-                    ],
+                    "must": [{"term": {"org_id": org_id}}],
                     "should": long_should,
+                    "minimum_should_match": 1,
                     "filter": filter_clauses,
                 }
             }
