@@ -86,32 +86,37 @@ export function SceneCard({
           : "border-gray-200 bg-white hover:border-gray-300",
       )}
     >
-      <div className="w-[140px] flex-shrink-0 relative">
+      <div className="w-[140px] flex-shrink-0">
         <SceneThumbnail
           videoId={videoId}
           sceneId={scene.scene_id}
           agentAvailable={true}
           className="aspect-video w-full"
         />
-        <div className={cn(
-          "absolute top-2 left-2 flex h-5 w-5 items-center justify-center rounded border-2 transition-colors",
-          selected
-            ? "border-indigo-500 bg-indigo-500"
-            : "border-gray-300 bg-white",
-        )}>
-          {selected && (
-            <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-            </svg>
-          )}
-        </div>
       </div>
       <div className="flex-1 min-w-0 p-3">
         <div className="flex items-center justify-between">
           <span className="text-sm font-bold text-gray-900">장면{index + 1}</span>
           <div className="flex items-center gap-2">
-            <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{timeRange}</span>
-            <span className="text-xs text-gray-500">{durationSec}초</span>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-[2px] bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{timeRange}</span>
+              <span className="text-xs text-gray-500">{durationSec}초</span>
+            </div>
+            <div
+              data-testid="scene-checkbox"
+              className={cn(
+                "flex items-center justify-center size-[16.5px] rounded-[4px] transition-colors",
+                selected
+                  ? "bg-[#605dec]"
+                  : "bg-white border-[0.688px] border-[#c7c7c7]",
+              )}
+            >
+              {selected && (
+                <svg className="h-2.5 w-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+              )}
+            </div>
           </div>
         </div>
         {scene.scene_caption && (

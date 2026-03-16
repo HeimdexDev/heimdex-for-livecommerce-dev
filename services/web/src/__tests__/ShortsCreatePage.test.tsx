@@ -14,17 +14,24 @@ vi.mock("@/components/SceneThumbnail", () => ({
 }));
 
 let mockVideoId: string | null = "video-test";
+let mockSceneIds: string | null = null;
+const mockRouterPush = vi.fn();
+const mockGetAccessToken = vi.fn().mockResolvedValue("test-token");
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => ({
-    get: (k: string) => (k === "videoId" ? mockVideoId : null),
+    get: (k: string) => {
+      if (k === "videoId") return mockVideoId;
+      if (k === "sceneIds") return mockSceneIds;
+      return null;
+    },
   }),
-  useRouter: () => ({ push: vi.fn() }),
+  useRouter: () => ({ push: mockRouterPush }),
 }));
 
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({
-    getAccessToken: vi.fn().mockResolvedValue("test-token"),
+    getAccessToken: mockGetAccessToken,
     isAuthenticated: true,
     isLoading: false,
     user: { email: "test@test.com", name: "Test" },
@@ -85,6 +92,7 @@ const makeResponse = (scenes: VideoScene[]): VideoScenesResponse => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mockVideoId = "video-test";
+  mockSceneIds = null;
 });
 
 // ── Tests: scene_caption rendering ───────────────────────────────────────
@@ -189,6 +197,17 @@ describe("SceneCard speaker_transcript rendering", () => {
     expect(screen.getByText("00:01:06")).toBeInTheDocument();
   });
 
+  it("renders absolute timestamp with HH:MM:SS offset format", () => {
+    const scene = {
+      ...baseScene,
+      start_ms: 0,
+      speaker_transcript: "SPEAKER_00 [1:02:03]: 테스트",
+    };
+    render(<SceneCard {...defaultCardProps} scene={scene} />);
+    // 0 + 1:02:03 (3723s) = 01:02:03
+    expect(screen.getByText("01:02:03")).toBeInTheDocument();
+  });
+
   it("shows max 2 speaker entries", () => {
     const scene = {
       ...baseScene,
@@ -284,6 +303,29 @@ describe("SceneCard baseline", () => {
     expect(card).toHaveClass("border-gray-200");
   });
 
+  it("checkbox is in title row (not on thumbnail) with Figma styles", () => {
+    render(<SceneCard {...defaultCardProps} selected={false} />);
+    const checkbox = screen.getByTestId("scene-checkbox");
+    // Checkbox is inside the content panel, not inside the thumbnail wrapper
+    expect(checkbox.closest("[data-testid='scene-thumbnail']")).toBeNull();
+    // Figma styles: 16.5px square, rounded-[4px], unselected border
+    expect(checkbox).toHaveClass("size-[16.5px]", "rounded-[4px]");
+    expect(checkbox).toHaveClass("bg-white", "border-[#c7c7c7]");
+  });
+
+  it("selected checkbox shows check icon with #605dec background", () => {
+    render(<SceneCard {...defaultCardProps} selected={true} />);
+    const checkbox = screen.getByTestId("scene-checkbox");
+    expect(checkbox).toHaveClass("bg-[#605dec]");
+    expect(checkbox.querySelector("svg")).toBeInTheDocument();
+  });
+
+  it("unselected checkbox does not show check icon", () => {
+    render(<SceneCard {...defaultCardProps} selected={false} />);
+    const checkbox = screen.getByTestId("scene-checkbox");
+    expect(checkbox.querySelector("svg")).not.toBeInTheDocument();
+  });
+
   it("clicking a scene card calls onToggle", async () => {
     const onToggle = vi.fn();
     const user = userEvent.setup();
@@ -370,5 +412,132 @@ describe("ShortsCreatePage behavior", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /저장하기/ })).not.toBeDisabled();
     });
+  });
+
+  it("pre-selects scenes when sceneIds query param is provided", async () => {
+    mockSceneIds = "scene-1";
+    vi.mocked(getVideoScenes).mockResolvedValue(makeResponse([baseScene]));
+
+    render(<ShortsCreatePage />);
+    await screen.findByText("장면1");
+
+    const card = screen.getByRole("button", { name: /장면1/ });
+    expect(card).toHaveClass("ring-1");
+  });
+
+  it("deselects a scene when clicking a selected scene card", async () => {
+    const scene2 = { ...baseScene, scene_id: "scene-2", start_ms: 10000, end_ms: 20000 };
+    vi.mocked(getVideoScenes).mockResolvedValue(makeResponse([baseScene, scene2]));
+
+    const user = userEvent.setup();
+    render(<ShortsCreatePage />);
+    await screen.findByText("장면1");
+
+    // Select all, then deselect scene-1
+    await user.click(screen.getByRole("button", { name: "전체 선택" }));
+    const cards = screen.getAllByRole("button", { name: /장면/ });
+    expect(cards[0]).toHaveClass("ring-1");
+
+    await user.click(cards[0]);
+    await waitFor(() => {
+      const updated = screen.getAllByRole("button", { name: /장면/ });
+      expect(updated[0]).not.toHaveClass("ring-1");
+      // scene-2 should still be selected
+      expect(updated[1]).toHaveClass("ring-1");
+    });
+  });
+
+  it("saves successfully and navigates to /shorts", async () => {
+    vi.mocked(getVideoScenes).mockResolvedValue(makeResponse([baseScene]));
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "short-1" }), { status: 201 }),
+    );
+
+    const user = userEvent.setup();
+    render(<ShortsCreatePage />);
+    await screen.findByText("장면1");
+
+    await user.click(screen.getByRole("button", { name: /장면1/ }));
+    await user.click(screen.getByRole("button", { name: /저장하기/ }));
+
+    await waitFor(() => {
+      expect(mockRouterPush).toHaveBeenCalledWith("/shorts");
+    });
+
+    vi.mocked(global.fetch).mockRestore();
+  });
+
+  it("shows error message when save fails with detail", async () => {
+    vi.mocked(getVideoScenes).mockResolvedValue(makeResponse([baseScene]));
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ detail: "권한 없음" }), { status: 403 }),
+    );
+
+    const user = userEvent.setup();
+    render(<ShortsCreatePage />);
+    await screen.findByText("장면1");
+
+    await user.click(screen.getByRole("button", { name: /장면1/ }));
+    await user.click(screen.getByRole("button", { name: /저장하기/ }));
+
+    expect(await screen.findByText("권한 없음")).toBeInTheDocument();
+
+    vi.mocked(global.fetch).mockRestore();
+  });
+
+  it("shows fallback error when save fails without detail", async () => {
+    vi.mocked(getVideoScenes).mockResolvedValue(makeResponse([baseScene]));
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response("bad", { status: 500, headers: { "Content-Type": "text/plain" } }),
+    );
+
+    const user = userEvent.setup();
+    render(<ShortsCreatePage />);
+    await screen.findByText("장면1");
+
+    await user.click(screen.getByRole("button", { name: /장면1/ }));
+    await user.click(screen.getByRole("button", { name: /저장하기/ }));
+
+    expect(await screen.findByText("저장 실패 (500)")).toBeInTheDocument();
+
+    vi.mocked(global.fetch).mockRestore();
+  });
+
+  it("shows generic error when fetch throws", async () => {
+    vi.mocked(getVideoScenes).mockResolvedValue(makeResponse([baseScene]));
+    vi.spyOn(global, "fetch").mockRejectedValueOnce("network error");
+
+    const user = userEvent.setup();
+    render(<ShortsCreatePage />);
+    await screen.findByText("장면1");
+
+    await user.click(screen.getByRole("button", { name: /장면1/ }));
+    await user.click(screen.getByRole("button", { name: /저장하기/ }));
+
+    expect(await screen.findByText("저장 중 오류가 발생했습니다.")).toBeInTheDocument();
+
+    vi.mocked(global.fetch).mockRestore();
+  });
+
+  it("handles API error gracefully (getVideoScenes rejects)", async () => {
+    vi.mocked(getVideoScenes).mockRejectedValueOnce(new Error("API error"));
+
+    render(<ShortsCreatePage />);
+
+    expect(await screen.findByText("장면이 없습니다.")).toBeInTheDocument();
+  });
+
+  it("renders gdrive playback URL when source_type is gdrive", async () => {
+    const gdriveResponse: VideoScenesResponse = {
+      ...makeResponse([baseScene]),
+      source_type: "gdrive",
+    };
+    vi.mocked(getVideoScenes).mockResolvedValue(gdriveResponse);
+
+    render(<ShortsCreatePage />);
+    await screen.findByText("장면1");
+
+    const video = document.querySelector("video");
+    expect(video?.src).toContain("cloud");
   });
 });
