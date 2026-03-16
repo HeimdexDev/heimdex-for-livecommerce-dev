@@ -6,6 +6,7 @@ import {
   VideoListResponse,
   VideoScenesResponse,
   VideoStats,
+  VideoPeopleResponse,
 } from "@/lib/types";
 import { API_BASE_URL } from "./utils";
 
@@ -196,4 +197,14 @@ export async function getReprocessStatus(
       "Network error. Check your connection and try again.",
     );
   }
+}
+
+export async function getVideoPeople(
+  videoId: string,
+  getToken?: TokenGetter,
+): Promise<VideoPeopleResponse> {
+  return apiGet<VideoPeopleResponse>(
+    `/api/videos/${encodeURIComponent(videoId)}/people`,
+    getToken,
+  );
 }

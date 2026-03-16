@@ -182,6 +182,18 @@ class Settings(BaseSettings):
     sqs_visual_embed_queue_url: str = ""
     sqs_export_queue_url: str = ""
 
+    # --- Aircloud GPU worker orchestration ---
+    aircloud_enabled: bool = False
+    aircloud_api_key: str = ""
+    aircloud_endpoint_transcode: str = ""
+    aircloud_endpoint_caption: str = ""
+    aircloud_endpoint_stt: str = ""
+    aircloud_endpoint_ocr: str = ""
+    aircloud_endpoint_face: str = ""
+    aircloud_endpoint_visual_embed: str = ""
+    aircloud_wake_debounce_seconds: int = 300   # 5 min between wake-up calls per worker
+    aircloud_cooldown_checks: int = 3           # 3 × 5 min = 15 min idle before stop
+
     # --- Search analytics ---
     analytics_enabled: bool = True  # Record search events to Postgres
     analytics_export_enabled: bool = False  # Nightly S3 Parquet export

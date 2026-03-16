@@ -1,9 +1,14 @@
 import { render, type RenderOptions } from "@testing-library/react";
 import { SceneBasketProvider } from "@/features/basket/useSceneBasket";
+import { OrgSettingsProvider } from "@/lib/orgSettings";
 import type { ReactElement, ReactNode } from "react";
 
 function AllProviders({ children }: { children: ReactNode }) {
-  return <SceneBasketProvider>{children}</SceneBasketProvider>;
+  return (
+    <OrgSettingsProvider>
+      <SceneBasketProvider>{children}</SceneBasketProvider>
+    </OrgSettingsProvider>
+  );
 }
 
 /**

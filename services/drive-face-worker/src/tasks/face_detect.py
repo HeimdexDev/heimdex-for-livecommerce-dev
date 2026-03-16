@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 cv2 = importlib.import_module("cv2")
 np = importlib.import_module("numpy")
 
+# Expand face bounding box by this ratio on each side for thumbnails.
+# 0.4 = 40% of face width/height added to each edge (tight face → head + shoulders).
+THUMBNAIL_PADDING = 0.4
+
 
 def compute_quality(blur_score: float, area_ratio: float, det_conf: float) -> float:
     blur_norm = blur_score / (blur_score + 100.0)
@@ -241,6 +245,14 @@ def _detect_faces(image_paths: list[Path], face_analyzer: Any, video_id: str) ->
                 continue
             embedding = embedding / norm
 
+            pad_x = int(face_w * THUMBNAIL_PADDING)
+            pad_y = int(face_h * THUMBNAIL_PADDING)
+            tx1 = max(0, x1 - pad_x)
+            ty1 = max(0, y1 - pad_y)
+            tx2 = min(width, x2 + pad_x)
+            ty2 = min(height, y2 + pad_y)
+            thumbnail_crop = image[ty1:ty2, tx1:tx2]
+
             detections.append(
                 {
                     "scene_id": scene_id,
@@ -249,7 +261,7 @@ def _detect_faces(image_paths: list[Path], face_analyzer: Any, video_id: str) ->
                     "det_conf": det_conf,
                     "quality": quality,
                     "embedding": embedding,
-                    "crop": crop,
+                    "crop": thumbnail_crop,
                 }
             )
     return detections

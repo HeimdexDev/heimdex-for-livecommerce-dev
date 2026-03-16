@@ -296,6 +296,61 @@ class SceneFacetsMixin:
             **video_meta,
         }
 
+    async def search_people_by_video_title(
+        self,
+        org_id: str,
+        query: str,
+    ) -> dict[str, list[str]]:
+        """Find person clusters appearing in videos whose title matches *query*.
+
+        Uses a dual strategy: BM25 on ``video_title.nori`` (works when Nori
+        plugin is installed) OR case-insensitive wildcard on the keyword field
+        (works everywhere, including production where Nori is absent and the
+        fallback analyzer fails to tokenize Korean filenames).
+
+        Returns ``{person_cluster_id: [matched_video_title, …]}``.
+        """
+        escaped = query.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
+                        {"exists": {"field": "people_cluster_ids"}},
+                    ],
+                    "should": [
+                        {"match": {"video_title.nori": query}},
+                        {"wildcard": {"video_title": {"value": f"*{escaped}*", "case_insensitive": True}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "matching_people": {
+                    "terms": {
+                        "field": "people_cluster_ids",
+                        "size": self.settings.opensearch_facet_size,
+                    },
+                    "aggs": {
+                        "video_titles": {
+                            "terms": {"field": "video_title", "size": 5},
+                        },
+                    },
+                },
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        buckets = response["aggregations"]["matching_people"]["buckets"]
+        return {
+            bucket["key"]: [
+                vt["key"] for vt in bucket["video_titles"]["buckets"]
+            ]
+            for bucket in buckets
+        }
+
     async def get_videos_by_person(
         self,
         org_id: str,
@@ -335,6 +390,54 @@ class SceneFacetsMixin:
                     else None
                 ),
                 "scene_count": int(bucket["scene_count"]["value"]),
+            }
+            for bucket in buckets
+        ]
+
+    async def get_people_by_video(
+        self,
+        org_id: str,
+        video_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return person clusters appearing in scenes of a specific video.
+
+        Aggregates ``people_cluster_ids`` across all scenes that belong to
+        *video_id* within the given org. Each bucket contains the cluster
+        ID and the number of scenes (``face_count``) in which that person
+        appears within this video.
+
+        Returns ``[{"person_cluster_id": str, "face_count": int}, ...]``
+        sorted by face_count descending (OpenSearch default for terms agg).
+        """
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"video_id": video_id}},
+                        {"term": {"content_type": "video"}},
+                        {"exists": {"field": "people_cluster_ids"}},
+                    ],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "by_person": {
+                    "terms": {
+                        "field": "people_cluster_ids",
+                        "size": self.settings.opensearch_facet_size,
+                    },
+                },
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        buckets = response["aggregations"]["by_person"]["buckets"]
+
+        return [
+            {
+                "person_cluster_id": bucket["key"],
+                "face_count": int(bucket["doc_count"]),
             }
             for bucket in buckets
         ]

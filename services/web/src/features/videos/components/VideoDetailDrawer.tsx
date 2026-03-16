@@ -6,6 +6,9 @@ import { formatTimestamp } from "@/lib/api/utils";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { ShortsPlanPanel } from "./ShortsPlanPanel";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
+import { useOrgSettings } from "@/lib/orgSettings";
+import { getDrawerHeroClass, getSmallThumbnailClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
+import { cn } from "@/lib/utils";
 
 interface VideoDetailDrawerProps {
   video: VideoSummary | null;
@@ -26,6 +29,9 @@ export function VideoDetailDrawer({
   onClose,
   agentAvailable,
 }: VideoDetailDrawerProps) {
+  const { settings } = useOrgSettings();
+  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKey = (e: KeyboardEvent) => {
@@ -77,7 +83,7 @@ export function VideoDetailDrawer({
             videoId={video.video_id}
             sceneId={video.source_type === "gdrive" ? `${video.video_id}_scene_000` : undefined}
             agentAvailable={agentAvailable}
-            className="w-full h-40 rounded-lg"
+            className={cn("w-full rounded-lg", getDrawerHeroClass(aspectRatio))}
           />
         </div>
 
@@ -148,7 +154,7 @@ export function VideoDetailDrawer({
                         videoId={video.video_id}
                         sceneId={scene.scene_id}
                         agentAvailable={agentAvailable}
-                        className="flex-shrink-0 w-20 h-14 rounded"
+                        className={cn("flex-shrink-0 rounded", getSmallThumbnailClass(aspectRatio))}
                       />
                     )}
                     <div className="flex-1 min-w-0">

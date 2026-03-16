@@ -11,6 +11,7 @@ class PersonResponse(BaseModel):
     representative_video_id: str | None = None
     representative_scene_id: str | None = None
     is_excluded: bool = False
+    matched_video_titles: list[str] | None = None
 
 
 class PeopleListResponse(BaseModel):

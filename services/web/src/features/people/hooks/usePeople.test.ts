@@ -252,6 +252,7 @@ describe("usePeople", () => {
       vi.mocked(peopleApi.mergePeople).mockResolvedValueOnce({
         target_cluster_id: "person-3",
         merged_source_ids: ["person-1", "person-2"],
+        scenes_updated: 5,
         label: "Merged Person",
       });
 
@@ -310,6 +311,7 @@ describe("usePeople", () => {
       vi.mocked(peopleApi.mergePeople).mockResolvedValueOnce({
         target_cluster_id: "person-3",
         merged_source_ids: ["person-1", "person-2"],
+        scenes_updated: 5,
         label: "Merged Person",
       });
 

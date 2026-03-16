@@ -217,6 +217,14 @@ def main() -> None:
     else:
         logger.info("export_sqs_consumer_disabled")
 
+    # ── GPU Orchestrator (automatic start/stop of Aircloud workers) ──
+    gpu_orch = None
+    if settings.aircloud_enabled:
+        from heimdex_worker_sdk.gpu_orchestrator import get_orchestrator
+        gpu_orch = get_orchestrator()
+        if gpu_orch:
+            logger.info("gpu_orchestrator_enabled")
+
     # ── HTTP Poll (discovery only — no processing claims) ─────────
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -227,6 +235,15 @@ def main() -> None:
         max_instances=1,
         id="drive_discovery_poll",
     )
+
+    if gpu_orch:
+        scheduler.add_job(
+            gpu_orch.check_and_manage,
+            "interval",
+            seconds=300,
+            max_instances=1,
+            id="gpu_orchestrator",
+        )
 
     async def _run() -> None:
         stop_event = asyncio.Event()

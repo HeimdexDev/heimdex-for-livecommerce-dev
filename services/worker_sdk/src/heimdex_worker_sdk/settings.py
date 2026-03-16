@@ -104,6 +104,18 @@ class WorkerSettings(BaseSettings):
     export_expiry_days: int = 3
 
 
+    # --- Aircloud GPU worker orchestration ---
+    aircloud_enabled: bool = False
+    aircloud_api_key: str = ""
+    aircloud_endpoint_transcode: str = ""
+    aircloud_endpoint_caption: str = ""
+    aircloud_endpoint_stt: str = ""
+    aircloud_endpoint_ocr: str = ""
+    aircloud_endpoint_face: str = ""
+    aircloud_endpoint_visual_embed: str = ""
+    aircloud_wake_debounce_seconds: int = 300
+    aircloud_cooldown_checks: int = 3
+
     # --- GPU acceleration (AirCloud+ remote workers) ---
     use_gpu: bool = False  # Set True on GPU instances; caption/OCR engines auto-detect CUDA
     stt_device: str = "cpu"  # "cpu", "cuda", or "auto"; faster-whisper device selection

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useAgent } from "@/features/search/hooks/useAgent";
@@ -14,8 +13,11 @@ import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
 import { ReprocessDialog } from "./ReprocessDialog";
+import { VideoPeoplePanel } from "./VideoPeoplePanel";
+import { useOrgSettings } from "@/lib/orgSettings";
+import { getDetailThumbnailClass, getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
-type ViewMode = "overview" | "scenes";
+type ViewMode = "overview" | "scenes" | "people";
 
 const SCENES_PER_PAGE = 10;
 
@@ -266,11 +268,13 @@ function OverviewPanel({
   allTags,
   videoId,
   onSwitchToScenes,
+  onSwitchToPeople,
 }: {
   scenes: VideoScene[];
   allTags: string[];
   videoId: string;
   onSwitchToScenes: () => void;
+  onSwitchToPeople: () => void;
 }) {
   const router = useRouter();
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
@@ -325,13 +329,14 @@ function OverviewPanel({
           <FilmIcon />
           영상 장면 분석
         </button>
-        <Link
-          href="/settings/people"
+        <button
+          type="button"
+          onClick={onSwitchToPeople}
           className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
         >
           <PersonIcon />
           인물 라벨 관리
-        </Link>
+        </button>
         <button
           type="button"
           onClick={() => router.push(`/shorts/create?videoId=${videoId}`)}
@@ -419,6 +424,7 @@ function SceneCard({
   onToggle,
   onSeek,
   isPlaying,
+  aspectRatio,
 }: {
   scene: VideoScene;
   index: number;
@@ -428,6 +434,7 @@ function SceneCard({
   onToggle: (id: string) => void;
   onSeek?: (startMs: number) => void;
   isPlaying?: boolean;
+  aspectRatio: ThumbnailAspectRatio;
 }) {
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [subtitleExpanded, setSubtitleExpanded] = useState(false);
@@ -467,7 +474,7 @@ function SceneCard({
       )}
     >
       <div className="flex gap-0">
-        <div className="w-[200px] flex-shrink-0">
+        <div className={cn("flex-shrink-0", getDetailThumbnailClass(aspectRatio))}>
           <button
             type="button"
             onClick={() => onSeek?.(scene.start_ms)}
@@ -478,7 +485,7 @@ function SceneCard({
               videoId={videoId}
               sceneId={scene.scene_id}
               agentAvailable={agentAvailable}
-              className="aspect-video w-full rounded-tl-xl"
+              className={cn("w-full rounded-tl-xl", getThumbnailAspectClass(aspectRatio))}
             />
             <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors rounded-tl-xl">
               <svg
@@ -490,11 +497,8 @@ function SceneCard({
               </svg>
             </div>
           </button>
-          <div className="px-3 py-2">
-            <span className="mr-2 inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
-              검색 정확도 00%
-            </span>
-            <div className="mt-1.5 flex flex-wrap gap-1">
+          {tags.length > 0 && (
+            <div className="px-3 py-2 flex flex-wrap gap-1">
               {tags.map((tag) => (
                 <span
                   key={tag}
@@ -503,13 +507,8 @@ function SceneCard({
                   {tag}
                 </span>
               ))}
-              {tags.length === 0 && (
-                <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700">
-                  해시태그
-                </span>
-              )}
             </div>
-          </div>
+          )}
         </div>
 
         <div className="flex-1 min-w-0 p-4">
@@ -617,6 +616,7 @@ function ScenesPanel({
   onSeekToScene,
   activeSceneMs,
   getToken,
+  aspectRatio,
 }: {
   scenes: VideoScene[];
   totalScenes: number;
@@ -625,6 +625,7 @@ function ScenesPanel({
   onSeekToScene?: (startMs: number) => void;
   activeSceneMs?: number | null;
   getToken: () => Promise<string | null>;
+  aspectRatio: ThumbnailAspectRatio;
 }) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
@@ -784,6 +785,7 @@ function ScenesPanel({
               onToggle={toggleSelection}
               onSeek={onSeekToScene}
               isPlaying={activeSceneMs === scene.start_ms}
+              aspectRatio={aspectRatio}
             />
           ))
         )}
@@ -861,6 +863,8 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
   const [isLoading, setIsLoading] = useState(true);
   const [seekMs, setSeekMs] = useState<number | null>(initialT ? Number(initialT) : null);
   const [seekKey, setSeekKey] = useState(initialT ? 1 : 0);
+  const { settings } = useOrgSettings();
+  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
 
   const [reprocessStatus, setReprocessStatus] = useState<ReprocessJobResponse | null>(null);
   const [isReprocessDialogOpen, setIsReprocessDialogOpen] = useState(false);
@@ -971,6 +975,14 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             <span>&gt;</span>
             <span className="text-gray-700">영상 장면 분석</span>
           </>
+        ) : view === "people" ? (
+          <>
+            <button type="button" onClick={() => setView("overview")} className="hover:text-gray-700">
+              {videoTitle}
+            </button>
+            <span>&gt;</span>
+            <span className="text-gray-700">인물 관리</span>
+          </>
         ) : (
           <span className="text-gray-700">{videoTitle}</span>
         )}
@@ -1001,27 +1013,16 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             isReprocessing={isReprocessing}
           />
 
-          {view === "scenes" && (
-            <div className="mt-4">
-              <span className="mr-2 inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
-                검색 정확도 00%
-              </span>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {allTags.slice(0, 3).map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700"
-                  >
-                    {tag}
-                  </span>
-                ))}
-                {allTags.length === 0 && (
-                  <>
-                    <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700">해시태그</span>
-                    <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700">해시태그</span>
-                  </>
-                )}
-              </div>
+          {view === "scenes" && allTags.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-1">
+              {allTags.slice(0, 3).map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700"
+                >
+                  {tag}
+                </span>
+              ))}
             </div>
           )}
         </div>
@@ -1033,8 +1034,9 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               allTags={allTags}
               videoId={videoId}
               onSwitchToScenes={() => setView("scenes")}
+              onSwitchToPeople={() => setView("people")}
             />
-          ) : (
+          ) : view === "scenes" ? (
             <ScenesPanel
               scenes={scenes}
               totalScenes={totalScenes}
@@ -1043,6 +1045,12 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               onSeekToScene={handleSeekToScene}
               activeSceneMs={seekMs}
               getToken={getAccessToken}
+              aspectRatio={aspectRatio}
+            />
+          ) : (
+            <VideoPeoplePanel
+              videoId={videoId}
+              onSwitchToOverview={() => setView("overview")}
             />
           )}
         </div>

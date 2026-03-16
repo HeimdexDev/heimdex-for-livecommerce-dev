@@ -12,10 +12,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.db.base import get_db_session
 from app.dependencies import (
     get_drive_file_repository,
+    get_people_cluster_label_repository,
+    get_people_exclude_preference_repository,
     get_reprocess_repository,
+    get_scene_opensearch_client,
     get_video_service,
     get_youtube_video_repository,
 )
@@ -23,6 +27,12 @@ from app.logging_config import get_logger
 from app.modules.auth import get_current_user
 from app.modules.drive.models import DriveConnection
 from app.modules.drive.repository import DriveFileRepository
+from app.modules.people.repository import (
+    PeopleClusterLabelRepository,
+    PeopleExcludePreferenceRepository,
+)
+from app.modules.people.schemas import PersonResponse
+from app.modules.search.scene_client import SceneSearchClient
 from app.modules.tenancy import OrgContext, get_current_org
 from app.modules.users.models import User
 from app.modules.videos.reprocess_repository import ReprocessRepository
@@ -33,6 +43,7 @@ from app.modules.videos.schemas import (
     ShortsPlanRequest,
     ShortsPlanResponse,
     VideoListResponse,
+    VideoPeopleResponse,
     VideoScenesResponse,
     VideoStats,
 )
@@ -151,6 +162,59 @@ async def video_scenes(
         page_size=page_size,
         offset=offset,
     )
+
+
+@router.get("/{video_id}/people", response_model=VideoPeopleResponse)
+async def get_video_people(
+    video_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+    people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
+    exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
+):
+    """List people (face clusters) appearing in a specific video."""
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    org_id_str = str(org_ctx.org_id)
+    user_id = cast(UUID, user.id)
+
+    people_buckets = await scene_opensearch.get_people_by_video(org_id_str, video_id)
+    if not people_buckets:
+        return VideoPeopleResponse(video_id=video_id, people=[], total=0)
+
+    labels = await people_repo.list_by_org(org_ctx.org_id)
+    label_map = {entry.person_cluster_id: entry.label for entry in labels}
+
+    excluded_ids = set(await exclude_repo.list_by_user(org_ctx.org_id, user_id))
+
+    cluster_ids = [b["person_cluster_id"] for b in people_buckets]
+    rep_scenes = await scene_opensearch.get_representative_scenes_for_people(
+        org_id_str, cluster_ids,
+    )
+
+    people: list[PersonResponse] = []
+    for bucket in people_buckets:
+        cluster_id = bucket["person_cluster_id"]
+        person = PersonResponse(
+            person_cluster_id=cluster_id,
+            label=label_map.get(cluster_id),
+            face_count=bucket["face_count"],
+            is_excluded=cluster_id in excluded_ids,
+        )
+        scene_info = rep_scenes.get(cluster_id)
+        if scene_info:
+            person.representative_video_id = scene_info["video_id"]
+            person.representative_scene_id = scene_info["scene_id"]
+            person.last_seen_scene_time = scene_info.get("ingest_time")
+        people.append(person)
+
+    return VideoPeopleResponse(video_id=video_id, people=people, total=len(people))
 
 
 @router.post("/{video_id}/shorts/plan", response_model=ShortsPlanResponse)

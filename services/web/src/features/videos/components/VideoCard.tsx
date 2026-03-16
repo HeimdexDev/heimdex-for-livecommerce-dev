@@ -5,6 +5,8 @@ import { formatTimestamp } from "@/lib/api/utils";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
+import { useOrgSettings } from "@/lib/orgSettings";
+import { getVideoCardThumbnailClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
 interface VideoCardProps {
   video: VideoSummary;
@@ -28,6 +30,8 @@ function formatRelativeTime(iso: string): string {
 export function VideoCard({ video, onSelect, agentAvailable }: VideoCardProps) {
   const duration = video.last_scene_end_ms - video.first_scene_start_ms;
   const allTags = [...video.keyword_tags, ...video.product_tags].slice(0, 5);
+  const { settings } = useOrgSettings();
+  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
 
   return (
     <button
@@ -39,7 +43,7 @@ export function VideoCard({ video, onSelect, agentAvailable }: VideoCardProps) {
           videoId={video.video_id}
           sceneId={video.source_type === "gdrive" || video.source_type === "youtube" ? `${video.video_id}_scene_000` : undefined}
           agentAvailable={agentAvailable}
-          className="flex-shrink-0 w-28 h-20 rounded-lg"
+          className={cn("flex-shrink-0 rounded-lg", getVideoCardThumbnailClass(aspectRatio))}
           sourceType={video.source_type}
         />
 

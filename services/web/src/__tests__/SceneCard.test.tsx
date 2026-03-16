@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
@@ -11,6 +11,13 @@ import type {
   SceneResult,
   DebugInfo,
 } from "@/lib/api";
+
+vi.mock("@/lib/orgSettings", () => ({
+  useOrgSettings: () => ({
+    settings: { thumbnail_aspect_ratio: "16:9" },
+  }),
+  OrgSettingsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
 
 const baseDebug: DebugInfo = {
   lexical_rank: 1,

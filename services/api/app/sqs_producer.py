@@ -24,6 +24,15 @@ from app.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def _wake_gpu_worker(job_type: str) -> None:
+    """Wake the Aircloud GPU worker for this job type.  Fire-and-forget."""
+    try:
+        from heimdex_worker_sdk.gpu_orchestrator import ensure_worker_running
+        ensure_worker_running(job_type)
+    except Exception:
+        pass
+
+
 # ── Queue URL mapping ──────────────────────────────────────────────────
 
 _QUEUE_URL_ATTRS = {
@@ -101,6 +110,7 @@ def _publish(
             message_id=resp.get("MessageId"),
             file_id=body.get("file_id", ""),
         )
+        _wake_gpu_worker(job_type)
     except Exception:
         logger.exception(
             "sqs_publish_failed",
@@ -453,3 +463,5 @@ def publish_scene_enrichment_jobs(
             failed=failed,
             total_scenes=len(scenes),
         )
+        if published > 0:
+            _wake_gpu_worker(job_type)

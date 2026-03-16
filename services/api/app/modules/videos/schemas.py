@@ -6,6 +6,7 @@ All data is derived from OpenSearch scene aggregations — no Postgres table.
 from pydantic import BaseModel, Field
 
 from heimdex_media_contracts.ingest import SourceType
+from app.modules.people.schemas import PersonResponse
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +90,12 @@ class VideoScenesResponse(BaseModel):
     web_view_link: str | None = None
     scenes: list[VideoScene]
     total: int
+
+
+class VideoPeopleResponse(BaseModel):
+    video_id: str
+    people: list[PersonResponse] = Field(default_factory=list)
+    total: int = 0
 
 
 # ---------------------------------------------------------------------------

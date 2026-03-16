@@ -27,6 +27,7 @@ import type {
 import { cn } from "@/lib/utils";
 import { PersonIcon } from "@/components/icons";
 import { ScenePreviewTooltip } from "@/components/ScenePreviewTooltip";
+import { AvatarThumbnail } from "@/components/people/AvatarThumbnail";
 import { DeletePersonDialog } from "./DeletePersonDialog";
 import { MergeConfirmDialog } from "./MergeConfirmDialog";
 import { TimelineBar } from "./TimelineBar";
@@ -128,59 +129,6 @@ function GripVerticalIcon({ className }: { className?: string }) {
     <svg className={className} fill="currentColor" viewBox="0 0 20 20">
       <path d="M7 2a1 1 0 110 2H6a1 1 0 010-2h1zm3 0a1 1 0 110 2h-1a1 1 0 010-2h1zM7 7a1 1 0 110 2H6a1 1 0 010-2h1zm3 0a1 1 0 110 2h-1a1 1 0 010-2h1zM7 12a1 1 0 110 2H6a1 1 0 010-2h1zm3 0a1 1 0 110 2h-1a1 1 0 010-2h1z" />
     </svg>
-  );
-}
-
-/** Thumbnail content shared between PersonAvatar and DragOverlay */
-function AvatarThumbnail({
-  person,
-  agentAvailable,
-  className,
-}: {
-  person: PersonResponse;
-  agentAvailable: boolean;
-  className?: string;
-}) {
-  const [imgError, setImgError] = useState(false);
-  const faceThumbnailUrl = getFaceThumbnailUrl(person.person_cluster_id);
-  const sceneThumbnailUrl =
-    person.representative_video_id && person.representative_scene_id
-      ? getCloudThumbnailUrl(person.representative_video_id, person.representative_scene_id)
-      : null;
-  const [useFallback, setUseFallback] = useState(false);
-  const thumbnailUrl = !useFallback ? faceThumbnailUrl : sceneThumbnailUrl;
-
-  return (
-    <div
-      className={cn(
-        "flex h-24 w-24 items-center justify-center overflow-hidden rounded-2xl bg-gray-100 transition-all group-hover:brightness-90",
-        className,
-      )}
-    >
-      {thumbnailUrl && !imgError ? (
-        <img
-          src={thumbnailUrl}
-          alt={person.label ?? "인물"}
-          className="h-full w-full object-cover"
-          onError={() => {
-            if (!useFallback && sceneThumbnailUrl) {
-              setUseFallback(true);
-            } else {
-              setImgError(true);
-            }
-          }}
-        />
-      ) : (
-        <div className="relative flex h-full w-full items-center justify-center">
-          <PersonIcon className="h-12 w-12 text-gray-400" />
-          {!agentAvailable && (
-            <span className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-gray-500/80 px-1.5 py-0.5 text-[8px] font-medium leading-tight text-white">
-              오프라인
-            </span>
-          )}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -321,6 +269,12 @@ function PersonAvatar({
         {person.label && (
            <span className="max-w-[96px] truncate text-xs text-gray-600">
             {person.label}
+          </span>
+        )}
+        {person.matched_video_titles && person.matched_video_titles.length > 0 && (
+          <span className="max-w-[96px] truncate text-[10px] text-gray-400">
+            {person.matched_video_titles[0]}
+            {person.matched_video_titles.length > 1 && ` 외 ${person.matched_video_titles.length - 1}건`}
           </span>
         )}
       </div>
@@ -870,30 +824,30 @@ export function PeopleSettings() {
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 24;
 
-  const filteredPeople = useMemo(() => {
-    if (!searchQuery.trim()) return people;
-    const q = searchQuery.trim().toLowerCase();
-    return people.filter(
-      (p) =>
-        p.label?.toLowerCase().includes(q) ||
-        p.person_cluster_id.toLowerCase().includes(q),
-    );
-  }, [people, searchQuery]);
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    const trimmed = searchQuery.trim();
+    const timer = setTimeout(() => {
+      fetchPeople(trimmed || undefined);
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery, fetchPeople]);
 
-  const totalPages = Math.ceil(filteredPeople.length / PAGE_SIZE);
-  const paginatedPeople = filteredPeople.slice(
+  const totalPages = Math.ceil(people.length / PAGE_SIZE);
+  const paginatedPeople = people.slice(
     (currentPage - 1) * PAGE_SIZE,
     currentPage * PAGE_SIZE,
   );
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery]);
-
-  useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(filteredPeople.length / PAGE_SIZE));
+    const maxPage = Math.max(1, Math.ceil(people.length / PAGE_SIZE));
     if (currentPage > maxPage) setCurrentPage(maxPage);
-  }, [filteredPeople.length, currentPage]);
+  }, [people.length, currentPage]);
 
   const selectedPeople = useMemo(
     () => people.filter((p) => selectedIds.has(p.person_cluster_id)),
@@ -1063,7 +1017,7 @@ export function PeopleSettings() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder={
                       hasPeople
-                        ? "인물 이름을 검색해주세요."
+                        ? "인물 이름 또는 영상 제목으로 검색"
                         : "파일 추가 완료 후에 인물을 찾아보세요."
                     }
                     className="w-full rounded-lg border border-gray-200 py-2.5 pl-10 pr-4 text-sm placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"

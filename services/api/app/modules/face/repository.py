@@ -1,3 +1,4 @@
+import json
 from typing import TypedDict, cast
 from uuid import UUID
 
@@ -34,7 +35,18 @@ class FaceRepository:
             return [None] * len(embeddings)
 
         cluster_ids = [str(r["cluster_id"]) for r in rows]
-        centroids = np.array([list(r["centroid_embedding"]) for r in rows], dtype=np.float32)
+
+        def _parse_embedding(raw: object) -> list[float]:
+            """Parse pgvector embedding from asyncpg (returns str) or ORM (returns ndarray/list)."""
+            if isinstance(raw, str):
+                return json.loads(raw)
+            if isinstance(raw, np.ndarray):
+                return raw.tolist()
+            if isinstance(raw, (list, tuple)):
+                return [float(x) for x in raw]
+            raise TypeError(f"Unexpected embedding type: {type(raw)}")
+
+        centroids = np.array([_parse_embedding(r["centroid_embedding"]) for r in rows], dtype=np.float32)
 
         input_arr = np.array(embeddings, dtype=np.float32)
 
