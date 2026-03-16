@@ -490,11 +490,8 @@ function SceneCard({
               </svg>
             </div>
           </button>
-          <div className="px-3 py-2">
-            <span className="mr-2 inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
-              검색 정확도 00%
-            </span>
-            <div className="mt-1.5 flex flex-wrap gap-1">
+          {tags.length > 0 && (
+            <div className="px-3 py-2 flex flex-wrap gap-1">
               {tags.map((tag) => (
                 <span
                   key={tag}
@@ -503,13 +500,8 @@ function SceneCard({
                   {tag}
                 </span>
               ))}
-              {tags.length === 0 && (
-                <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700">
-                  해시태그
-                </span>
-              )}
             </div>
-          </div>
+          )}
         </div>
 
         <div className="flex-1 min-w-0 p-4">
@@ -1001,27 +993,16 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             isReprocessing={isReprocessing}
           />
 
-          {view === "scenes" && (
-            <div className="mt-4">
-              <span className="mr-2 inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
-                검색 정확도 00%
-              </span>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {allTags.slice(0, 3).map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700"
-                  >
-                    {tag}
-                  </span>
-                ))}
-                {allTags.length === 0 && (
-                  <>
-                    <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700">해시태그</span>
-                    <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700">해시태그</span>
-                  </>
-                )}
-              </div>
+          {view === "scenes" && allTags.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-1">
+              {allTags.slice(0, 3).map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700"
+                >
+                  {tag}
+                </span>
+              ))}
             </div>
           )}
         </div>

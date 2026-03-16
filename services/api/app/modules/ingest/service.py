@@ -28,6 +28,8 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from heimdex_media_contracts.ingest import IngestScenesRequest
 
+from heimdex_media_contracts.speech.tagger import SpeechTagger, PRODUCT_KEYWORD_DICT
+
 from app.logging_config import get_logger
 from app.modules.ingest.schemas import EnrichSceneUpdate, EnrichScenesRequest
 from app.modules.libraries.repository import LibraryRepository
@@ -36,6 +38,40 @@ from app.modules.search.normalize import normalize_transcript
 from app.modules.search.scene_client import SceneSearchClient
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Keyword tagging — reuses contracts SpeechTagger (pure string matching)
+# ---------------------------------------------------------------------------
+_keyword_tagger = SpeechTagger()
+_product_tagger = SpeechTagger(keyword_dict=PRODUCT_KEYWORD_DICT)
+
+
+def generate_tags(transcript: str, caption: str) -> tuple[list[str], list[str]]:
+    """Generate keyword and product tags from transcript + caption text.
+
+    Combines both text sources, deduplicates, and returns sorted tag lists.
+    Pure string matching — no ML, no I/O, microsecond-scale.
+    """
+    from heimdex_media_contracts.speech.schemas import SpeechSegment
+
+    segments: list[SpeechSegment] = []
+    if transcript:
+        segments.append(SpeechSegment(start=0.0, end=0.0, text=transcript))
+    if caption:
+        segments.append(SpeechSegment(start=0.0, end=0.0, text=caption))
+    if not segments:
+        return [], []
+
+    keyword_tags: set[str] = set()
+    for tagged in _keyword_tagger.tag(segments):
+        keyword_tags.update(tagged.tags)
+
+    product_tags: set[str] = set()
+    for tagged in _product_tagger.tag(segments):
+        product_tags.update(tagged.tags)
+
+    return sorted(keyword_tags), sorted(product_tags)
+
 
 # ---------------------------------------------------------------------------
 # Embedding text construction (AD-2: single vector, caption-first priority)
@@ -316,8 +352,6 @@ class SceneIngestService:
             if enrichment.visual_embedding is not None:
                 partial["visual_embedding"] = enrichment.visual_embedding
             if needs_embedding_update:
-                # Merge newly enriched values with existing doc values
-                # for full embedding text using caption-first priority (AD-2).
                 t_raw = partial.get("transcript_raw", existing.get("transcript_raw", ""))
                 o_raw = partial.get("ocr_text_raw", existing.get("ocr_text_raw", ""))
                 c_raw = partial.get("scene_caption", existing.get("scene_caption", ""))
@@ -327,6 +361,12 @@ class SceneIngestService:
                 embedding_text = build_embedding_text(t_norm, o_norm, c_norm)
                 if embedding_text:
                     embedding_inputs.append((len(partial_updates), embedding_text))
+
+                keyword_tags, product_tags = generate_tags(t_raw or "", c_raw or "")
+                if keyword_tags:
+                    partial["keyword_tags"] = keyword_tags
+                if product_tags:
+                    partial["product_tags"] = product_tags
 
             partial["ingest_time"] = now.isoformat()
             partial_updates.append((doc_id, partial))

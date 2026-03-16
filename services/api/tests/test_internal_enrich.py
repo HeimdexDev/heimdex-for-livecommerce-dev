@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from app.modules.ingest.internal_router import _verify_internal_token, internal_enrich_scenes
 from app.modules.ingest.schemas import EnrichSceneUpdate, EnrichScenesRequest
-from app.modules.ingest.service import SceneIngestService
+from app.modules.ingest.service import SceneIngestService, generate_tags
 from app.modules.orgs.repository import OrgRepository
 
 
@@ -286,3 +286,154 @@ class TestInternalEnrichEndpoint:
                     ingest_service=mock_ingest_service,
                 )
             assert exc_info.value.status_code == 404
+
+
+class TestGenerateTags:
+    def test_korean_transcript_produces_keyword_tags(self):
+        kw, _ = generate_tags("지금 바로 할인 가격으로 구매하세요", "")
+        assert "price" in kw
+        assert "cta" in kw
+
+    def test_korean_transcript_produces_product_tags(self):
+        _, pt = generate_tags("이 스킨케어 세럼은 수분크림과 함께 사용하세요", "")
+        assert "skincare" in pt
+
+    def test_caption_text_produces_tags(self):
+        kw, pt = generate_tags("", "호스트가 립스틱을 바르며 할인 쿠폰을 설명하고 있다")
+        assert "price" in kw or "coupon" in kw
+        assert "makeup" in pt
+
+    def test_combined_transcript_and_caption(self):
+        kw, pt = generate_tags(
+            "배송은 무료배송입니다",
+            "호스트가 샴푸 제품을 보여주고 있다",
+        )
+        assert "delivery" in kw
+        assert "haircare" in pt
+
+    def test_empty_inputs_return_empty_lists(self):
+        kw, pt = generate_tags("", "")
+        assert kw == []
+        assert pt == []
+
+    def test_no_matching_keywords_return_empty(self):
+        kw, pt = generate_tags("오늘 날씨가 좋습니다", "")
+        assert kw == []
+        assert pt == []
+
+    def test_tags_are_sorted(self):
+        kw, _ = generate_tags("지금 구매하세요 할인 가격 쿠폰 배송", "")
+        assert kw == sorted(kw)
+
+
+class TestEnrichTagGeneration:
+    @pytest.fixture
+    def mock_scene_client(self):
+        client = MagicMock()
+        client.mget_scenes = AsyncMock()
+        client.bulk_partial_update_scenes = AsyncMock()
+        return client
+
+    @pytest.fixture
+    def service(self, mock_db_session, mock_scene_client):
+        return SceneIngestService(mock_db_session, mock_scene_client)
+
+    @pytest.mark.asyncio
+    async def test_stt_enrichment_generates_keyword_tags(self, service, mock_scene_client):
+        org_id = uuid4()
+        scene_id = "vid1_scene_0"
+        doc_id = f"{org_id}:{scene_id}"
+        request = EnrichScenesRequest(
+            video_id="vid1",
+            scenes=[EnrichSceneUpdate(
+                scene_id=scene_id,
+                transcript_raw="지금 바로 할인 가격으로 구매하세요",
+            )],
+        )
+        mock_scene_client.mget_scenes.return_value = {
+            doc_id: {"scene_id": scene_id, "transcript_raw": "", "ocr_text_raw": "", "scene_caption": ""}
+        }
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.1] * 1024]):
+            await service.enrich_scenes(request, org_id)
+
+        updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
+        _, partial = updates[0]
+        assert "keyword_tags" in partial
+        assert "price" in partial["keyword_tags"]
+        assert "cta" in partial["keyword_tags"]
+
+    @pytest.mark.asyncio
+    async def test_caption_enrichment_generates_product_tags(self, service, mock_scene_client):
+        org_id = uuid4()
+        scene_id = "vid1_scene_0"
+        doc_id = f"{org_id}:{scene_id}"
+        request = EnrichScenesRequest(
+            video_id="vid1",
+            scenes=[EnrichSceneUpdate(
+                scene_id=scene_id,
+                scene_caption="호스트가 립스틱을 바르고 있다",
+            )],
+        )
+        mock_scene_client.mget_scenes.return_value = {
+            doc_id: {"scene_id": scene_id, "transcript_raw": "", "ocr_text_raw": "", "scene_caption": ""}
+        }
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.1] * 1024]):
+            await service.enrich_scenes(request, org_id)
+
+        updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
+        _, partial = updates[0]
+        assert "product_tags" in partial
+        assert "makeup" in partial["product_tags"]
+
+    @pytest.mark.asyncio
+    async def test_enrichment_combines_existing_and_new_text_for_tags(self, service, mock_scene_client):
+        org_id = uuid4()
+        scene_id = "vid1_scene_0"
+        doc_id = f"{org_id}:{scene_id}"
+        request = EnrichScenesRequest(
+            video_id="vid1",
+            scenes=[EnrichSceneUpdate(
+                scene_id=scene_id,
+                scene_caption="호스트가 샴푸를 보여주고 있다",
+            )],
+        )
+        mock_scene_client.mget_scenes.return_value = {
+            doc_id: {
+                "scene_id": scene_id,
+                "transcript_raw": "지금 할인 가격입니다",
+                "ocr_text_raw": "",
+                "scene_caption": "",
+            }
+        }
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.1] * 1024]):
+            await service.enrich_scenes(request, org_id)
+
+        updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
+        _, partial = updates[0]
+        assert "keyword_tags" in partial
+        assert "price" in partial["keyword_tags"]
+        assert "product_tags" in partial
+        assert "haircare" in partial["product_tags"]
+
+    @pytest.mark.asyncio
+    async def test_no_tags_when_text_has_no_keywords(self, service, mock_scene_client):
+        org_id = uuid4()
+        scene_id = "vid1_scene_0"
+        doc_id = f"{org_id}:{scene_id}"
+        request = EnrichScenesRequest(
+            video_id="vid1",
+            scenes=[EnrichSceneUpdate(
+                scene_id=scene_id,
+                transcript_raw="오늘 날씨가 좋습니다",
+            )],
+        )
+        mock_scene_client.mget_scenes.return_value = {
+            doc_id: {"scene_id": scene_id, "transcript_raw": "", "ocr_text_raw": "", "scene_caption": ""}
+        }
+        with patch("app.modules.ingest.service.get_passage_embeddings_batch", return_value=[[0.1] * 1024]):
+            await service.enrich_scenes(request, org_id)
+
+        updates = mock_scene_client.bulk_partial_update_scenes.call_args[0][0]
+        _, partial = updates[0]
+        assert "keyword_tags" not in partial
+        assert "product_tags" not in partial
