@@ -296,6 +296,56 @@ class SceneFacetsMixin:
             **video_meta,
         }
 
+    async def search_people_by_video_title(
+        self,
+        org_id: str,
+        query: str,
+    ) -> dict[str, list[str]]:
+        """Find person clusters appearing in videos whose title matches *query*.
+
+        Uses BM25 on the ``video_title.nori`` sub-field so that Korean
+        tokenisation is applied.
+
+        Returns ``{person_cluster_id: [matched_video_title, …]}``.
+        """
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
+                        {"exists": {"field": "people_cluster_ids"}},
+                    ],
+                    "must": [
+                        {"match": {"video_title.nori": query}},
+                    ],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "matching_people": {
+                    "terms": {
+                        "field": "people_cluster_ids",
+                        "size": self.settings.opensearch_facet_size,
+                    },
+                    "aggs": {
+                        "video_titles": {
+                            "terms": {"field": "video_title", "size": 5},
+                        },
+                    },
+                },
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        buckets = response["aggregations"]["matching_people"]["buckets"]
+        return {
+            bucket["key"]: [
+                vt["key"] for vt in bucket["video_titles"]["buckets"]
+            ]
+            for bucket in buckets
+        }
+
     async def get_videos_by_person(
         self,
         org_id: str,

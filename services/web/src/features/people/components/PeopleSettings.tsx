@@ -323,6 +323,12 @@ function PersonAvatar({
             {person.label}
           </span>
         )}
+        {person.matched_video_titles && person.matched_video_titles.length > 0 && (
+          <span className="max-w-[96px] truncate text-[10px] text-gray-400">
+            {person.matched_video_titles[0]}
+            {person.matched_video_titles.length > 1 && ` 외 ${person.matched_video_titles.length - 1}건`}
+          </span>
+        )}
       </div>
     </ScenePreviewTooltip>
   );
@@ -870,30 +876,30 @@ export function PeopleSettings() {
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 24;
 
-  const filteredPeople = useMemo(() => {
-    if (!searchQuery.trim()) return people;
-    const q = searchQuery.trim().toLowerCase();
-    return people.filter(
-      (p) =>
-        p.label?.toLowerCase().includes(q) ||
-        p.person_cluster_id.toLowerCase().includes(q),
-    );
-  }, [people, searchQuery]);
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    const trimmed = searchQuery.trim();
+    const timer = setTimeout(() => {
+      fetchPeople(trimmed || undefined);
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery, fetchPeople]);
 
-  const totalPages = Math.ceil(filteredPeople.length / PAGE_SIZE);
-  const paginatedPeople = filteredPeople.slice(
+  const totalPages = Math.ceil(people.length / PAGE_SIZE);
+  const paginatedPeople = people.slice(
     (currentPage - 1) * PAGE_SIZE,
     currentPage * PAGE_SIZE,
   );
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [searchQuery]);
-
-  useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(filteredPeople.length / PAGE_SIZE));
+    const maxPage = Math.max(1, Math.ceil(people.length / PAGE_SIZE));
     if (currentPage > maxPage) setCurrentPage(maxPage);
-  }, [filteredPeople.length, currentPage]);
+  }, [people.length, currentPage]);
 
   const selectedPeople = useMemo(
     () => people.filter((p) => selectedIds.has(p.person_cluster_id)),
@@ -1063,7 +1069,7 @@ export function PeopleSettings() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder={
                       hasPeople
-                        ? "인물 이름을 검색해주세요."
+                        ? "인물 이름 또는 영상 제목으로 검색"
                         : "파일 추가 완료 후에 인물을 찾아보세요."
                     }
                     className="w-full rounded-lg border border-gray-200 py-2.5 pl-10 pr-4 text-sm placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"

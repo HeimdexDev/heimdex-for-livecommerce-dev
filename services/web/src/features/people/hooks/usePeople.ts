@@ -20,7 +20,7 @@ export interface UsePeopleReturn {
   error: string | null;
   renamePerson: (personClusterId: string, label: string | null) => Promise<void>;
   isRenaming: boolean;
-  fetchPeople: () => Promise<void>;
+  fetchPeople: (query?: string) => Promise<void>;
   excludedIds: Set<string>;
   toggleExclude: (personClusterId: string) => void;
   isSavingExcludes: boolean;
@@ -50,12 +50,12 @@ export function usePeople(): UsePeopleReturn {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestExcludedRef = useRef<Set<string>>(new Set());
 
-  const fetchPeopleList = useCallback(async () => {
+  const fetchPeopleList = useCallback(async (query?: string) => {
     setIsLoading(true);
     setError(null);
     try {
       const [peopleRes, excludeRes] = await Promise.all([
-        getPeople(getAccessToken),
+        getPeople(getAccessToken, query),
         getExcludePreferences(getAccessToken),
       ]);
       setPeople(peopleRes.people);

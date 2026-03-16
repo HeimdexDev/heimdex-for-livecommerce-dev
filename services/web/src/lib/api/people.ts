@@ -64,8 +64,10 @@ async function apiRequest<T>(
 
 export async function getPeople(
   getToken?: TokenGetter,
+  query?: string,
 ): Promise<PeopleListResponse> {
-  return apiRequest<PeopleListResponse>("/api/people", "GET", getToken);
+  const params = query ? `?q=${encodeURIComponent(query)}` : "";
+  return apiRequest<PeopleListResponse>(`/api/people${params}`, "GET", getToken);
 }
 
 export async function renamePerson(

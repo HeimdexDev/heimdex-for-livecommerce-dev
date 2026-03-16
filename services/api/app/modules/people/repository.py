@@ -101,6 +101,18 @@ class PeopleClusterLabelRepository:
         )
         return list(result.scalars().all())
 
+    async def search_by_label(
+        self, org_id: UUID, query: str, limit: int = 500,
+    ) -> list[str]:
+        result = await self.session.execute(
+            select(PeopleClusterLabel.person_cluster_id).where(
+                PeopleClusterLabel.org_id == org_id,
+                PeopleClusterLabel.label.isnot(None),
+                PeopleClusterLabel.label.ilike(f"%{query}%"),
+            ).limit(limit)
+        )
+        return list(result.scalars().all())
+
     async def delete_by_cluster_id(self, org_id: UUID, cluster_id: str) -> bool:
         """Hard-delete a cluster label row. Returns True if a row was deleted."""
         existing = await self.get_by_cluster_id(org_id, cluster_id)

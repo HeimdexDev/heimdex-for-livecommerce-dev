@@ -6,6 +6,7 @@ export interface PersonResponse {
   representative_video_id: string | null;
   representative_scene_id: string | null;
   is_excluded: boolean;
+  matched_video_titles?: string[] | null;
 }
 
 export interface PeopleListResponse {

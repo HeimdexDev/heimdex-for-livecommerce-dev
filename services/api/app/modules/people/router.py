@@ -1,7 +1,8 @@
+import asyncio
 from pathlib import Path as FilePath
 from typing import cast
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -50,6 +51,7 @@ router = APIRouter(prefix="/people", tags=["people"])
 
 @router.get("", response_model=PeopleListResponse)
 async def list_people(
+    q: str | None = Query(None, min_length=1, max_length=100),
     org_ctx: OrgContext = Depends(get_current_org),
     user: User = Depends(get_current_user),
     people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
@@ -64,15 +66,29 @@ async def list_people(
         )
 
     user_id = cast(UUID, user.id)
-    logger.debug("list_people_request", user_id=str(user_id), org_id=str(org_ctx.org_id))
+    org_id_str = str(org_ctx.org_id)
+    logger.debug("list_people_request", user_id=str(user_id), org_id=org_id_str, q=q)
 
     labels = await people_repo.list_by_org(org_ctx.org_id)
     label_map = {entry.person_cluster_id: entry.label for entry in labels}
 
     excluded_ids = set(await exclude_repo.list_by_user(org_ctx.org_id, user_id))
 
-    facets = await scene_opensearch.get_facets(str(org_ctx.org_id), {})
+    facets = await scene_opensearch.get_facets(org_id_str, {})
     people_buckets = facets.get("people", [])
+
+    video_title_matches: dict[str, list[str]] = {}
+    label_match_ids: set[str] = set()
+    matching_ids: set[str] = set()
+
+    if q:
+        vt_result, lb_result = await asyncio.gather(
+            scene_opensearch.search_people_by_video_title(org_id_str, q),
+            people_repo.search_by_label(org_ctx.org_id, q),
+        )
+        video_title_matches = vt_result
+        label_match_ids = set(lb_result)
+        matching_ids = set(video_title_matches.keys()) | label_match_ids
 
     people: list[PersonResponse] = []
     seen_cluster_ids: set[str] = set()
@@ -81,6 +97,8 @@ async def list_people(
         cluster_id = str(bucket.get("key", ""))
         if not cluster_id:
             continue
+        if q and cluster_id not in matching_ids:
+            continue
         seen_cluster_ids.add(cluster_id)
         people.append(
             PersonResponse(
@@ -88,11 +106,14 @@ async def list_people(
                 label=label_map.get(cluster_id),
                 face_count=int(bucket.get("doc_count", 0)),
                 is_excluded=cluster_id in excluded_ids,
+                matched_video_titles=video_title_matches.get(cluster_id) if q else None,
             )
         )
 
     for cluster_id, label in sorted(label_map.items()):
         if cluster_id in seen_cluster_ids:
+            continue
+        if q and cluster_id not in label_match_ids:
             continue
         people.append(
             PersonResponse(
@@ -100,12 +121,14 @@ async def list_people(
                 label=label,
                 face_count=0,
                 is_excluded=cluster_id in excluded_ids,
+                matched_video_titles=video_title_matches.get(cluster_id) if q else None,
             )
         )
+        seen_cluster_ids.add(cluster_id)
 
     all_cluster_ids = [p.person_cluster_id for p in people]
     rep_scenes = await scene_opensearch.get_representative_scenes_for_people(
-        str(org_ctx.org_id), all_cluster_ids
+        org_id_str, all_cluster_ids
     )
     for person in people:
         scene_info = rep_scenes.get(person.person_cluster_id)
