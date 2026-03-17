@@ -29,7 +29,6 @@ function ArrowRightIcon() {
 
 interface VideoPeoplePanelProps {
   videoId: string;
-  onSwitchToOverview: () => void;
 }
 
 function InlinePersonDetail({
@@ -158,7 +157,7 @@ function InlinePersonDetail({
   );
 }
 
-export function VideoPeoplePanel({ videoId, onSwitchToOverview }: VideoPeoplePanelProps) {
+export function VideoPeoplePanel({ videoId }: VideoPeoplePanelProps) {
   const { isAvailable: agentAvailable } = useAgent();
   const {
     people,

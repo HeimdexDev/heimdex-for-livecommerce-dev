@@ -50,22 +50,6 @@ function BackArrowIcon() {
   );
 }
 
-function FilmIcon() {
-  return (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h1.5C5.496 19.5 6 18.996 6 18.375m-2.625 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-1.5A1.125 1.125 0 0118 18.375M20.625 4.5H3.375m17.25 0c.621 0 1.125.504 1.125 1.125M20.625 4.5h-1.5C18.504 4.5 18 5.004 18 5.625m3.75 0v1.5c0 .621-.504 1.125-1.125 1.125M3.375 4.5c-.621 0-1.125.504-1.125 1.125M3.375 4.5h1.5C5.496 4.5 6 5.004 6 5.625m-3.75 0v1.5c0 .621.504 1.125 1.125 1.125m0 0h1.5m-1.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m1.5-3.75C5.496 8.25 6 7.746 6 7.125v-1.5M4.875 8.25C5.496 8.25 6 8.754 6 9.375v1.5m0-5.25v5.25m0-5.25C6 5.004 6.504 4.5 7.125 4.5h9.75c.621 0 1.125.504 1.125 1.125m1.125 2.625h1.5m-1.5 0A1.125 1.125 0 0118 7.125v-1.5m1.125 2.625c-.621 0-1.125.504-1.125 1.125v1.5m2.625-2.625c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125M18 5.625v5.25M7.125 12h9.75m-9.75 0A1.125 1.125 0 016 10.875M7.125 12C6.504 12 6 12.504 6 13.125m0-2.25C6 11.496 5.496 12 4.875 12M18 10.875c0 .621-.504 1.125-1.125 1.125M18 10.875c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125m-12 5.25v-5.25m0 5.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125m-12 0v-1.5c0-.621-.504-1.125-1.125-1.125M18 18.375v-5.25m0 5.25v-1.5c0-.621.504-1.125 1.125-1.125M18 13.125v1.5c0 .621.504 1.125 1.125 1.125M18 13.125c0-.621.504-1.125 1.125-1.125M6 13.125v1.5c0 .621-.504 1.125-1.125 1.125M6 13.125C6 12.504 5.496 12 4.875 12m-1.5 0h1.5m-1.5 0c-.621 0-1.125-.504-1.125-1.125v-1.5c0-.621.504-1.125 1.125-1.125m1.5 2.625c0-.621-.504-1.125-1.125-1.125M19.5 12h1.5m0 0c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 2.625h-1.5" />
-    </svg>
-  );
-}
-
-function PersonIcon() {
-  return (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-    </svg>
-  );
-}
-
 function DownloadIcon() {
   return (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -268,17 +252,10 @@ function VideoInfoPanel({
 function OverviewPanel({
   scenes,
   allTags,
-  videoId,
-  onSwitchToScenes,
-  onSwitchToPeople,
 }: {
   scenes: VideoScene[];
   allTags: string[];
-  videoId: string;
-  onSwitchToScenes: () => void;
-  onSwitchToPeople: () => void;
 }) {
-  const router = useRouter();
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
 
   const fullTranscript = useMemo(
@@ -322,34 +299,7 @@ function OverviewPanel({
 
   return (
     <div>
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onSwitchToScenes}
-          className="inline-flex items-center gap-2 rounded-lg bg-indigo-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
-        >
-          <FilmIcon />
-          영상 장면 분석
-        </button>
-        <button
-          type="button"
-          onClick={onSwitchToPeople}
-          className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-        >
-          <PersonIcon />
-          인물 라벨 관리
-        </button>
-        <button
-          type="button"
-          onClick={() => router.push(`/shorts/create?videoId=${videoId}`)}
-          className="ml-auto inline-flex items-center gap-2 rounded-lg bg-indigo-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
-        >
-          <DownloadIcon />
-          내보내기
-        </button>
-      </div>
-
-      <div className="mt-8">
+      <div className="mt-2">
         <div className="flex items-center gap-3">
           <h3 className="text-lg font-bold text-gray-900">행동 요약</h3>
           {hasCaptions && (
@@ -912,7 +862,14 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
   const { isAvailable: agentAvailable } = useAgent();
   const searchParams = useSearchParams();
   const initialT = searchParams.get("t");
-  const [view, setView] = useState<ViewMode>(initialT ? "scenes" : "overview");
+  const initialView = searchParams.get("view") as ViewMode | null;
+  const [view, setViewRaw] = useState<ViewMode>(
+    initialT
+      ? "scenes"
+      : initialView && (["overview", "scenes", "people"] as ViewMode[]).includes(initialView)
+        ? initialView
+        : "overview",
+  );
   const [meta, setMeta] = useState<VideoScenesResponse | null>(null);
   const [scenes, setScenes] = useState<VideoScene[]>([]);
   const [totalScenes, setTotalScenes] = useState(0);
@@ -924,6 +881,18 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
   const [reprocessStatus, setReprocessStatus] = useState<ReprocessJobResponse | null>(null);
   const [isReprocessDialogOpen, setIsReprocessDialogOpen] = useState(false);
+
+  const handleViewChange = useCallback((newView: ViewMode) => {
+    setViewRaw(newView);
+    const params = new URLSearchParams(window.location.search);
+    if (newView === "overview") {
+      params.delete("view");
+    } else {
+      params.set("view", newView);
+    }
+    const search = params.toString();
+    router.replace(`${window.location.pathname}${search ? `?${search}` : ""}`, { scroll: false });
+  }, [router]);
 
   const handleSeekToScene = useCallback((startMs: number) => {
     setSeekMs(startMs);
@@ -1017,31 +986,13 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
   return (
     <div className="mx-auto max-w-6xl pt-4">
-      <div className="mb-6 flex items-center gap-3 text-sm text-gray-500">
+      <div className="mb-4 flex items-center gap-3 text-sm text-gray-500">
         <button type="button" onClick={() => router.back()} className="rounded-full p-1 hover:bg-gray-200">
           <BackArrowIcon />
         </button>
         <button type="button" onClick={() => router.back()} className="hover:text-gray-700">전체 아카이브 검색</button>
         <span>&gt;</span>
-        {view === "scenes" ? (
-          <>
-            <button type="button" onClick={() => setView("overview")} className="hover:text-gray-700">
-              {videoTitle}
-            </button>
-            <span>&gt;</span>
-            <span className="text-gray-700">영상 장면 분석</span>
-          </>
-        ) : view === "people" ? (
-          <>
-            <button type="button" onClick={() => setView("overview")} className="hover:text-gray-700">
-              {videoTitle}
-            </button>
-            <span>&gt;</span>
-            <span className="text-gray-700">인물 관리</span>
-          </>
-        ) : (
-          <span className="text-gray-700">{videoTitle}</span>
-        )}
+        <span className="text-gray-700">{videoTitle}</span>
       </div>
 
       {reprocessStatus && (
@@ -1056,6 +1007,41 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
           {reprocessStatus.status === "failed" && `장면 재분석에 실패했습니다: ${reprocessStatus.error}`}
         </div>
       )}
+
+      <nav className="mb-6 flex items-center border-b border-gray-200">
+        {([
+          { key: "overview" as const, label: "개요", badge: undefined as number | undefined },
+          { key: "scenes" as const, label: "장면 분석", badge: totalScenes > 0 ? totalScenes : undefined },
+          { key: "people" as const, label: "인물 관리", badge: undefined as number | undefined },
+        ]).map((tab) => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => handleViewChange(tab.key)}
+            className={cn(
+              "relative px-4 py-2.5 text-sm font-medium -mb-px border-b-2 transition-colors",
+              view === tab.key
+                ? "border-indigo-500 text-indigo-600"
+                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300",
+            )}
+          >
+            {tab.label}
+            {tab.badge != null && (
+              <span className="ml-1.5 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                {tab.badge}
+              </span>
+            )}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => router.push(`/shorts/create?videoId=${videoId}`)}
+          className="ml-auto mb-1 inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+        >
+          <DownloadIcon />
+          내보내기
+        </button>
+      </nav>
 
       <div className="flex gap-8">
         <div className="w-[45%] flex-shrink-0">
@@ -1088,9 +1074,6 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             <OverviewPanel
               scenes={scenes}
               allTags={allTags}
-              videoId={videoId}
-              onSwitchToScenes={() => setView("scenes")}
-              onSwitchToPeople={() => setView("people")}
             />
           ) : view === "scenes" ? (
             <ScenesPanel
@@ -1104,10 +1087,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               aspectRatio={aspectRatio}
             />
           ) : (
-            <VideoPeoplePanel
-              videoId={videoId}
-              onSwitchToOverview={() => setView("overview")}
-            />
+            <VideoPeoplePanel videoId={videoId} />
           )}
         </div>
       </div>
