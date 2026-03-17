@@ -1,0 +1,135 @@
+"""Async CRUD repository for ShortsRenderJob.
+
+Org-scoped queries enforce multi-tenant isolation where applicable.
+Internal methods (update_status, list_expired) omit org scope for worker use.
+"""
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .models import ShortsRenderJob
+
+
+class ShortsRenderJobRepository:
+    def __init__(self, session: AsyncSession):
+        self.session: AsyncSession = session
+
+    async def create(
+        self,
+        *,
+        org_id: UUID,
+        user_id: UUID,
+        video_id: str,
+        title: str | None,
+        input_spec: dict[str, Any],
+        expires_at: datetime | None,
+    ) -> ShortsRenderJob:
+        """Create a new render job (status set by server_default)."""
+        job = ShortsRenderJob(
+            org_id=org_id,
+            user_id=user_id,
+            video_id=video_id,
+            title=title,
+            input_spec=input_spec,
+            expires_at=expires_at,
+        )
+        self.session.add(job)
+        await self.session.flush()
+        return job
+
+    async def get_by_id(self, org_id: UUID, job_id: UUID) -> ShortsRenderJob | None:
+        """Get a render job by ID, scoped to org."""
+        result = await self.session.execute(
+            select(ShortsRenderJob).where(
+                ShortsRenderJob.id == job_id,
+                ShortsRenderJob.org_id == org_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def _get_by_id_internal(self, job_id: UUID) -> ShortsRenderJob | None:
+        """Get a render job by ID (no org scope — for internal/worker use)."""
+        result = await self.session.execute(
+            select(ShortsRenderJob).where(ShortsRenderJob.id == job_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_by_user(
+        self,
+        org_id: UUID,
+        user_id: UUID,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[ShortsRenderJob], int]:
+        """List render jobs for a user with pagination. Returns (jobs, total_count)."""
+        where = (
+            ShortsRenderJob.org_id == org_id,
+            ShortsRenderJob.user_id == user_id,
+        )
+
+        count_result = await self.session.execute(
+            select(func.count()).select_from(ShortsRenderJob).where(*where)
+        )
+        total = count_result.scalar_one()
+
+        result = await self.session.execute(
+            select(ShortsRenderJob)
+            .where(*where)
+            .order_by(ShortsRenderJob.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        jobs = list(result.scalars().all())
+        return jobs, total
+
+    async def update_status(
+        self,
+        job_id: UUID,
+        status: str,
+        **kwargs: Any,
+    ) -> ShortsRenderJob | None:
+        """Update job status and optional result fields. Returns refreshed job or None."""
+        values: dict[str, Any] = {
+            "status": status,
+            "updated_at": datetime.now(timezone.utc),
+        }
+        if status in ("completed", "failed"):
+            values["completed_at"] = datetime.now(timezone.utc)
+
+        for key in ("output_s3_key", "output_duration_ms", "output_size_bytes", "render_time_ms", "error"):
+            if key in kwargs:
+                values[key] = kwargs[key]
+
+        result = await self.session.execute(
+            update(ShortsRenderJob)
+            .where(ShortsRenderJob.id == job_id)
+            .values(**values)
+        )
+        await self.session.flush()
+
+        if result.rowcount == 0:
+            return None
+
+        return await self._get_by_id_internal(job_id)
+
+    async def delete(self, org_id: UUID, job_id: UUID) -> bool:
+        """Delete a render job by ID, scoped to org. Returns True if deleted."""
+        job = await self.get_by_id(org_id, job_id)
+        if job is None:
+            return False
+        await self.session.delete(job)
+        await self.session.flush()
+        return True
+
+    async def list_expired(self, now: datetime) -> list[ShortsRenderJob]:
+        """List expired jobs that have output files (for cleanup)."""
+        result = await self.session.execute(
+            select(ShortsRenderJob).where(
+                ShortsRenderJob.expires_at < now,
+                ShortsRenderJob.output_s3_key.is_not(None),
+            )
+        )
+        return list(result.scalars().all())

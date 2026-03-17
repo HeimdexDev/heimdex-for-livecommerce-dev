@@ -152,6 +152,12 @@ def get_saved_short_repository(db: AsyncSession = Depends(get_db_session)):
     return SavedShortRepository(db)
 
 
+def get_shorts_render_repository(db: AsyncSession = Depends(get_db_session)):
+    """Shorts render job repository factory."""
+    from app.modules.shorts_render.repository import ShortsRenderJobRepository
+    return ShortsRenderJobRepository(db)
+
+
 def get_pairing_code_repository(db: AsyncSession = Depends(get_db_session)):
     """Pairing code repository factory."""
     from app.modules.devices.pairing import PairingCodeRepository
