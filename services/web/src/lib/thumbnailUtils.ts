@@ -44,3 +44,8 @@ export function getVideoCardThumbnailClass(ratio: ThumbnailAspectRatio): string 
 export function getDrawerHeroClass(ratio: ThumbnailAspectRatio): string {
   return ratio === "9:16" ? "h-64" : "h-40";
 }
+
+/** Grid layout for person scene thumbnails (people tab). */
+export function getPersonGridClass(ratio: ThumbnailAspectRatio): string {
+  return ratio === "9:16" ? "grid-cols-4 gap-2" : "grid-cols-3 gap-3";
+}

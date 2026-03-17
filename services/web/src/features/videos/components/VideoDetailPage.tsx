@@ -1087,7 +1087,13 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               aspectRatio={aspectRatio}
             />
           ) : (
-            <VideoPeoplePanel videoId={videoId} />
+            <VideoPeoplePanel
+              videoId={videoId}
+              scenes={scenes}
+              onSeekToScene={handleSeekToScene}
+              agentAvailable={agentAvailable}
+              aspectRatio={aspectRatio}
+            />
           )}
         </div>
       </div>

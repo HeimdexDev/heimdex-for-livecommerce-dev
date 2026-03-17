@@ -1,15 +1,17 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useAgent } from "@/features/search/hooks/useAgent";
 import { useVideoPeople } from "../hooks/useVideoPeople";
 import { VideoPersonAvatar } from "./VideoPersonAvatar";
+import { PersonSceneGrid } from "./PersonSceneGrid";
 import { DeletePersonDialog } from "@/features/people/components/DeletePersonDialog";
 import { getFaceThumbnailUrl, getCloudThumbnailUrl } from "@/lib/agent";
 import { PersonIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-import type { PersonResponse } from "@/lib/types";
+import type { PersonResponse, VideoScene } from "@/lib/types";
+import type { ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
 function PencilIcon() {
   return (
@@ -29,6 +31,10 @@ function ArrowRightIcon() {
 
 interface VideoPeoplePanelProps {
   videoId: string;
+  scenes?: VideoScene[];
+  onSeekToScene?: (startMs: number) => void;
+  agentAvailable?: boolean;
+  aspectRatio?: ThumbnailAspectRatio;
 }
 
 function InlinePersonDetail({
@@ -157,8 +163,15 @@ function InlinePersonDetail({
   );
 }
 
-export function VideoPeoplePanel({ videoId }: VideoPeoplePanelProps) {
-  const { isAvailable: agentAvailable } = useAgent();
+export function VideoPeoplePanel({
+  videoId,
+  scenes,
+  onSeekToScene,
+  agentAvailable: agentAvailableProp,
+  aspectRatio = "16:9",
+}: VideoPeoplePanelProps) {
+  const { isAvailable: agentAvailableFromHook } = useAgent();
+  const agentAvailable = agentAvailableProp ?? agentAvailableFromHook;
   const {
     people,
     isLoading,
@@ -180,6 +193,11 @@ export function VideoPeoplePanel({ videoId }: VideoPeoplePanelProps) {
   }, [people, selectedId]);
 
   const selectedPerson = people.find((p) => p.person_cluster_id === selectedId) ?? null;
+
+  const personScenes = useMemo(() => {
+    if (!selectedId || !scenes?.length) return [];
+    return scenes.filter((s) => s.people_cluster_ids.includes(selectedId));
+  }, [scenes, selectedId]);
 
   const handleSelect = useCallback((personClusterId: string) => {
     setSelectedId((prev) => (prev === personClusterId ? null : personClusterId));
@@ -253,13 +271,22 @@ export function VideoPeoplePanel({ videoId }: VideoPeoplePanelProps) {
 
           {/* Inline Detail */}
           {selectedPerson && (
-            <div className="mt-6">
+            <div className="mt-6 space-y-4">
               <InlinePersonDetail
                 person={selectedPerson}
                 onRename={renamePerson}
                 isRenaming={isRenaming}
                 onDelete={setDeleteTargetId}
               />
+              {scenes && (
+                <PersonSceneGrid
+                  scenes={personScenes}
+                  videoId={videoId}
+                  agentAvailable={agentAvailable}
+                  aspectRatio={aspectRatio}
+                  onSceneClick={onSeekToScene}
+                />
+              )}
             </div>
           )}
         </>

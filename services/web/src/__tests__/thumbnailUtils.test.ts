@@ -1,4 +1,4 @@
-import { getThumbnailAspectClass, getDashboardGridClass, getInlineThumbnailClass } from "@/lib/thumbnailUtils";
+import { getThumbnailAspectClass, getDashboardGridClass, getInlineThumbnailClass, getPersonGridClass } from "@/lib/thumbnailUtils";
 
 describe("thumbnailUtils", () => {
   describe("getThumbnailAspectClass", () => {
@@ -25,6 +25,15 @@ describe("thumbnailUtils", () => {
     });
     it("returns w-14 h-24 for 9:16", () => {
       expect(getInlineThumbnailClass("9:16")).toBe("w-14 h-24");
+    });
+  });
+
+  describe("getPersonGridClass", () => {
+    it("returns 3-col grid for 16:9", () => {
+      expect(getPersonGridClass("16:9")).toContain("grid-cols-3");
+    });
+    it("returns 4-col grid for 9:16", () => {
+      expect(getPersonGridClass("9:16")).toContain("grid-cols-4");
     });
   });
 });
