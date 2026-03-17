@@ -296,6 +296,101 @@ class SceneFacetsMixin:
             **video_meta,
         }
 
+    async def get_video_scenes_with_embeddings(
+        self,
+        org_id: str,
+        video_id: str,
+    ) -> list[dict[str, Any]]:
+        """Fetch ALL scenes for a video including embedding vectors.
+
+        Unlike ``get_video_scenes()`` which excludes embedding fields for
+        bandwidth, this method includes ``embedding_vector`` (1024-dim) and
+        ``visual_embedding`` (768-dim) for server-side grouping computation.
+
+        Paginates internally (200 per page) to handle large videos.
+        Returns scenes sorted by ``start_ms`` ascending.
+        """
+        page_size = 200
+        offset = 0
+        all_scenes: list[dict[str, Any]] = []
+
+        source_fields = [
+            "scene_id", "start_ms", "end_ms", "transcript_raw",
+            "transcript_char_count", "scene_caption", "keyword_tags", "product_tags",
+            "product_entities", "speech_segment_count",
+            "people_cluster_ids", "ingest_time", "keyframe_timestamp_ms",
+            "speaker_transcript", "speaker_count",
+            "ocr_text_raw", "ocr_char_count",
+            "embedding_vector", "visual_embedding",
+        ]
+
+        while True:
+            body: dict[str, Any] = {
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"org_id": org_id}},
+                            {"term": {"video_id": video_id}},
+                        ],
+                    }
+                },
+                "sort": [{"start_ms": "asc"}],
+                "from": offset,
+                "size": page_size,
+                "_source": source_fields,
+            }
+
+            response = await self.client.search(index=self.alias_name, body=body)
+            hits = response["hits"]["hits"]
+
+            for hit in hits:
+                src = hit["_source"]
+                all_scenes.append({
+                    "scene_id": src.get("scene_id", hit["_id"]),
+                    "start_ms": src.get("start_ms", 0),
+                    "end_ms": src.get("end_ms", 0),
+                    "transcript_raw": src.get("transcript_raw", ""),
+                    "transcript_char_count": src.get("transcript_char_count", 0),
+                    "scene_caption": src.get("scene_caption", ""),
+                    "keyword_tags": src.get("keyword_tags", []),
+                    "product_tags": src.get("product_tags", []),
+                    "product_entities": src.get("product_entities", []),
+                    "speech_segment_count": src.get("speech_segment_count", 0),
+                    "people_cluster_ids": src.get("people_cluster_ids", []),
+                    "ingest_time": src.get("ingest_time"),
+                    "keyframe_timestamp_ms": src.get("keyframe_timestamp_ms", 0),
+                    "speaker_transcript": src.get("speaker_transcript", ""),
+                    "speaker_count": src.get("speaker_count", 0),
+                    "ocr_text_raw": src.get("ocr_text_raw", ""),
+                    "ocr_char_count": src.get("ocr_char_count", 0),
+                    "embedding_vector": src.get("embedding_vector"),
+                    "visual_embedding": src.get("visual_embedding"),
+                })
+
+            total_raw = response["hits"]["total"]
+            total_count = (
+                total_raw["value"] if isinstance(total_raw, dict) else total_raw
+            )
+
+            if len(all_scenes) >= int(total_count) or len(hits) < page_size:
+                break
+
+            offset += page_size
+
+        logger.debug(
+            "fetched_scenes_with_embeddings",
+            video_id=video_id,
+            scene_count=len(all_scenes),
+            has_text_embeddings=any(
+                s.get("embedding_vector") for s in all_scenes[:1]
+            ),
+            has_visual_embeddings=any(
+                s.get("visual_embedding") for s in all_scenes[:1]
+            ),
+        )
+
+        return all_scenes
+
     async def search_people_by_video_title(
         self,
         org_id: str,

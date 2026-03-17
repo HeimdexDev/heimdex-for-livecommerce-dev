@@ -200,6 +200,13 @@ async def get_video_service(
     return VideoService(db, scene_opensearch)
 
 
+def get_grouping_service(
+    scene_opensearch=Depends(get_scene_opensearch_client),
+):
+    from app.modules.grouping.service import GroupingService
+    return GroupingService(scene_opensearch)
+
+
 def get_device_repository(db: AsyncSession = Depends(get_db_session)):
     """Device repository factory."""
     from app.modules.devices.repository import DeviceRepository

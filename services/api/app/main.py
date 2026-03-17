@@ -27,6 +27,7 @@ from app.modules.thumbnails.router import public_router as thumbnails_public_rou
 from app.modules.thumbnails.router import upload_router as thumbnails_upload_router
 from app.modules.videos.router import router as videos_router
 from app.modules.videos.internal_router import router as videos_internal_router
+from app.modules.grouping.router import router as grouping_router
 from app.modules.youtube.router import router as youtube_router
 
 setup_logging()
@@ -330,6 +331,7 @@ app.include_router(shorts_router, prefix="/api")
 app.include_router(basket_router, prefix="/api")
 app.include_router(thumbnails_public_router, prefix="/api")
 app.include_router(videos_router, prefix="/api")
+app.include_router(grouping_router, prefix="/api")
 
 if get_settings().youtube_enabled:
     app.include_router(youtube_router, prefix="/api")
