@@ -13,8 +13,10 @@ import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
 import { ReprocessDialog } from "./ReprocessDialog";
+import { SceneGroupCard } from "./SceneGroupCard";
 import { VideoPeoplePanel } from "./VideoPeoplePanel";
 import { useOrgSettings } from "@/lib/orgSettings";
+import { useSceneGroups } from "@/features/videos/hooks/useSceneGroups";
 import { getDetailThumbnailClass, getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
 type ViewMode = "overview" | "scenes" | "people";
@@ -415,7 +417,7 @@ function OverviewPanel({
   );
 }
 
-function SceneCard({
+export function SceneCard({
   scene,
   index,
   videoId,
@@ -635,6 +637,8 @@ function ScenesPanel({
   const [isSearching, setIsSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
+  const [groupingEnabled, setGroupingEnabled] = useState(false);
+  const sceneGroups = useSceneGroups(videoId, getToken);
 
   const displayScenes = searchResults ?? initialScenes;
   const displayTotal = searchResults !== null ? searchTotal : initialTotal;
@@ -739,10 +743,46 @@ function ScenesPanel({
         </button>
       </form>
 
+      {initialTotal >= 5 && !activeSearch && (
+        <div className="mt-4 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              const next = !groupingEnabled;
+              setGroupingEnabled(next);
+              if (next && !sceneGroups.data) {
+                sceneGroups.fetchGroups();
+              }
+            }}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+              groupingEnabled
+                ? "bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200",
+            )}
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+            </svg>
+            의미 그룹
+          </button>
+          {groupingEnabled && sceneGroups.isLoading && (
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-300 border-t-indigo-600" />
+          )}
+          {groupingEnabled && sceneGroups.error && (
+            <span className="text-xs text-red-500">{sceneGroups.error}</span>
+          )}
+        </div>
+      )}
+
       <div className="mt-6 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
           <h3 className="text-lg font-bold text-gray-900">결과</h3>
-          <span className="text-sm text-gray-500">{displayTotal}개 장면</span>
+          <span className="text-sm text-gray-500">
+            {groupingEnabled && sceneGroups.data && !activeSearch
+              ? `${sceneGroups.data.total_groups}개 그룹 (${sceneGroups.data.total_scenes}개 장면)`
+              : `${displayTotal}개 장면`}
+          </span>
         </div>
         <button
           type="button"
@@ -764,34 +804,50 @@ function ScenesPanel({
         </button>
       </div>
 
-      <div className="mt-4 space-y-4">
-        {isSearching ? (
-          <div className="flex items-center justify-center py-12">
-            <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-500" />
-          </div>
-        ) : paginatedScenes.length === 0 ? (
-          <div className="py-12 text-center text-sm text-gray-400">
-            {activeSearch ? "검색 결과가 없습니다." : "장면이 없습니다."}
-          </div>
-        ) : (
-          paginatedScenes.map((scene, i) => (
-            <SceneCard
-              key={scene.scene_id}
-              scene={scene}
-              index={(currentPage - 1) * SCENES_PER_PAGE + i}
+      {groupingEnabled && sceneGroups.data && !activeSearch ? (
+        <div className="mt-4 space-y-4">
+          {sceneGroups.data.groups.map((group) => (
+            <SceneGroupCard
+              key={group.group_index}
+              group={group}
               videoId={videoId}
               agentAvailable={agentAvailable}
-              isSelected={selectedIds.has(scene.scene_id)}
-              onToggle={toggleSelection}
-              onSeek={onSeekToScene}
-              isPlaying={activeSceneMs === scene.start_ms}
+              onSeekToScene={onSeekToScene}
+              activeSceneMs={activeSceneMs}
               aspectRatio={aspectRatio}
             />
-          ))
-        )}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 space-y-4">
+          {isSearching ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-500" />
+            </div>
+          ) : paginatedScenes.length === 0 ? (
+            <div className="py-12 text-center text-sm text-gray-400">
+              {activeSearch ? "검색 결과가 없습니다." : "장면이 없습니다."}
+            </div>
+          ) : (
+            paginatedScenes.map((scene, i) => (
+              <SceneCard
+                key={scene.scene_id}
+                scene={scene}
+                index={(currentPage - 1) * SCENES_PER_PAGE + i}
+                videoId={videoId}
+                agentAvailable={agentAvailable}
+                isSelected={selectedIds.has(scene.scene_id)}
+                onToggle={toggleSelection}
+                onSeek={onSeekToScene}
+                isPlaying={activeSceneMs === scene.start_ms}
+                aspectRatio={aspectRatio}
+              />
+            ))
+          )}
+        </div>
+      )}
 
-      {totalPages > 1 && (
+      {totalPages > 1 && !groupingEnabled && (
         <nav className="mt-8 flex items-center justify-center gap-1">
           <button
             type="button"
