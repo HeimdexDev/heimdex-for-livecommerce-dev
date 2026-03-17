@@ -113,3 +113,23 @@ export interface ReprocessJobResponse {
   error: string | null;
   created_at: string;
 }
+
+// ============================================================================
+// Scene Grouping Types
+// ============================================================================
+
+export interface SceneGroup {
+  group_index: number;
+  start_ms: number;
+  end_ms: number;
+  scene_count: number;
+  representative_scene_id: string;
+  scenes: VideoScene[];
+}
+
+export interface SceneGroupsResponse {
+  video_id: string;
+  total_groups: number;
+  total_scenes: number;
+  groups: SceneGroup[];
+}

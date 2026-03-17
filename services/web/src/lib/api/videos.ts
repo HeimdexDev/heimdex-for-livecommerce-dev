@@ -2,6 +2,7 @@ import {
   ApiError,
   ReprocessJobResponse,
   ReprocessParams,
+  SceneGroupsResponse,
   VideoFilters,
   VideoListResponse,
   VideoScenesResponse,
@@ -205,6 +206,20 @@ export async function getVideoPeople(
 ): Promise<VideoPeopleResponse> {
   return apiGet<VideoPeopleResponse>(
     `/api/videos/${encodeURIComponent(videoId)}/people`,
+    getToken,
+  );
+}
+
+export async function getVideoSceneGroups(
+  videoId: string,
+  threshold?: number,
+  getToken?: TokenGetter,
+): Promise<SceneGroupsResponse> {
+  const params = new URLSearchParams();
+  if (threshold !== undefined) params.set("threshold", String(threshold));
+  const qs = params.toString();
+  return apiGet<SceneGroupsResponse>(
+    `/api/videos/${encodeURIComponent(videoId)}/scene-groups${qs ? `?${qs}` : ""}`,
     getToken,
   );
 }
