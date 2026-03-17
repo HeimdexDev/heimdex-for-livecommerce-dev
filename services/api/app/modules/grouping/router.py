@@ -19,9 +19,13 @@ async def get_scene_groups(
     org_ctx: OrgContext = Depends(get_current_org),
     user: User = Depends(get_current_user),
     service: GroupingService = Depends(get_grouping_service),
-    threshold: float = Query(
-        0.55, ge=0.0, le=1.0,
-        description="Similarity threshold for group boundaries",
+    threshold: float | None = Query(
+        None, ge=0.0, le=1.0,
+        description="Similarity threshold override. When omitted, uses adaptive threshold.",
+    ),
+    sensitivity: float = Query(
+        1.0, ge=0.0, le=3.0,
+        description="Adaptive threshold sensitivity (std devs below mean). Higher = fewer groups.",
     ),
 ):
     _ = user
@@ -29,4 +33,5 @@ async def get_scene_groups(
         str(org_ctx.org_id),
         video_id,
         threshold=threshold,
+        sensitivity=sensitivity,
     )

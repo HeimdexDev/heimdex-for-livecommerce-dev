@@ -41,9 +41,23 @@ class GroupingService:
         org_id: str,
         video_id: str,
         *,
-        threshold: float = 0.55,
+        threshold: float | None = None,
+        sensitivity: float = 1.0,
         min_group_size: int = 2,
     ) -> SceneGroupsResponse:
+        """Compute semantic scene groups for a video.
+
+        Args:
+            org_id: Organization ID.
+            video_id: Video ID.
+            threshold: If provided, overrides adaptive threshold.
+                When None (default), the threshold is computed adaptively
+                from the video's own similarity distribution.
+            sensitivity: Std devs below mean for adaptive threshold.
+                Higher = fewer groups. Lower = more groups. Default 1.0.
+            min_group_size: Minimum scenes per group (smaller groups are
+                merged into neighbors). Default 2.
+        """
         raw_scenes = await self.scene_client.get_video_scenes_with_embeddings(
             org_id, video_id,
         )
@@ -58,6 +72,7 @@ class GroupingService:
             similarities,
             total_scenes=len(raw_scenes),
             threshold=threshold,
+            sensitivity=sensitivity,
             min_group_size=min_group_size,
         )
 

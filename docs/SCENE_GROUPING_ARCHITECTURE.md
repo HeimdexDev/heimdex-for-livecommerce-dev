@@ -13,9 +13,9 @@ Semantic scene grouping is a **toggle feature** on the video detail page that gr
 ## Architecture
 
 ```
-┌──────────────┐     GET /api/videos/{id}/scene-groups?threshold=0.55
-│   Frontend    │────────────────────────────────────────────────────►
-│  ScenesPanel  │◄────────────────────────────────────────────────────
+┌──────────────┐     GET /api/videos/{id}/scene-groups[?sensitivity=1.0]
+│   Frontend    │────────────────────────────────────────────────────────►
+│  ScenesPanel  │◄────────────────────────────────────────────────────────
 │  + toggle     │     SceneGroupsResponse { groups: SceneGroup[] }
 └──────────────┘
 
@@ -36,7 +36,7 @@ Semantic scene grouping is a **toggle feature** on the video detail page that gr
 
 | File | Purpose | Dependencies |
 |------|---------|--------------|
-| `algorithm.py` | Pure functions: `_dot_product`, `compute_pairwise_similarity`, `find_group_boundaries`, `_merge_small_groups` | None (stdlib only) |
+| `algorithm.py` | Pure functions: `_dot_product`, `compute_pairwise_similarity`, `_compute_adaptive_threshold`, `find_group_boundaries`, `_merge_small_groups` | None (stdlib only) |
 | `schemas.py` | `SceneGroup`, `SceneGroupsResponse` Pydantic models | `VideoScene` from `videos/schemas.py` |
 | `service.py` | `GroupingService` — fetches scenes, runs algorithm, builds response | `SceneSearchClient` |
 | `router.py` | `GET /api/videos/{video_id}/scene-groups` | `GroupingService` via DI |
@@ -44,18 +44,32 @@ Semantic scene grouping is a **toggle feature** on the video detail page that gr
 ### Algorithm Design
 
 **`compute_pairwise_similarity(scenes)`**
-- For N scenes, returns N-1 similarity scores
+- For N scenes, returns N-1 similarity values (`float | None`)
 - Adaptive signal fusion:
   - Both text + visual → weighted average (default: text=0.6, visual=0.4)
   - Single signal → uses it alone (weight=1.0)
-  - No embeddings → 0.5 (neutral, avoids false boundaries)
+  - No embeddings → `None` (unknown — skipped during boundary detection)
 - For L2-normalized vectors: `cosine_similarity == dot_product`
-- Output clamped to [0.0, 1.0]
+- Real values clamped to [0.0, 1.0]
 
-**`find_group_boundaries(similarities, total_scenes, threshold=0.55)`**
-- Boundary placed where `similarity < threshold`
-- `_merge_small_groups()` absorbs undersized groups into neighbors with higher connecting similarity
+**`_compute_adaptive_threshold(similarities)`**
+- Filters out `None` values, computes `mean - sensitivity * stdev` of real similarities
+- Falls back to 0.55 when fewer than 2 real values exist
+- Adapts to each video's own similarity distribution (e.g., mean 0.80 → threshold ~0.76)
+
+**`find_group_boundaries(similarities, total_scenes, threshold=None, sensitivity=1.0)`**
+- `threshold=None` (default) → uses adaptive threshold from `_compute_adaptive_threshold`
+- Explicit `threshold` overrides adaptive computation
+- `None` similarity values are SKIPPED (never create boundaries — no information to decide)
+- `_merge_small_groups()` absorbs undersized groups into neighbors with higher connecting similarity (treats `None` as -1.0 for merge direction preference)
 - Coverage invariant: all scenes covered, no gaps, `groups[0].start == 0`, `groups[-1].end == total_scenes - 1`
+
+#### Why Adaptive Threshold?
+
+The original fixed threshold (0.55) failed for long production videos:
+1. **Sparse embeddings**: 70%+ of scene pairs lack embeddings entirely (STT/OCR enrichment pending)
+2. **Old behavior**: Missing pairs got neutral 0.5 → `0.5 < 0.55` → false boundary at every gap → hundreds of single-scene groups → `_merge_small_groups` cascade → one giant group
+3. **Fix**: Missing pairs → `None` (skipped), threshold computed from real similarities only. Boundaries placed at natural dips relative to the video's own baseline.
 
 ### OpenSearch Query
 
@@ -64,7 +78,7 @@ Semantic scene grouping is a **toggle feature** on the video detail page that gr
 ### API
 
 ```
-GET /api/videos/{video_id}/scene-groups?threshold=0.55
+GET /api/videos/{video_id}/scene-groups[?threshold=0.8&sensitivity=1.0]
 Authorization: Bearer <token>
 
 Response:
@@ -116,19 +130,21 @@ Response:
 
 | Test File | Tests | Scope |
 |-----------|-------|-------|
-| `test_grouping_algorithm.py` | 41 | `_dot_product`, `compute_pairwise_similarity`, `find_group_boundaries`, `_merge_small_groups`, integration |
-| `test_grouping_router.py` | 15 | `_strip_embeddings`, `GroupingService`, schema validation |
+| `test_grouping_algorithm.py` | 63 | `_dot_product`, `compute_pairwise_similarity`, `_compute_adaptive_threshold`, `find_group_boundaries`, `_merge_small_groups`, integration (sparse embeddings, production scenarios) |
+| `test_grouping_router.py` | 14 | `_strip_embeddings`, `GroupingService`, schema validation |
 | `SceneGroupCard.test.tsx` | 5 | Collapsed/expanded rendering, toggle, scene count |
-| **Total** | **61** | |
+| **Total** | **82** | |
 
 ## Configuration
 
 | Parameter | Default | Range | Description |
 |-----------|---------|-------|-------------|
-| `threshold` | 0.55 | 0.0–1.0 | Similarity below this creates a boundary. Lower = fewer groups, higher = more groups. |
+| `threshold` | `None` (adaptive) | 0.0–1.0 | Explicit threshold override. When omitted, uses adaptive threshold. |
+| `sensitivity` | 1.0 | 0.0–3.0 | Std devs below mean for adaptive threshold. Higher = fewer groups, lower = more groups. |
 | `text_weight` | 0.6 | — | Relative weight for text embedding similarity (hardcoded) |
 | `visual_weight` | 0.4 | — | Relative weight for visual embedding similarity (hardcoded) |
 | `min_group_size` | 2 | — | Groups smaller than this are merged into neighbors (hardcoded) |
+| `fallback_threshold` | 0.55 | — | Used when adaptive can't be computed (< 2 real similarity values, hardcoded) |
 
 ## Coupling Analysis
 
