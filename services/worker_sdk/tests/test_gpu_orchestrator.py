@@ -324,6 +324,89 @@ def test_poll_all_queue_depths_skips_queue_when_attribute_query_raises():
     assert depths == {"caption": {"waiting": 1, "in_flight": 0}}
 
 
+def test_check_and_manage_restarts_worker_when_waiting_but_no_in_flight():
+    """Worker has queued messages but nothing in-flight → restart it."""
+    orchestrator, aircloud = _build_orchestrator()
+
+    with patch.object(
+        orchestrator,
+        "_poll_all_queue_depths",
+        return_value={"transcode": {"waiting": 100, "in_flight": 0}},
+    ):
+        orchestrator.check_and_manage()
+
+    aircloud.start.assert_called_once_with("ep-trans")
+    aircloud.stop.assert_not_called()
+    assert orchestrator._empty_counts["transcode"] == 0
+
+
+def test_check_and_manage_does_not_restart_when_in_flight_is_nonzero():
+    """Worker has both waiting and in-flight → already consuming, don't restart."""
+    orchestrator, aircloud = _build_orchestrator()
+
+    with patch.object(
+        orchestrator,
+        "_poll_all_queue_depths",
+        return_value={"transcode": {"waiting": 50, "in_flight": 3}},
+    ):
+        orchestrator.check_and_manage()
+
+    aircloud.start.assert_not_called()
+    aircloud.stop.assert_not_called()
+    assert orchestrator._empty_counts["transcode"] == 0
+
+
+def test_check_and_manage_does_not_restart_when_only_in_flight():
+    """Worker has only in-flight messages (waiting=0) → actively consuming, don't restart."""
+    orchestrator, aircloud = _build_orchestrator()
+
+    with patch.object(
+        orchestrator,
+        "_poll_all_queue_depths",
+        return_value={"transcode": {"waiting": 0, "in_flight": 5}},
+    ):
+        orchestrator.check_and_manage()
+
+    aircloud.start.assert_not_called()
+    aircloud.stop.assert_not_called()
+    assert orchestrator._empty_counts["transcode"] == 0
+
+
+def test_check_and_manage_restart_survives_aircloud_error():
+    """Aircloud start failure during restart is caught — doesn't crash check_and_manage."""
+    orchestrator, aircloud = _build_orchestrator()
+    aircloud.start.side_effect = requests.ConnectionError("no route")
+
+    with patch.object(
+        orchestrator,
+        "_poll_all_queue_depths",
+        return_value={"caption": {"waiting": 200, "in_flight": 0}},
+    ):
+        orchestrator.check_and_manage()
+
+    aircloud.start.assert_called_once_with("ep-cap")
+    assert orchestrator._empty_counts["caption"] == 0
+
+
+def test_check_and_manage_restarts_multiple_stalled_workers():
+    """Multiple workers stalled simultaneously → all get restarted."""
+    orchestrator, aircloud = _build_orchestrator()
+
+    with patch.object(
+        orchestrator,
+        "_poll_all_queue_depths",
+        return_value={
+            "transcode": {"waiting": 100, "in_flight": 0},
+            "caption": {"waiting": 200, "in_flight": 0},
+        },
+    ):
+        orchestrator.check_and_manage()
+
+    assert aircloud.start.call_count == 2
+    aircloud.start.assert_any_call("ep-trans")
+    aircloud.start.assert_any_call("ep-cap")
+
+
 def test_module_level_ensure_worker_running_returns_silently_when_disabled():
     with patch("heimdex_worker_sdk.gpu_orchestrator.get_orchestrator", return_value=None) as get_orch:
         result = ensure_worker_running("transcode")

@@ -6,9 +6,11 @@ Two integration points:
      SQS message.  Debounced: skips if the same worker was woken within
      AIRCLOUD_WAKE_DEBOUNCE_SECONDS (default 5 min).  Fire-and-forget.
 
-  2. check_and_manage() — called every 5 min by APScheduler in drive-worker.
+   2. check_and_manage() — called every 5 min by APScheduler in drive-worker.
      Polls SQS queue depths, stops workers whose queues have been empty for
      AIRCLOUD_COOLDOWN_CHECKS consecutive checks (default 3 = 15 min).
+     Also restarts workers that have queued messages but zero in-flight
+     (stalled: worker stopped while messages remain).
 
 Design principles:
   - Never block ingest or API requests.  All Aircloud calls are best-effort.
@@ -155,10 +157,39 @@ class GPUOrchestrator:
             total = waiting + in_flight
 
             if total > 0:
-                # Work exists — reset cooldown, ensure running
+                # Work exists — reset cooldown
                 self._empty_counts[worker_name] = 0
-                # Don't call start here — the debounced ensure_running from
-                # sqs_producer handles wake-ups.  Only log state.
+
+                if waiting > 0 and in_flight == 0:
+                    # Messages queued but nothing in-flight — worker is
+                    # likely stopped.  Restart it.  The sqs_producer's
+                    # ensure_running only fires on NEW publishes; if all
+                    # messages were published in a batch and the worker
+                    # stopped (crash, Aircloud timeout, brief empty window),
+                    # no new publishes will trigger a wake-up.
+                    #
+                    # Aircloud start is idempotent — calling it on an
+                    # already-running worker is a harmless no-op.
+                    try:
+                        self._aircloud.start(endpoint_id)
+                        logger.info(
+                            "gpu_orchestrator_restarting_stalled_worker",
+                            extra={
+                                "worker": worker_name,
+                                "endpoint_id": endpoint_id,
+                                "waiting": waiting,
+                            },
+                        )
+                    except Exception:
+                        logger.exception(
+                            "gpu_orchestrator_restart_failed",
+                            extra={
+                                "worker": worker_name,
+                                "endpoint_id": endpoint_id,
+                                "waiting": waiting,
+                            },
+                        )
+
                 logger.info(
                     "gpu_orchestrator_worker_active",
                     extra={
