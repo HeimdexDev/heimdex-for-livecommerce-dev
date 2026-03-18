@@ -658,6 +658,37 @@ services:
     command: >
       sh -c "python -m src.worker"
 
+  shorts-render-worker:
+    build:
+      context: .
+      dockerfile: services/shorts-render-worker/Dockerfile
+    container_name: heimdex-shorts-render-worker
+    environment:
+      - PYTHONPATH=/app
+      - SQS_CONSUMER_ENABLED=true
+      - SQS_SHORTS_RENDER_QUEUE_URL=http://elasticmq:9324/000000000000/heimdex-shorts-render-queue
+      - SQS_ENDPOINT_URL=http://elasticmq:9324
+      - SQS_REGION=ap-northeast-2
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=false
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      api:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    restart: unless-stopped
+    command: python -m src.worker
+
   # NOTE (2026-02-26): elasticmq is for LOCAL DEV SQS simulation only.
   # Staging/prod uses real AWS SQS (ap-northeast-2). Not needed on EC2.
   # Guarded by profiles: ["local-dev"] — requires --profile local-dev to start.

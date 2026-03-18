@@ -329,6 +329,10 @@ app.include_router(people_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
 app.include_router(shorts_router, prefix="/api")
 app.include_router(shorts_render_router, prefix="/api")
+
+from app.modules.shorts_render.internal_router import router as internal_shorts_render_router
+app.include_router(internal_shorts_render_router)
+
 app.include_router(basket_router, prefix="/api")
 app.include_router(thumbnails_public_router, prefix="/api")
 app.include_router(videos_router, prefix="/api")
