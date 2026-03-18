@@ -113,7 +113,7 @@ def _upload_rendered_file(
     job_id: str,
 ) -> tuple[str, int]:
     """Upload rendered MP4 to S3. Returns (s3_key, file_size_bytes)."""
-    s3_key = f"shorts-render/{org_id}/{job_id}/output.mp4"
+    s3_key = f"{org_id}/shorts/renders/{job_id}/output.mp4"
     file_size = os.path.getsize(local_path)
     s3_client.upload_file(Path(local_path), s3_key, content_type="video/mp4")
     return s3_key, file_size

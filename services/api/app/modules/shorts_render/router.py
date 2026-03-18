@@ -1,7 +1,10 @@
+import asyncio
+import logging
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 
 from app.dependencies import get_shorts_render_service
 from app.modules.auth.service import get_current_user
@@ -15,7 +18,11 @@ from app.modules.tenancy.context import OrgContext
 from app.modules.tenancy.middleware import get_current_org
 from app.modules.users.models import User
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/shorts/render", tags=["shorts-render"])
+
+_RANGE_CHUNK = 2 * 1024 * 1024  # 2MB default for open-ended ranges
 
 
 @router.post("", response_model=RenderJobResponse, status_code=status.HTTP_201_CREATED)
@@ -60,3 +67,113 @@ async def delete_render_job(
 ):
     await service.delete_render_job(org_ctx.org_id, job_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{job_id}/download")
+async def download_rendered_short(
+    job_id: UUID,
+    request: Request,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[ShortsRenderService, Depends(get_shorts_render_service)],
+):
+    """Stream the rendered MP4 from S3. Supports HTTP Range requests."""
+    job = await service.get_render_job_record(org_ctx.org_id, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Render job not found")
+
+    if job.status != "completed" or not job.output_s3_key:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Render job is not ready for download",
+        )
+
+    from app.config import get_settings
+    from app.storage.s3 import S3Client
+
+    settings = get_settings()
+    s3 = S3Client(bucket=settings.drive_s3_bucket)
+
+    try:
+        loop = asyncio.get_running_loop()
+        head = await loop.run_in_executor(
+            None, lambda: s3._client.head_object(Bucket=s3.bucket, Key=job.output_s3_key)
+        )
+    except Exception:
+        logger.warning("download_head_failed", extra={"key": job.output_s3_key}, exc_info=True)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to retrieve file from storage")
+
+    total_size = head["ContentLength"]
+    content_type = "video/mp4"
+    filename = f"short_{job_id}.mp4"
+
+    range_header = request.headers.get("range")
+
+    if range_header:
+        range_spec = range_header.strip().lower()
+        if not range_spec.startswith("bytes="):
+            raise HTTPException(status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE)
+
+        range_val = range_spec[6:]
+        parts = range_val.split("-", 1)
+        start = int(parts[0]) if parts[0] else 0
+        end = int(parts[1]) if parts[1] else min(start + _RANGE_CHUNK - 1, total_size - 1)
+        end = min(end, total_size - 1)
+
+        if start >= total_size or start > end:
+            raise HTTPException(status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE)
+
+        content_length = end - start + 1
+        s3_key = job.output_s3_key
+
+        def _range_iter():
+            resp = s3._client.get_object(
+                Bucket=s3.bucket, Key=s3_key, Range=f"bytes={start}-{end}",
+            )
+            body = resp["Body"]
+            try:
+                while True:
+                    chunk = body.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                body.close()
+
+        return StreamingResponse(
+            _range_iter(),
+            status_code=206,
+            media_type=content_type,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{total_size}",
+                "Content-Length": str(content_length),
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "private, max-age=3600",
+            },
+        )
+
+    s3_key = job.output_s3_key
+
+    def _full_iter():
+        resp = s3._client.get_object(Bucket=s3.bucket, Key=s3_key)
+        body = resp["Body"]
+        try:
+            while True:
+                chunk = body.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
+
+    return StreamingResponse(
+        _full_iter(),
+        media_type=content_type,
+        headers={
+            "Content-Length": str(total_size),
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )

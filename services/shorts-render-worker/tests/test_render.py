@@ -218,7 +218,7 @@ class TestUploadRenderedFile:
             mock_s3, str(output_file), "org-001", "job-001",
         )
 
-        assert s3_key == "shorts-render/org-001/job-001/output.mp4"
+        assert s3_key == "org-001/shorts/renders/job-001/output.mp4"
         assert file_size == len(b"fake mp4 content")
         mock_s3.upload_file.assert_called_once_with(
             output_file, s3_key, content_type="video/mp4",

@@ -82,6 +82,14 @@ class ShortsRenderService:
 
         return _to_response(job)
 
+    async def get_render_job_record(
+        self,
+        org_id: UUID,
+        job_id: UUID,
+    ) -> ShortsRenderJob | None:
+        """Get the raw DB record for a render job."""
+        return await self.repository.get_by_id(org_id, job_id)
+
     async def get_render_job(
         self,
         org_id: UUID,
