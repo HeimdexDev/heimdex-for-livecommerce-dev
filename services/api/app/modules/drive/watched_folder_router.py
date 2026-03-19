@@ -3,6 +3,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from google.auth.exceptions import RefreshError
 
 from app.config import get_settings
 from app.dependencies import (
@@ -117,11 +118,17 @@ async def enumerate_folders(
         )
 
     token_data = _decrypt_oauth_token_data(secret, settings.drive_sa_encryption_key)
-    drive_client = DriveClient.from_oauth_token(
-        refresh_token=token_data["refresh_token"],
-        client_id=token_data["client_id"],
-        client_secret=token_data["client_secret"],
-    )
+    try:
+        drive_client = DriveClient.from_oauth_token(
+            refresh_token=token_data["refresh_token"],
+            client_id=token_data["client_id"],
+            client_secret=token_data["client_secret"],
+        )
+    except RefreshError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google 연결이 만료되었습니다. 설정에서 다시 연결해 주세요.",
+        )
 
     shared_drives = drive_client.list_shared_drives()
     connections = await conn_repo.list_by_org(org_ctx.org_id)
