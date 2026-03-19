@@ -629,8 +629,32 @@ function SyncContent() {
                 }}
               />
             )}
+          </div>
+        ) : (
+          <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white p-6 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-500" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M5.5 16a3.5 3.5 0 01-.369-6.98 4 4 0 117.753-1.977A4.5 4.5 0 1113.5 16h-8z" />
+              </svg>
+            </div>
+            <h3 className="mt-3 text-sm font-semibold text-gray-900">Google 드라이브 연결</h3>
+            <p className="mt-1 text-xs text-gray-500">
+              Google 계정을 연결하여 드라이브 폴더를 동기화하세요.
+            </p>
+            <button
+              onClick={handleConnectGoogle}
+              disabled={oauthLoading}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
+            >
+              {oauthLoading ? "연결 중..." : "Google 드라이브 연결하기"}
+            </button>
+          </div>
+        )}
 
-            {/* Connected drive connections */}
+        {/* Connection list — always visible regardless of OAuth status so users can delete disconnected connections */}
+        {driveConnections.length > 0 && (
+          <div className={oauthStatus?.connected ? "" : "mt-4 rounded-xl border border-gray-200 bg-white p-6"}>
+            {/* Drive connections */}
             {driveConnections.filter((c) => c.scope_type === "drive").length > 0 && (
               <div className="mt-4 space-y-2">
                 <h4 className="text-xs font-medium text-gray-500">공유 드라이브</h4>
@@ -668,7 +692,7 @@ function SyncContent() {
               </div>
             )}
 
-            {/* Connected folder connections */}
+            {/* Folder connections */}
             {driveConnections.filter((c) => c.scope_type === "folder").length > 0 && (
               <div className="mt-4 space-y-2">
                 <h4 className="text-xs font-medium text-gray-500">동기화 폴더</h4>
@@ -709,11 +733,9 @@ function SyncContent() {
               </div>
             )}
 
-            {driveConnections.length > 0 && (
-              <DriveSyncProgressComponent progress={syncProgress} />
-            )}
+            <DriveSyncProgressComponent progress={syncProgress} />
 
-            {folderTree && driveConnections.length > 0 && (
+            {folderTree && (
               <div className="my-4 border-t border-gray-200" />
             )}
 
@@ -727,25 +749,6 @@ function SyncContent() {
                 isRefreshing={isEnumerating}
               />
             )}
-          </div>
-        ) : (
-          <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white p-6 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-blue-500" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M5.5 16a3.5 3.5 0 01-.369-6.98 4 4 0 117.753-1.977A4.5 4.5 0 1113.5 16h-8z" />
-              </svg>
-            </div>
-            <h3 className="mt-3 text-sm font-semibold text-gray-900">Google 드라이브 연결</h3>
-            <p className="mt-1 text-xs text-gray-500">
-              Google 계정을 연결하여 드라이브 폴더를 동기화하세요.
-            </p>
-            <button
-              onClick={handleConnectGoogle}
-              disabled={oauthLoading}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
-            >
-              {oauthLoading ? "연결 중..." : "Google 드라이브 연결하기"}
-            </button>
           </div>
         )}
       </div>
