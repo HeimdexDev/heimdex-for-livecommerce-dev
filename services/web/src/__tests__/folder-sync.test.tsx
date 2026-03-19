@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { DisableFolderConfirmDialog } from "@/components/sync/DisableFolderConfirmDialog";
+import { OAuthExpiredDialog } from "@/components/sync/OAuthExpiredDialog";
 import { FolderRow } from "@/components/sync/FolderRow";
 import { FolderSyncTree } from "@/components/sync/FolderSyncTree";
 import type { WatchedFolder, DriveInfo, ContentType } from "@/lib/types/drive";
@@ -134,6 +135,130 @@ describe("DisableFolderConfirmDialog", () => {
     );
 
     expect(screen.getByText(/이 폴더/)).toBeInTheDocument();
+  });
+});
+
+describe("OAuthExpiredDialog", () => {
+  it("renders nothing when not open", () => {
+    const { container } = render(
+      <OAuthExpiredDialog
+        isOpen={false}
+        googleEmail="test@gmail.com"
+        isLoading={false}
+        onReconnect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("renders expired message when open", () => {
+    render(
+      <OAuthExpiredDialog
+        isOpen={true}
+        googleEmail="test@gmail.com"
+        isLoading={false}
+        onReconnect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Google 연결이 만료되었습니다")).toBeInTheDocument();
+    expect(screen.getByText(/다시 인증해 주세요/)).toBeInTheDocument();
+  });
+
+  it("displays google email when provided", () => {
+    render(
+      <OAuthExpiredDialog
+        isOpen={true}
+        googleEmail="user@example.com"
+        isLoading={false}
+        onReconnect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("user@example.com")).toBeInTheDocument();
+  });
+
+  it("hides email section when email is null", () => {
+    render(
+      <OAuthExpiredDialog
+        isOpen={true}
+        googleEmail={null}
+        isLoading={false}
+        onReconnect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("@")).not.toBeInTheDocument();
+  });
+
+  it("reconnect button calls onReconnect", async () => {
+    const onReconnect = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <OAuthExpiredDialog
+        isOpen={true}
+        googleEmail="test@gmail.com"
+        isLoading={false}
+        onReconnect={onReconnect}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByText("다시 연결"));
+    expect(onReconnect).toHaveBeenCalledOnce();
+  });
+
+  it("close button calls onClose", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <OAuthExpiredDialog
+        isOpen={true}
+        googleEmail="test@gmail.com"
+        isLoading={false}
+        onReconnect={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+
+    await user.click(screen.getByText("닫기"));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("buttons disabled while loading", () => {
+    render(
+      <OAuthExpiredDialog
+        isOpen={true}
+        googleEmail="test@gmail.com"
+        isLoading={true}
+        onReconnect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const reconnectButton = screen.getByText("연결 중...").closest("button");
+    const closeButton = screen.getByText("닫기");
+
+    expect(reconnectButton).toBeDisabled();
+    expect(closeButton).toBeDisabled();
+  });
+
+  it("shows loading spinner when loading", () => {
+    render(
+      <OAuthExpiredDialog
+        isOpen={true}
+        googleEmail="test@gmail.com"
+        isLoading={true}
+        onReconnect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("연결 중...")).toBeInTheDocument();
+    expect(screen.queryByText("다시 연결")).not.toBeInTheDocument();
   });
 });
 

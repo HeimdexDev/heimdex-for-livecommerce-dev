@@ -37,9 +37,11 @@ import { UploadProgress } from "@/components/sync/UploadProgress";
 import { StopConfirmDialog } from "@/components/sync/StopConfirmDialog";
 import { DriveFolderBrowser } from "@/components/sync/DriveFolderBrowser";
 import { DeleteConnectionDialog } from "@/components/sync/DeleteConnectionDialog";
+import { OAuthExpiredDialog } from "@/components/sync/OAuthExpiredDialog";
 import { FolderSyncTree } from "@/components/sync/FolderSyncTree";
 import type { DeviceListItem, DriveStatusResponse, DriveFolderInfo, DriveConnectionResponse, DriveOAuthStatus, DriveSyncProgress } from "@/lib/types";
 import type { FolderTreeResponse, ContentType } from "@/lib/types/drive";
+import { ApiError } from "@/lib/types/api";
 
 type UploadState = "hidden" | "uploading" | "paused" | "complete" | "error";
 
@@ -145,6 +147,7 @@ function SyncContent() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [folderTree, setFolderTree] = useState<FolderTreeResponse | null>(null);
   const [isEnumerating, setIsEnumerating] = useState(false);
+  const [showReauthDialog, setShowReauthDialog] = useState(false);
   const syncProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollingRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -211,7 +214,11 @@ function SyncContent() {
       const tree = await enumerateFolders(getAccessToken);
       setFolderTree(tree);
     } catch (err) {
-      console.error("Failed to enumerate folders:", err);
+      if (err instanceof ApiError && err.detail.includes("만료")) {
+        setShowReauthDialog(true);
+      } else {
+        console.error("Failed to enumerate folders:", err);
+      }
     } finally {
       setIsEnumerating(false);
     }
@@ -771,6 +778,17 @@ function SyncContent() {
         isDeleting={isDeleting}
         onCancel={() => setDeleteTarget(null)}
         onConfirm={handleDeleteConnection}
+      />
+
+      <OAuthExpiredDialog
+        isOpen={showReauthDialog}
+        googleEmail={oauthStatus?.google_email ?? null}
+        isLoading={oauthLoading}
+        onReconnect={() => {
+          setShowReauthDialog(false);
+          handleConnectGoogle();
+        }}
+        onClose={() => setShowReauthDialog(false)}
       />
     </div>
   );
