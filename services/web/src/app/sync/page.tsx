@@ -277,7 +277,6 @@ function SyncContent() {
   }, [driveConnections, getAccessToken]);
 
   useEffect(() => {
-    console.log("[DEBUG-DELETE] SyncContent mounted — build v2");
     loadDevices();
     loadSources();
     loadDriveStatus();
@@ -287,10 +286,6 @@ function SyncContent() {
     const id = setInterval(() => { loadDevices(); loadSources(); loadDriveStatus(); loadDriveConnections(); loadOAuthStatus(); }, DEVICE_POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [loadDevices, loadSources, loadDriveStatus, loadDriveConnections, loadOAuthStatus, loadFolderTree]);
-
-  useEffect(() => {
-    console.log("[DEBUG-DELETE] deleteTarget changed:", deleteTarget?.id ?? "null", deleteTarget?.scope_type ?? "");
-  }, [deleteTarget]);
 
   useEffect(() => {
     if (showDriveFolders) {
@@ -516,7 +511,6 @@ function SyncContent() {
   }, [loadSources]);
 
   const handleDeleteConnection = useCallback(async () => {
-    console.log("[DEBUG-DELETE] handleDeleteConnection called, deleteTarget:", deleteTarget?.id, deleteTarget?.scope_type);
     if (!deleteTarget) return;
     setIsDeleting(true);
     try {
@@ -688,7 +682,7 @@ function SyncContent() {
                       </span>
                       <button
                         type="button"
-                        onClick={() => { console.log("[DEBUG-DELETE] drive button clicked, conn:", conn.id, conn.scope_type, conn.status); setDeleteTarget(conn); }}
+                        onClick={() => setDeleteTarget(conn)}
                         className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
                       >
                         삭제
@@ -729,7 +723,7 @@ function SyncContent() {
                       </span>
                       <button
                         type="button"
-                        onClick={() => { console.log("[DEBUG-DELETE] folder button clicked, conn:", conn.id, conn.scope_type, conn.status); setDeleteTarget(conn); }}
+                        onClick={() => setDeleteTarget(conn)}
                         className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
                       >
                         삭제

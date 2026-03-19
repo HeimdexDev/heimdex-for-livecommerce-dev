@@ -144,6 +144,11 @@ def test_delete_connection_cascade_soft_deletes_files():
             AsyncMock(return_value=conn),
         ),
         patch.object(
+            DriveConnectionRepository,
+            "delete",
+            AsyncMock(return_value=True),
+        ) as mock_delete_conn,
+        patch.object(
             DriveFileRepository,
             "soft_delete_by_connection",
             AsyncMock(return_value=["vid_1", "vid_2", "vid_3"]),
@@ -159,7 +164,7 @@ def test_delete_connection_cascade_soft_deletes_files():
     assert response.status_code == 204
     mock_soft_delete.assert_awaited_once_with(connection_id, org_ctx.org_id)
     assert scene_client.delete_scenes_by_video_id.await_count == 3
-    db.flush.assert_awaited_once()
+    mock_delete_conn.assert_awaited_once_with(connection_id, org_ctx.org_id)
 
 
 def test_delete_connection_cascade_removes_scenes():
@@ -176,6 +181,11 @@ def test_delete_connection_cascade_removes_scenes():
     with (
         patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
         patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
+        patch.object(
+            DriveConnectionRepository,
+            "delete",
+            AsyncMock(return_value=True),
+        ) as mock_delete_conn,
         patch.object(
             DriveFileRepository,
             "soft_delete_by_connection",
@@ -196,9 +206,10 @@ def test_delete_connection_cascade_removes_scenes():
     ]
     actual_calls = [call.args for call in scene_client.delete_scenes_by_video_id.await_args_list]
     assert actual_calls == [c[0] for c in expected_calls]
+    mock_delete_conn.assert_awaited_once_with(connection_id, org_ctx.org_id)
 
 
-def test_delete_connection_sets_disconnected_status():
+def test_delete_connection_removes_record():
     org_ctx = OrgContext(org_id=uuid4(), org_slug="testorg")
     db = AsyncMock()
     scene_client = AsyncMock()
@@ -213,6 +224,11 @@ def test_delete_connection_sets_disconnected_status():
         patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
         patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
         patch.object(
+            DriveConnectionRepository,
+            "delete",
+            AsyncMock(return_value=True),
+        ) as mock_delete_conn,
+        patch.object(
             DriveFileRepository,
             "soft_delete_by_connection",
             AsyncMock(return_value=["vid_1"]),
@@ -226,8 +242,7 @@ def test_delete_connection_sets_disconnected_status():
 
     app.dependency_overrides.clear()
     assert response.status_code == 204
-    assert conn.status == "disconnected"
-    db.flush.assert_awaited_once()
+    mock_delete_conn.assert_awaited_once_with(connection_id, org_ctx.org_id)
 
 
 def test_delete_connection_not_found_returns_404():
@@ -295,6 +310,11 @@ def test_delete_connection_no_files():
         patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
         patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
         patch.object(
+            DriveConnectionRepository,
+            "delete",
+            AsyncMock(return_value=True),
+        ) as mock_delete_conn,
+        patch.object(
             DriveFileRepository,
             "soft_delete_by_connection",
             AsyncMock(return_value=[]),
@@ -308,9 +328,8 @@ def test_delete_connection_no_files():
 
     app.dependency_overrides.clear()
     assert response.status_code == 204
-    assert conn.status == "disconnected"
     scene_client.delete_scenes_by_video_id.assert_not_awaited()
-    db.flush.assert_awaited_once()
+    mock_delete_conn.assert_awaited_once_with(connection_id, org_ctx.org_id)
 
 
 def test_delete_connection_already_deleted_files_skipped():
@@ -328,6 +347,11 @@ def test_delete_connection_already_deleted_files_skipped():
         patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
         patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
         patch.object(
+            DriveConnectionRepository,
+            "delete",
+            AsyncMock(return_value=True),
+        ) as mock_delete_conn,
+        patch.object(
             DriveFileRepository,
             "soft_delete_by_connection",
             AsyncMock(return_value=["vid_live_1", "vid_live_2"]),
@@ -344,6 +368,7 @@ def test_delete_connection_already_deleted_files_skipped():
     assert scene_client.delete_scenes_by_video_id.await_count == 2
     called_video_ids = [call.args[1] for call in scene_client.delete_scenes_by_video_id.await_args_list]
     assert called_video_ids == ["vid_live_1", "vid_live_2"]
+    mock_delete_conn.assert_awaited_once_with(connection_id, org_ctx.org_id)
 
 
 def test_delete_connection_opensearch_failure_doesnt_block():
@@ -361,6 +386,11 @@ def test_delete_connection_opensearch_failure_doesnt_block():
         patch("app.modules.drive.router.get_settings", return_value=_settings(True)),
         patch.object(DriveConnectionRepository, "get_by_id", AsyncMock(return_value=conn)),
         patch.object(
+            DriveConnectionRepository,
+            "delete",
+            AsyncMock(return_value=True),
+        ) as mock_delete_conn,
+        patch.object(
             DriveFileRepository,
             "soft_delete_by_connection",
             AsyncMock(return_value=["vid_1"]),
@@ -375,8 +405,7 @@ def test_delete_connection_opensearch_failure_doesnt_block():
 
     app.dependency_overrides.clear()
     assert response.status_code == 204
-    assert conn.status == "disconnected"
-    db.flush.assert_awaited_once()
+    mock_delete_conn.assert_awaited_once_with(connection_id, org_ctx.org_id)
     mock_warning.assert_called_once()
 
 

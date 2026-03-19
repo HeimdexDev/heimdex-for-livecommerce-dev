@@ -1,5 +1,7 @@
 "use client";
 
+import { useState, useEffect } from "react";
+
 interface DeleteConnectionDialogProps {
   isOpen: boolean;
   connectionName: string | null;
@@ -15,6 +17,20 @@ export function DeleteConnectionDialog({
   onCancel,
   onConfirm,
 }: DeleteConnectionDialogProps) {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setReady(false);
+      return;
+    }
+    const raf = requestAnimationFrame(() => {
+      const timer = setTimeout(() => setReady(true), 80);
+      return () => clearTimeout(timer);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const displayName = connectionName || "이 연결";
@@ -23,7 +39,7 @@ export function DeleteConnectionDialog({
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
       <div
         className="absolute inset-0 bg-black/40"
-        onClick={isDeleting ? undefined : onCancel}
+        onClick={isDeleting || !ready ? undefined : onCancel}
         onKeyDown={(e) => {
           if (e.key === "Escape" && !isDeleting) onCancel();
         }}
@@ -53,7 +69,7 @@ export function DeleteConnectionDialog({
           <button
             type="button"
             onClick={onConfirm}
-            disabled={isDeleting}
+            disabled={isDeleting || !ready}
             className="rounded-lg bg-red-500 px-6 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
           >
             {isDeleting ? (

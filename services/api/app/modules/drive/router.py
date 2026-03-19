@@ -188,7 +188,6 @@ async def update_connection(
 async def delete_connection(
     connection_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
     conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
     file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
     scene_client: Annotated[SceneSearchClient, Depends(get_scene_opensearch_client)],
@@ -210,8 +209,7 @@ async def delete_connection(
                 extra={"connection_id": str(connection_id), "video_id": vid},
             )
 
-    conn.status = "disconnected"
-    await db.flush()
+    await conn_repo.delete(connection_id, org_ctx.org_id)
 
 
 @router.get("/connections/{connection_id}/files", response_model=DriveFileListResponse)
