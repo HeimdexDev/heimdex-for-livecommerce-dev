@@ -6,12 +6,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
-from app.dependencies import get_shorts_render_service
+from app.dependencies import get_scene_opensearch_client, get_shorts_render_service
 from app.modules.auth.service import get_current_user
 from app.modules.shorts_render.schemas import (
     RenderJobCreate,
     RenderJobListResponse,
     RenderJobResponse,
+    SubtitleSuggestion,
+    SubtitleSuggestions,
 )
 from app.modules.shorts_render.service import ShortsRenderService
 from app.modules.tenancy.context import OrgContext
@@ -177,3 +179,56 @@ async def download_rendered_short(
             "Cache-Control": "private, max-age=3600",
         },
     )
+
+
+_TRANSCRIPT_MAX_LEN = 50
+
+
+@router.get(
+    "/suggestions/{video_id}/{scene_id}",
+    response_model=SubtitleSuggestions,
+)
+async def get_subtitle_suggestions(
+    video_id: str,
+    scene_id: str,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    user: Annotated[User, Depends(get_current_user)],
+    scene_opensearch=Depends(get_scene_opensearch_client),
+):
+    """Return subtitle text suggestions from scene metadata."""
+    doc_id = f"{org_ctx.org_id}:{scene_id}"
+    scenes = await scene_opensearch.mget_scenes([doc_id])
+    scene_doc = scenes.get(doc_id)
+
+    if scene_doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Scene not found: {scene_id}",
+        )
+
+    seen: set[str] = set()
+    suggestions: list[SubtitleSuggestion] = []
+
+    # Product tags first
+    for tag in scene_doc.get("product_tags") or []:
+        tag = tag.strip()
+        if tag and tag not in seen:
+            seen.add(tag)
+            suggestions.append(SubtitleSuggestion(text=tag, source="product_tag"))
+
+    # Keyword tags second
+    for tag in scene_doc.get("keyword_tags") or []:
+        tag = tag.strip()
+        if tag and tag not in seen:
+            seen.add(tag)
+            suggestions.append(SubtitleSuggestion(text=tag, source="keyword_tag"))
+
+    # Transcript last (truncated)
+    transcript = (scene_doc.get("transcript_raw") or "").strip()
+    if transcript:
+        truncated = transcript[:_TRANSCRIPT_MAX_LEN]
+        if truncated not in seen:
+            seen.add(truncated)
+            suggestions.append(SubtitleSuggestion(text=truncated, source="transcript"))
+
+    return SubtitleSuggestions(suggestions=suggestions)

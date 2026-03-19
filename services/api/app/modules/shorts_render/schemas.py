@@ -41,3 +41,12 @@ class RenderJobResponse(BaseModel):
 class RenderJobListResponse(BaseModel):
     items: list[RenderJobResponse]
     total: int
+
+
+class SubtitleSuggestion(BaseModel):
+    text: str
+    source: Literal["product_tag", "keyword_tag", "transcript"]
+
+
+class SubtitleSuggestions(BaseModel):
+    suggestions: list[SubtitleSuggestion]
