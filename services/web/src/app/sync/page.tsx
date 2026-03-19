@@ -486,14 +486,17 @@ function SyncContent() {
   }, [getAccessToken, loadDriveConnections]);
 
   const handleFolderSelected = useCallback(async (folderId: string, folderName: string, folderPath: string) => {
-    // library_id is optional — API auto-selects the org's default library if not provided
     const libraryId = driveConnections[0]?.library_id ?? null;
     try {
       await createFolderConnection(libraryId, folderId, folderName, folderPath, getAccessToken);
       setShowFolderBrowser(false);
       loadDriveConnections();
     } catch (err) {
-      console.error("Failed to create folder connection:", err);
+      if (err instanceof ApiError && err.detail.includes("만료")) {
+        setShowReauthDialog(true);
+      } else {
+        console.error("Failed to create folder connection:", err);
+      }
     }
   }, [driveConnections, getAccessToken, loadDriveConnections]);
 
@@ -620,6 +623,10 @@ function SyncContent() {
                 onFolderSelected={handleFolderSelected}
                 onClose={() => setShowFolderBrowser(false)}
                 getAccessToken={getAccessToken}
+                onAuthExpired={() => {
+                  setShowFolderBrowser(false);
+                  setShowReauthDialog(true);
+                }}
               />
             )}
 
@@ -704,6 +711,10 @@ function SyncContent() {
 
             {driveConnections.length > 0 && (
               <DriveSyncProgressComponent progress={syncProgress} />
+            )}
+
+            {folderTree && driveConnections.length > 0 && (
+              <div className="my-4 border-t border-gray-200" />
             )}
 
             {folderTree && (

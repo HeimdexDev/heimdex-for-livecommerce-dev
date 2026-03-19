@@ -155,6 +155,81 @@ def test_get_watched_folders_with_data():
     assert tree.drives[1].drive_id == 'drive-1'
 
 
+def test_get_watched_folders_legacy_drive_mapped_to_shared_drive():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug='testorg')
+    db = AsyncMock()
+    folder_repo = _FolderRepoMock()
+    app = _build_watched_folder_app(db, org_ctx, folder_repo)
+
+    legacy_drive = _make_drive(scope_type='drive', drive_id='sd-1', drive_name='Legacy Shared')
+
+    with patch('app.modules.drive.router.get_settings', return_value=SimpleNamespace(drive_connector_enabled=True)), patch.object(
+        DriveConnectionRepository,
+        'list_by_org',
+        AsyncMock(return_value=[legacy_drive]),
+    ):
+        with TestClient(app) as client:
+            response = client.get('/api/drive/watched-folders')
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 200
+    tree = FolderTreeResponse.model_validate(response.json())
+    assert len(tree.drives) == 1
+    assert tree.drives[0].connection_id == legacy_drive.id
+    assert tree.drives[0].drive_id == 'sd-1'
+    assert tree.drives[0].drive_name == 'Legacy Shared'
+    assert tree.drives[0].scope_type == 'shared_drive'
+
+
+def test_get_watched_folders_deduplicates_legacy_and_new():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug='testorg')
+    db = AsyncMock()
+    folder_repo = _FolderRepoMock()
+    app = _build_watched_folder_app(db, org_ctx, folder_repo)
+
+    legacy_drive = _make_drive(scope_type='drive', drive_id='sd-1', drive_name='Legacy Name')
+    new_drive = _make_drive(scope_type='shared_drive', drive_id='sd-1', drive_name='New Name')
+
+    with patch('app.modules.drive.router.get_settings', return_value=SimpleNamespace(drive_connector_enabled=True)), patch.object(
+        DriveConnectionRepository,
+        'list_by_org',
+        AsyncMock(return_value=[legacy_drive, new_drive]),
+    ):
+        with TestClient(app) as client:
+            response = client.get('/api/drive/watched-folders')
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 200
+    tree = FolderTreeResponse.model_validate(response.json())
+    assert len(tree.drives) == 1
+    assert tree.drives[0].connection_id == new_drive.id
+    assert tree.drives[0].scope_type == 'shared_drive'
+
+
+def test_get_watched_folders_excludes_folder_scope_type():
+    org_ctx = OrgContext(org_id=uuid4(), org_slug='testorg')
+    db = AsyncMock()
+    folder_repo = _FolderRepoMock()
+    app = _build_watched_folder_app(db, org_ctx, folder_repo)
+
+    folder_conn = _make_drive(scope_type='folder', drive_id=None, drive_name=None)
+    my_drive = _make_drive(scope_type='my_drive', drive_id=None, drive_name='My Drive')
+
+    with patch('app.modules.drive.router.get_settings', return_value=SimpleNamespace(drive_connector_enabled=True)), patch.object(
+        DriveConnectionRepository,
+        'list_by_org',
+        AsyncMock(return_value=[folder_conn, my_drive]),
+    ):
+        with TestClient(app) as client:
+            response = client.get('/api/drive/watched-folders')
+
+    app.dependency_overrides.clear()
+    assert response.status_code == 200
+    tree = FolderTreeResponse.model_validate(response.json())
+    assert len(tree.drives) == 1
+    assert tree.drives[0].scope_type == 'my_drive'
+
+
 def test_toggle_on():
     org_ctx = OrgContext(org_id=uuid4(), org_slug='testorg')
     db = AsyncMock()

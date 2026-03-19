@@ -89,16 +89,58 @@ def _build_folder_inputs(folders: list[dict[str, Any]]) -> list[WatchedFolderInp
 
 
 def _build_drive_infos(connections: list[DriveConnection]) -> list[DriveInfoResponse]:
-    return [
-        DriveInfoResponse(
-            connection_id=conn.id,
-            drive_id=conn.drive_id,
-            drive_name=conn.drive_name,
-            scope_type=conn.scope_type,
-        )
-        for conn in connections
-        if conn.scope_type in {"my_drive", "shared_drive"}
-    ]
+    """Build drive info list for FolderSyncTree.
+
+    Includes ``my_drive``, ``shared_drive``, and legacy ``drive`` connections.
+    Legacy ``drive`` connections are mapped to ``shared_drive`` in the response
+    so the frontend receives a consistent type.  When both a ``shared_drive``
+    and a legacy ``drive`` connection exist for the same Google Drive ID, only
+    the ``shared_drive`` entry is returned (it has folder associations from a
+    prior enumerate).
+    """
+    results: list[DriveInfoResponse] = []
+    shared_drive_ids: set[str] = set()
+
+    # First pass: include my_drive and shared_drive connections.
+    for conn in connections:
+        if conn.scope_type == "my_drive":
+            results.append(
+                DriveInfoResponse(
+                    connection_id=conn.id,
+                    drive_id=conn.drive_id,
+                    drive_name=conn.drive_name,
+                    scope_type="my_drive",
+                )
+            )
+        elif conn.scope_type == "shared_drive":
+            results.append(
+                DriveInfoResponse(
+                    connection_id=conn.id,
+                    drive_id=conn.drive_id,
+                    drive_name=conn.drive_name,
+                    scope_type="shared_drive",
+                )
+            )
+            if conn.drive_id:
+                shared_drive_ids.add(conn.drive_id)
+
+    # Second pass: include legacy "drive" connections not already covered.
+    for conn in connections:
+        if (
+            conn.scope_type == "drive"
+            and conn.drive_id
+            and conn.drive_id not in shared_drive_ids
+        ):
+            results.append(
+                DriveInfoResponse(
+                    connection_id=conn.id,
+                    drive_id=conn.drive_id,
+                    drive_name=conn.drive_name,
+                    scope_type="shared_drive",
+                )
+            )
+
+    return results
 
 
 @router.post("/enumerate-folders", response_model=FolderTreeResponse)
@@ -166,7 +208,7 @@ async def enumerate_folders(
             (
                 c
                 for c in connections
-                if c.scope_type == "shared_drive" and c.drive_id == drive_id
+                if c.scope_type in {"shared_drive", "drive"} and c.drive_id == drive_id
             ),
             None,
         )

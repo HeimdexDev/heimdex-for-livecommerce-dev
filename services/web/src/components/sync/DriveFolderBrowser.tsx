@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { browseDriveFolders } from "@/lib/api/drive";
 import type { DriveFolderItem } from "@/lib/types";
+import { ApiError } from "@/lib/types/api";
 
 interface BreadcrumbItem {
   id: string;
@@ -13,6 +14,7 @@ interface DriveFolderBrowserProps {
   onFolderSelected: (folderId: string, folderName: string, folderPath: string) => void;
   onClose: () => void;
   getAccessToken: () => Promise<string | null>;
+  onAuthExpired?: () => void;
 }
 
 function FolderIcon() {
@@ -51,6 +53,7 @@ export function DriveFolderBrowser({
   onFolderSelected,
   onClose,
   getAccessToken,
+  onAuthExpired,
 }: DriveFolderBrowserProps) {
   const [folders, setFolders] = useState<DriveFolderItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,12 +68,15 @@ export function DriveFolderBrowser({
     try {
       const resp = await browseDriveFolders(parentId, getAccessToken);
       setFolders(resp.folders);
-    } catch {
+    } catch (err) {
+      if (err instanceof ApiError && err.detail.includes("만료") && onAuthExpired) {
+        onAuthExpired();
+      }
       setFolders([]);
     } finally {
       setLoading(false);
     }
-  }, [getAccessToken]);
+  }, [getAccessToken, onAuthExpired]);
 
   useEffect(() => {
     loadFolders(currentParentId);
