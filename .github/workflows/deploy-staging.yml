@@ -62,22 +62,31 @@ jobs:
             CURR=$(git rev-parse HEAD)
             API_CHANGED=false
             WEB_CHANGED=false
+            WORKER_CHANGED=false
+            YOUTUBE_CHANGED=false
 
             if [ -n "$PREV" ] && [ "$PREV" != "$CURR" ]; then
               DIFF_FILES=$(git diff --name-only "$PREV" "$CURR" || true)
-              echo "$DIFF_FILES" | grep -q '^services/api/' && API_CHANGED=true || true
-              echo "$DIFF_FILES" | grep -q '^services/web/' && WEB_CHANGED=true || true
 
-              echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example)' && API_CHANGED=true && WEB_CHANGED=true || true
+              # Use if-statements to avoid pipefail + set -e interaction
+              if echo "$DIFF_FILES" | grep -qE '^services/api/|^services/worker_sdk/'; then API_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -q '^services/web/'; then WEB_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -qE '^services/drive-worker/|^services/worker_sdk/'; then WORKER_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -qE '^services/youtube-worker/|^services/worker_sdk/'; then YOUTUBE_CHANGED=true; fi
+
+              # Shared config changes trigger all
+              if echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example)'; then API_CHANGED=true; WEB_CHANGED=true; WORKER_CHANGED=true; YOUTUBE_CHANGED=true; fi
 
               # Self-healing: if deploy script changed, force full rebuild
-              echo "$DIFF_FILES" | grep -qE '^\.github/workflows/deploy' && API_CHANGED=true && WEB_CHANGED=true || true
+              if echo "$DIFF_FILES" | grep -qE '^\.github/workflows/deploy'; then API_CHANGED=true; WEB_CHANGED=true; WORKER_CHANGED=true; YOUTUBE_CHANGED=true; fi
             elif [ -z "$PREV" ]; then
               API_CHANGED=true
               WEB_CHANGED=true
+              WORKER_CHANGED=true
+              YOUTUBE_CHANGED=true
             fi
 
-            echo "API changed: $API_CHANGED | Web changed: $WEB_CHANGED"
+            echo "API changed: $API_CHANGED | Web changed: $WEB_CHANGED | Worker changed: $WORKER_CHANGED | YouTube changed: $YOUTUBE_CHANGED"
 
             # ---- Build changed services ----
             if [ "$API_CHANGED" = true ]; then
@@ -88,6 +97,23 @@ jobs:
             if [ "$WEB_CHANGED" = true ]; then
               echo "--- building web ---"
               docker compose build web
+            fi
+
+            if [ "$WORKER_CHANGED" = true ]; then
+              echo "--- building drive-worker ---"
+              docker compose build drive-worker
+            fi
+
+            # YouTube worker uses --profile youtube; only build if running
+            if [ "$YOUTUBE_CHANGED" = true ]; then
+              YT_STATUS=$(docker inspect --format='{{.State.Status}}' heimdex-youtube-worker 2>/dev/null || echo "not_found")
+              if [ "$YT_STATUS" = "running" ]; then
+                echo "--- building youtube-worker ---"
+                docker compose --profile youtube build youtube-worker
+              else
+                echo "--- youtube-worker not running, skipping build ---"
+                YOUTUBE_CHANGED=false
+              fi
             fi
 
             # ---- Ensure all services are up before migrations ----
@@ -106,6 +132,18 @@ jobs:
               echo "--- restarting api ---"
               docker compose up -d --no-deps api
               sleep 10
+            fi
+
+            if [ "$WORKER_CHANGED" = true ]; then
+              echo "--- restarting drive-worker ---"
+              docker compose up -d --no-deps drive-worker
+              sleep 5
+            fi
+
+            if [ "$YOUTUBE_CHANGED" = true ]; then
+              echo "--- restarting youtube-worker ---"
+              docker compose --profile youtube up -d --no-deps youtube-worker
+              sleep 5
             fi
 
             if [ "$WEB_CHANGED" = true ]; then
@@ -154,6 +192,16 @@ jobs:
             done
             if [ "$WEB_OK" = false ]; then
               echo "Web: FAILED after $MAX_ATTEMPTS attempts"
+              FAIL=1
+            fi
+
+            echo "Checking drive-worker..."
+            DW_STATUS=$(docker inspect --format='{{.State.Status}}' heimdex-drive-worker 2>/dev/null || echo "not_found")
+            if [ "$DW_STATUS" = "running" ]; then
+              echo "drive-worker: OK"
+            else
+              echo "drive-worker: $DW_STATUS"
+              docker logs --tail 20 heimdex-drive-worker 2>&1 || true
               FAIL=1
             fi
 

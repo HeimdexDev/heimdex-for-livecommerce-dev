@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       services:
-        description: 'Services to deploy (api, web, drive-worker, or "all")'
+        description: 'Services to deploy (api, web, drive-worker, youtube-worker, or "all")'
         required: false
         default: 'all'
       skip_migrations:
@@ -129,6 +129,7 @@ jobs:
             DEPLOY_API=false
             DEPLOY_WEB=false
             DEPLOY_WORKER=false
+            DEPLOY_YOUTUBE=false
 
             if [ "$SERVICES" = "all" ]; then
               # If deploying all, check what actually changed to optimize build time
@@ -138,34 +139,48 @@ jobs:
                   DEPLOY_API=true
                   DEPLOY_WEB=true
                   DEPLOY_WORKER=true
+                  DEPLOY_YOUTUBE=true
                 else
                   # Use if-statements instead of `echo|grep && ... || true` to avoid
                   # pipefail + set -e interaction in appleboy/ssh-action (script_stop: true).
                   if echo "$DIFF_FILES" | grep -qE '^services/api/|^services/worker_sdk/'; then DEPLOY_API=true; fi
                   if echo "$DIFF_FILES" | grep -q '^services/web/'; then DEPLOY_WEB=true; fi
                   if echo "$DIFF_FILES" | grep -qE '^services/drive-worker/|^services/worker_sdk/'; then DEPLOY_WORKER=true; fi
+                  if echo "$DIFF_FILES" | grep -qE '^services/youtube-worker/|^services/worker_sdk/'; then DEPLOY_YOUTUBE=true; fi
                   # Shared config changes trigger all
-                  if echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example|requirements)'; then DEPLOY_API=true; DEPLOY_WEB=true; DEPLOY_WORKER=true; fi
+                  if echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example|requirements)'; then DEPLOY_API=true; DEPLOY_WEB=true; DEPLOY_WORKER=true; DEPLOY_YOUTUBE=true; fi
                 fi
               else
                 echo "No new commits. Force-deploying all services."
                 DEPLOY_API=true
                 DEPLOY_WEB=true
                 DEPLOY_WORKER=true
+                DEPLOY_YOUTUBE=true
               fi
             else
               # Deploy only specified services
               if echo "$SERVICES" | grep -q "api"; then DEPLOY_API=true; fi
               if echo "$SERVICES" | grep -q "web"; then DEPLOY_WEB=true; fi
               if echo "$SERVICES" | grep -q "drive-worker"; then DEPLOY_WORKER=true; fi
+              if echo "$SERVICES" | grep -q "youtube-worker"; then DEPLOY_YOUTUBE=true; fi
             fi
 
-            echo "Deploy API:          $DEPLOY_API"
-            echo "Deploy Web:          $DEPLOY_WEB"
-            echo "Deploy drive-worker: $DEPLOY_WORKER"
+            # YouTube worker uses --profile youtube; only deploy if already running
+            if [ "$DEPLOY_YOUTUBE" = true ]; then
+              YT_STATUS=$(docker inspect --format='{{.State.Status}}' heimdex-youtube-worker 2>/dev/null || echo "not_found")
+              if [ "$YT_STATUS" != "running" ]; then
+                echo "youtube-worker not running, skipping deploy"
+                DEPLOY_YOUTUBE=false
+              fi
+            fi
+
+            echo "Deploy API:            $DEPLOY_API"
+            echo "Deploy Web:            $DEPLOY_WEB"
+            echo "Deploy drive-worker:   $DEPLOY_WORKER"
+            echo "Deploy youtube-worker: $DEPLOY_YOUTUBE"
             echo ""
 
-            if [ "$DEPLOY_API" = false ] && [ "$DEPLOY_WEB" = false ] && [ "$DEPLOY_WORKER" = false ]; then
+            if [ "$DEPLOY_API" = false ] && [ "$DEPLOY_WEB" = false ] && [ "$DEPLOY_WORKER" = false ] && [ "$DEPLOY_YOUTUBE" = false ]; then
               echo "No services to deploy. Exiting."
               echo "=== Deploy finished at $(date) | NO CHANGES ==="
               exit 0
@@ -199,6 +214,11 @@ jobs:
               echo "--- building drive-worker ---"
               $DC build drive-worker
             fi
+
+            if [ "$DEPLOY_YOUTUBE" = true ]; then
+              echo "--- building youtube-worker ---"
+              $DC --profile youtube build youtube-worker
+            fi
             echo ""
 
             # ── Database migrations ───────────────────────────────────────────────
@@ -228,6 +248,12 @@ jobs:
             if [ "$DEPLOY_WORKER" = true ]; then
               echo "--- restarting drive-worker ---"
               $DC up -d --no-deps drive-worker
+              sleep 5
+            fi
+
+            if [ "$DEPLOY_YOUTUBE" = true ]; then
+              echo "--- restarting youtube-worker ---"
+              $DC --profile youtube up -d --no-deps youtube-worker
               sleep 5
             fi
 
@@ -301,6 +327,15 @@ jobs:
               echo "--- end logs ---"
               FAIL=1
             fi
+
+            YT_CHECK=$(docker inspect --format='{{.State.Status}}' heimdex-youtube-worker 2>/dev/null || echo "not_found")
+            if [ "$YT_CHECK" = "running" ]; then
+              echo "✓ youtube-worker: running"
+            elif [ "$YT_CHECK" = "not_found" ]; then
+              echo "- youtube-worker: not deployed (optional)"
+            else
+              echo "⚠ youtube-worker: $YT_CHECK"
+            fi
             echo ""
 
             # ── External HTTPS check ──────────────────────────────────────────────
@@ -326,13 +361,13 @@ jobs:
             echo "╠══════════════════════════════════════════════════════════════╣"
             echo "  Commit:       $CURR_SHA"
             echo "  Previous:     $PREV_SHA"
-            echo "  Services:     api=$DEPLOY_API web=$DEPLOY_WEB worker=$DEPLOY_WORKER"
+            echo "  Services:     api=$DEPLOY_API web=$DEPLOY_WEB worker=$DEPLOY_WORKER youtube=$DEPLOY_YOUTUBE"
             echo "  Status:       $([ $FAIL -eq 0 ] && echo 'SUCCESS' || echo 'DEGRADED')"
             echo ""
             echo "  Rollback:     SSH into EC2 and run:"
             echo "    cd $APP_DIR && git reset --hard $PREV_SHA"
-            echo "    $DC build api web drive-worker"
-            echo "    $DC up -d --no-deps api web drive-worker"
+            echo "    $DC build api web drive-worker youtube-worker"
+            echo "    $DC up -d --no-deps api web drive-worker youtube-worker"
             echo "╚══════════════════════════════════════════════════════════════╝"
 
             echo ""
