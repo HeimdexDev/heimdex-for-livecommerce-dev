@@ -8,6 +8,7 @@ import {
   SyncTriggerResponse,
   DriveSyncProgress,
 } from "@/lib/types";
+import type { FolderTreeResponse, ToggleFolderResponse, WatchedFolder } from "@/lib/types/drive";
 import { API_BASE_URL } from "./utils";
 
 type TokenGetter = () => Promise<string | null>;
@@ -347,6 +348,98 @@ export async function deleteDriveConnection(
       const body = await response.json().catch(() => null);
       throw ApiError.fromResponse(response.status, body);
     }
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError("network", 0, "Network error.");
+  }
+}
+
+export async function getWatchedFolders(
+  getToken?: TokenGetter,
+): Promise<FolderTreeResponse> {
+  const headers = await _buildHeaders(getToken);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/drive/watched-folders`, {
+      method: "GET",
+      headers,
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw ApiError.fromResponse(response.status, body);
+    }
+    return response.json();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError("network", 0, "Network error.");
+  }
+}
+
+export async function enumerateFolders(
+  getToken?: TokenGetter,
+): Promise<FolderTreeResponse> {
+  const headers = await _buildHeaders(getToken);
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/drive/watched-folders/enumerate-folders`,
+      { method: "POST", headers },
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw ApiError.fromResponse(response.status, body);
+    }
+    return response.json();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError("network", 0, "Network error.");
+  }
+}
+
+export async function toggleFolderSync(
+  folderId: string,
+  enabled: boolean,
+  getToken?: TokenGetter,
+): Promise<ToggleFolderResponse> {
+  const headers = await _buildHeaders(getToken);
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/drive/watched-folders/${folderId}/toggle`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ sync_enabled: enabled }),
+      },
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw ApiError.fromResponse(response.status, body);
+    }
+    return response.json();
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    throw new ApiError("network", 0, "Network error.");
+  }
+}
+
+export async function updateFolderContentTypes(
+  folderId: string,
+  types: string[],
+  getToken?: TokenGetter,
+): Promise<WatchedFolder> {
+  const headers = await _buildHeaders(getToken);
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/api/drive/watched-folders/${folderId}/content-types`,
+      {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ content_types: types }),
+      },
+    );
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw ApiError.fromResponse(response.status, body);
+    }
+    return response.json();
   } catch (err) {
     if (err instanceof ApiError) throw err;
     throw new ApiError("network", 0, "Network error.");

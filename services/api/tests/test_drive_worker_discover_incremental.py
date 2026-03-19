@@ -189,7 +189,7 @@ def test_full_scan_with_reconciliation(monkeypatch):
     api_client.list_connection_file_ids.return_value = {"file_a", "file_b", "file_c"}
     monkeypatch.setattr(discover, "_batch_delete", lambda *_: 1)
 
-    result = discover._full_scan_drive(api_client, service, conn)
+    result = discover._full_scan_drive(api_client, service, conn, set(), {})
 
     assert result == 3
     assert captured_updates["connection_id"] == conn.connection_id

@@ -12,7 +12,7 @@ Features:
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional, cast
 from uuid import UUID
 
 import requests
@@ -228,6 +228,23 @@ class InternalAPIClient:
             for c in data.get("connections", [])
         ]
 
+    def get_watched_folders(self, connection_id: str) -> list[dict[str, Any]]:
+        """Fetch enabled watched folders for a connection.
+
+        Returns list of {google_folder_id: str, content_types: list[str]}.
+        Empty list means no folders are enabled (skip discovery).
+        """
+        resp = self._request_with_retry(
+            lambda: self._session.get(
+                f"{self.base_url}/internal/drive/sync/connections/{connection_id}/watched-folders",
+                timeout=self.timeout,
+            ),
+        )
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+        return resp.json().get("folders", [])
+
     def upsert_files(
         self,
         connection_id: UUID,
@@ -424,10 +441,10 @@ class InternalAPIClient:
 
     def _request_with_retry(
         self,
-        method: str,
-        url: str,
+        method_or_callable: str | Callable[[], requests.Response],
+        url: str | None = None,
         **kwargs: Any,
-    ) -> dict[str, Any]:
+    ) -> Any:
         """Execute HTTP request with bounded exponential backoff retry.
 
         Retries on:
@@ -439,12 +456,39 @@ class InternalAPIClient:
         - 4xx client errors (400, 401, 404, 422)
         - Successful responses (2xx)
         """
-        kwargs.setdefault("timeout", self.timeout)
+        use_callable = callable(method_or_callable)
+        if not use_callable:
+            kwargs.setdefault("timeout", self.timeout)
+
+        method = method_or_callable if isinstance(method_or_callable, str) else "CALLABLE"
+        request_url = url or ""
         last_exception: Optional[Exception] = None
 
         for attempt in range(self.max_retries + 1):
             try:
-                resp = self._session.request(method, url, **kwargs)
+                if use_callable:
+                    request_fn = cast(Callable[[], requests.Response], method_or_callable)
+                    resp = request_fn()
+                else:
+                    request_method = cast(str, method_or_callable)
+                    resp = self._session.request(request_method, request_url, **kwargs)
+
+                if use_callable:
+                    if resp.status_code in _RETRYABLE_STATUS_CODES and attempt < self.max_retries:
+                        delay = self._backoff_delay(attempt)
+                        logger.warning(
+                            "internal_api_retryable_error",
+                            extra={
+                                "method": method,
+                                "url": request_url,
+                                "status": resp.status_code,
+                                "attempt": attempt + 1,
+                                "retry_delay": delay,
+                            },
+                        )
+                        time.sleep(delay)
+                        continue
+                    return resp
 
                 if resp.status_code < 300:
                     return resp.json()
@@ -459,7 +503,7 @@ class InternalAPIClient:
                             "internal_api_retryable_error",
                             extra={
                                 "method": method,
-                                "url": url,
+                                "url": request_url,
                                 "status": resp.status_code,
                                 "attempt": attempt + 1,
                                 "retry_delay": delay,
@@ -481,7 +525,7 @@ class InternalAPIClient:
                         "internal_api_connection_retry",
                         extra={
                             "method": method,
-                            "url": url,
+                            "url": request_url,
                             "error": str(e),
                             "attempt": attempt + 1,
                             "retry_delay": delay,

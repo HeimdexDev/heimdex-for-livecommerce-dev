@@ -122,6 +122,12 @@ def get_drive_secret_repository(db: AsyncSession = Depends(get_db_session)):
     return DriveSecretRepository(db)
 
 
+def get_watched_folder_repository(db: AsyncSession = Depends(get_db_session)):
+    """Watched folder repository factory."""
+    from app.modules.drive.watched_folder_repository import WatchedFolderRepository
+    return WatchedFolderRepository(db)
+
+
 def get_export_record_repository(db: AsyncSession = Depends(get_db_session)):
     """Export record repository factory."""
     from app.modules.export.repository import ExportRecordRepository

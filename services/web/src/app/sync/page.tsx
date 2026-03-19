@@ -14,6 +14,10 @@ import {
   createFolderConnection,
   getDriveConnectionProgress,
   deleteDriveConnection,
+  getWatchedFolders,
+  enumerateFolders,
+  toggleFolderSync,
+  updateFolderContentTypes,
 } from "@/lib/api/drive";
 import { DriveSyncProgress as DriveSyncProgressComponent } from "@/components/sync/DriveSyncProgress";
 import {
@@ -33,7 +37,9 @@ import { UploadProgress } from "@/components/sync/UploadProgress";
 import { StopConfirmDialog } from "@/components/sync/StopConfirmDialog";
 import { DriveFolderBrowser } from "@/components/sync/DriveFolderBrowser";
 import { DeleteConnectionDialog } from "@/components/sync/DeleteConnectionDialog";
+import { FolderSyncTree } from "@/components/sync/FolderSyncTree";
 import type { DeviceListItem, DriveStatusResponse, DriveFolderInfo, DriveConnectionResponse, DriveOAuthStatus, DriveSyncProgress } from "@/lib/types";
+import type { FolderTreeResponse, ContentType } from "@/lib/types/drive";
 
 type UploadState = "hidden" | "uploading" | "paused" | "complete" | "error";
 
@@ -137,6 +143,8 @@ function SyncContent() {
   const [syncProgress, setSyncProgress] = useState<DriveSyncProgress | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DriveConnectionResponse | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [folderTree, setFolderTree] = useState<FolderTreeResponse | null>(null);
+  const [isEnumerating, setIsEnumerating] = useState(false);
   const syncProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollingRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -188,6 +196,53 @@ function SyncContent() {
     }
   }, [getAccessToken]);
 
+  const loadFolderTree = useCallback(async () => {
+    try {
+      const tree = await getWatchedFolders(getAccessToken);
+      setFolderTree(tree);
+    } catch {
+      // First load may fail if not enumerated yet
+    }
+  }, [getAccessToken]);
+
+  const handleEnumerate = useCallback(async () => {
+    setIsEnumerating(true);
+    try {
+      const tree = await enumerateFolders(getAccessToken);
+      setFolderTree(tree);
+    } catch (err) {
+      console.error("Failed to enumerate folders:", err);
+    } finally {
+      setIsEnumerating(false);
+    }
+  }, [getAccessToken]);
+
+  const handleFolderToggle = useCallback(async (folderId: string, enabled: boolean) => {
+    const result = await toggleFolderSync(folderId, enabled, getAccessToken);
+    setFolderTree((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        folders: prev.folders.map((f) =>
+          f.id === folderId ? result.folder : f,
+        ),
+      };
+    });
+  }, [getAccessToken]);
+
+  const handleContentTypeChange = useCallback(async (folderId: string, types: ContentType[]) => {
+    const updated = await updateFolderContentTypes(folderId, types, getAccessToken);
+    setFolderTree((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        folders: prev.folders.map((f) =>
+          f.id === folderId ? updated : f,
+        ),
+      };
+    });
+  }, [getAccessToken]);
+
   const loadSyncProgress = useCallback(async () => {
     const activeConn = driveConnections.find(c => c.status === "active");
     if (!activeConn) return;
@@ -220,9 +275,10 @@ function SyncContent() {
     loadDriveStatus();
     loadDriveConnections();
     loadOAuthStatus();
+    loadFolderTree();
     const id = setInterval(() => { loadDevices(); loadSources(); loadDriveStatus(); loadDriveConnections(); loadOAuthStatus(); }, DEVICE_POLL_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [loadDevices, loadSources, loadDriveStatus, loadDriveConnections, loadOAuthStatus]);
+  }, [loadDevices, loadSources, loadDriveStatus, loadDriveConnections, loadOAuthStatus, loadFolderTree]);
 
   useEffect(() => {
     if (showDriveFolders) {
@@ -641,6 +697,17 @@ function SyncContent() {
 
             {driveConnections.length > 0 && (
               <DriveSyncProgressComponent progress={syncProgress} />
+            )}
+
+            {folderTree && (
+              <FolderSyncTree
+                folders={folderTree.folders}
+                drives={folderTree.drives}
+                onToggle={handleFolderToggle}
+                onContentTypeChange={handleContentTypeChange}
+                onRefresh={handleEnumerate}
+                isRefreshing={isEnumerating}
+              />
             )}
           </div>
         ) : (

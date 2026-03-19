@@ -110,6 +110,7 @@ class Settings(BaseSettings):
 
     # --- Google Drive connector ---
     drive_connector_enabled: bool = False
+    folder_sync_v2_enabled: bool = False  # Folder-level sync settings (watched folders UI)
     drive_sa_encryption_key: str = ""  # AES-256 key (hex) for encrypting SA keys in drive_secrets
     drive_worker_poll_interval_seconds: int = 30
     drive_worker_global_concurrency: int = 2

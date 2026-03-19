@@ -709,3 +709,28 @@ async def delete_files(
         deleted_count=len(files_to_delete),
         not_found_count=not_found_count,
     )
+
+
+@router.get("/connections/{connection_id}/watched-folders")
+async def get_connection_watched_folders(
+    connection_id: UUID,
+    _token: str = Depends(_verify_internal_token),
+    db: AsyncSession = Depends(get_db_session),
+):
+    from app.modules.drive.watched_folder_repository import WatchedFolderRepository
+    from app.modules.drive.watched_folder_schemas import (
+        WatchedFolderForWorkerResponse,
+        WatchedFoldersForWorkerResponse,
+    )
+
+    repo = WatchedFolderRepository(db)
+    folders = await repo.list_enabled_by_connection(connection_id)
+    return WatchedFoldersForWorkerResponse(
+        folders=[
+            WatchedFolderForWorkerResponse(
+                google_folder_id=f.google_folder_id,
+                content_types=f.content_types,
+            )
+            for f in folders
+        ]
+    )

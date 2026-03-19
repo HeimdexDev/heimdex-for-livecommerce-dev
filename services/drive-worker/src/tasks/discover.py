@@ -24,6 +24,39 @@ logger = logging.getLogger(__name__)
 _MAX_UPSERT_BATCH = 500
 
 
+def _should_ingest_file(
+    file_data: dict[str, Any],
+    watched_folder_ids: set[str],
+    content_types_map: dict[str, list[str]],
+) -> bool:
+    """Check if a file should be ingested based on watched folder settings."""
+    parents = file_data.get("parents") or []
+    if not parents:
+        return False
+
+    parent_id = parents[0]
+    if parent_id not in watched_folder_ids:
+        return False
+
+    mime_type = file_data.get("mimeType", "")
+    allowed_types = content_types_map.get(parent_id, ["video"])
+
+    if "video" in allowed_types and mime_type.startswith("video/"):
+        return True
+    if "image" in allowed_types and _is_image_mime(mime_type):
+        return True
+
+    return False
+
+
+def _is_image_mime(mime_type: str) -> bool:
+    """Check if MIME type is a supported image type."""
+    return mime_type in {
+        "image/jpeg", "image/png", "image/webp",
+        "image/gif", "image/bmp", "image/tiff",
+    }
+
+
 def _build_drive_service(access_token: str):
     """Build a Google Drive API service from a pre-minted access token."""
     credentials = Credentials(token=access_token)
@@ -136,10 +169,45 @@ def _discover_drive_connection(
         and last_full > seven_days_ago
     )
 
-    if use_incremental:
-        return _incremental_sync_drive(api_client, service, conn)
+    # Watched folder filtering — only active when folder_sync_v2_enabled
+    watched_folder_ids: set[str] = set()
+    content_types_map: dict[str, list[str]] = {}
 
-    count = _full_scan_drive(api_client, service, conn)
+    if getattr(settings, "folder_sync_v2_enabled", False):
+        watched = api_client.get_watched_folders(str(conn.connection_id))
+        if not watched:
+            logger.info(
+                "discover_skip_no_watched_folders",
+                extra={"connection_id": str(conn.connection_id)},
+            )
+            return 0
+        watched_folder_ids = {w["google_folder_id"] for w in watched}
+        content_types_map = {
+            w["google_folder_id"]: w.get("content_types", ["video"]) for w in watched
+        }
+
+    # TODO(folder-sync): Add _post_process_check() to process.py.
+    # When a file completes processing, check if its parent folder is still enabled.
+    # If not, soft-delete the file and skip enrichment publishing.
+    # This handles the race condition where a folder is toggled OFF while a file
+    # is mid-processing (downloading/transcoding/enriching).
+
+    if use_incremental:
+        return _incremental_sync_drive(
+            api_client,
+            service,
+            conn,
+            watched_folder_ids,
+            content_types_map,
+        )
+
+    count = _full_scan_drive(
+        api_client,
+        service,
+        conn,
+        watched_folder_ids,
+        content_types_map,
+    )
     start_token = service.changes().getStartPageToken(
         driveId=conn.drive_id, supportsAllDrives=True,
     ).execute()["startPageToken"]
@@ -153,7 +221,13 @@ def _discover_drive_connection(
     return count
 
 
-def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> int:
+def _full_scan_drive(
+    api_client: InternalAPIClient,
+    service: Any,
+    conn: Any,
+    watched_folder_ids: set[str],
+    content_types_map: dict[str, list[str]],
+) -> int:
     """Full file listing from Shared Drive (existing logic, extracted)."""
     items: list[dict[str, Any]] = []
     scanned_google_file_ids: set[str] = set()
@@ -187,7 +261,15 @@ def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> 
                     exc_info=True,
                 )
 
-        for file in files:
+        if watched_folder_ids:
+            filtered_files = [
+                f for f in files
+                if _should_ingest_file(f, watched_folder_ids, content_types_map)
+            ]
+        else:
+            filtered_files = files
+
+        for file in filtered_files:
             google_file_id = file.get("id")
             if not google_file_id:
                 continue
@@ -215,11 +297,18 @@ def _full_scan_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> 
     return upsert_count + reconcile_count
 
 
-def _incremental_sync_drive(api_client: InternalAPIClient, service: Any, conn: Any) -> int:
+def _incremental_sync_drive(
+    api_client: InternalAPIClient,
+    service: Any,
+    conn: Any,
+    watched_folder_ids: set[str],
+    content_types_map: dict[str, list[str]],
+) -> int:
     """Incremental sync using changes().list() for a Shared Drive."""
     page_token = conn.change_token
     items_to_upsert: list[dict[str, Any]] = []
-    file_ids_to_delete: list[str] = []
+    file_ids_to_delete: set[str] = set()
+    existing_file_ids = api_client.list_connection_file_ids(conn.connection_id)
 
     while True:
         response = service.changes().list(
@@ -239,11 +328,24 @@ def _incremental_sync_drive(api_client: InternalAPIClient, service: Any, conn: A
 
             if is_removed or is_trashed:
                 if file_id:
-                    file_ids_to_delete.append(file_id)
+                    file_ids_to_delete.add(file_id)
                 continue
 
             mime_type = file_data.get("mimeType", "")
             if not is_supported_mime(mime_type):
+                continue
+
+            if watched_folder_ids and not _should_ingest_file(file_data, watched_folder_ids, content_types_map):
+                google_file_id = file_data.get("id")
+                if google_file_id and google_file_id in existing_file_ids:
+                    file_ids_to_delete.add(google_file_id)
+                    logger.info(
+                        "file_moved_out_of_watched_folder",
+                        extra={
+                            "google_file_id": google_file_id,
+                            "parents": file_data.get("parents"),
+                        },
+                    )
                 continue
 
             path_map: dict[str, str] = {}
@@ -272,7 +374,7 @@ def _incremental_sync_drive(api_client: InternalAPIClient, service: Any, conn: A
 
     delete_count = 0
     if file_ids_to_delete:
-        delete_count = _batch_delete(api_client, conn, file_ids_to_delete)
+        delete_count = _batch_delete(api_client, conn, list(file_ids_to_delete))
 
     api_client.checkpoint(
         conn.connection_id,

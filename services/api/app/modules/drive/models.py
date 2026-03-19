@@ -17,8 +17,8 @@ from datetime import datetime
 from typing import Optional, final
 from uuid import UUID as PyUUID
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint, func, text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, LargeBinary, String, Text, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDMixin
@@ -221,4 +221,47 @@ class DriveSecret(Base, UUIDMixin, TimestampMixin):
     __table_args__: tuple[object, ...] = (
         UniqueConstraint("org_id", "secret_type", name="uq_drive_secrets_org_type"),
         {"comment": "Encrypted Google Drive credentials for Drive integration"},
+    )
+
+
+@final
+class DriveWatchedFolder(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "drive_watched_folders"
+
+    org_id: Mapped[PyUUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("orgs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    connection_id: Mapped[PyUUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("drive_connections.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    google_folder_id: Mapped[str] = mapped_column(String(256), nullable=False)
+    folder_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    folder_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parent_folder_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    sync_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    content_types: Mapped[list[str]] = mapped_column(
+        ARRAY(String(32)),
+        nullable=False,
+        server_default=text("ARRAY['video']::varchar[]"),
+    )
+    file_count_cached: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_enumerated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__: tuple[object, ...] = (
+        UniqueConstraint("org_id", "google_folder_id", name="uq_watched_folders_org_folder"),
+        Index("ix_watched_folders_org_id", "org_id"),
+        Index("ix_watched_folders_connection_id", "connection_id"),
+        Index(
+            "ix_watched_folders_sync_enabled",
+            "org_id",
+            "sync_enabled",
+            postgresql_where=text("sync_enabled = true"),
+        ),
+        Index("ix_watched_folders_parent", "org_id", "parent_folder_id"),
     )

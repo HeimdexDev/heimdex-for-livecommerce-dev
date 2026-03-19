@@ -219,6 +219,15 @@ class DriveFileRepository:
 
         return video_ids
 
+    async def soft_delete_by_watched_folder(
+        self,
+        org_id: UUID,
+        google_folder_id: str,
+    ) -> list[str]:
+        _ = org_id
+        _ = google_folder_id
+        return []
+
     async def count_by_status(self, org_id: UUID) -> dict[str, int]:
         """Return {processing_status: count} for non-deleted files in this org."""
         result = await self.session.execute(

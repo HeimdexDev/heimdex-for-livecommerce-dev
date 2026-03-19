@@ -357,8 +357,58 @@ class DriveClient:
                 break
         return results
 
+    def list_shared_drives(self) -> list[dict[str, Any]]:
+        self._ensure_valid_credentials()
+        results: list[dict[str, Any]] = []
+        page_token: Optional[str] = None
+        while True:
+            resp = self._service.drives().list(
+                pageSize=100,
+                fields="nextPageToken,drives(id,name)",
+                pageToken=page_token,
+            ).execute()
+            results.extend(resp.get("drives", []))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return results
+
+    def list_all_folders(self, drive_id: str | None = None) -> list[dict[str, Any]]:
+        self._ensure_valid_credentials()
+        query = "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        results: list[dict[str, Any]] = []
+        page_token: Optional[str] = None
+
+        kwargs: dict[str, Any] = {
+            "q": query,
+            "fields": "nextPageToken,files(id,name,parents)",
+            "pageSize": 1000,
+            "includeItemsFromAllDrives": True,
+            "supportsAllDrives": True,
+        }
+        if drive_id:
+            kwargs["corpora"] = "drive"
+            kwargs["driveId"] = drive_id
+        else:
+            kwargs["corpora"] = "user"
+
+        while True:
+            if page_token:
+                kwargs["pageToken"] = page_token
+            elif "pageToken" in kwargs:
+                del kwargs["pageToken"]
+            resp = self._service.files().list(**kwargs).execute()
+            results.extend(resp.get("files", []))
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+        return results
+
     @staticmethod
     def _execute_with_retry(request_fn, max_retries: int = MAX_RETRIES) -> Any:
+        if max_retries < 0:
+            max_retries = 0
+
         backoff = INITIAL_BACKOFF
         for attempt in range(max_retries + 1):
             response = request_fn()
@@ -371,4 +421,4 @@ class DriveClient:
                 )
                 time.sleep(backoff)
                 backoff *= 2
-        return response
+        raise RuntimeError("Retry loop exhausted without response")

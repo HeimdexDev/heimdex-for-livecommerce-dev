@@ -36,6 +36,7 @@ class WorkerSettings(BaseSettings):
     drive_api_base_url: str = "http://api:8000"
     drive_connector_enabled: bool = False
     drive_enrichment_enabled: bool = False
+    folder_sync_v2_enabled: bool = False
 
     # --- Image processing ---
     image_processing_enabled: bool = False

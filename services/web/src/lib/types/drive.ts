@@ -109,3 +109,35 @@ export interface DriveSyncProgress {
   failed_files: FailedFileInfo[];
   enrichment: EnrichmentSummary;
 }
+
+// Folder Sync Settings (v2)
+export type ContentType = "video" | "image";
+
+export interface WatchedFolder {
+  id: string;
+  google_folder_id: string;
+  folder_name: string;
+  folder_path: string | null;
+  parent_folder_id: string | null;
+  sync_enabled: boolean;
+  content_types: ContentType[];
+  file_count_cached: number;
+  connection_id: string;
+}
+
+export interface DriveInfo {
+  connection_id: string;
+  drive_id: string | null;
+  drive_name: string | null;
+  scope_type: "shared_drive" | "my_drive";
+}
+
+export interface FolderTreeResponse {
+  folders: WatchedFolder[];
+  drives: DriveInfo[];
+}
+
+export interface ToggleFolderResponse {
+  folder: WatchedFolder;
+  deleted_file_count: number;
+}
