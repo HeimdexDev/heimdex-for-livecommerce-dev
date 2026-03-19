@@ -30,6 +30,7 @@ import { ScenePreviewTooltip } from "@/components/ScenePreviewTooltip";
 import { AvatarThumbnail } from "@/components/people/AvatarThumbnail";
 import { DeletePersonDialog } from "./DeletePersonDialog";
 import { MergeConfirmDialog } from "./MergeConfirmDialog";
+import { SelectionTray } from "./SelectionTray";
 import { TimelineBar } from "./TimelineBar";
 
 /** Format ISO 8601 timestamp to Korean relative time string */
@@ -1129,40 +1130,16 @@ export function PeopleSettings() {
           onConfirm={handleMergeConfirm}
         />
       )}
-      {selectedIds.size >= 2 && (
-        <div className="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-4 rounded-xl border border-gray-200 bg-white px-6 py-3 shadow-xl">
-          <span className="text-sm font-medium text-gray-700">
-            {selectedIds.size}명 선택됨
-          </span>
-          <button
-            type="button"
-            onClick={selectAll}
-            className="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 hover:text-gray-800"
-          >
-            전체 선택
-          </button>
-          <button
-            type="button"
-            onClick={() => setBulkMergeOpen(true)}
-            className="rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
-          >
-            병합
-          </button>
-          <button
-            type="button"
-            onClick={() => setBulkDeleteOpen(true)}
-            className="rounded-md bg-red-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-red-700"
-          >
-            삭제
-          </button>
-          <button
-            type="button"
-            onClick={clearSelection}
-            className="rounded-md px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-          >
-            취소
-          </button>
-        </div>
+      {selectedIds.size >= 1 && (
+        <SelectionTray
+          selectedPeople={selectedPeople}
+          agentAvailable={agentAvailable}
+          onRemove={toggleSelection}
+          onSelectAll={selectAll}
+          onMerge={() => setBulkMergeOpen(true)}
+          onDelete={() => setBulkDeleteOpen(true)}
+          onClear={clearSelection}
+        />
       )}
       {bulkMergeOpen && (
         <BulkMergeDialog
