@@ -182,6 +182,7 @@ class Settings(BaseSettings):
     sqs_face_queue_url: str = ""
     sqs_visual_embed_queue_url: str = ""
     sqs_export_queue_url: str = ""
+    sqs_shorts_render_queue_url: str = ""
 
     # --- Aircloud GPU worker orchestration ---
     aircloud_enabled: bool = False
@@ -206,6 +207,7 @@ class Settings(BaseSettings):
     export_max_clips: int = 100
     export_max_proxies: int = 20
     export_expiry_days: int = 3
+    shorts_render_expiry_days: int = 3
 
     # --- CORS ---
     cors_allow_origin_regex: str = (

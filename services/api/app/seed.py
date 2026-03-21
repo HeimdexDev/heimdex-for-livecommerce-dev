@@ -13,6 +13,7 @@ from app.modules.users.models import User, UserRole
 from app.modules.libraries.models import Library
 from app.modules.profiles.models import LibraryProfile, ProfileStatus
 from app.modules.people.models import DriveNicknameRegistry, PeopleClusterLabel
+from app.modules.text_templates.models import TextTemplate
 from app.modules.search.client import OpenSearchClient
 from app.modules.search.scene_client import SceneSearchClient
 from app.modules.search.embedding import generate_mock_embedding
@@ -188,11 +189,90 @@ async def seed_database():
         session.add_all(people_clusters)
         await session.flush()
         logger.info("created_people_clusters", count=len(people_clusters))
-        
+
+        await seed_text_templates(session, org.id)
+
         await session.commit()
         
         await seed_opensearch(org, libraries, profiles, people_clusters, drive_entries)
         await seed_scenes(org, libraries, profiles, people_clusters, drive_entries)
+
+
+SYSTEM_TEXT_PRESETS = [
+    {
+        "name": "기본",
+        "font_family": "Noto Sans KR", "font_size_px": 48, "font_color": "#FFFFFF",
+        "font_weight": 700, "line_height": 1.4, "letter_spacing": 0,
+        "text_align": "center", "position_x": 0.5, "position_y": 0.85,
+        "shadow_enabled": True, "shadow_color": "#000000",
+        "shadow_offset_x": 2, "shadow_offset_y": 2, "shadow_blur": 4,
+        "background_enabled": False, "background_color": None, "background_padding": 8,
+    },
+    {
+        "name": "강조",
+        "font_family": "Pretendard", "font_size_px": 64, "font_color": "#FFD700",
+        "font_weight": 700, "line_height": 1.3, "letter_spacing": 0,
+        "text_align": "center", "position_x": 0.5, "position_y": 0.5,
+        "shadow_enabled": True, "shadow_color": "#000000",
+        "shadow_offset_x": 3, "shadow_offset_y": 3, "shadow_blur": 6,
+        "background_enabled": False, "background_color": None, "background_padding": 8,
+    },
+    {
+        "name": "제품소개",
+        "font_family": "Noto Sans KR", "font_size_px": 36, "font_color": "#FFFFFF",
+        "font_weight": 400, "line_height": 1.5, "letter_spacing": 0,
+        "text_align": "left", "position_x": 0.08, "position_y": 0.12,
+        "shadow_enabled": False, "shadow_color": "#000000",
+        "shadow_offset_x": 0, "shadow_offset_y": 0, "shadow_blur": 0,
+        "background_enabled": True, "background_color": "#000000B3", "background_padding": 12,
+    },
+    {
+        "name": "가격",
+        "font_family": "Pretendard", "font_size_px": 56, "font_color": "#FF4444",
+        "font_weight": 700, "line_height": 1.3, "letter_spacing": 0,
+        "text_align": "center", "position_x": 0.5, "position_y": 0.5,
+        "shadow_enabled": True, "shadow_color": "#FFFFFF",
+        "shadow_offset_x": 2, "shadow_offset_y": 2, "shadow_blur": 4,
+        "background_enabled": False, "background_color": None, "background_padding": 8,
+    },
+    {
+        "name": "엔딩",
+        "font_family": "Noto Sans KR", "font_size_px": 42, "font_color": "#FFFFFF",
+        "font_weight": 700, "line_height": 1.4, "letter_spacing": 0,
+        "text_align": "center", "position_x": 0.5, "position_y": 0.5,
+        "shadow_enabled": True, "shadow_color": "#000000",
+        "shadow_offset_x": 3, "shadow_offset_y": 3, "shadow_blur": 8,
+        "background_enabled": False, "background_color": None, "background_padding": 8,
+    },
+]
+
+
+async def seed_text_templates(session: AsyncSession, org_id) -> None:
+    """Seed system preset text templates. Idempotent — skips existing by name."""
+    existing = await session.execute(
+        select(TextTemplate).where(
+            TextTemplate.org_id == org_id,
+            TextTemplate.is_system_preset.is_(True),
+        )
+    )
+    existing_names = {t.name for t in existing.scalars().all()}
+
+    created = 0
+    for preset in SYSTEM_TEXT_PRESETS:
+        if preset["name"] in existing_names:
+            continue
+        template = TextTemplate(
+            org_id=org_id,
+            user_id=None,
+            is_system_preset=True,
+            **preset,
+        )
+        session.add(template)
+        created += 1
+
+    if created:
+        await session.flush()
+    logger.info("seeded_text_templates", created=created, skipped=len(existing_names))
 
 
 async def seed_opensearch(org, libraries, profiles, people_clusters, drive_entries):

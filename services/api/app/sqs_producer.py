@@ -45,6 +45,7 @@ _QUEUE_URL_ATTRS = {
     "face": "sqs_face_queue_url",
     "visual_embed": "sqs_visual_embed_queue_url",
     "export": "sqs_export_queue_url",
+    "shorts_render": "sqs_shorts_render_queue_url",
 }
 
 # ── Internal helpers ───────────────────────────────────────────────────
@@ -465,3 +466,53 @@ def publish_scene_enrichment_jobs(
         )
         if published > 0:
             _wake_gpu_worker(job_type)
+
+
+def publish_shorts_render_job(
+    *,
+    job_id: UUID,
+    org_id: UUID,
+    video_id: str,
+    input_spec: dict[str, Any],
+) -> None:
+    """Publish a shorts render job to the render queue.
+
+    Called from ShortsRenderService after creating a render job record.
+    Unlike other producers, this RAISES on failure so the service can
+    mark the job as failed instead of leaving it stuck in "queued".
+    """
+    settings = get_settings()
+    if not settings.sqs_enabled:
+        raise RuntimeError("SQS is not enabled — cannot enqueue render job")
+
+    queue_url = settings.sqs_shorts_render_queue_url
+    if not queue_url:
+        raise RuntimeError("SQS_SHORTS_RENDER_QUEUE_URL is not configured")
+
+    now = datetime.now(timezone.utc)
+    body = {
+        "version": "1",
+        "type": "shorts_render.job_created",
+        "timestamp": now.isoformat(),
+        "job_id": str(job_id),
+        "org_id": str(org_id),
+        "video_id": video_id,
+        "input_spec": input_spec,
+    }
+
+    client = _get_sqs_client()
+    resp = client.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(body, default=str),
+        MessageAttributes={
+            "job_type": {"StringValue": "shorts_render", "DataType": "String"},
+            "org_id": {"StringValue": str(org_id), "DataType": "String"},
+            "source": {"StringValue": "api", "DataType": "String"},
+        },
+    )
+    logger.info(
+        "sqs_job_published",
+        job_type="shorts_render",
+        message_id=resp.get("MessageId"),
+        job_id=str(job_id),
+    )

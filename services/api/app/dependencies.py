@@ -158,6 +158,27 @@ def get_saved_short_repository(db: AsyncSession = Depends(get_db_session)):
     return SavedShortRepository(db)
 
 
+def get_shorts_render_repository(db: AsyncSession = Depends(get_db_session)):
+    """Shorts render job repository factory."""
+    from app.modules.shorts_render.repository import ShortsRenderJobRepository
+    return ShortsRenderJobRepository(db)
+
+
+def get_shorts_render_service(
+    repo=Depends(get_shorts_render_repository),
+    scene_search=Depends(get_scene_opensearch_client),
+):
+    """Shorts render service factory."""
+    from app.modules.shorts_render.service import ShortsRenderService
+    return ShortsRenderService(repo, scene_search)
+
+
+def get_text_template_repository(db: AsyncSession = Depends(get_db_session)):
+    """Text template repository factory."""
+    from app.modules.text_templates.repository import TextTemplateRepository
+    return TextTemplateRepository(db)
+
+
 def get_pairing_code_repository(db: AsyncSession = Depends(get_db_session)):
     """Pairing code repository factory."""
     from app.modules.devices.pairing import PairingCodeRepository

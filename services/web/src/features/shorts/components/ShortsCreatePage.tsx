@@ -7,9 +7,31 @@ import { useAuth } from "@/lib/auth";
 import { getVideoScenes } from "@/lib/api/videos";
 import { getAgentPlaybackUrl, getCloudPlaybackUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
-import { formatTimestamp } from "@/lib/api/utils";
 import { cn } from "@/lib/utils";
+import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
 import type { VideoScene, VideoScenesResponse } from "@/lib/types";
+
+const SPEAKER_BADGE_COLORS = ["bg-red-500", "bg-blue-500", "bg-green-500", "bg-amber-500"];
+
+function formatTimestampHMS(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function speakerTimestampToAbsoluteHMS(ts: string, sceneStartMs: number): string {
+  const parts = ts.split(":").map(Number);
+  let offsetSeconds: number;
+  if (parts.length === 2) {
+    offsetSeconds = parts[0] * 60 + parts[1];
+  } else {
+    offsetSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+  }
+  const absoluteMs = sceneStartMs + offsetSeconds * 1000;
+  return formatTimestampHMS(absoluteMs);
+}
 
 function BackArrowIcon() {
   return (
@@ -35,7 +57,7 @@ function ChevronRightIcon() {
   );
 }
 
-function SceneCard({
+export function SceneCard({
   scene,
   index,
   videoId,
@@ -49,8 +71,9 @@ function SceneCard({
   onToggle: () => void;
 }) {
   const durationSec = Math.round((scene.end_ms - scene.start_ms) / 1000);
-  const timeRange = `${formatTimestamp(scene.start_ms)} - ${formatTimestamp(scene.end_ms)}`;
+  const timeRange = `${formatTimestampHMS(scene.start_ms)} - ${formatTimestampHMS(scene.end_ms)}`;
   const tags = [...scene.keyword_tags, ...scene.product_tags].slice(0, 2);
+  const speakerEntries = parseSpeakerTranscript(scene.speaker_transcript ?? "");
 
   return (
     <button
@@ -63,34 +86,74 @@ function SceneCard({
           : "border-gray-200 bg-white hover:border-gray-300",
       )}
     >
-      <div className="w-[140px] flex-shrink-0 relative">
+      <div className="w-[140px] flex-shrink-0">
         <SceneThumbnail
           videoId={videoId}
           sceneId={scene.scene_id}
           agentAvailable={true}
           className="aspect-video w-full"
         />
-        <div className={cn(
-          "absolute top-2 left-2 flex h-5 w-5 items-center justify-center rounded border-2 transition-colors",
-          selected
-            ? "border-indigo-500 bg-indigo-500"
-            : "border-gray-300 bg-white",
-        )}>
-          {selected && (
-            <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-            </svg>
-          )}
-        </div>
       </div>
       <div className="flex-1 min-w-0 p-3">
         <div className="flex items-center justify-between">
           <span className="text-sm font-bold text-gray-900">장면{index + 1}</span>
           <div className="flex items-center gap-2">
-            <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{timeRange}</span>
-            <span className="text-xs text-gray-500">{durationSec}초</span>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-[2px] bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{timeRange}</span>
+              <span className="text-xs text-gray-500">{durationSec}초</span>
+            </div>
+            <div
+              data-testid="scene-checkbox"
+              className={cn(
+                "flex items-center justify-center size-[16.5px] rounded-[4px] transition-colors",
+                selected
+                  ? "bg-[#605dec]"
+                  : "bg-white border-[0.688px] border-[#c7c7c7]",
+              )}
+            >
+              {selected && (
+                <svg className="h-2.5 w-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                </svg>
+              )}
+            </div>
           </div>
         </div>
+        {scene.scene_caption && (
+          <p className="mt-1.5 text-xs text-gray-600">
+            {scene.scene_caption.length > 70
+              ? scene.scene_caption.slice(0, 70) + "…"
+              : scene.scene_caption}
+          </p>
+        )}
+        {speakerEntries.length > 0 ? (
+          <div className="mt-2 space-y-2">
+            {speakerEntries.slice(0, 2).map((entry, i) => (
+              <div key={i} className="flex items-start gap-2">
+                <span
+                  className={cn(
+                    "flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white",
+                    SPEAKER_BADGE_COLORS[entry.label.charCodeAt(0) - 65] ?? "bg-gray-400",
+                  )}
+                >
+                  {entry.label}
+                </span>
+                <span className="flex-shrink-0 text-xs text-gray-400">
+                  {entry.timestamp ? speakerTimestampToAbsoluteHMS(entry.timestamp, scene.start_ms) : ""}
+                </span>
+                <span className="text-xs text-gray-600 line-clamp-3">
+                  {entry.text.length > 100 ? entry.text.slice(0, 100) + "…" : entry.text}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : scene.transcript_raw ? (
+          <p className="mt-1 text-xs text-gray-400">
+            {scene.transcript_raw.length > 100
+              ? scene.transcript_raw.slice(0, 100) + "…"
+              : scene.transcript_raw}
+          </p>
+        ) : null}
         {tags.length > 0 && (
           <div className="mt-2 flex flex-wrap justify-end gap-1.5">
             {tags.map((tag) => (
@@ -299,7 +362,7 @@ export function ShortsCreatePage() {
                   <div key={scene.scene_id} className="flex items-center gap-2 text-sm text-gray-600">
                     <span className="font-medium text-gray-900">장면{allScenes.indexOf(scene) + 1}</span>
                     <span className="text-xs text-gray-400">
-                      {formatTimestamp(scene.start_ms)} - {formatTimestamp(scene.end_ms)}
+                      {formatTimestampHMS(scene.start_ms)} - {formatTimestampHMS(scene.end_ms)}
                     </span>
                   </div>
                 ))}
