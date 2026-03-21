@@ -1,7 +1,7 @@
 """Add shorts_render_jobs table for render job metadata
 
 Revision ID: 036_add_shorts_render_jobs_table
-Revises: 035_add_org_settings
+Revises: 036_create_drive_watched_folders
 Create Date: 2026-03-17
 
 """
@@ -14,7 +14,7 @@ from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 revision: str = "036_add_shorts_render_jobs_table"
-down_revision: str | None = "035_add_org_settings"
+down_revision: str | None = "036_create_drive_watched_folders"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -478,8 +478,17 @@ def publish_shorts_render_job(
     """Publish a shorts render job to the render queue.
 
     Called from ShortsRenderService after creating a render job record.
-    Fire-and-forget — SQS failure must not affect the API response.
+    Unlike other producers, this RAISES on failure so the service can
+    mark the job as failed instead of leaving it stuck in "queued".
     """
+    settings = get_settings()
+    if not settings.sqs_enabled:
+        raise RuntimeError("SQS is not enabled — cannot enqueue render job")
+
+    queue_url = settings.sqs_shorts_render_queue_url
+    if not queue_url:
+        raise RuntimeError("SQS_SHORTS_RENDER_QUEUE_URL is not configured")
+
     now = datetime.now(timezone.utc)
     body = {
         "version": "1",
@@ -490,5 +499,20 @@ def publish_shorts_render_job(
         "video_id": video_id,
         "input_spec": input_spec,
     }
-    dedup_id = f"{job_id}:shorts_render:{now.strftime('%Y%m%dT%H%M')}"
-    _publish("shorts_render", body, dedup_id)
+
+    client = _get_sqs_client()
+    resp = client.send_message(
+        QueueUrl=queue_url,
+        MessageBody=json.dumps(body, default=str),
+        MessageAttributes={
+            "job_type": {"StringValue": "shorts_render", "DataType": "String"},
+            "org_id": {"StringValue": str(org_id), "DataType": "String"},
+            "source": {"StringValue": "api", "DataType": "String"},
+        },
+    )
+    logger.info(
+        "sqs_job_published",
+        job_type="shorts_render",
+        message_id=resp.get("MessageId"),
+        job_id=str(job_id),
+    )

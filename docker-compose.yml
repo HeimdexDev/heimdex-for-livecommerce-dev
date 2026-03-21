@@ -167,6 +167,9 @@ services:
       - EXPORT_MAX_PROXIES=${EXPORT_MAX_PROXIES:-20}
       - EXPORT_EXPIRY_DAYS=${EXPORT_EXPIRY_DAYS:-3}
       - ANALYTICS_ENABLED=${ANALYTICS_ENABLED:-true}
+      # AWS credentials (dummy for ElasticMQ local SQS)
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-localdev}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-localdev}
       - ANALYTICS_EXPORT_ENABLED=${ANALYTICS_EXPORT_ENABLED:-false}
       - ANALYTICS_S3_BUCKET=${ANALYTICS_S3_BUCKET:-}
       - ANALYTICS_S3_PREFIX=${ANALYTICS_S3_PREFIX:-analytics}
@@ -668,10 +671,10 @@ services:
     container_name: heimdex-shorts-render-worker
     environment:
       - PYTHONPATH=/app
-      - SQS_CONSUMER_ENABLED=true
-      - SQS_SHORTS_RENDER_QUEUE_URL=http://elasticmq:9324/000000000000/heimdex-shorts-render-queue
-      - SQS_ENDPOINT_URL=http://elasticmq:9324
-      - SQS_REGION=ap-northeast-2
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-true}
+      - SQS_SHORTS_RENDER_QUEUE_URL=${SQS_SHORTS_RENDER_QUEUE_URL:-}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
       - DRIVE_API_BASE_URL=http://api:8000
       - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
       - MINIO_ENDPOINT=minio:9000
@@ -681,6 +684,12 @@ services:
       - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
       - FONT_DIR=/usr/share/fonts/heimdex
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-localdev}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-localdev}
+    volumes:
+      # Mount pipeline repos (same pattern as drive-worker)
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
     depends_on:
       api:
         condition: service_healthy
@@ -691,7 +700,10 @@ services:
         limits:
           memory: 2G
     restart: unless-stopped
-    command: python -m src.worker
+    command: >
+      sh -c "pip install --no-deps /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps /opt/heimdex-media-pipelines 2>/dev/null;
+             python -m src.worker"
 
   # NOTE (2026-02-26): elasticmq is for LOCAL DEV SQS simulation only.
   # Staging/prod uses real AWS SQS (ap-northeast-2). Not needed on EC2.

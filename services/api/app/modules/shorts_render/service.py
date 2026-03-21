@@ -77,7 +77,8 @@ class ShortsRenderService:
             subtitle_count=len(payload.composition.subtitles),
         )
 
-        # 3. Publish SQS (fire-and-forget)
+        # 3. Publish SQS — if this fails, mark job as failed so it doesn't
+        #    stay stuck in "queued" forever.
         try:
             from app.sqs_producer import publish_shorts_render_job
 
@@ -89,6 +90,13 @@ class ShortsRenderService:
             )
         except Exception:
             logger.exception("sqs_shorts_render_publish_failed", job_id=str(job.id))
+            await self.repository.update_status(
+                cast(UUID, job.id),
+                "failed",
+                error="Failed to enqueue render job",
+            )
+            job.status = "failed"
+            job.error = "Failed to enqueue render job"
 
         return _to_response(job)
 
