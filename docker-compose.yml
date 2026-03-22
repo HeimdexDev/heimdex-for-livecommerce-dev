@@ -684,8 +684,6 @@ services:
       - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
       - FONT_DIR=/usr/share/fonts/heimdex
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-localdev}
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-localdev}
     volumes:
       # Mount pipeline repos (same pattern as drive-worker)
       - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
