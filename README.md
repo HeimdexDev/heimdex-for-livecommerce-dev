@@ -1,5 +1,5 @@
 # Heimdex
-
+ 
 Video search platform with hybrid lexical + semantic search, supporting Korean language.
 
 ## Quick Start
