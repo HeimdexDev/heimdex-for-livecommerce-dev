@@ -128,7 +128,7 @@ class AircloudClient:
                 extra={
                     "endpoint_id": endpoint_id,
                     "is_active": data.get("is_active"),
-                    "message": data.get("message", ""),
+                    "response_message": data.get("message", ""),
                 },
             )
             return True
@@ -153,7 +153,7 @@ class AircloudClient:
                 extra={
                     "endpoint_id": endpoint_id,
                     "is_active": data.get("is_active"),
-                    "message": data.get("message", ""),
+                    "response_message": data.get("message", ""),
                 },
             )
             return True
@@ -183,7 +183,7 @@ class AircloudClient:
                     "endpoint_id": endpoint_id,
                     "previous_replicas": data.get("previous_replicas"),
                     "current_replicas": data.get("current_replicas"),
-                    "message": data.get("message", ""),
+                    "response_message": data.get("message", ""),
                 },
             )
             return True
