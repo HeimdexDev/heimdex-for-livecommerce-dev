@@ -1,28 +1,25 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useBrowseData } from "@/hooks/useBrowseData";
+import { useSearchEngine } from "@/hooks/useSearchEngine";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import { useURLSync } from "@/hooks/useURLSync";
 import { useAuth } from "@/lib/auth";
-import { getVideos, getVideoStats } from "@/lib/api/videos";
-import { searchScenes } from "@/lib/api/search";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { GroupByToggle } from "@/features/search/components/GroupByToggle";
 import { SearchModeToggle } from "@/features/search/components/SearchModeToggle";
 import type { GroupBy } from "@/features/search/hooks/useSearch";
-import type { VideoSummary, VideoStats, SceneResult, VideoResult, AnySearchResponse, SceneSearchResponse, SearchFilters, SearchMode } from "@/lib/types";
+import type { VideoSummary, SceneResult, VideoResult, SearchMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { parseSlashCommand, getSlashCommandSuggestions } from "@/lib/slash-commands";
 import { useOrgSettings } from "@/lib/orgSettings";
 import { getThumbnailAspectClass, getDashboardGridClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 import {
-  serializeSearchState,
   deserializeSearchState,
   hasSearchParams,
-  ALL_SOURCES as SEARCH_STATE_ALL_SOURCES,
-  type SortOption as SearchStateSortOption,
-  type SourceType as SearchStateSourceType,
   type ContentTypeFilter,
   type DashboardSearchState,
 } from "@/lib/search-state";
@@ -794,7 +791,6 @@ export default function DashboardContent({
   hideContentTypeToggle = false,
 }: DashboardContentProps = {}) {
   const { getAccessToken } = useAuth();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const { settings } = useOrgSettings();
   const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
@@ -815,17 +811,10 @@ export default function DashboardContent({
     [],
   );
 
-  const [videos, setVideos] = useState<VideoSummary[]>([]);
-  const [totalVideos, setTotalVideos] = useState(0);
-  const [stats, setStats] = useState<VideoStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [query, setQuery] = useState(initialState.query);
   const [referenceMode, setReferenceMode] = useState(initialState.referenceMode);
   const [showAutocomplete, setShowAutocomplete] = useState(false);
   const [sortBy, setSortBy] = useState<SortOption>(initialState.sortBy);
-  const [currentPage, setCurrentPage] = useState(initialState.currentPage);
   const [dateStart, setDateStart] = useState<Date | null>(
     initialState.dateStart ?? null,
   );
@@ -861,20 +850,48 @@ export default function DashboardContent({
   const [sourceFilters, setSourceFilters] = useState<Set<SourceType>>(
     () => new Set(initialState.sourceFilters as ReadonlySet<SourceType>),
   );
-  const [searchResponse, setSearchResponse] = useState<AnySearchResponse | null>(null);
-  const [activeQuery, setActiveQuery] = useState(initialState.query);
-  const isSearchMode = searchResponse !== null;
-  const sortBeforeSearchRef = useRef<SortOption>(sortBy);
 
-  // ── Sync state → URL (replace, not push, to avoid polluting history) ───
-  const isInitialRender = useRef(true);
-  useEffect(() => {
-    // Skip the first render to avoid a redundant replace on mount
-    if (isInitialRender.current) {
-      isInitialRender.current = false;
-      return;
-    }
-    const state: DashboardSearchState = {
+  // ── Search engine hook ──────────────────────────────────────────────────
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const searchContentTypes = useMemo<("video" | "image")[]>(
+    () =>
+      contentType === "video" ? ["video"]
+        : contentType === "image" ? ["image"]
+        : ["video", "image"],
+    [contentType],
+  );
+  const {
+    searchResponse,
+    isSearchMode,
+    activeQuery,
+    performSearch,
+    handleSearch: searchEngineHandleSearch,
+    clearSearch,
+    sortedResults: sortedSearchResults,
+    paginatedResults,
+    currentPage,
+    totalPages,
+    setCurrentPage,
+  } = useSearchEngine(
+    {
+      contentTypes: searchContentTypes,
+      sourceFilters,
+      dateStart,
+      dateEnd,
+      groupBy,
+      searchMode,
+      sortBy,
+      referenceMode,
+      getAccessToken,
+      initialQuery: initialState.query,
+      hadSearchParamsOnMount,
+    },
+    { setIsLoading: setIsSearchLoading, setSortBy },
+  );
+
+  // ── Sync state → URL ───
+  useURLSync(
+    {
       query: activeQuery,
       searchMode,
       groupBy,
@@ -885,19 +902,9 @@ export default function DashboardContent({
       sourceFilters,
       dateStart,
       dateEnd,
-    };
-    // When content type is locked via prop, don't write it to the URL
-    const stateForUrl: DashboardSearchState = defaultContentType
-      ? { ...state, contentType: "all" }
-      : state;
-    const params = serializeSearchState(stateForUrl);
-    const paramString = params.toString();
-    const newUrl = paramString ? `/?${paramString}` : "/";
-    router.replace(newUrl, { scroll: false });
-  }, [activeQuery, searchMode, groupBy, sortBy, contentType, referenceMode, currentPage, sourceFilters, dateStart, dateEnd, router]);
-
-  // ── Auto-search on mount if URL had a query ────────────────────────────
-  const hasTriggeredInitialSearch = useRef(false);
+    },
+    defaultContentType ? { lockedContentType: defaultContentType } : undefined,
+  );
 
   const videoSortBy = sortBy === "relevance" ? "latest" : sortBy;
 
@@ -914,109 +921,25 @@ export default function DashboardContent({
     [sourceFilters],
   );
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    setNextCursor(null);
-    try {
-      const tokenGetter = () => getAccessToken();
-      const [videosRes, statsRes] = await Promise.all([
-        getVideos(
-          {
-            sort: videoSortBy,
-            page_size: 20,
-            content_types: browseContentTypes,
-            source_types: browseSourceTypes,
-            date_from: dateStart ? formatDateKr(dateStart) : undefined,
-            date_to: dateEnd ? formatDateKr(dateEnd) : undefined,
-          },
-          tokenGetter,
-        ),
-        getVideoStats(tokenGetter),
-      ]);
-      setVideos(videosRes.videos);
-      setTotalVideos(videosRes.total);
-      setNextCursor(videosRes.next_cursor);
-      setStats(statsRes);
-    } catch {
-      setVideos([]);
-      setTotalVideos(0);
-      setNextCursor(null);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [getAccessToken, videoSortBy, browseContentTypes, browseSourceTypes, dateStart, dateEnd]);
+  const {
+    videos,
+    totalVideos,
+    stats,
+    isLoading: isBrowseLoading,
+    isLoadingMore,
+    loadMore,
+    hasMore,
+  } = useBrowseData({
+    contentTypes: browseContentTypes,
+    sourceTypes: browseSourceTypes,
+    dateStart,
+    dateEnd,
+    sortBy: videoSortBy,
+    enabled: !isSearchMode,
+    getAccessToken,
+  });
 
-  const loadMore = useCallback(async () => {
-    if (!nextCursor || isLoadingMore) return;
-    setIsLoadingMore(true);
-    try {
-      const tokenGetter = () => getAccessToken();
-      const videosRes = await getVideos(
-        {
-          sort: videoSortBy,
-          page_size: 20,
-          content_types: browseContentTypes,
-          source_types: browseSourceTypes,
-          date_from: dateStart ? formatDateKr(dateStart) : undefined,
-          date_to: dateEnd ? formatDateKr(dateEnd) : undefined,
-          after: nextCursor,
-        },
-        tokenGetter,
-      );
-      setVideos((prev) => [...prev, ...videosRes.videos]);
-      setTotalVideos(videosRes.total);
-      setNextCursor(videosRes.next_cursor);
-    } catch {
-      // Keep existing videos, just stop loading more
-    } finally {
-      setIsLoadingMore(false);
-    }
-  }, [getAccessToken, nextCursor, isLoadingMore, videoSortBy, browseContentTypes, browseSourceTypes, dateStart, dateEnd]);
-
-  useEffect(() => {
-    if (!isSearchMode) {
-      fetchData();
-    }
-  }, [fetchData, isSearchMode]);
-
-  const sortedSearchResults = useMemo(() => {
-    if (!searchResponse) return [];
-    if (sortBy === "relevance") return searchResponse.results;
-    const results = [...searchResponse.results];
-    if (searchResponse.result_type === "video") {
-      const items = results as VideoResult[];
-      if (sortBy === "latest") {
-        items.sort((a, b) => (b.best_scene.capture_time ?? "").localeCompare(a.best_scene.capture_time ?? ""));
-      } else if (sortBy === "alpha_asc") {
-        items.sort((a, b) => (a.video_title ?? "").localeCompare(b.video_title ?? ""));
-      } else if (sortBy === "alpha_desc") {
-        items.sort((a, b) => (b.video_title ?? "").localeCompare(a.video_title ?? ""));
-      }
-      return items;
-    }
-    const items = results as SceneResult[];
-    if (sortBy === "latest") {
-      items.sort((a, b) => (b.capture_time ?? "").localeCompare(a.capture_time ?? ""));
-    } else if (sortBy === "alpha_asc") {
-      items.sort((a, b) => (a.video_title ?? "").localeCompare(b.video_title ?? ""));
-    } else if (sortBy === "alpha_desc") {
-      items.sort((a, b) => (b.video_title ?? "").localeCompare(a.video_title ?? ""));
-    }
-    return items;
-  }, [searchResponse, sortBy]);
-
-  const paginatedResults = useMemo(() => {
-    if (!sortedSearchResults.length) return [];
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return sortedSearchResults.slice(start, start + PAGE_SIZE);
-  }, [sortedSearchResults, currentPage]);
-
-  const searchTotalPages = Math.max(1, Math.ceil(sortedSearchResults.length / PAGE_SIZE));
-  const totalPages = isSearchMode ? searchTotalPages : 1;
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [sortBy]);
+  const isLoading = isSearchMode ? isSearchLoading : isBrowseLoading;
 
   const toggleSource = useCallback((type: SourceType) => {
     setSourceFilters((prev) => {
@@ -1031,63 +954,17 @@ export default function DashboardContent({
     });
   }, []);
 
-  const performSearch = useCallback(
-    async (q: string, isRefMode: boolean = referenceMode) => {
-      setIsLoading(true);
-      setCurrentPage(1);
-      try {
-        const tokenGetter = () => getAccessToken();
-        const filters: SearchFilters = {};
-        if (contentType === "video") {
-          filters.content_types = ["video"];
-        } else if (contentType === "image") {
-          filters.content_types = ["image"];
-        } else {
-          filters.content_types = ["video", "image"];
-        }
-        
-        if (isRefMode) {
-          filters.source_types = ["youtube"];
-        } else if (sourceFilters.size !== ALL_SOURCES.length) {
-          filters.source_types = Array.from(sourceFilters);
-        }
-        if (dateStart) filters.date_from = formatDateKr(dateStart);
-        if (dateEnd) filters.date_to = formatDateKr(dateEnd);
-
-        const res = await searchScenes(
-          { q, alpha: 0.5, filters, group_by: groupBy, search_mode: searchMode },
-          tokenGetter,
-        );
-        setSearchResponse(res);
-        setActiveQuery(q);
-      } catch {
-        const emptyResponse: SceneSearchResponse = {
-          results: [],
-          total_candidates: 0,
-          facets: { libraries: [], source_types: [], people_cluster_ids: [], content_types: [] },
-          query: q,
-          alpha: 0.5,
-          result_type: "scene",
-        };
-        setSearchResponse(emptyResponse);
-        setActiveQuery(q);
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [getAccessToken, groupBy, searchMode, contentType, sourceFilters, dateStart, dateEnd, referenceMode],
-  );
-
+  // ── Form submission handler — parses slash commands, delegates to hook ──
   const handleSearch = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
       const rawInput = query;
       if (!rawInput.trim()) return;
-      
+
       const slashResult = parseSlashCommand(rawInput);
       let finalQuery = rawInput.trim();
       let isRefMode = referenceMode;
-      
+
       if (slashResult) {
         isRefMode = true;
         finalQuery = slashResult.query;
@@ -1097,46 +974,23 @@ export default function DashboardContent({
 
       if (!finalQuery) return;
 
-      if (!isSearchMode) {
-        sortBeforeSearchRef.current = sortBy;
-        setSortBy("relevance");
-      }
-      await performSearch(finalQuery, isRefMode);
+      await searchEngineHandleSearch(finalQuery);
     },
-    [query, performSearch, isSearchMode, sortBy, referenceMode],
+    [query, searchEngineHandleSearch, referenceMode],
   );
 
-  // Re-execute search from URL params on mount (e.g. browser back-navigation)
-  useEffect(() => {
-    if (hasTriggeredInitialSearch.current) return;
-    if (!hadSearchParamsOnMount || !initialState.query) return;
-    hasTriggeredInitialSearch.current = true;
-    performSearch(initialState.query);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [performSearch]);
-
-  useEffect(() => {
-    if (activeQuery) {
-      performSearch(activeQuery);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupBy, searchMode, contentType, sourceFilters, dateStart, dateEnd]);
-
   const handleClearSearch = useCallback(() => {
-    setSearchResponse(null);
-    setActiveQuery("");
+    clearSearch();
     setQuery("");
-    setCurrentPage(1);
-    setSortBy(sortBeforeSearchRef.current);
     setReferenceMode(false);
-  }, []);
+  }, [clearSearch]);
 
   const handleDateSelect = useCallback((start: Date, end: Date) => {
     setDateStart(start);
     setDateEnd(end);
     setShowCalendar(false);
     setCurrentPage(1);
-  }, []);
+  }, [setCurrentPage]);
 
   const videoCount = isSearchMode ? sortedSearchResults.length : totalVideos;
   const libraryCount = stats?.total_libraries ?? 0;
@@ -1475,7 +1329,7 @@ export default function DashboardContent({
                 totalPages={totalPages}
                 onPageChange={setCurrentPage}
               />
-            ) : nextCursor ? (
+            ) : hasMore ? (
               <div className="mt-8 flex justify-center">
                 <button
                   type="button"
