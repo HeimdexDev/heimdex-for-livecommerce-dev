@@ -5,9 +5,9 @@ import { usePathname } from "next/navigation";
 import { LogoIcon, LogoText } from "@/components/login/HeimdexLogo";
 import { cn } from "@/lib/utils";
 
-const navItems = [
+const navItems: { label: string; href: string; badge?: string }[] = [
   { label: "전체 아카이브 검색", href: "/" },
-  { label: "이미지 검색", href: "/images" },
+  { label: "이미지 검색", href: "/images", badge: "Pro" },
   { label: "파일 동기화", href: "/sync" },
   { label: "인물 라벨 관리", href: "/settings/people" },
   { label: "저장된 쇼츠", href: "/shorts" },
@@ -92,6 +92,11 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                   )}
                 />
                 {item.label}
+                {item.badge && (
+                  <span className="ml-auto rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-indigo-600">
+                    {item.badge}
+                  </span>
+                )}
               </Link>
             );
           })}
