@@ -674,10 +674,10 @@ services:
       - SQS_REGION=${SQS_REGION:-ap-northeast-2}
       - DRIVE_API_BASE_URL=http://api:8000
       - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
-      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
-      - MINIO_SECURE=false
+      - MINIO_SECURE=${MINIO_SECURE:-false}
       - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
       - FONT_DIR=/usr/share/fonts/heimdex
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
