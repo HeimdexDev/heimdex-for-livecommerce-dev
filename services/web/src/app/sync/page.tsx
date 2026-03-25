@@ -475,6 +475,10 @@ function SyncContent() {
     }
   }, [getAccessToken]);
 
+  /** Re-authorize OAuth without disconnecting folders or deleting files.
+   *  Reuses the same authorize → callback → upsert flow as initial connect. */
+  const handleRefreshOAuth = handleConnectGoogle;
+
   const handleDisconnectGoogle = useCallback(async () => {
     setOauthLoading(true);
     try {
@@ -618,6 +622,13 @@ function SyncContent() {
                   className="rounded-lg bg-blue-500 px-4 py-2 text-sm font-medium text-white hover:bg-blue-600 disabled:opacity-50"
                 >
                   폴더 추가
+                </button>
+                <button
+                  onClick={handleRefreshOAuth}
+                  disabled={oauthLoading || !isAdmin}
+                  className="rounded-lg border border-blue-200 px-4 py-2 text-sm font-medium text-blue-600 transition-colors hover:bg-blue-50 disabled:opacity-50"
+                >
+                  {oauthLoading ? "갱신 중..." : "연결 갱신"}
                 </button>
                 <button
                   onClick={handleDisconnectGoogle}
