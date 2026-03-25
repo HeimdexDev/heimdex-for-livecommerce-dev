@@ -9,6 +9,7 @@ import {
   type ProxyPackStatusResponse,
 } from "@/lib/cloud-export";
 import { useSceneBasket, type BasketItem } from "./useSceneBasket";
+import { FEATURES } from "@/lib/feature-flags";
 
 const STORAGE_KEY = "heimdex_drive_mount_path";
 const CUSTOM_OPTION = "__custom__";
@@ -138,7 +139,7 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
             start_ms: item.start_ms,
             end_ms: item.end_ms,
             label: item.label,
-            keyword_tags: item.keyword_tags ?? [],
+            keyword_tags: FEATURES.TAGS_ENABLED ? (item.keyword_tags ?? []) : [],
             transcript_raw: item.transcript_raw ?? "",
           })),
           clip_gap_ms: clipGapMs,
@@ -180,7 +181,7 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
             start_ms: item.start_ms,
             end_ms: item.end_ms,
             label: item.label,
-            keyword_tags: item.keyword_tags ?? [],
+            keyword_tags: FEATURES.TAGS_ENABLED ? (item.keyword_tags ?? []) : [],
             transcript_raw: item.transcript_raw ?? "",
           })),
           clip_gap_ms: clipGapMs,

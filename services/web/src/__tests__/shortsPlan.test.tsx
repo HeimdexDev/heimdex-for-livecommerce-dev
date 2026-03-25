@@ -10,6 +10,10 @@ import type { ShortsCandidateResponse } from "@/lib/types";
 import { generateShortsPlan } from "@/lib/api/shorts";
 import { exportToPremiere } from "@/lib/agent-export";
 
+vi.mock("@/lib/feature-flags", () => ({
+  FEATURES: { TAGS_ENABLED: true },
+}));
+
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({
     getAccessToken: vi.fn().mockResolvedValue("test-token"),

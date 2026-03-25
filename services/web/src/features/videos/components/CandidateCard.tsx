@@ -4,6 +4,7 @@ import { formatTimestamp } from "@/lib/api/utils";
 import { getAgentPlaybackUrl, getCloudPlaybackUrl } from "@/lib/agent";
 import { cn } from "@/lib/utils";
 import type { ShortsCandidateResponse } from "@/lib/types";
+import { FEATURES } from "@/lib/feature-flags";
 
 interface CandidateCardProps {
   candidate: ShortsCandidateResponse;
@@ -49,7 +50,7 @@ export function CandidateCard({
             <span className="font-mono text-xs text-gray-500">
               {formatTimestamp(candidate.start_ms)} - {formatTimestamp(candidate.end_ms)}
             </span>
-            {candidate.tags.map((tag) => (
+            {FEATURES.TAGS_ENABLED && candidate.tags.map((tag) => (
               <span
                 key={tag}
                 className="inline-block px-1.5 py-0.5 text-xs bg-blue-50 text-blue-700 rounded"

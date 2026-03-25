@@ -3,6 +3,7 @@
 import { Facets, SearchFilters } from "@/lib/api";
 import { hasTagFilters } from "@/lib/types/search";
 import { TagFilters } from "./TagFilters";
+import { FEATURES } from "@/lib/feature-flags";
 
 interface FilterPanelProps {
   facets: Facets | null;
@@ -188,7 +189,7 @@ export function FilterPanel({
         )}
 
         <div className="pt-2 border-t border-gray-200">
-          <TagFilters filters={filters} onFiltersChange={onFiltersChange} />
+          {FEATURES.TAGS_ENABLED && <TagFilters filters={filters} onFiltersChange={onFiltersChange} />}
         </div>
       </div>
     </div>

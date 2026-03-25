@@ -8,6 +8,7 @@ import { getVideoScenes } from "@/lib/api/videos";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import type { VideoScenesResponse } from "@/lib/types";
+import { FEATURES } from "@/lib/feature-flags";
 
 interface ImageDetailPageProps {
   imageId: string;
@@ -140,7 +141,7 @@ export function ImageDetailPage({ imageId }: ImageDetailPageProps) {
                 </div>
               )}
 
-              {scene.keyword_tags.length > 0 && (
+              {FEATURES.TAGS_ENABLED && scene.keyword_tags.length > 0 && (
                 <div className="rounded-xl bg-white p-5 shadow-sm">
                   <h3 className="text-xs font-medium text-gray-400">태그</h3>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">

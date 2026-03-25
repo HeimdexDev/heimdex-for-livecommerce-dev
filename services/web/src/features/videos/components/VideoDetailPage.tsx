@@ -18,6 +18,7 @@ import { VideoPeoplePanel } from "./VideoPeoplePanel";
 import { useOrgSettings } from "@/lib/orgSettings";
 import { useSceneGroups } from "@/features/videos/hooks/useSceneGroups";
 import { getDetailThumbnailClass, getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
+import { FEATURES } from "@/lib/feature-flags";
 
 type ViewMode = "overview" | "scenes" | "people";
 
@@ -305,7 +306,7 @@ function OverviewPanel({
           {hasCaptions && (
             <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">AI</span>
           )}
-          {allTags.slice(0, 3).map((tag) => (
+          {FEATURES.TAGS_ENABLED && allTags.slice(0, 3).map((tag) => (
             <span
               key={tag}
               className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-3 py-0.5 text-xs font-medium text-indigo-700"
@@ -449,7 +450,7 @@ export function SceneCard({
               </svg>
             </div>
           </button>
-          {tags.length > 0 && (
+          {FEATURES.TAGS_ENABLED && tags.length > 0 && (
             <div className="px-3 py-2 flex flex-wrap gap-1">
               {tags.map((tag) => (
                 <span
@@ -1055,7 +1056,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             isReprocessing={isReprocessing}
           />
 
-          {view === "scenes" && allTags.length > 0 && (
+          {FEATURES.TAGS_ENABLED && view === "scenes" && allTags.length > 0 && (
             <div className="mt-4 flex flex-wrap gap-1">
               {allTags.slice(0, 3).map((tag) => (
                 <span
