@@ -12,6 +12,12 @@ class TokenPayload(BaseModel):
     exp: int
 
 
+class MeResponse(BaseModel):
+    user_id: str
+    email: str
+    role: str
+
+
 class DevLoginRequest(BaseModel):
     email: EmailStr
 

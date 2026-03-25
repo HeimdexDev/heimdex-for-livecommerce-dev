@@ -145,6 +145,32 @@ function Auth0AuthProvider({ children }: { children: ReactNode }) {
     getAccessTokenSilently,
   } = useAuth0();
 
+  // Fetch authoritative role from backend database (not Auth0 token)
+  const [dbRole, setDbRole] = useState<"admin" | "member">("member");
+
+  useEffect(() => {
+    if (!isAuthenticated || isLoading) return;
+    (async () => {
+      try {
+        const token = await getAccessTokenSilently({
+          authorizationParams: {
+            audience: AUTH0_AUDIENCE,
+            ...(AUTH0_ORGANIZATION ? { organization: AUTH0_ORGANIZATION } : {}),
+          },
+        });
+        const res = await fetch("/api/auth/me", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setDbRole(data.role === "admin" ? "admin" : "member");
+        }
+      } catch {
+        // Fallback to member on error
+      }
+    })();
+  }, [isAuthenticated, isLoading, getAccessTokenSilently]);
+
   const login = useCallback(() => {
     loginWithRedirect({
       authorizationParams: {
@@ -197,7 +223,7 @@ function Auth0AuthProvider({ children }: { children: ReactNode }) {
           email: user.email,
           name: user.name,
           picture: user.picture,
-          role: (user["https://heimdex.co/role"] ?? user.role) === "admin" ? "admin" : "member",
+          role: dbRole,
         }
       : null,
     error: error || null,

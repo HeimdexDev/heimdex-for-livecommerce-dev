@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.config import get_settings
 from app.dependencies import get_auth_service
 from app.logging_config import get_logger
-from app.modules.auth.schemas import DevLoginRequest, DevLoginResponse
+from app.modules.auth.schemas import DevLoginRequest, DevLoginResponse, MeResponse
 from app.modules.auth.service import AuthService, get_current_user
 from app.modules.tenancy import OrgContext, get_current_org
 from app.modules.users.models import User
@@ -48,6 +48,23 @@ async def dev_login(
         user_id=user.id,
         org_id=org_ctx.org_id,
         org_slug=org_ctx.org_slug,
+    )
+
+
+@router.get("/me", response_model=MeResponse)
+async def get_current_user_info(
+    user: User = Depends(get_current_user),
+):
+    """Return the authenticated user's profile from the database.
+
+    Works with both Auth0 and dev-login tokens. The role field
+    is the authoritative source of truth (from the users table),
+    not the JWT claim.
+    """
+    return MeResponse(
+        user_id=str(user.id),
+        email=user.email,
+        role=str(user.role),
     )
 
 
