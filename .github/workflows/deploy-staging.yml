@@ -64,6 +64,7 @@ jobs:
             WEB_CHANGED=false
             WORKER_CHANGED=false
             YOUTUBE_CHANGED=false
+            SHORTS_CHANGED=false
 
             if [ -n "$PREV" ] && [ "$PREV" != "$CURR" ]; then
               DIFF_FILES=$(git diff --name-only "$PREV" "$CURR" || true)
@@ -73,20 +74,22 @@ jobs:
               if echo "$DIFF_FILES" | grep -q '^services/web/'; then WEB_CHANGED=true; fi
               if echo "$DIFF_FILES" | grep -qE '^services/drive-worker/|^services/worker_sdk/'; then WORKER_CHANGED=true; fi
               if echo "$DIFF_FILES" | grep -qE '^services/youtube-worker/|^services/worker_sdk/'; then YOUTUBE_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -qE '^services/shorts-render-worker/|^services/worker_sdk/'; then SHORTS_CHANGED=true; fi
 
               # Shared config changes trigger all
-              if echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example)'; then API_CHANGED=true; WEB_CHANGED=true; WORKER_CHANGED=true; YOUTUBE_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example)'; then API_CHANGED=true; WEB_CHANGED=true; WORKER_CHANGED=true; YOUTUBE_CHANGED=true; SHORTS_CHANGED=true; fi
 
               # Self-healing: if deploy script changed, force full rebuild
-              if echo "$DIFF_FILES" | grep -qE '^\.github/workflows/deploy'; then API_CHANGED=true; WEB_CHANGED=true; WORKER_CHANGED=true; YOUTUBE_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -qE '^\.github/workflows/deploy'; then API_CHANGED=true; WEB_CHANGED=true; WORKER_CHANGED=true; YOUTUBE_CHANGED=true; SHORTS_CHANGED=true; fi
             elif [ -z "$PREV" ]; then
               API_CHANGED=true
               WEB_CHANGED=true
               WORKER_CHANGED=true
               YOUTUBE_CHANGED=true
+              SHORTS_CHANGED=true
             fi
 
-            echo "API changed: $API_CHANGED | Web changed: $WEB_CHANGED | Worker changed: $WORKER_CHANGED | YouTube changed: $YOUTUBE_CHANGED"
+            echo "API changed: $API_CHANGED | Web changed: $WEB_CHANGED | Worker changed: $WORKER_CHANGED | YouTube changed: $YOUTUBE_CHANGED | Shorts changed: $SHORTS_CHANGED"
 
             # ---- Build changed services ----
             if [ "$API_CHANGED" = true ]; then
@@ -102,6 +105,11 @@ jobs:
             if [ "$WORKER_CHANGED" = true ]; then
               echo "--- building drive-worker ---"
               docker compose build drive-worker
+            fi
+
+            if [ "$SHORTS_CHANGED" = true ]; then
+              echo "--- building shorts-render-worker ---"
+              docker compose build shorts-render-worker
             fi
 
             # YouTube worker uses --profile youtube; only build if running
@@ -143,6 +151,12 @@ jobs:
             if [ "$YOUTUBE_CHANGED" = true ]; then
               echo "--- restarting youtube-worker ---"
               docker compose --profile youtube up -d --no-deps youtube-worker
+              sleep 5
+            fi
+
+            if [ "$SHORTS_CHANGED" = true ]; then
+              echo "--- restarting shorts-render-worker ---"
+              docker compose up -d --no-deps shorts-render-worker
               sleep 5
             fi
 
