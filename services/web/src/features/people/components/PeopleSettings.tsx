@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback, Fragment } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -32,6 +32,7 @@ import { DeletePersonDialog } from "./DeletePersonDialog";
 import { MergeConfirmDialog } from "./MergeConfirmDialog";
 import { SelectionTray } from "./SelectionTray";
 import { TimelineBar } from "./TimelineBar";
+import { splitByLabel } from "@/lib/people-utils";
 
 /** Format ISO 8601 timestamp to Korean relative time string */
 function formatRelativeTime(isoTimestamp: string | null | undefined): string | null {
@@ -839,16 +840,26 @@ export function PeopleSettings() {
     return () => clearTimeout(timer);
   }, [searchQuery, fetchPeople]);
 
-  const totalPages = Math.ceil(people.length / PAGE_SIZE);
-  const paginatedPeople = people.slice(
+  const sortedPeople = useMemo(() => {
+    const { labelled, unlabelled } = splitByLabel(people);
+    return [...labelled, ...unlabelled];
+  }, [people]);
+
+  const totalPages = Math.ceil(sortedPeople.length / PAGE_SIZE);
+  const paginatedPeople = sortedPeople.slice(
     (currentPage - 1) * PAGE_SIZE,
     currentPage * PAGE_SIZE,
   );
 
+  const labelledTotal = sortedPeople.filter((p) => p.label).length;
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const separatorIndex = labelledTotal - pageStart;
+  const showSeparator = separatorIndex > 0 && separatorIndex < paginatedPeople.length;
+
   useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(people.length / PAGE_SIZE));
+    const maxPage = Math.max(1, Math.ceil(sortedPeople.length / PAGE_SIZE));
     if (currentPage > maxPage) setCurrentPage(maxPage);
-  }, [people.length, currentPage]);
+  }, [sortedPeople.length, currentPage]);
 
   const selectedPeople = useMemo(
     () => people.filter((p) => selectedIds.has(p.person_cluster_id)),
@@ -1065,17 +1076,21 @@ export function PeopleSettings() {
                   onDragCancel={handleDragCancel}
                 >
                   <div className="grid grid-cols-4 gap-5">
-                    {paginatedPeople.map((person) => (
-                      <PersonAvatar
-                        key={person.person_cluster_id}
-                        person={person}
-                        isSelected={selectedIds.has(person.person_cluster_id)}
-                        onToggle={toggleSelection}
-                        onDelete={setDeleteTargetId}
-                        onRename={() => toggleSelection(person.person_cluster_id)}
-                        agentAvailable={agentAvailable}
-                        isDragActive={activeDragPerson !== null}
-                      />
+                    {paginatedPeople.map((person, i) => (
+                      <Fragment key={person.person_cluster_id}>
+                        {i === separatorIndex && showSeparator && (
+                          <hr className="col-span-4 my-2 border-gray-200" />
+                        )}
+                        <PersonAvatar
+                          person={person}
+                          isSelected={selectedIds.has(person.person_cluster_id)}
+                          onToggle={toggleSelection}
+                          onDelete={setDeleteTargetId}
+                          onRename={() => toggleSelection(person.person_cluster_id)}
+                          agentAvailable={agentAvailable}
+                          isDragActive={activeDragPerson !== null}
+                        />
+                      </Fragment>
                     ))}
                   </div>
                   {totalPages > 1 && (

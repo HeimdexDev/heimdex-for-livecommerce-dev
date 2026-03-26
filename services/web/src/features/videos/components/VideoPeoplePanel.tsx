@@ -21,6 +21,7 @@ import { AvatarThumbnail } from "@/components/people/AvatarThumbnail";
 import { getFaceThumbnailUrl, getCloudThumbnailUrl } from "@/lib/agent";
 import { PersonIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
+import { splitByLabel } from "@/lib/people-utils";
 import type { PersonResponse, VideoScene } from "@/lib/types";
 import type { ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
@@ -220,6 +221,8 @@ export function VideoPeoplePanel({
     return scenes.filter((s) => s.people_cluster_ids.includes(selectedId));
   }, [scenes, selectedId]);
 
+  const { labelled, unlabelled } = useMemo(() => splitByLabel(people), [people]);
+
   const handleSelect = useCallback((personClusterId: string) => {
     setSelectedId((prev) => (prev === personClusterId ? null : personClusterId));
   }, []);
@@ -317,19 +320,42 @@ export function VideoPeoplePanel({
             onDragEnd={handleDragEnd}
             onDragCancel={handleDragCancel}
           >
-            <div className="mt-6 grid max-h-[380px] grid-cols-4 gap-5 overflow-y-auto">
-              {people.map((person) => (
-                <VideoPersonAvatar
-                  key={person.person_cluster_id}
-                  person={person}
-                  isSelected={selectedId === person.person_cluster_id}
-                  onSelect={handleSelect}
-                  onDelete={setDeleteTargetId}
-                  onRename={handleRenameFromAvatar}
-                  agentAvailable={agentAvailable}
-                  isDragActive={activeDragPerson !== null}
-                />
-              ))}
+            <div className="mt-6 max-h-[380px] overflow-y-auto">
+              {labelled.length > 0 && (
+                <div className="grid grid-cols-4 gap-5">
+                  {labelled.map((person) => (
+                    <VideoPersonAvatar
+                      key={person.person_cluster_id}
+                      person={person}
+                      isSelected={selectedId === person.person_cluster_id}
+                      onSelect={handleSelect}
+                      onDelete={setDeleteTargetId}
+                      onRename={handleRenameFromAvatar}
+                      agentAvailable={agentAvailable}
+                      isDragActive={activeDragPerson !== null}
+                    />
+                  ))}
+                </div>
+              )}
+              {labelled.length > 0 && unlabelled.length > 0 && (
+                <hr className="my-4 border-gray-200" />
+              )}
+              {unlabelled.length > 0 && (
+                <div className="grid grid-cols-4 gap-5">
+                  {unlabelled.map((person) => (
+                    <VideoPersonAvatar
+                      key={person.person_cluster_id}
+                      person={person}
+                      isSelected={selectedId === person.person_cluster_id}
+                      onSelect={handleSelect}
+                      onDelete={setDeleteTargetId}
+                      onRename={handleRenameFromAvatar}
+                      agentAvailable={agentAvailable}
+                      isDragActive={activeDragPerson !== null}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
             <DragOverlay dropAnimation={null}>
               {activeDragPerson ? (
