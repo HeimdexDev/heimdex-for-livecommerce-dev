@@ -156,7 +156,8 @@ class Settings(BaseSettings):
     drive_caption_model: str = "Qwen/Qwen2-VL-2B-Instruct"
     caption_engine: str = "qwen2vl"  # "qwen2vl", "internvl2", "florence2", or "llama_http"
 
-
+    # --- VLM tag extraction ---
+    vlm_tags_enabled: bool = False  # Feature flag: VLM-generated tags instead of rule-based
 
     # --- YouTube reference ---
     youtube_enabled: bool = False

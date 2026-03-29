@@ -437,14 +437,18 @@ def publish_scene_enrichment_jobs(
     org_id: UUID,
     video_id: str,
     scenes: list[dict[str, Any]],
+    job_types: tuple[str, ...] = ("caption", "visual_embed"),
 ) -> None:
-    """Publish per-scene (v2) enrichment jobs for caption and visual-embed.
+    """Publish per-scene (v2) enrichment jobs for caption and/or visual-embed.
 
     Each scene produces one SQS message per job_type, published via
     ``send_message_batch`` (10 msgs/call) for throughput.
 
     Args:
         scenes: List of dicts with keys: scene_id, scene_index, keyframe_s3_key.
+            For caption jobs, optional keys: transcript_raw (str).
+        job_types: Which job types to publish. Default is both caption and
+            visual_embed. Pass ``("visual_embed",)`` to defer caption.
 
     Called asynchronously from the PATCH status handler after status='indexed'.
     Fire-and-forget — errors are logged but never raised to the caller.
@@ -460,7 +464,7 @@ def publish_scene_enrichment_jobs(
     timestamp = now.isoformat()
     client = _get_sqs_client()
 
-    for job_type in ("caption", "visual_embed"):
+    for job_type in job_types:
         queue_attr = _QUEUE_URL_ATTRS.get(job_type)
         if queue_attr is None:
             continue
@@ -471,21 +475,29 @@ def publish_scene_enrichment_jobs(
         # Build all message entries for this job_type
         entries: list[dict[str, Any]] = []
         for scene in scenes:
+            msg_body: dict[str, Any] = {
+                "version": "2",
+                "type": "enrichment.scene_job_created",
+                "timestamp": timestamp,
+                "job_type": job_type,
+                "file_id": str(file_id),
+                "org_id": str(org_id),
+                "video_id": video_id,
+                "scene_id": scene["scene_id"],
+                "scene_index": scene["scene_index"],
+                "keyframe_s3_key": scene["keyframe_s3_key"],
+                "audio_s3_key": None,
+            }
+            # Include transcript and VLM flag for caption jobs
+            if job_type == "caption":
+                transcript = scene.get("transcript_raw")
+                if transcript:
+                    msg_body["transcript_raw"] = transcript
+                msg_body["vlm_tags_enabled"] = settings.vlm_tags_enabled
+
             entries.append({
                 "Id": f"{scene['scene_id']}_{job_type}",
-                "MessageBody": json.dumps({
-                    "version": "2",
-                    "type": "enrichment.scene_job_created",
-                    "timestamp": timestamp,
-                    "job_type": job_type,
-                    "file_id": str(file_id),
-                    "org_id": str(org_id),
-                    "video_id": video_id,
-                    "scene_id": scene["scene_id"],
-                    "scene_index": scene["scene_index"],
-                    "keyframe_s3_key": scene["keyframe_s3_key"],
-                    "audio_s3_key": None,
-                }, default=str),
+                "MessageBody": json.dumps(msg_body, default=str),
                 "MessageAttributes": {
                     "job_type": {"StringValue": job_type, "DataType": "String"},
                     "org_id": {"StringValue": str(org_id), "DataType": "String"},

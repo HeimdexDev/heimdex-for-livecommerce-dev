@@ -362,11 +362,19 @@ class SceneIngestService:
                 if embedding_text:
                     embedding_inputs.append((len(partial_updates), embedding_text))
 
-                keyword_tags, product_tags = generate_tags(t_raw or "", c_raw or "")
-                if keyword_tags:
-                    partial["keyword_tags"] = keyword_tags
-                if product_tags:
-                    partial["product_tags"] = product_tags
+                # VLM-generated tags take priority over rule-based
+                if enrichment.keyword_tags is not None:
+                    partial["keyword_tags"] = enrichment.keyword_tags
+                    if enrichment.product_tags is not None:
+                        partial["product_tags"] = enrichment.product_tags
+                    if enrichment.product_entities is not None:
+                        partial["product_entities"] = enrichment.product_entities
+                else:
+                    keyword_tags, product_tags = generate_tags(t_raw or "", c_raw or "")
+                    if keyword_tags:
+                        partial["keyword_tags"] = keyword_tags
+                    if product_tags:
+                        partial["product_tags"] = product_tags
 
             partial["ingest_time"] = now.isoformat()
             partial_updates.append((doc_id, partial))

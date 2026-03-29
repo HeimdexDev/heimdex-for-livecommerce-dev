@@ -135,6 +135,9 @@ class WorkerSettings(BaseSettings):
     drive_split_preset: str = "default"  # Default split preset for initial processing
     drive_stt_timeout_seconds: int = 600  # 10 min timeout for STT phase
 
+    # --- VLM tag extraction ---
+    vlm_tags_enabled: bool = False  # Feature flag: VLM-generated tags instead of rule-based
+
     # --- Visual embedding worker ---
     visual_embed_enabled: bool = False
     visual_embed_concurrency: int = 1

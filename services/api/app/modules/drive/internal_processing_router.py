@@ -48,6 +48,7 @@ async def _publish_scene_jobs_in_background(
     org_id: UUID,
     video_id: str,
     scenes: list[dict[str, Any]],
+    job_types: tuple[str, ...] = ("caption", "visual_embed"),
 ) -> None:
     """Publish per-scene SQS messages in a background thread.
 
@@ -64,12 +65,14 @@ async def _publish_scene_jobs_in_background(
                 org_id=org_id,
                 video_id=video_id,
                 scenes=scenes,
+                job_types=job_types,
             ),
         )
         logger.info(
             "scene_enrichment_jobs_dispatched",
             video_id=video_id,
             scene_count=len(scenes),
+            job_types=list(job_types),
         )
     except Exception:
         logger.exception(
@@ -337,12 +340,22 @@ async def update_processing_status(
                 }
                 for i in range(_scene_count)
             ]
+
+            # Determine which job types to publish now.
+            # If STT already done (two-phase pipeline), publish caption immediately.
+            # If STT not done (legacy pipeline), defer caption until STT completes.
+            if stt_already_done:
+                _scene_job_types: tuple[str, ...] = ("caption", "visual_embed")
+            else:
+                _scene_job_types = ("visual_embed",)
+
             asyncio.create_task(
                 _publish_scene_jobs_in_background(
                     file_id=file_id,
                     org_id=drive_file.org_id,
                     video_id=_vid,
                     scenes=scenes_for_publish,
+                    job_types=_scene_job_types,
                 )
             )
 

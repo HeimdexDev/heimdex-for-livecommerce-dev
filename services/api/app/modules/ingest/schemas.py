@@ -39,6 +39,9 @@ class EnrichSceneUpdate(BaseModel):
     ocr_text_raw: str | None = Field(default=None)
     ocr_char_count: int | None = Field(default=None)
     scene_caption: str | None = Field(default=None)
+    keyword_tags: list[str] | None = Field(default=None)
+    product_tags: list[str] | None = Field(default=None)
+    product_entities: list[str] | None = Field(default=None)
     people_cluster_ids: list[str] | None = Field(default=None)
     visual_embedding: list[float] | None = Field(default=None)
 
