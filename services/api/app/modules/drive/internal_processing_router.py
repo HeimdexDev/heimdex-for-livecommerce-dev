@@ -31,6 +31,8 @@ from app.config import get_settings
 from app.sqs_producer import (
     publish_enrichment_jobs,
     publish_scene_enrichment_jobs,
+    publish_scene_split_job,
+    publish_stt_for_splitting,
     publish_transcode_job,
 )
 
@@ -254,6 +256,31 @@ async def update_processing_status(
             values["video_width"] = request.video_width
         if request.video_height is not None:
             values["video_height"] = request.video_height
+    elif request.status == "awaiting_stt":
+        values["processing_status"] = "awaiting_stt"
+        values["stt_requested_at"] = func.now()
+        if request.proxy_s3_key is not None:
+            values["proxy_s3_key"] = request.proxy_s3_key
+        if request.proxy_size_bytes is not None:
+            values["proxy_size_bytes"] = request.proxy_size_bytes
+        if request.proxy_duration_ms is not None:
+            values["proxy_duration_ms"] = request.proxy_duration_ms
+        if request.audio_s3_key is not None:
+            values["audio_s3_key"] = request.audio_s3_key
+        if request.video_fps is not None:
+            values["video_fps"] = request.video_fps
+        if request.video_width is not None:
+            values["video_width"] = request.video_width
+        if request.video_height is not None:
+            values["video_height"] = request.video_height
+        values["lease_token"] = None
+        values["lease_expires_at"] = None
+    elif request.status == "awaiting_scene_split":
+        values["processing_status"] = "awaiting_scene_split"
+        if request.stt_result_s3_key is not None:
+            values["stt_result_s3_key"] = request.stt_result_s3_key
+        values["lease_token"] = None
+        values["lease_expires_at"] = None
     elif request.status == "awaiting_transcode":
         values["processing_status"] = "awaiting_transcode"
         if request.original_s3_key is not None:
@@ -286,12 +313,15 @@ async def update_processing_status(
             else drive_file.audio_s3_key
         )
         # v1: per-video enrichment for STT, OCR, face
+        # Skip STT re-publish if already done during two-phase pipeline
+        stt_already_done = bool(drive_file.stt_result_s3_key)
         publish_enrichment_jobs(
             file_id=file_id,
             org_id=drive_file.org_id,
             video_id=drive_file.video_id,
             keyframe_s3_prefix=_eff_keyframe,
             audio_s3_key=_eff_audio,
+            stt_already_done=stt_already_done,
         )
 
         # v2: per-scene enrichment for caption + visual-embed (async,
@@ -315,6 +345,37 @@ async def update_processing_status(
                     scenes=scenes_for_publish,
                 )
             )
+
+    # SQS: publish STT-for-splitting job when drive-worker uploads audio.
+    if values.get("processing_status") == "awaiting_stt":
+        _eff_audio = request.audio_s3_key or drive_file.audio_s3_key
+        if _eff_audio:
+            publish_stt_for_splitting(
+                file_id=file_id,
+                org_id=drive_file.org_id,
+                video_id=drive_file.video_id,
+                audio_s3_key=_eff_audio,
+            )
+
+    # SQS: publish scene_split job when STT completes (or times out).
+    if values.get("processing_status") == "awaiting_scene_split":
+        conn_result = await db.execute(
+            select(DriveConnection).where(DriveConnection.id == drive_file.connection_id)
+        )
+        connection = conn_result.scalar_one_or_none()
+        publish_scene_split_job(
+            file_id=file_id,
+            org_id=drive_file.org_id,
+            video_id=drive_file.video_id,
+            proxy_s3_key=drive_file.proxy_s3_key or "",
+            stt_result_s3_key=request.stt_result_s3_key or drive_file.stt_result_s3_key,
+            audio_s3_key=drive_file.audio_s3_key,
+            connection_id=str(drive_file.connection_id),
+            library_id=str(connection.library_id) if connection else str(drive_file.org_id),
+            file_name=drive_file.file_name or drive_file.video_id,
+            google_created_time=str(drive_file.google_created_time) if drive_file.google_created_time else None,
+            google_modified_time=str(drive_file.google_modified_time) if drive_file.google_modified_time else None,
+        )
 
     # SQS: publish transcode job when drive-worker finishes original upload.
     # Only fires when drive_transcode_mode='gpu' and status is 'awaiting_transcode'.

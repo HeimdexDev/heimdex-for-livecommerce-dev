@@ -372,6 +372,22 @@ def _process_single_file(
         proxy_probe = probe_video(proxy_path) if decision.should_transcode else probe
         proxy_size = proxy_path.stat().st_size
 
+        # Two-phase STT-then-split: hand off to STT worker before scene detection
+        if getattr(settings, "drive_speech_split_enabled", False):
+            _handle_stt_split_handoff(
+                api_client=api_client,
+                settings=settings,
+                claimed_file=claimed_file,
+                original_path=original_path,
+                s3=s3,
+                s3_key=s3_key,
+                probe=probe,
+                proxy_probe=proxy_probe,
+                proxy_size=proxy_size,
+                temp_dir=temp_dir,
+            )
+            return
+
         # Scene detection
         api_client.update_processing_status(
             claimed_file.id,
@@ -577,6 +593,56 @@ def _handle_gpu_mode(
         "video_id": claimed_file.video_id,
         "original_s3_key": s3_key,
         "original_size_bytes": original_size_bytes,
+    })
+
+
+def _handle_stt_split_handoff(
+    api_client: InternalAPIClient,
+    settings: Any,
+    claimed_file: Any,
+    original_path: Path,
+    s3: Any,
+    s3_key: str,
+    probe: Any,
+    proxy_probe: Any,
+    proxy_size: int,
+    temp_dir: Path,
+) -> None:
+    """Two-phase pipeline: extract audio, upload to S3, hand off to STT worker."""
+    from heimdex_worker_sdk.drive_keys import audio_s3_key as audio_s3_key_fn
+
+    org_id_str = str(claimed_file.org_id)
+
+    # Extract audio from original video
+    audio_path = temp_dir / "audio.wav"
+    subprocess.run(
+        ["ffmpeg", "-i", str(original_path),
+         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+         "-y", str(audio_path)],
+        capture_output=True, check=True, timeout=600,
+    )
+    a_key = audio_s3_key_fn(org_id_str, claimed_file.video_id)
+    s3.upload_file(audio_path, a_key, content_type="audio/wav")
+
+    # Report awaiting_stt — triggers API to publish STT job
+    api_client.update_processing_status(
+        claimed_file.id,
+        status="awaiting_stt",
+        lease_token=claimed_file.lease_token,
+        proxy_s3_key=s3_key,
+        proxy_size_bytes=proxy_size,
+        proxy_duration_ms=proxy_probe.duration_ms,
+        audio_s3_key=a_key,
+        video_fps=probe.frame_rate,
+        video_width=probe.width,
+        video_height=probe.height,
+    )
+
+    logger.info("stt_split_phase1_complete", extra={
+        "file_id": claimed_file.google_file_id,
+        "video_id": claimed_file.video_id,
+        "proxy_s3_key": s3_key,
+        "audio_s3_key": a_key,
     })
 
 

@@ -76,6 +76,7 @@ def _make_sqs_callback(api_client, settings):
     from heimdex_worker_sdk.sqs_consumer import InvalidMessageError
     from src.tasks.process import _process_single_file
     from src.tasks.resplit import handle_resplit
+    from src.tasks.scene_split import handle_scene_split
 
     def callback(message):
         body = message.body
@@ -89,6 +90,10 @@ def _make_sqs_callback(api_client, settings):
 
         if body.get("type") == "resplit.job_created":
             handle_resplit(body, api_client, settings)
+            return
+
+        if body.get("type") == "scene_split.job_created":
+            handle_scene_split(body, api_client, settings)
             return
 
         # Parse message for org_id (used for per-org concurrency check only)

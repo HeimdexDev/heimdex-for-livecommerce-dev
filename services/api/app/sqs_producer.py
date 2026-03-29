@@ -172,13 +172,14 @@ def publish_enrichment_jobs(
     video_id: str,
     keyframe_s3_prefix: Optional[str],
     audio_s3_key: Optional[str],
+    stt_already_done: bool = False,
 ) -> None:
     """Publish per-video (v1) enrichment-job-created events.
 
     Called from ``update_processing_status`` when status transitions to 'indexed'.
 
     * OCR + Face published when ``keyframe_s3_prefix`` is set.
-    * STT published when ``audio_s3_key`` is set.
+    * STT published when ``audio_s3_key`` is set and ``stt_already_done`` is False.
 
     Note: Caption and visual-embed are published as per-scene (v2) messages
     by ``publish_scene_enrichment_jobs()`` instead.
@@ -205,7 +206,7 @@ def publish_enrichment_jobs(
                 f"{file_id}:{job_type}:{minute}",
             )
 
-    if audio_s3_key:
+    if audio_s3_key and not stt_already_done:
         _publish(
             "stt",
             {
@@ -221,6 +222,73 @@ def publish_enrichment_jobs(
             },
             f"{file_id}:stt:{minute}",
         )
+
+
+def publish_stt_for_splitting(
+    *,
+    file_id: UUID,
+    org_id: UUID,
+    video_id: str,
+    audio_s3_key: str,
+) -> None:
+    """Publish STT job with callback_mode='scene_split'.
+
+    STT worker will upload result to S3 and call back the API to
+    trigger speech-aware scene detection.
+    """
+    now = datetime.now(timezone.utc)
+    body = {
+        "version": "1",
+        "type": "enrichment.job_created",
+        "timestamp": now.isoformat(),
+        "job_type": "stt",
+        "file_id": str(file_id),
+        "org_id": str(org_id),
+        "video_id": video_id,
+        "keyframe_s3_prefix": None,
+        "audio_s3_key": audio_s3_key,
+        "callback_mode": "scene_split",
+    }
+    _publish("stt", body, f"{file_id}:stt_split:{now.strftime('%Y%m%dT%H%M')}")
+
+
+def publish_scene_split_job(
+    *,
+    file_id: UUID,
+    org_id: UUID,
+    video_id: str,
+    proxy_s3_key: str,
+    stt_result_s3_key: Optional[str],
+    audio_s3_key: Optional[str],
+    connection_id: str,
+    library_id: str,
+    file_name: str,
+    google_created_time: Optional[str],
+    google_modified_time: Optional[str],
+) -> None:
+    """Publish scene_split job to the processing queue.
+
+    drive-worker will run split_scenes() with speech data.
+    """
+    now = datetime.now(timezone.utc)
+    body = {
+        "version": "1",
+        "type": "scene_split.job_created",
+        "timestamp": now.isoformat(),
+        "file_id": str(file_id),
+        "org_id": str(org_id),
+        "video_id": video_id,
+        "proxy_s3_key": proxy_s3_key,
+        "stt_result_s3_key": stt_result_s3_key,
+        "stt_available": stt_result_s3_key is not None,
+        "audio_s3_key": audio_s3_key,
+        "connection_id": connection_id,
+        "library_id": library_id,
+        "file_name": file_name,
+        "google_created_time": google_created_time,
+        "google_modified_time": google_modified_time,
+    }
+    _publish("processing", body, f"{file_id}:scene_split:{now.strftime('%Y%m%dT%H%M')}")
 
 
 def publish_transcode_job(
