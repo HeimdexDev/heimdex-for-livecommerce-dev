@@ -9,12 +9,13 @@ from typing import Any
 import requests
 
 from heimdex_media_pipelines.scenes.assembler import assemble_scenes
-from heimdex_media_pipelines.scenes.detector import detect_scenes
 from heimdex_media_pipelines.scenes.keyframe import extract_all_keyframes
+from heimdex_media_pipelines.scenes.splitter import split_scenes
 from heimdex_media_pipelines.transcoding import probe_video
 from heimdex_worker_sdk.drive_keys import (
     enrichment_keyframe_s3_key,
     enrichment_keyframe_s3_prefix,
+    stt_result_s3_key as stt_result_s3_key_fn,
     thumbnail_s3_key,
     thumbnail_s3_prefix,
 )
@@ -82,12 +83,38 @@ def handle_resplit(
         s3.download_file(proxy_s3_key, proxy_path)
 
         probe = probe_video(proxy_path)
-        scene_boundaries = detect_scenes(
+
+        # Load existing STT result from S3 if available
+        use_speech = bool(scene_params.get("use_speech", True))
+        split_preset = scene_params.get("split_preset")
+        speech_segments = None
+        stt_result_path = None
+        if use_speech:
+            stt_key = stt_result_s3_key_fn(org_id, video_id)
+            stt_local = temp_dir / "stt_result.json"
+            try:
+                s3.download_file(stt_key, stt_local)
+                stt_data = json.loads(stt_local.read_text())
+                speech_segments = stt_data.get("segments", [])
+                stt_result_path = str(stt_local)
+                logger.info("resplit_stt_loaded", extra={
+                    "video_id": video_id,
+                    "segment_count": len(speech_segments),
+                })
+            except Exception:
+                logger.info("resplit_no_stt_data", extra={"video_id": video_id})
+
+        overrides = {
+            "visual_threshold": float(scene_params.get("threshold", 0.3)),
+            "min_scene_duration_ms": int(scene_params.get("min_scene_duration_ms", 500)),
+            "max_scene_duration_ms": int(scene_params.get("max_scene_duration_ms", 45_000)),
+        }
+        scene_boundaries = split_scenes(
             video_path=str(proxy_path),
             video_id=video_id,
-            threshold=float(scene_params.get("threshold", 0.3)),
-            min_scene_duration_ms=int(scene_params.get("min_scene_duration_ms", 500)),
-            max_scene_duration_ms=int(scene_params.get("max_scene_duration_ms", 45_000)),
+            speech_segments=speech_segments,
+            preset=split_preset,
+            overrides=overrides,
         )
         extract_all_keyframes(
             video_path=str(proxy_path),
@@ -98,6 +125,7 @@ def handle_resplit(
             video_path=str(proxy_path),
             video_id=video_id,
             scene_boundaries=scene_boundaries,
+            speech_result_path=stt_result_path,
             total_duration_ms=probe.duration_ms,
         )
 

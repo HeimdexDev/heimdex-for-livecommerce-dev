@@ -160,6 +160,8 @@ class ReprocessScenesRequest(BaseModel):
     min_scene_duration_ms: int = Field(500, ge=500, le=30000)
     max_scene_duration_ms: int = Field(45000, ge=5000, le=120000)
     threshold: float = Field(0.3, ge=0.1, le=0.9)
+    split_preset: str | None = Field(None, description="Preset: default, fine, coarse, visual_only")
+    use_speech: bool = Field(True, description="Use STT data for splitting if available")
 
 
 class ReprocessJobResponse(BaseModel):

@@ -14,6 +14,8 @@ export function ReprocessDialog({ isOpen, onClose, onSubmit }: ReprocessDialogPr
   const [minDuration, setMinDuration] = useState(0.5);
   const [maxDuration, setMaxDuration] = useState(45);
   const [threshold, setThreshold] = useState(0.3);
+  const [splitPreset, setSplitPreset] = useState("default");
+  const [useSpeech, setUseSpeech] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -31,6 +33,8 @@ export function ReprocessDialog({ isOpen, onClose, onSubmit }: ReprocessDialogPr
         min_scene_duration_ms: minDuration * 1000,
         max_scene_duration_ms: maxDuration * 1000,
         threshold,
+        split_preset: splitPreset,
+        use_speech: useSpeech,
       });
       onClose();
     } finally {
@@ -51,6 +55,34 @@ export function ReprocessDialog({ isOpen, onClose, onSubmit }: ReprocessDialogPr
           </p>
 
           <div className="space-y-6">
+            <div>
+              <label className="mb-2 block text-sm font-medium text-gray-700">장면 분할 방식</label>
+              <select
+                value={splitPreset}
+                onChange={(e) => setSplitPreset(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                <option value="default">기본 (균형)</option>
+                <option value="fine">세밀 (검색 최적화)</option>
+                <option value="coarse">넓은 (주제 단위)</option>
+                <option value="visual_only">영상 컷 기준</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="use-speech"
+                checked={useSpeech && splitPreset !== "visual_only"}
+                disabled={splitPreset === "visual_only"}
+                onChange={(e) => setUseSpeech(e.target.checked)}
+                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <label htmlFor="use-speech" className="text-sm text-gray-700">
+                음성 데이터 활용 (STT 결과가 있는 경우)
+              </label>
+            </div>
+
             <div>
               <div className="mb-2 flex items-center justify-between">
                 <label className="text-sm font-medium text-gray-700">최소 장면 길이</label>

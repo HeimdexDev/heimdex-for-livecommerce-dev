@@ -325,6 +325,8 @@ async def reprocess_video_scenes(
         "min_scene_duration_ms": request.min_scene_duration_ms,
         "max_scene_duration_ms": request.max_scene_duration_ms,
         "threshold": request.threshold,
+        "split_preset": request.split_preset,
+        "use_speech": request.use_speech,
     }
 
     job = await repo.create(

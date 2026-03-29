@@ -102,6 +102,8 @@ export interface ReprocessParams {
   min_scene_duration_ms: number;
   max_scene_duration_ms: number;
   threshold: number;
+  split_preset?: string;
+  use_speech?: boolean;
 }
 
 export interface ReprocessJobResponse {
