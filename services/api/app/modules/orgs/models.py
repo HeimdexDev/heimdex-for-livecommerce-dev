@@ -11,6 +11,7 @@ Library = Any
 
 SETTINGS_DEFAULTS: dict[str, Any] = {
     "thumbnail_aspect_ratio": "16:9",
+    "split_preset": "default",
 }
 
 

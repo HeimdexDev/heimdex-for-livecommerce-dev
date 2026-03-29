@@ -178,6 +178,12 @@ class DriveFile(Base, UUIDMixin, TimestampMixin):
     )  # pending | running | done | failed
     face_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # --- STT-then-split pipeline ---
+    stt_result_s3_key: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    stt_requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # --- Lease tracking (Internal API Hardening) ---
     lease_token: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     lease_expires_at: Mapped[Optional[datetime]] = mapped_column(

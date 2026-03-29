@@ -46,3 +46,8 @@ def scene_manifest_s3_key(org_id: str, video_id: str) -> str:
 def original_s3_key(org_id: str, drive_id: str, google_file_id: str) -> str:
     """S3 key for the original (pre-transcode) file uploaded by drive-worker."""
     return f"{org_id}/drive/{drive_id}/{google_file_id}/original"
+
+
+def stt_result_s3_key(org_id: str, video_id: str) -> str:
+    """S3 key for STT result JSON used by speech-aware scene splitting."""
+    return f"{org_id}/drive/stt/{video_id}/stt_result.json"

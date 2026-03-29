@@ -130,6 +130,11 @@ class WorkerSettings(BaseSettings):
     face_match_threshold: float = 0.55
     drive_face_concurrency: int = 1
 
+    # --- Speech-aware scene splitting ---
+    drive_speech_split_enabled: bool = False  # Feature flag: two-phase STT-then-split
+    drive_split_preset: str = "default"  # Default split preset for initial processing
+    drive_stt_timeout_seconds: int = 600  # 10 min timeout for STT phase
+
     # --- Visual embedding worker ---
     visual_embed_enabled: bool = False
     visual_embed_concurrency: int = 1
