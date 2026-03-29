@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from fastapi import APIRouter, Depends, HTTPException, status as http_status
+from fastapi import APIRouter, Depends, HTTPException, Request, status as http_status
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials as OAuthCredentials
@@ -721,20 +721,15 @@ async def delete_files(
 async def backfill_capture_time(
     request: Request,
     _token: str = Depends(_verify_internal_token),
-    db: AsyncSession = Depends(get_db_session),
     scene_client=Depends(get_scene_opensearch_client),
 ):
-    """Update capture_time in OpenSearch scenes for a video after DB backfill.
-
-    Body: { "video_id": "gd_xxx", "capture_time": "2026-03-17T06:04:42Z" }
-    """
+    """Update capture_time in OpenSearch scenes for a video after DB backfill."""
     body = await request.json()
     video_id = body.get("video_id")
     capture_time = body.get("capture_time")
     org_id = request.headers.get("X-Heimdex-Org-Id", "")
 
     if not video_id or not capture_time or not org_id:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="video_id, capture_time, and X-Heimdex-Org-Id required")
 
     scene_ids = await scene_client.find_scene_ids_by_video_id(org_id, video_id)
