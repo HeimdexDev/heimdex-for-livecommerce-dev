@@ -54,10 +54,10 @@ def _import_filtering_functions():
             else:
                 sys.modules[mod_name] = original
 
-    return mod._should_ingest_file, mod._is_image_mime
+    return mod._should_ingest_file, mod._is_image_mime, mod._expand_watched_folder_ids
 
 
-_should_ingest_file, _is_image_mime = _import_filtering_functions()
+_should_ingest_file, _is_image_mime, _expand_watched_folder_ids = _import_filtering_functions()
 
 
 def test_file_in_watched_folder_video_allowed():
@@ -108,3 +108,79 @@ def test_unsupported_mimes():
     assert _is_image_mime("video/mp4") is False
     assert _is_image_mime("application/pdf") is False
     assert _is_image_mime("text/plain") is False
+
+
+# ── Subfolder expansion tests ────────────────────────────────────────────────
+
+
+def test_file_in_subfolder_of_watched_folder():
+    """Files in subfolders of watched folders should be ingested."""
+    file_data: dict[str, Any] = {"mimeType": "video/mp4", "parents": ["subfolder-1"]}
+    watched_ids = {"folder-1", "subfolder-1"}
+    types_map = {"folder-1": ["video"], "subfolder-1": ["video"]}
+    assert _should_ingest_file(file_data, watched_ids, types_map) is True
+
+
+def test_subfolder_inherits_content_types():
+    """Subfolders inherit ancestor's content_types."""
+    file_data: dict[str, Any] = {"mimeType": "image/jpeg", "parents": ["subfolder-1"]}
+    watched_ids = {"folder-1", "subfolder-1"}
+    types_map = {"folder-1": ["image"], "subfolder-1": ["image"]}
+    assert _should_ingest_file(file_data, watched_ids, types_map) is True
+
+
+def test_subfolder_rejects_wrong_content_type():
+    """Subfolders respect inherited content_types filter."""
+    file_data: dict[str, Any] = {"mimeType": "image/jpeg", "parents": ["subfolder-1"]}
+    watched_ids = {"folder-1", "subfolder-1"}
+    types_map = {"folder-1": ["video"], "subfolder-1": ["video"]}
+    assert _should_ingest_file(file_data, watched_ids, types_map) is False
+
+
+def test_expand_watched_folder_ids_no_subfolders():
+    """Expansion with no subfolders returns only top-level IDs."""
+    mock_service = MagicMock()
+    mock_service.files.return_value.list.return_value.execute.return_value = {"files": []}
+    watched = [{"google_folder_id": "folder-1", "content_types": ["video"]}]
+    ids, types_map = _expand_watched_folder_ids(mock_service, watched)
+    assert ids == {"folder-1"}
+    assert types_map == {"folder-1": ["video"]}
+
+
+def test_expand_watched_folder_ids_with_subfolders():
+    """Expansion includes subfolder IDs with inherited content_types."""
+    mock_service = MagicMock()
+    # First call: folder-1 has one subfolder sub-1
+    # Second call: sub-1 has no subfolders (stops recursion)
+    mock_service.files.return_value.list.return_value.execute.side_effect = [
+        {"files": [{"id": "sub-1"}]},
+        {"files": []},
+    ]
+    watched = [{"google_folder_id": "folder-1", "content_types": ["video", "image"]}]
+    ids, types_map = _expand_watched_folder_ids(mock_service, watched)
+    assert "folder-1" in ids
+    assert "sub-1" in ids
+    assert types_map["sub-1"] == ["video", "image"]
+
+
+def test_expand_watched_folder_ids_failure_partial():
+    """If one folder fails expansion, others still succeed."""
+    mock_service = MagicMock()
+
+    # First call: folder-bad fails
+    # Second call: folder-ok has one subfolder sub-2
+    # Third call: sub-2 has no subfolders (stops recursion)
+    mock_service.files.return_value.list.return_value.execute.side_effect = [
+        Exception("API error"),
+        {"files": [{"id": "sub-2"}]},
+        {"files": []},
+    ]
+    watched = [
+        {"google_folder_id": "folder-bad", "content_types": ["video"]},
+        {"google_folder_id": "folder-ok", "content_types": ["image"]},
+    ]
+    ids, types_map = _expand_watched_folder_ids(mock_service, watched)
+    assert "folder-bad" in ids  # top-level still included
+    assert "folder-ok" in ids
+    assert "sub-2" in ids
+    assert types_map["sub-2"] == ["image"]

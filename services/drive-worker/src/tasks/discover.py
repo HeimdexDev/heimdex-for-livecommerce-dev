@@ -57,6 +57,44 @@ def _is_image_mime(mime_type: str) -> bool:
     }
 
 
+def _expand_watched_folder_ids(
+    service: Any,
+    watched: list[dict[str, Any]],
+) -> tuple[set[str], dict[str, list[str]]]:
+    """Expand watched folders to include all nested subfolder IDs.
+
+    For each watched folder, recursively lists subfolders via the Google
+    Drive API and adds them to the watched set.  Subfolders inherit the
+    content_types of their watched ancestor.
+
+    Returns:
+        (watched_folder_ids, content_types_map) with subfolders included.
+    """
+    watched_folder_ids: set[str] = set()
+    content_types_map: dict[str, list[str]] = {}
+
+    for w in watched:
+        folder_id = w["google_folder_id"]
+        content_types = w.get("content_types", ["video"])
+
+        watched_folder_ids.add(folder_id)
+        content_types_map[folder_id] = content_types
+
+        try:
+            subfolder_ids = _list_subfolders(service, folder_id)
+            for sub_id in subfolder_ids:
+                watched_folder_ids.add(sub_id)
+                content_types_map[sub_id] = content_types
+        except Exception:
+            logger.warning(
+                "watched_folder_subfolder_expansion_failed",
+                extra={"google_folder_id": folder_id},
+                exc_info=True,
+            )
+
+    return watched_folder_ids, content_types_map
+
+
 def _build_drive_service(access_token: str):
     """Build a Google Drive API service from a pre-minted access token."""
     credentials = Credentials(token=access_token)
@@ -181,10 +219,17 @@ def _discover_drive_connection(
                 extra={"connection_id": str(conn.connection_id)},
             )
             return 0
-        watched_folder_ids = {w["google_folder_id"] for w in watched}
-        content_types_map = {
-            w["google_folder_id"]: w.get("content_types", ["video"]) for w in watched
-        }
+        watched_folder_ids, content_types_map = _expand_watched_folder_ids(
+            service, watched,
+        )
+        logger.info(
+            "watched_folder_expansion_complete",
+            extra={
+                "connection_id": str(conn.connection_id),
+                "watched_top_level": len(watched),
+                "watched_total": len(watched_folder_ids),
+            },
+        )
 
     # TODO(folder-sync): Add _post_process_check() to process.py.
     # When a file completes processing, check if its parent folder is still enabled.
