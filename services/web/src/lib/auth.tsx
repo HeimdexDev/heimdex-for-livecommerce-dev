@@ -30,8 +30,10 @@ let _orgInfoFetched = false;
 async function fetchAuth0OrgId(): Promise<string> {
   if (_orgInfoFetched) return _resolvedAuth0Org;
   try {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "";
-    const resp = await fetch(`${apiUrl}/api/auth/org-info`);
+    // Always use relative URL — must resolve from the current subdomain's
+    // Host header, not NEXT_PUBLIC_API_URL (which may be hardcoded to a
+    // specific subdomain like livenow.app.heimdex.co).
+    const resp = await fetch("/api/auth/org-info");
     if (resp.ok) {
       const data = await resp.json();
       if (data.auth0_org_id) {
