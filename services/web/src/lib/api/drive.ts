@@ -9,7 +9,7 @@ import {
   DriveSyncProgress,
 } from "@/lib/types";
 import type { FolderTreeResponse, ToggleFolderResponse, WatchedFolder, FolderDisableImpact } from "@/lib/types/drive";
-import { API_BASE_URL } from "./utils";
+import { getApiBaseUrl } from "./utils";
 
 type TokenGetter = () => Promise<string | null>;
 
@@ -32,7 +32,7 @@ export async function getDriveStatus(
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/drive/status`, {
+    const response = await fetch(`${getApiBaseUrl()}/api/drive/status`, {
       method: "GET",
       headers,
     });
@@ -74,7 +74,7 @@ export async function getDriveConnections(
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/drive/connections`, {
+    const response = await fetch(`${getApiBaseUrl()}/api/drive/connections`, {
       method: "GET",
       headers,
     });
@@ -118,7 +118,7 @@ export async function triggerDriveSync(
 
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/drive/connections/${connectionId}/sync`,
+      `${getApiBaseUrl()}/api/drive/connections/${connectionId}/sync`,
       {
         method: "POST",
         headers,
@@ -165,7 +165,7 @@ export async function getDriveFolders(
 
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/drive/connections/${connectionId}/folders`,
+      `${getApiBaseUrl()}/api/drive/connections/${connectionId}/folders`,
       {
         method: "GET",
         headers,
@@ -208,7 +208,7 @@ export async function getOAuthStatus(
 ): Promise<DriveOAuthStatus> {
   const headers = await _buildHeaders(getToken);
   try {
-    const response = await fetch(`${API_BASE_URL}/api/drive/oauth/status`, {
+    const response = await fetch(`${getApiBaseUrl()}/api/drive/oauth/status`, {
       method: "GET",
       headers,
     });
@@ -228,7 +228,7 @@ export async function getOAuthAuthorizeUrl(
 ): Promise<{ authorize_url: string }> {
   const headers = await _buildHeaders(getToken);
   try {
-    const response = await fetch(`${API_BASE_URL}/api/drive/oauth/authorize`, {
+    const response = await fetch(`${getApiBaseUrl()}/api/drive/oauth/authorize`, {
       method: "GET",
       headers,
     });
@@ -248,7 +248,7 @@ export async function disconnectOAuth(
 ): Promise<void> {
   const headers = await _buildHeaders(getToken);
   try {
-    const response = await fetch(`${API_BASE_URL}/api/drive/oauth/disconnect`, {
+    const response = await fetch(`${getApiBaseUrl()}/api/drive/oauth/disconnect`, {
       method: "DELETE",
       headers,
     });
@@ -269,7 +269,7 @@ export async function browseDriveFolders(
   const headers = await _buildHeaders(getToken);
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/drive/browse-folders?parent_id=${encodeURIComponent(parentId)}`,
+      `${getApiBaseUrl()}/api/drive/browse-folders?parent_id=${encodeURIComponent(parentId)}`,
       { method: "GET", headers },
     );
     if (!response.ok) {
@@ -292,7 +292,7 @@ export async function createFolderConnection(
 ): Promise<DriveConnectionResponse> {
   const headers = await _buildHeaders(getToken);
   try {
-    const response = await fetch(`${API_BASE_URL}/api/drive/folder-connections`, {
+    const response = await fetch(`${getApiBaseUrl()}/api/drive/folder-connections`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -320,7 +320,7 @@ export async function getDriveConnectionProgress(
   const headers = await _buildHeaders(getToken);
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/drive/connections/${connectionId}/progress`,
+      `${getApiBaseUrl()}/api/drive/connections/${connectionId}/progress`,
       { method: "GET", headers },
     );
     if (!response.ok) {
@@ -341,7 +341,7 @@ export async function deleteDriveConnection(
   const headers = await _buildHeaders(getToken);
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/drive/connections/${connectionId}`,
+      `${getApiBaseUrl()}/api/drive/connections/${connectionId}`,
       { method: "DELETE", headers },
     );
     if (!response.ok && response.status !== 204) {
@@ -359,7 +359,7 @@ export async function getWatchedFolders(
 ): Promise<FolderTreeResponse> {
   const headers = await _buildHeaders(getToken);
   try {
-    const response = await fetch(`${API_BASE_URL}/api/drive/watched-folders`, {
+    const response = await fetch(`${getApiBaseUrl()}/api/drive/watched-folders`, {
       method: "GET",
       headers,
     });
@@ -380,7 +380,7 @@ export async function enumerateFolders(
   const headers = await _buildHeaders(getToken);
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/drive/watched-folders/enumerate-folders`,
+      `${getApiBaseUrl()}/api/drive/watched-folders/enumerate-folders`,
       { method: "POST", headers },
     );
     if (!response.ok) {
@@ -402,7 +402,7 @@ export async function toggleFolderSync(
   const headers = await _buildHeaders(getToken);
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/drive/watched-folders/${folderId}/toggle`,
+      `${getApiBaseUrl()}/api/drive/watched-folders/${folderId}/toggle`,
       {
         method: "PATCH",
         headers,
@@ -428,7 +428,7 @@ export async function updateFolderContentTypes(
   const headers = await _buildHeaders(getToken);
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/drive/watched-folders/${folderId}/content-types`,
+      `${getApiBaseUrl()}/api/drive/watched-folders/${folderId}/content-types`,
       {
         method: "PATCH",
         headers,
@@ -453,7 +453,7 @@ export async function getFolderDisableImpact(
   const headers = await _buildHeaders(getToken);
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/drive/watched-folders/${folderId}/impact`,
+      `${getApiBaseUrl()}/api/drive/watched-folders/${folderId}/impact`,
       { method: "GET", headers },
     );
     if (!response.ok) {

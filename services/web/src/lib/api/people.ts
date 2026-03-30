@@ -11,7 +11,7 @@ import {
   RenamePersonResponse,
   VideoExclusionsResponse,
 } from "@/lib/types";
-import { API_BASE_URL } from "./utils";
+import { getApiBaseUrl } from "./utils";
 
 type TokenGetter = () => Promise<string | null>;
 
@@ -42,7 +42,7 @@ async function apiRequest<T>(
       init.body = JSON.stringify(body);
     }
 
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, init);
+    const response = await fetch(`${getApiBaseUrl()}${endpoint}`, init);
 
     if (!response.ok) {
       const responseBody = await response.json().catch(() => null);
@@ -102,7 +102,7 @@ export async function deletePerson(
 
   try {
     const response = await fetch(
-      `${API_BASE_URL}/api/people/${encodeURIComponent(personClusterId)}`,
+      `${getApiBaseUrl()}/api/people/${encodeURIComponent(personClusterId)}`,
       { method: "DELETE", headers },
     );
 

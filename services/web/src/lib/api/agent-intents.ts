@@ -1,6 +1,6 @@
 import { ApiError } from "@/lib/types";
 import type { AgentIntentResponse } from "@/lib/types";
-import { API_BASE_URL } from "./utils";
+import { getApiBaseUrl } from "./utils";
 
 type TokenGetter = () => Promise<string | null>;
 
@@ -26,7 +26,7 @@ async function apiRequest<T>(
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetch(`${getApiBaseUrl()}${endpoint}`, {
       method,
       headers,
       ...(body ? { body: JSON.stringify(body) } : {}),

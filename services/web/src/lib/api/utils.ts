@@ -1,4 +1,17 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+/**
+ * Resolve the API base URL dynamically.
+ *
+ * Priority:
+ *  1. NEXT_PUBLIC_API_URL env var (if non-empty) — used in local dev
+ *  2. window.location.origin (browser) — production/staging multi-subdomain
+ *  3. "" (SSR fallback, currently unused — all callers are "use client")
+ */
+const _ENV_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+export function getApiBaseUrl(): string {
+  if (_ENV_API_URL) return _ENV_API_URL;
+  if (typeof window !== "undefined") return window.location.origin;
+  return "";
+}
 
 const AUTH0_ENABLED = process.env.NEXT_PUBLIC_AUTH0_ENABLED === "true";
 

@@ -9,7 +9,7 @@ import {
   VideoStats,
   VideoPeopleResponse,
 } from "@/lib/types";
-import { API_BASE_URL } from "./utils";
+import { getApiBaseUrl } from "./utils";
 
 type TokenGetter = () => Promise<string | null>;
 
@@ -31,7 +31,7 @@ async function apiGet<T>(
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, { headers });
+    const response = await fetch(`${getApiBaseUrl()}${endpoint}`, { headers });
 
     if (!response.ok) {
       const body = await response.json().catch(() => null);
@@ -72,7 +72,7 @@ async function apiPost<T>(
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const response = await fetch(`${getApiBaseUrl()}${endpoint}`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
@@ -177,7 +177,7 @@ export async function getReprocessStatus(
   }
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/videos/${encodeURIComponent(videoId)}/reprocess`, { headers });
+    const response = await fetch(`${getApiBaseUrl()}/api/videos/${encodeURIComponent(videoId)}/reprocess`, { headers });
 
     if (!response.ok) {
       if (response.status === 404) return null;

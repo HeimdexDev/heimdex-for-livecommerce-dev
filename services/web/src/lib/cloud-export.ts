@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "./api/utils";
+import { getApiBaseUrl } from "./api/utils";
 
 type TokenGetter = () => Promise<string | null>;
 
@@ -38,7 +38,7 @@ export async function exportEdlCloud(
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/export/edl`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/export/edl`, {
     method: "POST",
     headers,
     body: JSON.stringify(request),
@@ -109,7 +109,7 @@ export async function downloadClipCloud(
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/export/clip`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/export/clip`, {
     method: "POST",
     headers,
     body: JSON.stringify(request),
@@ -180,7 +180,7 @@ export async function exportPremiereCloud(
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/export/premiere`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/export/premiere`, {
     method: "POST",
     headers,
     body: JSON.stringify(request),
@@ -266,7 +266,7 @@ export async function exportPremierePackage(
     }
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/export/premiere-package`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/export/premiere-package`, {
     method: "POST",
     headers,
     body: JSON.stringify(request),
@@ -351,7 +351,7 @@ export async function initiateProxyPack(
       if (token) headers["Authorization"] = `Bearer ${token}`;
     } catch { /* proceed without auth */ }
   }
-  const response = await fetch(`${API_BASE_URL}/api/export/proxy-pack`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/export/proxy-pack`, {
     method: "POST",
     headers,
     body: JSON.stringify(request),
@@ -378,7 +378,7 @@ export async function pollProxyPackStatus(
       if (token) headers["Authorization"] = `Bearer ${token}`;
     } catch { /* proceed without auth */ }
   }
-  const response = await fetch(`${API_BASE_URL}/api/export/proxy-pack/${jobId}`, {
+  const response = await fetch(`${getApiBaseUrl()}/api/export/proxy-pack/${jobId}`, {
     method: "GET",
     headers,
   });

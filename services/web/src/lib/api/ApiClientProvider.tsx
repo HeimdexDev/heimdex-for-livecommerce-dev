@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useMemo, ReactNode } from "react";
 import { ApiClient, createApiClient } from "./client";
+import { getApiBaseUrl } from "./utils";
 import { useAuth } from "@/lib/auth";
 
 const ApiClientContext = createContext<ApiClient | null>(null);
@@ -14,7 +15,7 @@ export function ApiClientProvider({ children }: ApiClientProviderProps) {
   const { getAccessToken } = useAuth();
 
   const apiClient = useMemo(() => {
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || "";
+    const baseUrl = getApiBaseUrl();
     return createApiClient({
       baseUrl,
       getAccessToken,
