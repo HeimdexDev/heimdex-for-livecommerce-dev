@@ -26,7 +26,7 @@ from sqlalchemy.sql import func
 
 import asyncio
 
-from app.config import get_settings
+
 from app.dependencies import get_db_session
 from app.logging_config import get_logger
 from app.modules.drive.internal_schemas import (
@@ -280,38 +280,36 @@ async def update_job_status(
         and drive_file.scene_count > 0
         and drive_file.keyframe_s3_prefix
     ):
-        settings = get_settings()
-        if settings.vlm_tags_enabled:
-            _vid = drive_file.video_id
-            _kf_prefix = drive_file.keyframe_s3_prefix
-            _sc = drive_file.scene_count
-            scenes_for_caption = [
-                {
-                    "scene_id": f"{_vid}_scene_{i:03d}",
-                    "scene_index": i,
-                    "keyframe_s3_key": f"{_kf_prefix}{_vid}_scene_{i:03d}.jpg",
-                }
-                for i in range(_sc)
-            ]
-            from app.sqs_producer import publish_scene_enrichment_jobs
-            asyncio.create_task(
-                asyncio.get_running_loop().run_in_executor(
-                    None,
-                    lambda: publish_scene_enrichment_jobs(
-                        file_id=file_id,
-                        org_id=drive_file.org_id,
-                        video_id=_vid,
-                        scenes=scenes_for_caption,
-                        job_types=("caption",),
-                    ),
-                )
+        _vid = drive_file.video_id
+        _kf_prefix = drive_file.keyframe_s3_prefix
+        _sc = drive_file.scene_count
+        scenes_for_caption = [
+            {
+                "scene_id": f"{_vid}_scene_{i:03d}",
+                "scene_index": i,
+                "keyframe_s3_key": f"{_kf_prefix}{_vid}_scene_{i:03d}.jpg",
+            }
+            for i in range(_sc)
+        ]
+        from app.sqs_producer import publish_scene_enrichment_jobs
+        asyncio.create_task(
+            asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: publish_scene_enrichment_jobs(
+                    file_id=file_id,
+                    org_id=drive_file.org_id,
+                    video_id=_vid,
+                    scenes=scenes_for_caption,
+                    job_types=("caption",),
+                ),
             )
-            logger.info(
-                "deferred_caption_jobs_published",
-                file_id=str(file_id),
-                video_id=_vid,
-                scene_count=_sc,
-            )
+        )
+        logger.info(
+            "deferred_caption_jobs_published",
+            file_id=str(file_id),
+            video_id=_vid,
+            scene_count=_sc,
+        )
 
     latency_ms = int((time.monotonic() - t0) * 1000)
     logger.info(

@@ -344,7 +344,9 @@ async def update_processing_status(
             # Determine which job types to publish now.
             # Images: always publish caption immediately (no STT to wait for).
             # Videos with STT done (two-phase): publish caption immediately.
-            # Videos without STT (legacy): defer caption until STT completes.
+            # Videos without STT (legacy/GPU transcode): defer caption until
+            # STT completes via v1 enrichment, then internal_router publishes
+            # the deferred caption jobs.
             _is_image = drive_file.mime_type and drive_file.mime_type.startswith("image/")
             if stt_already_done or _is_image:
                 _scene_job_types: tuple[str, ...] = ("caption", "visual_embed")
