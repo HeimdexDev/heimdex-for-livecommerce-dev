@@ -271,8 +271,10 @@ async def update_job_status(
     )
     await db.flush()
 
-    # Deferred caption: when STT completes on legacy pipeline, publish
-    # caption jobs that were deferred at "indexed" time.
+    # Deferred caption: when STT completes on legacy/GPU-transcode pipeline,
+    # publish caption jobs that were deferred at "indexed" time.
+    # Transcript data is now in OpenSearch — fetch it so the caption worker
+    # can build VLM prompts with transcript context.
     if (
         request.job_type == "stt"
         and request.status == "done"
@@ -283,11 +285,33 @@ async def update_job_status(
         _vid = drive_file.video_id
         _kf_prefix = drive_file.keyframe_s3_prefix
         _sc = drive_file.scene_count
+        _org_id = drive_file.org_id
+
+        # Fetch transcripts from OpenSearch (STT enrichment already completed)
+        from app.modules.search.scene_client import SceneSearchClient
+        scene_client = SceneSearchClient()
+        try:
+            scene_transcripts = await scene_client.get_scene_transcripts(
+                _org_id, _vid, _sc
+            )
+        except Exception:
+            logger.warning(
+                "deferred_caption_transcript_fetch_failed",
+                file_id=str(file_id),
+                video_id=_vid,
+            )
+            scene_transcripts = {}
+        finally:
+            await scene_client.close()
+
         scenes_for_caption = [
             {
                 "scene_id": f"{_vid}_scene_{i:03d}",
                 "scene_index": i,
                 "keyframe_s3_key": f"{_kf_prefix}{_vid}_scene_{i:03d}.jpg",
+                "transcript_raw": scene_transcripts.get(
+                    f"{_vid}_scene_{i:03d}", ""
+                ),
             }
             for i in range(_sc)
         ]
@@ -297,7 +321,7 @@ async def update_job_status(
                 None,
                 lambda: publish_scene_enrichment_jobs(
                     file_id=file_id,
-                    org_id=drive_file.org_id,
+                    org_id=_org_id,
                     video_id=_vid,
                     scenes=scenes_for_caption,
                     job_types=("caption",),
@@ -309,6 +333,7 @@ async def update_job_status(
             file_id=str(file_id),
             video_id=_vid,
             scene_count=_sc,
+            scenes_with_transcript=len(scene_transcripts),
         )
 
     latency_ms = int((time.monotonic() - t0) * 1000)

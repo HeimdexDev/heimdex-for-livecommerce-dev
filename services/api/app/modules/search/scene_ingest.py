@@ -59,6 +59,23 @@ class SceneIngestMixin:
                 result[doc["_id"]] = doc["_source"]
         return result
 
+    async def get_scene_transcripts(
+        self, org_id: str, video_id: str, scene_count: int
+    ) -> dict[str, str]:
+        """Fetch transcript_raw for all scenes of a video.
+
+        Returns {scene_id: transcript_raw} for scenes that have transcripts.
+        """
+        doc_ids = [
+            f"{org_id}:{video_id}_scene_{i:03d}" for i in range(scene_count)
+        ]
+        scenes = await self.mget_scenes(doc_ids)
+        return {
+            doc_id.split(":", 1)[1]: source.get("transcript_raw", "")
+            for doc_id, source in scenes.items()
+            if source.get("transcript_raw")
+        }
+
     async def find_scene_ids_by_video_id(self, org_id: str, video_id: str) -> list[str]:
         body: dict[str, Any] = {
             "query": {
