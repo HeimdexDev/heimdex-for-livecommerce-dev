@@ -237,6 +237,23 @@ async def internal_upload_face_thumbnail(
         size_bytes=len(data),
     )
 
+    # Dual-write to S3 (non-fatal)
+    try:
+        from app.modules.drive.keys import face_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3_key = face_thumbnail_s3_key(str(org_id), person_cluster_id)
+        await s3.upload_file_async(target_path, s3_key, content_type="image/jpeg")
+        logger.info("face_thumbnail_s3_uploaded", s3_key=s3_key)
+    except Exception:
+        logger.warning(
+            "face_thumbnail_s3_upload_failed",
+            org_id=str(org_id),
+            person_cluster_id=person_cluster_id,
+            exc_info=True,
+        )
+
     return {"stored": True, "path": f"faces/{person_cluster_id}"}
 
 
@@ -303,5 +320,22 @@ async def internal_upload_exemplar_thumbnail(
         exemplar_id=exemplar_id,
         size_bytes=len(data),
     )
+
+    # Dual-write to S3 (non-fatal)
+    try:
+        from app.modules.drive.keys import exemplar_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3_key = exemplar_thumbnail_s3_key(str(org_id), exemplar_id)
+        await s3.upload_file_async(target_path, s3_key, content_type="image/jpeg")
+        logger.info("exemplar_thumbnail_s3_uploaded", s3_key=s3_key)
+    except Exception:
+        logger.warning(
+            "exemplar_thumbnail_s3_upload_failed",
+            org_id=str(org_id),
+            exemplar_id=exemplar_id,
+            exc_info=True,
+        )
 
     return {"stored": True, "path": f"faces/exemplars/{exemplar_id}"}

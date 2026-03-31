@@ -278,7 +278,7 @@ async def merge_people(
             org_ctx.org_id, source_id, target_id,
         )
 
-        # 5. Clean up source face thumbnail
+        # 5. Clean up source face thumbnail (disk)
         try:
             thumbnail_dir = FilePath(settings.thumbnail_storage_dir)
             source_face = thumbnail_dir / org_id_str / "faces" / f"{source_id}.jpg"
@@ -294,6 +294,34 @@ async def merge_people(
                 "merge_people_thumbnail_cleanup_failed",
                 org_id=org_id_str,
                 source_cluster_id=source_id,
+            )
+
+        # 5b. Clean up source face thumbnail (S3, non-fatal)
+        try:
+            from app.modules.drive.keys import face_thumbnail_s3_key
+            from app.storage.s3 import S3Client
+
+            s3 = S3Client(bucket=settings.drive_s3_bucket)
+            source_s3 = face_thumbnail_s3_key(org_id_str, source_id)
+            target_s3 = face_thumbnail_s3_key(org_id_str, target_id)
+            # Promote source to target in S3 if target doesn't exist
+            if not await s3.exists_async(target_s3):
+                source_data = await s3.get_object_bytes_async(source_s3)
+                if source_data:
+                    import tempfile
+
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                        tmp.write(source_data)
+                        tmp_path = FilePath(tmp.name)
+                    await s3.upload_file_async(tmp_path, target_s3, content_type="image/jpeg")
+                    tmp_path.unlink(missing_ok=True)
+            s3.delete(source_s3)
+        except Exception:
+            logger.warning(
+                "merge_people_s3_cleanup_failed",
+                org_id=org_id_str,
+                source_cluster_id=source_id,
+                exc_info=True,
             )
 
     await db.commit()
@@ -376,7 +404,7 @@ async def delete_person(
             person_cluster_id=person_cluster_id,
         )
 
-    # 4. Delete face thumbnail file + exemplar crops
+    # 4. Delete face thumbnail file + exemplar crops (disk + S3)
     try:
         thumbnail_dir = FilePath(settings.thumbnail_storage_dir)
         face_path = thumbnail_dir / org_id_str / "faces" / f"{person_cluster_id}.jpg"
@@ -394,6 +422,23 @@ async def delete_person(
             "delete_person_thumbnail_cleanup_failed",
             org_id=org_id_str,
             person_cluster_id=person_cluster_id,
+        )
+
+    # 4b. Delete from S3 (non-fatal)
+    try:
+        from app.modules.drive.keys import face_thumbnail_s3_key, exemplar_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3.delete(face_thumbnail_s3_key(org_id_str, person_cluster_id))
+        for eid in exemplar_ids:
+            s3.delete(exemplar_thumbnail_s3_key(org_id_str, str(eid)))
+    except Exception:
+        logger.warning(
+            "delete_person_s3_cleanup_failed",
+            org_id=org_id_str,
+            person_cluster_id=person_cluster_id,
+            exc_info=True,
         )
 
     # Idempotent: if cluster was already gone, that's the same outcome as delete.
@@ -477,7 +522,7 @@ async def bulk_delete_people(
                     person_cluster_id=person_cluster_id,
                 )
 
-            # 5. Delete face thumbnail file
+            # 5. Delete face thumbnail file (disk)
             try:
                 thumbnail_dir = FilePath(settings.thumbnail_storage_dir)
                 face_path = thumbnail_dir / org_id_str / "faces" / f"{person_cluster_id}.jpg"
@@ -488,6 +533,21 @@ async def bulk_delete_people(
                     "bulk_delete_thumbnail_cleanup_failed",
                     org_id=org_id_str,
                     person_cluster_id=person_cluster_id,
+                )
+
+            # 5b. Delete from S3 (non-fatal)
+            try:
+                from app.modules.drive.keys import face_thumbnail_s3_key
+                from app.storage.s3 import S3Client
+
+                s3 = S3Client(bucket=settings.drive_s3_bucket)
+                s3.delete(face_thumbnail_s3_key(org_id_str, person_cluster_id))
+            except Exception:
+                logger.warning(
+                    "bulk_delete_s3_cleanup_failed",
+                    org_id=org_id_str,
+                    person_cluster_id=person_cluster_id,
+                    exc_info=True,
                 )
 
             deleted_ids.append(person_cluster_id)
@@ -788,6 +848,23 @@ async def select_thumbnail_from_exemplar(
     else:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exemplar thumbnail file not found")
 
+    # Dual-write to S3: copy exemplar as main face thumbnail (non-fatal)
+    try:
+        from app.modules.drive.keys import face_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3_key = face_thumbnail_s3_key(str(org_ctx.org_id), person_cluster_id)
+        await s3.upload_file_async(main_path, s3_key, content_type="image/jpeg")
+        logger.info("face_thumbnail_s3_uploaded_from_exemplar", s3_key=s3_key)
+    except Exception:
+        logger.warning(
+            "face_thumbnail_s3_upload_failed",
+            org_id=str(org_ctx.org_id),
+            person_cluster_id=person_cluster_id,
+            exc_info=True,
+        )
+
     identity = await face_repo.set_thumbnail_source(
         org_ctx.org_id, person_cluster_id, "exemplar", exemplar_id,
     )
@@ -867,6 +944,23 @@ async def upload_custom_thumbnail(
     main_path = root / str(org_ctx.org_id) / "faces" / f"{person_cluster_id}.jpg"
     main_path.parent.mkdir(parents=True, exist_ok=True)
     main_path.write_bytes(jpeg_data)
+
+    # Dual-write to S3 (non-fatal)
+    try:
+        from app.modules.drive.keys import face_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3_key = face_thumbnail_s3_key(str(org_ctx.org_id), person_cluster_id)
+        await s3.upload_file_async(main_path, s3_key, content_type="image/jpeg")
+        logger.info("face_thumbnail_s3_uploaded", s3_key=s3_key)
+    except Exception:
+        logger.warning(
+            "face_thumbnail_s3_upload_failed",
+            org_id=str(org_ctx.org_id),
+            person_cluster_id=person_cluster_id,
+            exc_info=True,
+        )
 
     identity = await face_repo.set_thumbnail_source(
         org_ctx.org_id, person_cluster_id, "upload",

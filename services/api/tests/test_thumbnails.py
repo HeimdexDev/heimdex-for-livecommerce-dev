@@ -179,7 +179,7 @@ def test_upload_and_retrieve_face_thumbnail(tmp_path: Path):
 
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("image/jpeg")
-        assert response.headers["cache-control"] == "public, max-age=86400"
+        assert response.headers["cache-control"] == "public, max-age=60, must-revalidate"
         assert response.content == b"\xff\xd8\xff\xd9"
     finally:
         app.dependency_overrides.clear()
