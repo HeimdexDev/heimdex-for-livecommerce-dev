@@ -6,9 +6,11 @@ import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { downloadClipCloud } from "@/lib/cloud-export";
 import { getAgentClipUrl } from "@/lib/agent";
+import { getApiBaseUrl } from "@/lib/api/utils";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { ExportModal } from "@/features/basket/ExportModal";
 import type { BasketItem } from "@/features/basket/useSceneBasket";
+import { getRenderJobStatus, type RenderJobResponse } from "@/lib/api/highlight-reel";
 
 interface SavedShort {
   id: string;
@@ -21,6 +23,25 @@ interface SavedShort {
 }
 
 type SortKey = "newest" | "oldest";
+
+// Unified card type for both saved shorts and render jobs
+interface DisplayItem {
+  id: string;
+  type: "saved" | "render";
+  title: string | null;
+  video_id: string;
+  scene_id?: string;
+  scene_ids?: string[];
+  start_ms?: number;
+  end_ms?: number;
+  created_at: string;
+  // Render-specific
+  status?: string;
+  output_duration_ms?: number | null;
+  output_size_bytes?: number | null;
+  render_time_ms?: number | null;
+  error?: string | null;
+}
 
 function BackArrowIcon() {
   return (
@@ -93,11 +114,34 @@ function CheckIcon({ checked }: { checked: boolean }) {
   );
 }
 
+function CircularProgress({ size = 40 }: { size?: number }) {
+  const r = (size - 6) / 2;
+  const circumference = 2 * Math.PI * r;
+  return (
+    <svg className="animate-spin" width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth={3} />
+      <circle
+        cx={size / 2} cy={size / 2} r={r} fill="none" stroke="white" strokeWidth={3}
+        strokeDasharray={circumference}
+        strokeDashoffset={circumference * 0.75}
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
 const ITEMS_PER_PAGE = 12;
+const RENDER_POLL_INTERVAL = 5000;
 
 export function SavedShortsPage() {
   const { getAccessToken } = useAuth();
-  const [items, setItems] = useState<SavedShort[]>([]);
+  const [savedShorts, setSavedShorts] = useState<SavedShort[]>([]);
+  const [renderJobs, setRenderJobs] = useState<RenderJobResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("newest");
@@ -106,7 +150,9 @@ export function SavedShortsPage() {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval>>();
 
+  // Fetch saved shorts + render jobs
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
@@ -114,14 +160,21 @@ export function SavedShortsPage() {
     (async () => {
       try {
         const token = await getAccessToken();
-        const res = await fetch("/api/shorts", {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (!res.ok) throw new Error("fetch failed");
-        const data = await res.json();
-        if (!cancelled) setItems(data.shorts ?? []);
+        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+        const [shortsRes, rendersRes] = await Promise.all([
+          fetch(`${getApiBaseUrl()}/api/shorts`, { headers }),
+          fetch(`${getApiBaseUrl()}/api/shorts/render`, { headers }),
+        ]);
+
+        if (!cancelled) {
+          const shortsData = shortsRes.ok ? await shortsRes.json() : { shorts: [] };
+          const rendersData = rendersRes.ok ? await rendersRes.json() : { items: [] };
+          setSavedShorts(shortsData.shorts ?? []);
+          setRenderJobs(rendersData.items ?? []);
+        }
       } catch {
-        if (!cancelled) setItems([]);
+        if (!cancelled) { setSavedShorts([]); setRenderJobs([]); }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -130,7 +183,28 @@ export function SavedShortsPage() {
     return () => { cancelled = true; };
   }, [getAccessToken]);
 
+  // Poll for in-progress render jobs
+  useEffect(() => {
+    const inProgress = renderJobs.filter((j) => j.status === "queued" || j.status === "rendering");
+    if (inProgress.length === 0) {
+      if (pollRef.current) clearInterval(pollRef.current);
+      return;
+    }
 
+    pollRef.current = setInterval(async () => {
+      const updates = await Promise.all(
+        inProgress.map((j) => getRenderJobStatus(j.id, getAccessToken).catch(() => j)),
+      );
+      setRenderJobs((prev) =>
+        prev.map((job) => {
+          const updated = updates.find((u) => u.id === job.id);
+          return updated ?? job;
+        }),
+      );
+    }, RENDER_POLL_INTERVAL);
+
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [renderJobs, getAccessToken]);
 
   useEffect(() => {
     if (!showExportMenu) return;
@@ -143,9 +217,48 @@ export function SavedShortsPage() {
     return () => document.removeEventListener("mousedown", handler);
   }, [showExportMenu]);
 
+  // Merge saved shorts and render jobs into unified list
+  const displayItems: DisplayItem[] = useMemo(() => {
+    const items: DisplayItem[] = [];
+
+    for (const s of savedShorts) {
+      items.push({
+        id: s.id,
+        type: "saved",
+        title: s.title,
+        video_id: s.video_id,
+        scene_ids: s.scene_ids,
+        scene_id: s.scene_ids[0],
+        start_ms: s.start_ms ?? undefined,
+        end_ms: s.end_ms ?? undefined,
+        created_at: s.created_at,
+      });
+    }
+
+    for (const r of renderJobs) {
+      // Extract first scene_id from input_spec if available
+      const firstClip = (r as unknown as { input_spec?: { scene_clips?: { scene_id?: string; video_id?: string }[] } }).input_spec?.scene_clips?.[0];
+      items.push({
+        id: r.id,
+        type: "render",
+        title: r.title,
+        video_id: r.video_id,
+        scene_id: firstClip?.scene_id,
+        created_at: r.created_at,
+        status: r.status,
+        output_duration_ms: r.output_duration_ms,
+        output_size_bytes: r.output_size_bytes,
+        render_time_ms: r.render_time_ms,
+        error: r.error,
+      });
+    }
+
+    return items;
+  }, [savedShorts, renderJobs]);
+
   const selectedShorts = useMemo(
-    () => items.filter((s) => selectedIds.has(s.id)),
-    [items, selectedIds],
+    () => savedShorts.filter((s) => selectedIds.has(s.id)),
+    [savedShorts, selectedIds],
   );
 
   const [isDownloading, setIsDownloading] = useState(false);
@@ -182,7 +295,27 @@ export function SavedShortsPage() {
     }
   }, [selectedShorts, getAccessToken]);
 
-  // Map selected shorts to BasketItem[] for the ExportModal
+  const handleRenderDownload = useCallback(async (jobId: string) => {
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(`${getApiBaseUrl()}/api/shorts/render/${jobId}/download`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `highlight_${jobId}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      // silent
+    }
+  }, [getAccessToken]);
+
   const exportItems: BasketItem[] = useMemo(
     () =>
       selectedShorts.map((s) => ({
@@ -197,14 +330,14 @@ export function SavedShortsPage() {
   );
 
   const sorted = useMemo(() => {
-    const copy = [...items];
+    const copy = [...displayItems];
     copy.sort((a, b) => {
       const da = new Date(a.created_at).getTime();
       const db = new Date(b.created_at).getTime();
       return sortKey === "newest" ? db - da : da - db;
     });
     return copy;
-  }, [items, sortKey]);
+  }, [displayItems, sortKey]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / ITEMS_PER_PAGE));
   const paged = useMemo(() => {
@@ -221,20 +354,21 @@ export function SavedShortsPage() {
     });
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (item: DisplayItem) => {
     try {
       const token = await getAccessToken();
-      const res = await fetch(`/api/shorts/${id}`, {
-        method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+      const endpoint = item.type === "saved"
+        ? `${getApiBaseUrl()}/api/shorts/${item.id}`
+        : `${getApiBaseUrl()}/api/shorts/render/${item.id}`;
+      const res = await fetch(endpoint, { method: "DELETE", headers });
       if (res.ok || res.status === 204) {
-        setItems((prev) => prev.filter((s) => s.id !== id));
-        setSelectedIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
+        if (item.type === "saved") {
+          setSavedShorts((prev) => prev.filter((s) => s.id !== item.id));
+        } else {
+          setRenderJobs((prev) => prev.filter((j) => j.id !== item.id));
+        }
+        setSelectedIds((prev) => { const next = new Set(prev); next.delete(item.id); return next; });
       }
     } catch {}
   };
@@ -242,6 +376,10 @@ export function SavedShortsPage() {
   const today = new Date();
   const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   const btnBase = "inline-flex h-8 w-8 items-center justify-center rounded text-sm transition-colors";
+
+  const isRendering = (item: DisplayItem) => item.type === "render" && (item.status === "queued" || item.status === "rendering");
+  const isCompleted = (item: DisplayItem) => item.type === "render" && item.status === "completed";
+  const isFailed = (item: DisplayItem) => item.type === "render" && item.status === "failed";
 
   return (
     <div className="mx-auto max-w-6xl pt-4">
@@ -300,7 +438,7 @@ export function SavedShortsPage() {
 
         <div className="mt-5 flex items-center justify-between">
           <div className="flex items-center gap-6 text-sm text-gray-500">
-            <span className="inline-flex items-center gap-1.5"><VideoFileIcon />{items.length} videos</span>
+            <span className="inline-flex items-center gap-1.5"><VideoFileIcon />{displayItems.length} videos</span>
             <span className="inline-flex items-center gap-1.5"><FolderIcon />0 folders</span>
             <span className="inline-flex items-center gap-1.5"><CalendarIcon />{dateStr}</span>
           </div>
@@ -324,31 +462,98 @@ export function SavedShortsPage() {
           </div>
         ) : paged.length > 0 ? (
           <div className="mt-6 grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {paged.map((short) => (
-              <div key={short.id} className="group">
-                <Link
-                  href={`/shorts/create?videoId=${short.video_id}&sceneIds=${short.scene_ids.join(",")}`}
-                  className="relative block aspect-[4/3] w-full overflow-hidden rounded-lg bg-gray-200"
-                >
-                  <SceneThumbnail
-                    videoId={short.video_id}
-                    sceneId={short.scene_ids[0]}
-                    agentAvailable={true}
-                    className="h-full w-full"
-                  />
-                  <button
-                    type="button"
-                    onClick={(e) => { e.preventDefault(); toggleSelect(short.id); }}
-                    className="absolute right-2 top-2"
-                  >
-                    <CheckIcon checked={selectedIds.has(short.id)} />
-                  </button>
-                </Link>
+            {paged.map((item) => (
+              <div key={item.id} className="group">
+                {/* Thumbnail area */}
+                <div className="relative block aspect-[4/3] w-full overflow-hidden rounded-lg bg-gray-200">
+                  {item.type === "saved" && item.scene_ids ? (
+                    <Link href={`/shorts/create?videoId=${item.video_id}&sceneIds=${item.scene_ids.join(",")}`} className="block h-full w-full">
+                      <SceneThumbnail videoId={item.video_id} sceneId={item.scene_ids[0]} agentAvailable={true} className="h-full w-full" />
+                    </Link>
+                  ) : (
+                    <div className="relative h-full w-full bg-gray-800 flex items-center justify-center">
+                      {/* Render job thumbnail — use first scene if available */}
+                      {item.scene_id && item.video_id && !item.video_id.startsWith("highlight:") ? (
+                        <SceneThumbnail videoId={item.video_id} sceneId={item.scene_id} agentAvailable={true} className="h-full w-full" />
+                      ) : (
+                        <svg className="h-8 w-8 text-gray-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" /></svg>
+                      )}
+
+                      {/* Rendering overlay */}
+                      {isRendering(item) && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                          <CircularProgress />
+                        </div>
+                      )}
+
+                      {/* Completed overlay */}
+                      {isCompleted(item) && (
+                        <button
+                          type="button"
+                          onClick={() => handleRenderDownload(item.id)}
+                          className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition-opacity hover:opacity-100"
+                        >
+                          <div className="flex flex-col items-center text-white">
+                            <DownloadIcon />
+                            <span className="mt-1 text-xs">다운로드</span>
+                          </div>
+                        </button>
+                      )}
+
+                      {/* Failed overlay */}
+                      {isFailed(item) && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-red-900/40">
+                          <svg className="h-6 w-6 text-red-300" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" /></svg>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Selection checkbox — only for saved shorts */}
+                  {item.type === "saved" && (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); toggleSelect(item.id); }}
+                      className="absolute right-2 top-2"
+                    >
+                      <CheckIcon checked={selectedIds.has(item.id)} />
+                    </button>
+                  )}
+
+                  {/* Badge for render jobs */}
+                  {item.type === "render" && (
+                    <span className={cn(
+                      "absolute left-2 top-2 rounded px-1.5 py-0.5 text-[10px] font-medium",
+                      isRendering(item) && "bg-yellow-100 text-yellow-700",
+                      isCompleted(item) && "bg-green-100 text-green-700",
+                      isFailed(item) && "bg-red-100 text-red-700",
+                    )}>
+                      {isRendering(item) && "렌더링 중"}
+                      {isCompleted(item) && "완료"}
+                      {isFailed(item) && "실패"}
+                    </span>
+                  )}
+                </div>
+
+                {/* Title + actions */}
                 <div className="mt-2 flex items-center justify-between">
-                  <p className="truncate text-sm text-gray-900">{short.title ?? `쇼츠 ${short.scene_ids.length}장면`}</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-gray-900">
+                      {item.title ?? (item.type === "render" ? "하이라이트 릴" : `쇼츠 ${item.scene_ids?.length ?? 0}장면`)}
+                    </p>
+                    {isCompleted(item) && item.output_size_bytes && (
+                      <p className="text-xs text-gray-400">{formatFileSize(item.output_size_bytes)}</p>
+                    )}
+                    {isRendering(item) && (
+                      <p className="text-xs text-yellow-600">렌더링 중...</p>
+                    )}
+                    {isFailed(item) && (
+                      <p className="truncate text-xs text-red-500">{item.error ?? "렌더링 실패"}</p>
+                    )}
+                  </div>
                   <button
                     type="button"
-                    onClick={() => handleDelete(short.id)}
+                    onClick={() => handleDelete(item)}
                     className="ml-2 flex-shrink-0 text-xs text-gray-400 hover:text-red-500 transition-colors"
                   >
                     삭제
