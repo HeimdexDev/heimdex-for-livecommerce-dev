@@ -326,6 +326,7 @@ async def delete_person(
     people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
     exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
     video_excl_repo: PeopleVideoExclusionRepository = Depends(get_people_video_exclusion_repository),
+    face_repo: FaceRepository = Depends(get_face_repository),
     scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
     db: AsyncSession = Depends(get_db_session),
 ):
@@ -375,12 +376,19 @@ async def delete_person(
             person_cluster_id=person_cluster_id,
         )
 
-    # 4. Delete face thumbnail file
+    # 4. Delete face thumbnail file + exemplar crops
     try:
         thumbnail_dir = FilePath(settings.thumbnail_storage_dir)
         face_path = thumbnail_dir / org_id_str / "faces" / f"{person_cluster_id}.jpg"
         if face_path.exists():
             face_path.unlink()
+        # Clean up exemplar crop files
+        exemplar_ids = await face_repo.get_exemplar_ids_for_identity(org_ctx.org_id, person_cluster_id)
+        exemplar_dir = thumbnail_dir / org_id_str / "faces" / "exemplars"
+        for eid in exemplar_ids:
+            crop_path = exemplar_dir / f"{eid}.jpg"
+            if crop_path.exists():
+                crop_path.unlink()
     except Exception:
         logger.exception(
             "delete_person_thumbnail_cleanup_failed",
