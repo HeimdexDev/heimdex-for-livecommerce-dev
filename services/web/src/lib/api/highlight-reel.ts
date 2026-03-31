@@ -72,6 +72,28 @@ export async function generateHighlightPreview(
   return res.json();
 }
 
+export async function getRenderJobStatus(
+  jobId: string,
+  getToken: TokenGetter,
+): Promise<RenderJobResponse> {
+  const headers: Record<string, string> = {};
+  try {
+    const token = await getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  } catch { /* noop */ }
+
+  const res = await fetch(
+    `${getApiBaseUrl()}/api/shorts/render/${jobId}`,
+    { method: "GET", headers },
+  );
+
+  if (!res.ok) {
+    throw new Error(`Status check failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
 export async function submitHighlightRender(
   personClusterId: string,
   clips: HighlightClipPreview[],
