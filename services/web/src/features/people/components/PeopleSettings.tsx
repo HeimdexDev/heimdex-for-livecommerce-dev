@@ -232,7 +232,6 @@ function PersonAvatar({
             person={person}
             agentAvailable={agentAvailable}
             cacheBuster={thumbnailVersion}
-            onClick={onGalleryOpen ? () => onGalleryOpen(person.person_cluster_id) : undefined}
             className={cn(
               isSelected && "ring-2 ring-indigo-500 ring-offset-2",
               !isSelected && !isOver && "hover:bg-gray-200",
@@ -264,6 +263,13 @@ function PersonAvatar({
                 className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
               >
                 이름 변경
+              </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onGalleryOpen?.(person.person_cluster_id); }}
+                className="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                프로필 사진 변경
               </button>
               <button
                 type="button"

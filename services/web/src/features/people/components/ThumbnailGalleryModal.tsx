@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getExemplars, selectThumbnailFromExemplar, uploadCustomThumbnail, resetThumbnail } from "@/lib/api/people";
 import type { ExemplarResponse } from "@/lib/types";
-import { getApiBaseUrl } from "@/lib/api/utils";
 
 interface ThumbnailGalleryModalProps {
   isOpen: boolean;
@@ -127,7 +126,7 @@ export function ThumbnailGalleryModal({
                 className="group relative overflow-hidden rounded-xl border-2 border-transparent transition-all hover:border-indigo-400 disabled:opacity-50 aspect-square"
               >
                 <img
-                  src={`${getApiBaseUrl()}${e.thumbnail_url}`}
+                  src={e.thumbnail_url}
                   alt={`${displayName} 얼굴`}
                   className="h-full w-full object-cover"
                 />

@@ -11,13 +11,11 @@ export function AvatarThumbnail({
   person,
   agentAvailable,
   className,
-  onClick,
   cacheBuster,
 }: {
   person: PersonResponse;
   agentAvailable: boolean;
   className?: string;
-  onClick?: () => void;
   cacheBuster?: number;
 }) {
   const [imgError, setImgError] = useState(false);
@@ -34,13 +32,8 @@ export function AvatarThumbnail({
     <div
       className={cn(
         "relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-2xl bg-gray-100 transition-all group-hover:brightness-90",
-        onClick && "cursor-pointer",
         className,
       )}
-      onClick={onClick}
-      role={onClick ? "button" : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      onKeyDown={onClick ? (e) => { if (e.key === "Enter") onClick(); } : undefined}
     >
       {thumbnailUrl && !imgError ? (
         <img
@@ -63,13 +56,6 @@ export function AvatarThumbnail({
               오프라인
             </span>
           )}
-        </div>
-      )}
-      {onClick && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all hover:bg-black/20 hover:opacity-100">
-          <svg className="h-5 w-5 text-white drop-shadow" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-          </svg>
         </div>
       )}
       {isCustom && (
