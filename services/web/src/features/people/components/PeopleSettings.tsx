@@ -31,6 +31,9 @@ import { AvatarThumbnail } from "@/components/people/AvatarThumbnail";
 import { DeletePersonDialog } from "./DeletePersonDialog";
 import { MergeConfirmDialog } from "./MergeConfirmDialog";
 import { ThumbnailGalleryModal } from "./ThumbnailGalleryModal";
+import { HighlightReelButton } from "./HighlightReelButton";
+import { HighlightReelPreviewModal } from "./HighlightReelPreviewModal";
+import type { HighlightReelPreviewResponse } from "@/lib/api/highlight-reel";
 import { SelectionTray } from "./SelectionTray";
 import { TimelineBar } from "./TimelineBar";
 import { splitByLabel } from "@/lib/people-utils";
@@ -474,6 +477,20 @@ function SelectedPersonCard({
          )}
       </div>
 
+      {/* Highlight reel generator */}
+      {person.face_count > 0 && (
+        <div className="mb-3">
+          <HighlightReelButton
+            personClusterId={person.person_cluster_id}
+            getToken={getToken}
+            onPreviewReady={(preview) => {
+              // Dispatch custom event for parent to handle modal
+              window.dispatchEvent(new CustomEvent("highlight-reel-preview", { detail: preview }));
+            }}
+          />
+        </div>
+      )}
+
       <div className="space-y-1">
         {loadingVideos ? (
           <div className="flex items-center justify-center py-4">
@@ -823,6 +840,18 @@ export function PeopleSettings() {
   const [thumbnailVersion, setThumbnailVersion] = useState(0);
   const [bulkMergeOpen, setBulkMergeOpen] = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+
+  // Highlight reel state
+  const [highlightPreview, setHighlightPreview] = useState<HighlightReelPreviewResponse | null>(null);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<HighlightReelPreviewResponse>).detail;
+      setHighlightPreview(detail);
+    };
+    window.addEventListener("highlight-reel-preview", handler);
+    return () => window.removeEventListener("highlight-reel-preview", handler);
+  }, []);
 
   // DnD merge state
   const [activeDragPerson, setActiveDragPerson] = useState<PersonResponse | null>(null);
@@ -1232,6 +1261,18 @@ export function PeopleSettings() {
           fetchPeople();
         }}
       />
+      {highlightPreview && (
+        <HighlightReelPreviewModal
+          isOpen={highlightPreview !== null}
+          preview={highlightPreview}
+          getToken={getAccessToken}
+          onClose={() => setHighlightPreview(null)}
+          onRegenerate={() => {
+            // Re-trigger the button's generate — close modal first
+            setHighlightPreview(null);
+          }}
+        />
+      )}
     </div>
   );
 }
