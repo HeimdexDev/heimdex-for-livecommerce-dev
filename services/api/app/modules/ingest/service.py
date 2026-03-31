@@ -204,6 +204,7 @@ class SceneIngestService:
                 "keyword_tags": scene.keyword_tags,
                 "product_tags": scene.product_tags,
                 "product_entities": scene.product_entities,
+                "ai_tags": scene.ai_tags or [],
                 "ocr_text_raw": scene.ocr_text_raw,
                 "ocr_text_norm": ocr_norm,
                 "ocr_char_count": ocr_char_count,
@@ -375,6 +376,9 @@ class SceneIngestService:
                         partial["keyword_tags"] = keyword_tags
                     if product_tags:
                         partial["product_tags"] = product_tags
+
+                if enrichment.ai_tags is not None:
+                    partial["ai_tags"] = enrichment.ai_tags
 
             partial["ingest_time"] = now.isoformat()
             partial_updates.append((doc_id, partial))

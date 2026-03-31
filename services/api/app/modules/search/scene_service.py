@@ -463,6 +463,8 @@ class SceneSearchService:
             "product_tags_not_in": filters.product_tags_not_in,
             "product_entities_in": filters.product_entities_in,
             "product_entities_not_in": filters.product_entities_not_in,
+            "ai_tags_in": filters.ai_tags_in,
+            "ai_tags_not_in": filters.ai_tags_not_in,
         }
 
         org_id_str = str(org_id)
@@ -556,6 +558,10 @@ class SceneSearchService:
                     ocr_char_count=src.get("ocr_char_count", 0),
                     speaker_transcript=src.get("speaker_transcript", "")[:500],
                     speaker_count=src.get("speaker_count", 0),
+                    keyword_tags=src.get("keyword_tags", []),
+                    product_tags=src.get("product_tags", []),
+                    product_entities=src.get("product_entities", []),
+                    ai_tags=src.get("ai_tags", []),
                     keyframe_timestamp_ms=src.get("keyframe_timestamp_ms", 0),
                     content_type=src.get("content_type", "video"),
                     image_width=src.get("image_width"),

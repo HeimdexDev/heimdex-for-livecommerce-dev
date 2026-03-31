@@ -42,6 +42,7 @@ class EnrichSceneUpdate(BaseModel):
     keyword_tags: list[str] | None = Field(default=None)
     product_tags: list[str] | None = Field(default=None)
     product_entities: list[str] | None = Field(default=None)
+    ai_tags: list[str] | None = Field(default=None)
     people_cluster_ids: list[str] | None = Field(default=None)
     visual_embedding: list[float] | None = Field(default=None)
 

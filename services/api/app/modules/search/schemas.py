@@ -42,11 +42,14 @@ class SearchFilters(BaseModel):
     product_tags_not_in: list[str] = Field(default_factory=list, max_length=_MAX_TAG_LIST_SIZE)
     product_entities_in: list[str] = Field(default_factory=list, max_length=_MAX_TAG_LIST_SIZE)
     product_entities_not_in: list[str] = Field(default_factory=list, max_length=_MAX_TAG_LIST_SIZE)
+    ai_tags_in: list[str] = Field(default_factory=list, max_length=_MAX_TAG_LIST_SIZE)
+    ai_tags_not_in: list[str] = Field(default_factory=list, max_length=_MAX_TAG_LIST_SIZE)
 
     @field_validator(
         "keyword_tags_in", "keyword_tags_not_in",
         "product_tags_in", "product_tags_not_in",
         "product_entities_in", "product_entities_not_in",
+        "ai_tags_in", "ai_tags_not_in",
         mode="before",
     )
     @classmethod
@@ -165,6 +168,10 @@ class SceneResult(BaseModel):
     ocr_char_count: int = 0
     speaker_transcript: str = ""
     speaker_count: int = 0
+    keyword_tags: list[str] = Field(default_factory=list)
+    product_tags: list[str] = Field(default_factory=list)
+    product_entities: list[str] = Field(default_factory=list)
+    ai_tags: list[str] = Field(default_factory=list)
     keyframe_timestamp_ms: int = 0
     content_type: str = "video"
     image_width: int | None = None

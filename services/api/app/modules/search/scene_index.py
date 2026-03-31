@@ -207,6 +207,16 @@ class SceneIndexMixin:
                 "keyword_tags": {"type": "keyword"},
                 "product_tags": {"type": "keyword"},
                 "product_entities": {"type": "keyword"},
+                "ai_tags": {
+                    "type": "keyword",
+                    "fields": {
+                        "nori": {
+                            "type": "text",
+                            "analyzer": transcript_analyzer,
+                            "search_analyzer": transcript_analyzer,
+                        }
+                    }
+                },
                 "speaker_transcript": {
                     "type": "text",
                     "analyzer": transcript_analyzer,

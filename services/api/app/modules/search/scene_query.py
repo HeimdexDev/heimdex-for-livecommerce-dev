@@ -305,6 +305,30 @@ class SceneQueryMixin:
                 ]
             )
 
+            should_clauses.extend(
+                [
+                    {
+                        "match": {
+                            "ai_tags.nori": {
+                                "query": query,
+                                "operator": "or",
+                                "minimum_should_match": "50%",
+                                "boost": 0.8,
+                            }
+                        }
+                    },
+                    {
+                        "match_phrase": {
+                            "ai_tags.nori": {
+                                "query": query,
+                                "boost": 1.6,
+                                "slop": 1,
+                            }
+                        }
+                    },
+                ]
+            )
+
             if includes_images:
                 should_clauses.extend([
                     {
@@ -387,6 +411,19 @@ class SceneQueryMixin:
                             "operator": "or",
                             "minimum_should_match": "50%",
                             "boost": 0.9,
+                        }
+                    }
+                }
+            )
+
+            optional_should.append(
+                {
+                    "match": {
+                        "ai_tags.nori": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": 0.8,
                         }
                     }
                 }
@@ -541,6 +578,7 @@ class SceneQueryMixin:
             "keyword_tags_in": "keyword_tags",
             "product_tags_in": "product_tags",
             "product_entities_in": "product_entities",
+            "ai_tags_in": "ai_tags",
         }
         for filter_key, os_field in _TAG_IN_FIELDS.items():
             vals = filters.get(filter_key)
@@ -551,6 +589,7 @@ class SceneQueryMixin:
             "keyword_tags_not_in": "keyword_tags",
             "product_tags_not_in": "product_tags",
             "product_entities_not_in": "product_entities",
+            "ai_tags_not_in": "ai_tags",
         }
         for filter_key, os_field in _TAG_NOT_IN_FIELDS.items():
             vals = filters.get(filter_key)
