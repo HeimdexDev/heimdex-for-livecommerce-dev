@@ -129,6 +129,81 @@ class FaceRepository:
         await self.session.flush()
         return (True, cast(UUID, entry.id))
 
+    async def get_exemplars_for_identity(
+        self, org_id: UUID, cluster_id: str, limit: int = 20,
+    ) -> list[FaceExemplar]:
+        result = await self.session.execute(
+            select(FaceExemplar)
+            .join(FaceIdentity, FaceExemplar.identity_id == FaceIdentity.id)
+            .where(FaceIdentity.org_id == org_id, FaceIdentity.cluster_id == cluster_id)
+            .order_by(FaceExemplar.quality.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def get_thumbnail_source(self, org_id: UUID, cluster_id: str) -> str | None:
+        result = await self.session.execute(
+            select(FaceIdentity.thumbnail_source).where(
+                FaceIdentity.org_id == org_id,
+                FaceIdentity.cluster_id == cluster_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def set_thumbnail_source(
+        self, org_id: UUID, cluster_id: str, source: str, exemplar_id: UUID | None = None,
+    ) -> FaceIdentity | None:
+        result = await self.session.execute(
+            select(FaceIdentity).where(
+                FaceIdentity.org_id == org_id,
+                FaceIdentity.cluster_id == cluster_id,
+            )
+        )
+        identity = result.scalar_one_or_none()
+        if identity is None:
+            return None
+        identity.thumbnail_source = source
+        identity.selected_exemplar_id = exemplar_id
+        await self.session.flush()
+        return identity
+
+    async def reset_thumbnail_source(self, org_id: UUID, cluster_id: str) -> FaceIdentity | None:
+        return await self.set_thumbnail_source(org_id, cluster_id, "auto", None)
+
+    async def get_exemplar_by_id(
+        self, org_id: UUID, exemplar_id: UUID,
+    ) -> FaceExemplar | None:
+        result = await self.session.execute(
+            select(FaceExemplar).where(
+                FaceExemplar.org_id == org_id,
+                FaceExemplar.id == exemplar_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_thumbnail_sources_batch(
+        self, org_id: UUID, cluster_ids: list[str],
+    ) -> dict[str, str]:
+        if not cluster_ids:
+            return {}
+        result = await self.session.execute(
+            select(FaceIdentity.cluster_id, FaceIdentity.thumbnail_source).where(
+                FaceIdentity.org_id == org_id,
+                FaceIdentity.cluster_id.in_(cluster_ids),
+            )
+        )
+        return {row.cluster_id: row.thumbnail_source for row in result.all()}
+
+    async def get_exemplar_ids_for_identity(
+        self, org_id: UUID, cluster_id: str,
+    ) -> list[UUID]:
+        result = await self.session.execute(
+            select(FaceExemplar.id)
+            .join(FaceIdentity, FaceExemplar.identity_id == FaceIdentity.id)
+            .where(FaceIdentity.org_id == org_id, FaceIdentity.cluster_id == cluster_id)
+        )
+        return list(result.scalars().all())
+
     async def add_exemplar(
         self,
         identity_id: UUID,
@@ -209,6 +284,11 @@ class FaceRepository:
             if source.best_quality > target.best_quality:
                 target.best_quality = source.best_quality
                 target.best_thumbnail_video_id = source.best_thumbnail_video_id
+
+            # Preserve user-selected thumbnail: if target is auto and source is not, inherit
+            if target.thumbnail_source == "auto" and source.thumbnail_source != "auto":
+                target.thumbnail_source = source.thumbnail_source
+                target.selected_exemplar_id = source.selected_exemplar_id
 
             # Reassign all source exemplars to target identity
             await self.session.execute(

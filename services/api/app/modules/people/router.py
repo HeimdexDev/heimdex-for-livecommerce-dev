@@ -1,8 +1,9 @@
 import asyncio
+import shutil
 from pathlib import Path as FilePath
-from typing import cast
+from typing import Annotated, cast
 from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -26,6 +27,8 @@ from app.modules.people.schemas import (
     BulkDeleteRequest,
     BulkDeleteResponse,
     ExcludePreferencesResponse,
+    ExemplarListResponse,
+    ExemplarResponse,
     MergePersonRequest,
     MergePersonResponse,
     PeopleListResponse,
@@ -38,7 +41,9 @@ from app.modules.people.schemas import (
     RenamePersonRequest,
     RenamePersonResponse,
     SetExcludePreferencesRequest,
+    SetThumbnailRequest,
     SetVideoExclusionsRequest,
+    ThumbnailResponse,
     VideoExclusionsResponse,
 )
 from app.modules.search.scene_client import SceneSearchClient
@@ -56,6 +61,7 @@ async def list_people(
     user: User = Depends(get_current_user),
     people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
     exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
+    face_repo: FaceRepository = Depends(get_face_repository),
     scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
 ):
     settings = get_settings()
@@ -130,12 +136,17 @@ async def list_people(
     rep_scenes = await scene_opensearch.get_representative_scenes_for_people(
         org_id_str, all_cluster_ids
     )
+
+    # Batch-fetch thumbnail sources from face identities
+    thumb_sources = await face_repo.get_thumbnail_sources_batch(org_ctx.org_id, all_cluster_ids)
+
     for person in people:
         scene_info = rep_scenes.get(person.person_cluster_id)
         if scene_info:
             person.representative_video_id = scene_info["video_id"]
             person.representative_scene_id = scene_info["scene_id"]
             person.last_seen_scene_time = scene_info.get("capture_time") or scene_info.get("ingest_time")
+        person.thumbnail_source = thumb_sources.get(person.person_cluster_id, "auto")
 
     return PeopleListResponse(people=people, total=len(people))
 
@@ -701,3 +712,198 @@ async def set_video_exclusions(
         person_cluster_id=person_cluster_id,
         excluded_video_ids=excluded,
     )
+
+
+# ---------------------------------------------------------------------------
+# Thumbnail management (gallery picker + custom upload)
+# ---------------------------------------------------------------------------
+
+_MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+_MAX_THUMBNAIL_PX = 512
+_ALLOWED_UPLOAD_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
+
+
+@router.get("/{person_cluster_id}/exemplars", response_model=ExemplarListResponse)
+async def list_exemplars(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    _user: User = Depends(get_current_user),
+    face_repo: FaceRepository = Depends(get_face_repository),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    exemplars = await face_repo.get_exemplars_for_identity(org_ctx.org_id, person_cluster_id, limit=20)
+
+    return ExemplarListResponse(
+        exemplars=[
+            ExemplarResponse(
+                exemplar_id=str(e.id),
+                video_id=e.video_id,
+                scene_id=e.scene_id,
+                quality=e.quality,
+                thumbnail_url=f"/api/thumbnails/faces/exemplars/{e.id}",
+            )
+            for e in exemplars
+        ],
+        total=len(exemplars),
+    )
+
+
+@router.patch("/{person_cluster_id}/thumbnail", response_model=ThumbnailResponse)
+async def select_thumbnail_from_exemplar(
+    person_cluster_id: str,
+    request: SetThumbnailRequest,
+    org_ctx: OrgContext = Depends(get_current_org),
+    _user: User = Depends(get_current_user),
+    face_repo: FaceRepository = Depends(get_face_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    exemplar_id = UUID(request.exemplar_id)
+    exemplar = await face_repo.get_exemplar_by_id(org_ctx.org_id, exemplar_id)
+    if exemplar is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exemplar not found")
+
+    # Copy exemplar crop to main face thumbnail path
+    root = FilePath(settings.thumbnail_storage_dir)
+    exemplar_path = root / str(org_ctx.org_id) / "faces" / "exemplars" / f"{exemplar_id}.jpg"
+    main_path = root / str(org_ctx.org_id) / "faces" / f"{person_cluster_id}.jpg"
+
+    if exemplar_path.exists():
+        main_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(exemplar_path), str(main_path))
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exemplar thumbnail file not found")
+
+    identity = await face_repo.set_thumbnail_source(
+        org_ctx.org_id, person_cluster_id, "exemplar", exemplar_id,
+    )
+    if identity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Person not found")
+
+    await db.commit()
+
+    logger.info(
+        "thumbnail_selected_from_exemplar",
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+        exemplar_id=str(exemplar_id),
+    )
+
+    return ThumbnailResponse(
+        person_cluster_id=person_cluster_id,
+        thumbnail_source="exemplar",
+    )
+
+
+@router.post("/{person_cluster_id}/thumbnail", response_model=ThumbnailResponse)
+async def upload_custom_thumbnail(
+    person_cluster_id: str,
+    file: Annotated[UploadFile, File(...)],
+    org_ctx: OrgContext = Depends(get_current_org),
+    _user: User = Depends(get_current_user),
+    face_repo: FaceRepository = Depends(get_face_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    content_type = (file.content_type or "").lower()
+    if content_type not in _ALLOWED_UPLOAD_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported image type. Allowed: JPEG, PNG, WebP",
+        )
+
+    data = await file.read()
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File too large. Maximum size: {_MAX_UPLOAD_BYTES // (1024 * 1024)}MB",
+        )
+
+    # Process image: validate, resize, convert to JPEG
+    from PIL import Image
+    import io
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.verify()
+        img = Image.open(io.BytesIO(data))  # re-open after verify
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file")
+
+    if img.width < 64 or img.height < 64:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Image too small. Minimum 64x64 pixels.")
+
+    # Resize to max 512x512 maintaining aspect ratio
+    if img.width > _MAX_THUMBNAIL_PX or img.height > _MAX_THUMBNAIL_PX:
+        img.thumbnail((_MAX_THUMBNAIL_PX, _MAX_THUMBNAIL_PX), Image.LANCZOS)
+
+    # Convert to RGB JPEG
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    jpeg_data = buf.getvalue()
+
+    # Write to disk
+    root = FilePath(settings.thumbnail_storage_dir)
+    main_path = root / str(org_ctx.org_id) / "faces" / f"{person_cluster_id}.jpg"
+    main_path.parent.mkdir(parents=True, exist_ok=True)
+    main_path.write_bytes(jpeg_data)
+
+    identity = await face_repo.set_thumbnail_source(
+        org_ctx.org_id, person_cluster_id, "upload",
+    )
+    if identity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Person not found")
+
+    await db.commit()
+
+    logger.info(
+        "thumbnail_custom_uploaded",
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+        size_bytes=len(jpeg_data),
+        original_size=len(data),
+    )
+
+    return ThumbnailResponse(
+        person_cluster_id=person_cluster_id,
+        thumbnail_source="upload",
+    )
+
+
+@router.delete("/{person_cluster_id}/thumbnail", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_thumbnail(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    _user: User = Depends(get_current_user),
+    face_repo: FaceRepository = Depends(get_face_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    identity = await face_repo.reset_thumbnail_source(org_ctx.org_id, person_cluster_id)
+    if identity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Person not found")
+
+    await db.commit()
+
+    logger.info(
+        "thumbnail_reset_to_auto",
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+    )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

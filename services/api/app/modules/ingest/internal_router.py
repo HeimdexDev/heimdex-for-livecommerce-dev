@@ -198,6 +198,23 @@ async def internal_upload_face_thumbnail(
             detail="Invalid path",
         )
 
+    # Override protection: skip if user has selected a custom thumbnail
+    from app.modules.face.repository import FaceRepository
+    from app.db.base import get_async_session_factory
+
+    factory = get_async_session_factory()
+    async with factory() as session:
+        repo = FaceRepository(session)
+        thumb_source = await repo.get_thumbnail_source(org_id, person_cluster_id)
+        if thumb_source and thumb_source != "auto":
+            logger.info(
+                "internal_face_thumbnail_skipped_user_override",
+                org_id=str(org_id),
+                person_cluster_id=person_cluster_id,
+                thumbnail_source=thumb_source,
+            )
+            return {"stored": False, "skipped": "user_override"}
+
     data = await file.read()
     try:
         target_dir.mkdir(parents=True, exist_ok=True)

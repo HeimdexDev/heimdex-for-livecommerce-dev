@@ -10,6 +10,7 @@ class PersonResponse(BaseModel):
     last_seen_scene_time: str | None = None
     representative_video_id: str | None = None
     representative_scene_id: str | None = None
+    thumbnail_source: str = "auto"
     is_excluded: bool = False
     matched_video_titles: list[str] | None = None
 
@@ -141,3 +142,25 @@ class BulkDeleteResponse(BaseModel):
     deleted_ids: list[str]
     failed_ids: list[str]
     total_deleted: int
+
+
+class ExemplarResponse(BaseModel):
+    exemplar_id: str
+    video_id: str
+    scene_id: str
+    quality: float
+    thumbnail_url: str
+
+
+class ExemplarListResponse(BaseModel):
+    exemplars: list[ExemplarResponse]
+    total: int
+
+
+class SetThumbnailRequest(BaseModel):
+    exemplar_id: str
+
+
+class ThumbnailResponse(BaseModel):
+    person_cluster_id: str
+    thumbnail_source: str

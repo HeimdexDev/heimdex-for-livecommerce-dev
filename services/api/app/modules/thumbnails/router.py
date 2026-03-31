@@ -115,6 +115,27 @@ async def ingest_thumbnail(
     return {"stored": True, "path": f"{video_id}/{scene_id}"}
 
 
+@public_router.get("/faces/exemplars/{exemplar_id}")
+async def get_exemplar_thumbnail(
+    exemplar_id: str,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+):
+    _validate_path_component(exemplar_id, "exemplar_id")
+
+    settings = get_settings()
+    root = Path(settings.thumbnail_storage_dir)
+    thumbnail_path = root / str(org_ctx.org_id) / "faces" / "exemplars" / f"{exemplar_id}.jpg"
+    _validate_resolved_path(thumbnail_path, root)
+    if not thumbnail_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exemplar thumbnail not found")
+
+    return FileResponse(
+        path=thumbnail_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800"},
+    )
+
+
 @public_router.get("/faces/{person_cluster_id}")
 async def get_face_thumbnail(
     person_cluster_id: str,

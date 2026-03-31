@@ -25,6 +25,14 @@ class FaceIdentity(Base, UUIDMixin, TimestampMixin):
     exemplar_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     best_quality: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     best_thumbnail_video_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    thumbnail_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="auto",
+    )  # auto | exemplar | upload
+    selected_exemplar_id: Mapped[PyUUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("face_exemplars.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     __table_args__: tuple[object, ...] = (
         UniqueConstraint("org_id", "cluster_id", name="uq_face_identities_org_cluster"),
