@@ -159,7 +159,7 @@ async def get_face_thumbnail(
     return FileResponse(
         path=thumbnail_path,
         media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": "public, max-age=60, must-revalidate"},
     )
 
 
