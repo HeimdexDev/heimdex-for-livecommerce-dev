@@ -101,7 +101,7 @@ def _upload_to_s3(data: bytes, bucket: str, key: str, region: str) -> None:
 
 
 def _upload_to_bq(data: bytes, project: str, dataset: str, target: date) -> None:
-    """Parquet 바이트를 BQ 네이티브 테이블에 APPEND 로드."""
+    """Load Parquet bytes into a BQ native table via APPEND."""
     from google.api_core.retry import Retry
     from google.cloud import bigquery
 
@@ -114,12 +114,16 @@ def _upload_to_bq(data: bytes, project: str, dataset: str, target: date) -> None
     )
 
     bq_retry = Retry(initial=1.0, maximum=4.0, multiplier=2.0, deadline=30.0)
-    load_job = client.load_table_from_file(
-        io.BytesIO(data),
-        table_id,
-        job_config=job_config,
-    )
-    load_job.result(retry=bq_retry)
+
+    @bq_retry
+    def _do_load() -> bigquery.LoadJob:
+        job = client.load_table_from_file(
+            io.BytesIO(data), table_id, job_config=job_config,
+        )
+        job.result(timeout=60)
+        return job
+
+    load_job = _do_load()
 
     logger.info(
         "bq_load_complete",

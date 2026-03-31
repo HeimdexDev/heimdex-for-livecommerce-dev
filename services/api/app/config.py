@@ -203,8 +203,8 @@ class Settings(BaseSettings):
     analytics_export_enabled: bool = False  # Nightly S3 Parquet export
     analytics_s3_bucket: str = ""  # Defaults to drive_s3_bucket if empty
     analytics_s3_prefix: str = "analytics"
-    analytics_bq_enabled: bool = False  # S3 export 후 BQ에도 적재
-    analytics_bq_project: str = ""  # 필수: ANALYTICS_BQ_ENABLED=true 시 반드시 설정
+    analytics_bq_enabled: bool = False  # Also load to BigQuery after S3 export
+    analytics_bq_project: str = ""  # Required when ANALYTICS_BQ_ENABLED=true
     analytics_bq_dataset: str = "search_analytics"
 
     # --- Proxy-pack export ---
