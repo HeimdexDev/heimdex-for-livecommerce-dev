@@ -40,6 +40,7 @@ class SceneJob:
     audio_s3_key: str | None = None
     transcript_raw: str | None = None
     vlm_tags_enabled: bool = False
+    ai_tags_enabled: bool = False
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,7 @@ def sqs_to_scene_job(message: SQSMessage) -> SceneJob:
             audio_s3_key=body.get("audio_s3_key"),
             transcript_raw=body.get("transcript_raw"),
             vlm_tags_enabled=bool(body.get("vlm_tags_enabled", False)),
+            ai_tags_enabled=bool(body.get("ai_tags_enabled", False)),
         )
     except (KeyError, ValueError, TypeError) as e:
         raise InvalidMessageError(

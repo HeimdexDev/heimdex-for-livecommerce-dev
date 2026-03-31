@@ -100,6 +100,7 @@ services:
       # Speech-aware scene splitting + VLM tags
       - DRIVE_SPEECH_SPLIT_ENABLED=${DRIVE_SPEECH_SPLIT_ENABLED:-false}
       - VLM_TAGS_ENABLED=${VLM_TAGS_ENABLED:-false}
+      - AI_TAGS_ENABLED=${AI_TAGS_ENABLED:-false}
       # Auth0 configuration
       - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
       - AUTH0_DOMAIN=${AUTH0_DOMAIN:-}
@@ -262,6 +263,7 @@ services:
       - DRIVE_CONNECTOR_ENABLED=${DRIVE_CONNECTOR_ENABLED:-false}
       - DRIVE_SPEECH_SPLIT_ENABLED=${DRIVE_SPEECH_SPLIT_ENABLED:-false}
       - VLM_TAGS_ENABLED=${VLM_TAGS_ENABLED:-false}
+      - AI_TAGS_ENABLED=${AI_TAGS_ENABLED:-false}
       - FOLDER_SYNC_V2_ENABLED=${FOLDER_SYNC_V2_ENABLED:-true}
       - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
       - DRIVE_API_BASE_URL=http://api:8000

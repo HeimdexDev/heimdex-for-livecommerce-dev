@@ -494,6 +494,7 @@ def publish_scene_enrichment_jobs(
                 if transcript:
                     msg_body["transcript_raw"] = transcript
                 msg_body["vlm_tags_enabled"] = settings.vlm_tags_enabled
+                msg_body["ai_tags_enabled"] = settings.ai_tags_enabled
 
             entries.append({
                 "Id": f"{scene['scene_id']}_{job_type}",

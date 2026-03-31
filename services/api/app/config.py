@@ -158,6 +158,7 @@ class Settings(BaseSettings):
 
     # --- VLM tag extraction ---
     vlm_tags_enabled: bool = False  # Feature flag: VLM-generated tags instead of rule-based
+    ai_tags_enabled: bool = False  # Feature flag: free-form Korean AI tags from VLM
 
     # --- YouTube reference ---
     youtube_enabled: bool = False
