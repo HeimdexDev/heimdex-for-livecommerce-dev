@@ -16,6 +16,7 @@ const TAG_FILTER_ROWS: {
   { label: "Keyword tags", includeField: "keyword_tags_in", excludeField: "keyword_tags_not_in" },
   { label: "Product tags", includeField: "product_tags_in", excludeField: "product_tags_not_in" },
   { label: "Product entities", includeField: "product_entities_in", excludeField: "product_entities_not_in" },
+  { label: "AI 태그", includeField: "ai_tags_in", excludeField: "ai_tags_not_in" },
 ];
 
 export function TagFilters({ filters, onFiltersChange }: TagFiltersProps) {

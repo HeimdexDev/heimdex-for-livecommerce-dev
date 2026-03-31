@@ -54,6 +54,14 @@ describe("hasTagFilters", () => {
     expect(hasTagFilters({ product_entities_in: ["Nike"] })).toBe(true);
   });
 
+  it("returns true when ai_tags_in has entries", () => {
+    expect(hasTagFilters({ ai_tags_in: ["수분크림"] })).toBe(true);
+  });
+
+  it("returns true when ai_tags_not_in has entries", () => {
+    expect(hasTagFilters({ ai_tags_not_in: ["보습"] })).toBe(true);
+  });
+
   it("returns false when all tag fields are empty arrays", () => {
     const filters: SearchFilters = {
       keyword_tags_in: [],
@@ -62,6 +70,8 @@ describe("hasTagFilters", () => {
       product_tags_not_in: [],
       product_entities_in: [],
       product_entities_not_in: [],
+      ai_tags_in: [],
+      ai_tags_not_in: [],
     };
     expect(hasTagFilters(filters)).toBe(false);
   });
@@ -76,7 +86,7 @@ describe("TAG_FILTER constants", () => {
     expect(TAG_FILTER_MAX_ITEM_LEN).toBe(64);
   });
 
-  it("FIELDS contains all 6 tag filter field names", () => {
+  it("FIELDS contains all 8 tag filter field names", () => {
     expect(TAG_FILTER_FIELDS).toEqual([
       "keyword_tags_in",
       "keyword_tags_not_in",
@@ -84,12 +94,14 @@ describe("TAG_FILTER constants", () => {
       "product_tags_not_in",
       "product_entities_in",
       "product_entities_not_in",
+      "ai_tags_in",
+      "ai_tags_not_in",
     ]);
   });
 });
 
 describe("SearchFilters type compatibility", () => {
-  it("accepts all 6 tag filter fields", () => {
+  it("accepts all 8 tag filter fields", () => {
     const filters: SearchFilters = {
       keyword_tags_in: ["할인"],
       keyword_tags_not_in: ["광고"],
@@ -97,9 +109,13 @@ describe("SearchFilters type compatibility", () => {
       product_tags_not_in: ["alcohol"],
       product_entities_in: ["Nike Air Max"],
       product_entities_not_in: ["BadBrand"],
+      ai_tags_in: ["수분크림"],
+      ai_tags_not_in: ["보습"],
     };
     expect(filters.keyword_tags_in).toEqual(["할인"]);
     expect(filters.product_entities_not_in).toEqual(["BadBrand"]);
+    expect(filters.ai_tags_in).toEqual(["수분크림"]);
+    expect(filters.ai_tags_not_in).toEqual(["보습"]);
   });
 
   it("all tag fields are optional (backward compatible)", () => {

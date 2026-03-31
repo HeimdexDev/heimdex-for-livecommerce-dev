@@ -413,6 +413,7 @@ export function SceneCard({
     : captionText;
 
   const tags = [...scene.keyword_tags, ...scene.product_tags].slice(0, 3);
+  const aiTags = (scene.ai_tags ?? []).slice(0, 4);
 
   return (
     <div
@@ -449,12 +450,20 @@ export function SceneCard({
               </svg>
             </div>
           </button>
-          {tags.length > 0 && (
+          {(tags.length > 0 || aiTags.length > 0) && (
             <div className="px-3 py-2 flex flex-wrap gap-1">
               {tags.map((tag) => (
                 <span
                   key={tag}
                   className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700"
+                >
+                  {tag}
+                </span>
+              ))}
+              {aiTags.map((tag) => (
+                <span
+                  key={`ai-${tag}`}
+                  className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700"
                 >
                   {tag}
                 </span>
@@ -968,6 +977,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
     for (const s of scenes) {
       for (const t of s.keyword_tags) tags.add(t);
       for (const t of s.product_tags) tags.add(t);
+      for (const t of s.ai_tags ?? []) tags.add(t);
     }
     return Array.from(tags);
   }, [scenes]);

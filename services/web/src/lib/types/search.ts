@@ -16,6 +16,8 @@ export interface SearchFilters {
   product_tags_not_in?: string[];
   product_entities_in?: string[];
   product_entities_not_in?: string[];
+  ai_tags_in?: string[];
+  ai_tags_not_in?: string[];
 }
 
 // Mirrors backend validation: max 50 items/list, 64 chars/item
@@ -29,6 +31,8 @@ export const TAG_FILTER_FIELDS = [
   "product_tags_not_in",
   "product_entities_in",
   "product_entities_not_in",
+  "ai_tags_in",
+  "ai_tags_not_in",
 ] as const;
 
 export type TagFilterField = (typeof TAG_FILTER_FIELDS)[number];
@@ -108,6 +112,10 @@ export interface SceneResult {
   speech_segment_count: number;
   speaker_transcript?: string;
   speaker_count?: number;
+  keyword_tags?: string[];
+  product_tags?: string[];
+  product_entities?: string[];
+  ai_tags?: string[];
   keyframe_timestamp_ms: number;
   content_type?: "video" | "image";
   image_width?: number;

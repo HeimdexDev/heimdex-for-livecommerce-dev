@@ -52,6 +52,7 @@ export interface VideoScene {
   keyword_tags: string[];
   product_tags: string[];
   product_entities: string[];
+  ai_tags?: string[];
   speech_segment_count: number;
   speaker_transcript?: string;
   speaker_count?: number;
