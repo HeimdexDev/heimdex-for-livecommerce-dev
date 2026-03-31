@@ -213,7 +213,7 @@ class FaceRepository:
         embedding: list[float],
         quality: float,
         bbox_json: dict[str, object] | None,
-    ) -> None:
+    ) -> UUID:
         exemplar = FaceExemplar(
             identity_id=identity_id,
             org_id=org_id,
@@ -225,6 +225,7 @@ class FaceRepository:
         )
         self.session.add(exemplar)
         await self.session.flush()
+        return cast(UUID, exemplar.id)
 
     async def merge_identities(
         self,

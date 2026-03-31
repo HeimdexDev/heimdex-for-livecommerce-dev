@@ -238,3 +238,70 @@ async def internal_upload_face_thumbnail(
     )
 
     return {"stored": True, "path": f"faces/{person_cluster_id}"}
+
+
+@router.post("/thumbnails/face-exemplar/{exemplar_id}")
+async def internal_upload_exemplar_thumbnail(
+    exemplar_id: str,
+    file: Annotated[UploadFile, File(...)],
+    x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
+    _token: str = Depends(_verify_internal_token),
+):
+    """Upload individual exemplar crop from face-worker. Auth: internal API key."""
+    _UNSAFE_PATH_RE = re.compile(r"[/\\\x00]")
+    if not exemplar_id or _UNSAFE_PATH_RE.search(exemplar_id) or ".." in exemplar_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid exemplar_id",
+        )
+
+    try:
+        org_id = UUID(x_heimdex_org_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid X-Heimdex-Org-Id: {x_heimdex_org_id!r}",
+        )
+
+    content_type = (file.content_type or "").lower()
+    if content_type not in {"image/jpeg", "image/jpg"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="file must be image/jpeg",
+        )
+
+    settings = get_settings()
+    root = Path(settings.thumbnail_storage_dir)
+    target_dir = root / str(org_id) / "faces" / "exemplars"
+    target_path = target_dir / f"{exemplar_id}.jpg"
+
+    resolved = target_path.resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path",
+        )
+
+    data = await file.read()
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(data)
+    except OSError as e:
+        logger.error(
+            "internal_exemplar_thumbnail_write_failed",
+            path=str(target_path),
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to store exemplar thumbnail",
+        )
+
+    logger.info(
+        "internal_exemplar_thumbnail_uploaded",
+        org_id=str(org_id),
+        exemplar_id=exemplar_id,
+        size_bytes=len(data),
+    )
+
+    return {"stored": True, "path": f"faces/exemplars/{exemplar_id}"}

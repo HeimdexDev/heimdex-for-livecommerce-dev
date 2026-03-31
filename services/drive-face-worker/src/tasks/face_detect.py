@@ -120,7 +120,7 @@ def _process_single_face_detect(
             video_id=video_id,
         )
 
-        _upsert_identities(settings=settings, org_id=org_id, identities=identity_rows)
+        upsert_result = _upsert_identities(settings=settings, org_id=org_id, identities=identity_rows)
 
         scene_cluster_map = _build_scene_people_map(detections, cluster_id_by_index)
         _post_enrich_to_api(
@@ -141,6 +141,20 @@ def _process_single_face_detect(
             logger.warning(
                 "face_thumbnail_upload_failed_non_fatal",
                 extra={"org_id": org_id, "video_id": video_id, "error": str(thumb_err)},
+            )
+
+        try:
+            _upload_exemplar_crops(
+                settings=settings,
+                org_id=org_id,
+                upsert_result=upsert_result,
+                clusters=clusters,
+                cluster_id_by_index=cluster_id_by_index,
+            )
+        except Exception as crop_err:
+            logger.warning(
+                "face_exemplar_crop_upload_failed_non_fatal",
+                extra={"org_id": org_id, "video_id": video_id, "error": str(crop_err)},
             )
 
         api_client.update_job_status(
@@ -452,3 +466,60 @@ def _upload_thumbnails(
             raise RuntimeError(
                 f"face_thumbnail_upload_failed {cluster_id} {resp.status_code}: {resp.text[:500]}"
             )
+
+
+def _upload_exemplar_crops(
+    settings: Any,
+    org_id: str,
+    upsert_result: dict[str, Any],
+    clusters: list[dict[str, Any]],
+    cluster_id_by_index: dict[int, str],
+) -> None:
+    """Upload per-detection exemplar crops for the gallery picker."""
+    exemplar_ids = upsert_result.get("exemplar_ids", [])
+    if not exemplar_ids:
+        return
+
+    # Build mapping: cluster_id -> list of exemplar_ids (in order)
+    cluster_exemplar_map: dict[str, list[str]] = {}
+    for mapping in exemplar_ids:
+        cid = mapping["cluster_id"]
+        cluster_exemplar_map.setdefault(cid, []).append(mapping["exemplar_id"])
+
+    for index, cluster_id in cluster_id_by_index.items():
+        eid_list = cluster_exemplar_map.get(cluster_id, [])
+        if not eid_list:
+            continue
+        # The last exemplar_id corresponds to the detection just uploaded
+        exemplar_id = eid_list[-1]
+
+        # Upload all member crops for this cluster (up to 20)
+        members = clusters[index]["members"]
+        for member in members[:20]:
+            crop = member.get("crop")
+            if crop is None or crop.size == 0:
+                continue
+            ok, encoded = cv2.imencode(".jpg", crop)
+            if not ok:
+                continue
+
+            url = f"{settings.drive_api_base_url.rstrip('/')}/internal/ingest/thumbnails/face-exemplar/{exemplar_id}"
+            resp = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {settings.drive_internal_api_key}",
+                    "X-Heimdex-Org-Id": org_id,
+                },
+                files={"file": (f"{exemplar_id}.jpg", encoded.tobytes(), "image/jpeg")},
+                timeout=60,
+            )
+            if resp.status_code >= 300:
+                logger.warning(
+                    "exemplar_crop_upload_failed",
+                    extra={
+                        "exemplar_id": exemplar_id,
+                        "cluster_id": cluster_id,
+                        "status": resp.status_code,
+                    },
+                )
+            break  # Only upload one crop per exemplar_id

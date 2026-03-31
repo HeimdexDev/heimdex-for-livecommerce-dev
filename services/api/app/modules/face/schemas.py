@@ -31,6 +31,12 @@ class FaceIdentityUpsertRequest(BaseModel):
     identities: list[FaceIdentityUpsert]
 
 
+class ExemplarIdMapping(BaseModel):
+    cluster_id: str
+    exemplar_id: str
+
+
 class FaceIdentityUpsertResponse(BaseModel):
     created: int
     updated: int
+    exemplar_ids: list[ExemplarIdMapping] = []

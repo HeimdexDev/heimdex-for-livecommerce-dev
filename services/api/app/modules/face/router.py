@@ -7,6 +7,7 @@ from app.dependencies import get_db_session, get_face_repository, verify_interna
 from app.logging_config import get_logger
 from app.modules.face.repository import FaceRepository
 from app.modules.face.schemas import (
+    ExemplarIdMapping,
     FaceIdentityUpsertRequest,
     FaceIdentityUpsertResponse,
     FaceMatchRequest,
@@ -90,6 +91,7 @@ async def internal_face_identities(
         )
     created = 0
     updated = 0
+    exemplar_mappings: list[ExemplarIdMapping] = []
 
     for item in request.identities:
         is_new, identity_id = await repository.upsert_identity(
@@ -99,7 +101,7 @@ async def internal_face_identities(
             quality=item.quality,
             best_thumbnail_video_id=item.video_id,
         )
-        await repository.add_exemplar(
+        exemplar_id = await repository.add_exemplar(
             identity_id=identity_id,
             org_id=org_id,
             video_id=item.video_id,
@@ -107,6 +109,9 @@ async def internal_face_identities(
             embedding=item.embedding,
             quality=item.quality,
             bbox_json=item.bbox_json,
+        )
+        exemplar_mappings.append(
+            ExemplarIdMapping(cluster_id=item.cluster_id, exemplar_id=str(exemplar_id))
         )
         if is_new:
             created += 1
@@ -121,4 +126,6 @@ async def internal_face_identities(
         updated=updated,
     )
 
-    return FaceIdentityUpsertResponse(created=created, updated=updated)
+    return FaceIdentityUpsertResponse(
+        created=created, updated=updated, exemplar_ids=exemplar_mappings,
+    )
