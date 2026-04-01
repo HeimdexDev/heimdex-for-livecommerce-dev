@@ -1,4 +1,4 @@
-"""Nightly export: search_events partition → Parquet → S3.
+"""Nightly export: search_events partition → Parquet → S3 → BigQuery.
 
 Usage:
     python -m app.cli.export_analytics                   # exports yesterday
@@ -6,13 +6,16 @@ Usage:
     python -m app.cli.export_analytics --dry-run         # print what would be exported
 
 Requires pyarrow (optional dependency — only needed for export, not at API runtime).
+BigQuery load requires google-cloud-bigquery (optional, gated by ANALYTICS_BQ_ENABLED).
 """
+
 from __future__ import annotations
 
 import argparse
 import io
 import json
 import logging
+import os
 import sys
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -48,26 +51,25 @@ def _rows_to_parquet(rows: list[dict[str, Any]]) -> bytes:
         import pyarrow as pa
         import pyarrow.parquet as pq
     except ImportError:
-        logger.error(
-            "pyarrow is required for Parquet export. "
-            "Install with: pip install pyarrow"
-        )
+        logger.error("pyarrow is required for Parquet export. Install with: pip install pyarrow")
         sys.exit(1)
 
     if not rows:
         return b""
 
-    schema = pa.schema([
-        ("id", pa.int64()),
-        ("org_id", pa.string()),
-        ("user_id", pa.string()),
-        ("query_text", pa.string()),
-        ("search_mode", pa.string()),
-        ("result_count", pa.int32()),
-        ("response_ms", pa.int32()),
-        ("metadata", pa.string()),
-        ("created_at", pa.timestamp("us", tz="UTC")),
-    ])
+    schema = pa.schema(
+        [
+            ("id", pa.int64()),
+            ("org_id", pa.string()),
+            ("user_id", pa.string()),
+            ("query_text", pa.string()),
+            ("search_mode", pa.string()),
+            ("result_count", pa.int32()),
+            ("response_ms", pa.int32()),
+            ("metadata", pa.string()),
+            ("created_at", pa.timestamp("us", tz="UTC")),
+        ]
+    )
 
     arrays = [
         pa.array([r["id"] for r in rows], type=pa.int64()),
@@ -102,8 +104,21 @@ def _upload_to_s3(data: bytes, bucket: str, key: str, region: str) -> None:
 
 def _upload_to_bq(data: bytes, project: str, dataset: str, target: date) -> None:
     """Load Parquet bytes into a BQ native table via APPEND."""
+    import boto3
     from google.api_core.retry import Retry
     from google.cloud import bigquery
+
+    # google-auth's AWS provider cannot read IMDSv2 metadata inside Docker
+    # containers, while boto3 handles it correctly.  Bridge boto3 credentials
+    # to env vars so google-auth skips the metadata service entirely.
+    session = boto3.Session()
+    creds = session.get_credentials()
+    if creds:
+        frozen = creds.get_frozen_credentials()
+        os.environ["AWS_ACCESS_KEY_ID"] = frozen.access_key
+        os.environ["AWS_SECRET_ACCESS_KEY"] = frozen.secret_key
+        if frozen.token:
+            os.environ["AWS_SESSION_TOKEN"] = frozen.token
 
     client = bigquery.Client(project=project)
     table_id = f"{project}.{dataset}.search_events"
@@ -118,7 +133,9 @@ def _upload_to_bq(data: bytes, project: str, dataset: str, target: date) -> None
     @bq_retry
     def _do_load() -> bigquery.LoadJob:
         job = client.load_table_from_file(
-            io.BytesIO(data), table_id, job_config=job_config,
+            io.BytesIO(data),
+            table_id,
+            job_config=job_config,
         )
         job.result(timeout=60)
         return job
@@ -143,6 +160,7 @@ def main() -> None:
     logger.info(f"Exporting search events for {target.isoformat()}")
 
     from app.config import get_settings
+
     settings = get_settings()
 
     if not settings.analytics_export_enabled:
