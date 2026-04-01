@@ -35,18 +35,10 @@ export function ThumbnailGalleryModal({
     setError(null);
     getExemplars(personClusterId, getToken)
       .then(async (res) => {
-        // Filter to only exemplars that have crop files on disk
-        const checks = await Promise.all(
-          res.exemplars.map(async (e) => {
-            try {
-              const resp = await fetch(e.thumbnail_url, { method: "HEAD" });
-              return resp.ok ? e : null;
-            } catch {
-              return null;
-            }
-          })
-        );
-        setAvailableExemplars(checks.filter((e): e is ExemplarResponse => e !== null));
+        // With S3-primary storage, exemplars returned by the API are
+        // guaranteed to exist — no need for a HEAD availability check
+        // (the old HEAD check returned 405 on the exemplar GET-only route).
+        setAvailableExemplars(res.exemplars);
       })
       .catch(() => setError("갤러리를 불러올 수 없습니다"))
       .finally(() => setLoading(false));
