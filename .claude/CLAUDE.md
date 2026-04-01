@@ -55,6 +55,12 @@ docker compose exec -T api python -m app.cli.backfill --target caption --since 2
 docker compose exec -T api python -m app.cli.backfill_face_thumbnails_to_s3 --dry-run
 docker compose exec -T api python -m app.cli.backfill_face_thumbnails_to_s3
 # Flags: --dry-run, --org <org_id>, --skip-existing
+
+# Export search analytics to S3 (Parquet)
+docker compose exec -T api python -m app.cli.export_analytics --dry-run
+docker compose exec -T api python -m app.cli.export_analytics                   # exports yesterday
+docker compose exec -T api python -m app.cli.export_analytics --date 2026-03-15 # specific date
+# S3 path: s3://{bucket}/analytics/search_events/year={Y}/month={M}/day={D}/{date}.parquet
 ```
 
 ## Architecture
@@ -148,6 +154,21 @@ Auto-generates a highlight video from a face profile. Uses the "Max-Diversity Ru
 Architecture: Hexagonal — domain algorithm (`highlight_reel/domain.py`) is pure Python with zero I/O imports. Port protocol (`port.py`) defines data access interface. Adapter (`adapter.py`) implements it with OpenSearch + DB. Service layer orchestrates. No direct imports from `shorts_render` internals.
 
 User controls: duration (30s-5min), per-video exclusions respected, clip removal in preview. Rendered videos appear on shorts page with progress tracking.
+
+### Shorts Timeline Editor
+
+Timeline-based video editor at `/shorts/editor` for composing short-form videos from scenes.
+
+- **Route**: `/shorts/editor?videoId=X&sceneIds=a,b,c` or `?shortId=Y`
+- **Module**: `services/web/src/features/shorts-editor/` (self-contained, 28 files)
+- **State**: `useEditorState` reducer with 16 actions (clip CRUD, trim, reorder, subtitle CRUD)
+- **Preview**: Multi-clip playback via `usePlaybackSync` — switches `<video>` source at clip boundaries
+- **Timeline**: Visual clip blocks + subtitle bars, zoom 25-300%, drag-and-drop reorder via `@dnd-kit/sortable`
+- **Render**: Builds `CompositionSpec` → `POST /api/shorts/render` → existing FFmpeg pipeline
+- **API client**: `lib/api/shorts-render.ts` (submitRender, listRenderJobs, getShortComposition)
+- **Backend**: `GET /api/shorts/{short_id}/composition` generates or retrieves CompositionSpec
+- **Entry points**: ShortsCreatePage ("타임라인에서 편집"), SavedShortsPage ("편집"), ShortsPlanPanel ("Edit in Timeline")
+- **Keyboard**: Space (play/pause), Delete (remove selected), Escape (deselect)
 
 ### Key Principle: Workers MUST NOT import API database models
 
@@ -262,7 +283,7 @@ Production MUST use `--no-deps` flag in all Docker Compose commands. Production 
 | `deploy-production.yml` | Manual dispatch | Deploy to production EC2 |
 | `build-gpu-images.yml` | Manual / code change | Build GPU worker images for GHCR |
 | `worker-coupling-check.yml` | PR / push | Verify workers don't import API DB models |
-| `analytics-export.yml` | Scheduled | Export analytics to S3 |
+| `analytics-export.yml` | Daily 01:00 UTC | Export search analytics to S3 (staging + production) |
 | `search-quality.yml` | Manual | Search quality regression tests |
 
 ## Key Configuration
@@ -282,6 +303,9 @@ Critical env vars:
 - `drive_stt_timeout_seconds` — timeout for STT worker callback before scene split proceeds
 - `FACE_THUMBNAIL_S3_PRIMARY` — `false` by default; when `true`, face thumbnails read from S3 first with disk fallback
 - `HIGHLIGHT_REEL_ENABLED` — `false` by default; enables person highlight reel auto-generation endpoints
+- `ANALYTICS_ENABLED` — `true` by default; records search events to Postgres `search_events` table (partitioned by month)
+- `ANALYTICS_EXPORT_ENABLED` — `false` by default; enables nightly S3 Parquet export via CLI. `true` on staging + production
+- `ANALYTICS_S3_BUCKET` — defaults to `DRIVE_S3_BUCKET` if empty. Staging: `heimdex-drive-staging`, production: `livenow-media-prod`
 
 ## Infrastructure Access
 
@@ -320,6 +344,22 @@ Contracts are **volume-mounted** into Docker containers, NOT installed from PyPI
 
 **Rule**: Never set `>=X.Y.Z` in pyproject.toml if that version doesn't exist on PyPI yet. The current safe floor is `>=0.8.0` (latest on PyPI: 0.8.2). To publish a new version, tag `vX.Y.Z` in the contracts repo.
 
+## OpenSearch Scene Index Conventions
+
+- **Doc ID format**: `{org_id}:{scene_id}` — e.g., `4d20264c-...:gd_1f7b991a_scene_037`
+- **`mget_scenes(doc_ids)`**: Takes a single `list[str]` argument (NOT `org_id, scene_ids`). Returns `dict[str, dict]`.
+- **`find_scene_ids_by_video_id(org_id, video_id)`**: Returns list of `scene_id` strings (not doc IDs)
+- When constructing doc IDs for `mget_scenes`, always prefix: `[f"{org_id}:{sid}" for sid in scene_ids]`
+- The scene search client (`get_scene_opensearch_client`) is a `SceneSearchClient` instance with `SceneIngestMixin`
+
+## Frontend Testing
+
+- **Test runner**: Vitest + Testing Library (`@testing-library/react`)
+- **Config**: `services/web/vitest.config.ts` — `@` alias resolves to `./src`
+- **CRITICAL**: Always run `npx vitest` from `services/web/`, NOT from the repo root. Running from root picks up `e2e/` Playwright files and tests without the vitest config, causing false failures.
+- **Test location**: Unit tests in `features/*/` next to code, or in `src/__tests__/`
+- **JSX test files**: Must have `.tsx` extension and vitest environment must be `jsdom`
+
 ## Data Backfill Patterns
 
 When fixing data that lives in both PostgreSQL and OpenSearch:
@@ -344,6 +384,13 @@ When fixing data that lives in both PostgreSQL and OpenSearch:
 - Setting `AI_TAGS_ENABLED=true` without `VLM_TAGS_ENABLED=true` (ai_tags only flow through the VLM path)
 - Importing from `shorts_render` internals in `highlight_reel` module (hexagonal boundary — use service interface via DI)
 - Adding I/O imports (DB, OpenSearch, S3) to `highlight_reel/domain.py` (must stay pure)
+- Using `value || fallback` with numeric values that can be 0 (use `value ?? fallback` or `value != null` instead — JS treats 0 as falsy)
+- Using `HEAD` requests to check if API endpoints exist (many FastAPI routes only support GET/POST — use GET or skip the check)
+- Passing `org_id` as first arg to `mget_scenes()` — it only takes `doc_ids: list[str]` where doc_id = `{org_id}:{scene_id}`
+- Silently swallowing exceptions with bare `except Exception: pass` in API endpoints (log at minimum with `logger.warning`)
+- Running `npx vitest` from repo root instead of `services/web/` (picks up Playwright e2e files, causes false failures)
+- Not adjusting `selectedClipIndex`/`selectedSubtitleIndex` when removing items before the selected index in array-based selection (off-by-one after splice)
+- Using stale closures in React effects that read frequently-changing values like `playheadMs` — use refs for values that change every frame, deps arrays for values that change on user action
 
 ## Documentation
 

@@ -14,7 +14,7 @@ import type { SortOption } from "@/lib/search-state";
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-export const PAGE_SIZE = 16;
+export const PAGE_SIZE = 20;
 
 type SourceType = "gdrive" | "removable_disk" | "local" | "youtube";
 const ALL_SOURCES: SourceType[] = ["gdrive", "removable_disk", "local", "youtube"];
