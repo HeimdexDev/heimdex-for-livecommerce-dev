@@ -24,6 +24,17 @@ logger = get_logger(__name__)
 
 
 def _to_response(job: ShortsRenderJob, download_url: str | None = None) -> RenderJobResponse:
+    # Extract thumbnail from first scene clip in input_spec
+    thumb_vid = None
+    thumb_scene = None
+    try:
+        clips = job.input_spec.get("scene_clips", [])
+        if clips:
+            thumb_vid = clips[0].get("video_id")
+            thumb_scene = clips[0].get("scene_id")
+    except (AttributeError, IndexError, TypeError):
+        pass
+
     return RenderJobResponse(
         id=cast(UUID, job.id),
         video_id=job.video_id,
@@ -36,6 +47,8 @@ def _to_response(job: ShortsRenderJob, download_url: str | None = None) -> Rende
         output_size_bytes=job.output_size_bytes,
         error=job.error,
         download_url=download_url,
+        thumbnail_video_id=thumb_vid,
+        thumbnail_scene_id=thumb_scene,
     )
 
 

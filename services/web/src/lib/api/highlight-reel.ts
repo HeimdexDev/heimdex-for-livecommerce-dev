@@ -38,6 +38,8 @@ export interface RenderJobResponse {
   output_size_bytes: number | null;
   error: string | null;
   download_url: string | null;
+  thumbnail_video_id: string | null;
+  thumbnail_scene_id: string | null;
 }
 
 // ---------------------------------------------------------------------------

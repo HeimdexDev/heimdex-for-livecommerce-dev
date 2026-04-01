@@ -236,14 +236,12 @@ export function SavedShortsPage() {
     }
 
     for (const r of renderJobs) {
-      // Extract first scene_id from input_spec if available
-      const firstClip = (r as unknown as { input_spec?: { scene_clips?: { scene_id?: string; video_id?: string }[] } }).input_spec?.scene_clips?.[0];
       items.push({
         id: r.id,
         type: "render",
         title: r.title,
-        video_id: r.video_id,
-        scene_id: firstClip?.scene_id,
+        video_id: r.thumbnail_video_id ?? r.video_id,
+        scene_id: r.thumbnail_scene_id ?? undefined,
         created_at: r.created_at,
         status: r.status,
         output_duration_ms: r.output_duration_ms,
@@ -472,8 +470,7 @@ export function SavedShortsPage() {
                     </Link>
                   ) : (
                     <div className="relative h-full w-full bg-gray-800 flex items-center justify-center">
-                      {/* Render job thumbnail — use first scene if available */}
-                      {item.scene_id && item.video_id && !item.video_id.startsWith("highlight:") ? (
+                      {item.scene_id && item.video_id ? (
                         <SceneThumbnail videoId={item.video_id} sceneId={item.scene_id} agentAvailable={true} className="h-full w-full" />
                       ) : (
                         <svg className="h-8 w-8 text-gray-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" /></svg>

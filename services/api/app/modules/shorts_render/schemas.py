@@ -34,6 +34,8 @@ class RenderJobResponse(BaseModel):
     output_size_bytes: int | None
     error: str | None
     download_url: str | None = None
+    thumbnail_video_id: str | None = None
+    thumbnail_scene_id: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
