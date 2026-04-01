@@ -43,6 +43,18 @@ make search-quality     # Golden queries: BM25, semantic, hybrid
 
 # Playwright setup (first time only)
 cd e2e && npm install && npx playwright install chromium
+
+# Backfill enrichments for existing videos
+docker compose exec -T api python -m app.cli.backfill --target ai_tags --dry-run
+docker compose exec -T api python -m app.cli.backfill --target ai_tags --org livenow --batch-size 20
+docker compose exec -T api python -m app.cli.backfill --target caption --since 2026-03-01 --resume
+# Targets: ai_tags, caption, visual_embed, stt, ocr
+# Flags: --org, --since, --until, --library, --limit, --batch-size, --delay, --dry-run, --resume, --skip-idempotency
+
+# Backfill face thumbnails to S3
+docker compose exec -T api python -m app.cli.backfill_face_thumbnails_to_s3 --dry-run
+docker compose exec -T api python -m app.cli.backfill_face_thumbnails_to_s3
+# Flags: --dry-run, --org <org_id>, --skip-existing
 ```
 
 ## Architecture
@@ -95,7 +107,47 @@ Pipeline: VLM prompt (`heimdex-media-pipelines/vision/tagging.py`) includes `AI�
 
 Feature flags: `VLM_TAGS_ENABLED` (enables VLM tag extraction), `AI_TAGS_ENABLED` (enables free-form ai_tags). Both must be `true` for ai_tags to flow.
 
-OpenSearch scene index version: `v5` (added `ai_tags` mapping with keyword + nori sub-field). Run `python -m app.modules.search.promote_alias` after deployment.
+OpenSearch scene index: `ai_tags` field added in-place to v4 via `put_mapping` (keyword + text sub-field with nori/fallback analyzer). No index version bump needed — additive mapping changes use `put_mapping` directly.
+
+### Backfill CLI (`services/api/app/cli/backfill.py`)
+
+**Living script** — evolve this CLI whenever new enrichment types are added. When a code change affects how existing data is indexed, stored, or enriched, add a new target to `TARGETS` in `backfill.py` and run a backfill.
+
+**When to backfill:** Any change that introduces a new field, modifies enrichment output, or changes how data is indexed requires backfilling existing videos. Use the backfill CLI — do not write one-off scripts.
+
+**How to add a new target:**
+1. Add a `BackfillTarget` entry to `TARGETS` dict in `backfill.py`
+2. Map it to the correct SQS `job_types` and `status_field` for idempotency
+3. Test with `--dry-run` first, then `--limit 5` on staging
+
+Current targets: `ai_tags`, `caption`, `visual_embed`, `stt`, `ocr`. All flow through existing SQS + worker infrastructure. `ai_tags` = re-captioning with `AI_TAGS_ENABLED=true`.
+
+### Face Profile Thumbnail Selection
+
+Users can choose representative face images via gallery picker or custom upload:
+
+- **Gallery**: `GET /api/people/{id}/exemplars` returns pre-generated face crops sorted by quality
+- **Select**: `PATCH /api/people/{id}/thumbnail` with exemplar_id
+- **Upload**: `POST /api/people/{id}/thumbnail` (multipart, max 5MB, resize to 512x512 JPEG)
+- **Reset**: `DELETE /api/people/{id}/thumbnail` reverts to auto-selection
+
+Override protection: `FaceIdentity.thumbnail_source` column (`auto`/`exemplar`/`upload`). When not `auto`, face worker's internal upload endpoint returns `{"stored": false, "skipped": "user_override"}`. Merge preserves user-selected thumbnails. Delete cleans up exemplar crop files.
+
+Disk layout: `/data/thumbnails/{org_id}/faces/exemplars/{exemplar_uuid}.jpg`
+S3 layout: `{org_id}/faces/{cluster_id}.jpg`, `{org_id}/faces/exemplars/{exemplar_id}.jpg`
+
+Storage: Dual-write (disk + S3). Reads check disk first, fall back to S3. When `FACE_THUMBNAIL_S3_PRIMARY=true`, reads from S3 first with disk fallback. S3 cleanup on delete/merge. Backfill existing disk thumbnails with `backfill_face_thumbnails_to_s3.py`.
+
+### Highlight Reel (when `HIGHLIGHT_REEL_ENABLED=true`)
+
+Auto-generates a highlight video from a face profile. Uses the "Max-Diversity Run Sampler" algorithm to select scenes across multiple videos.
+
+- **Preview**: `POST /api/people/{id}/highlight-reel/preview` — returns clip selection for review
+- **Render**: `POST /api/people/{id}/highlight-reel/render` — submits to existing shorts render pipeline
+
+Architecture: Hexagonal — domain algorithm (`highlight_reel/domain.py`) is pure Python with zero I/O imports. Port protocol (`port.py`) defines data access interface. Adapter (`adapter.py`) implements it with OpenSearch + DB. Service layer orchestrates. No direct imports from `shorts_render` internals.
+
+User controls: duration (30s-5min), per-video exclusions respected, clip removal in preview. Rendered videos appear on shorts page with progress tracking.
 
 ### Key Principle: Workers MUST NOT import API database models
 
@@ -228,6 +280,8 @@ Critical env vars:
 - `AI_TAGS_ENABLED` — `false` by default; enables free-form Korean AI tags (requires `VLM_TAGS_ENABLED=true`)
 - `drive_split_preset` — `default/fine/coarse/visual_only`; set per org in org settings
 - `drive_stt_timeout_seconds` — timeout for STT worker callback before scene split proceeds
+- `FACE_THUMBNAIL_S3_PRIMARY` — `false` by default; when `true`, face thumbnails read from S3 first with disk fallback
+- `HIGHLIGHT_REEL_ENABLED` — `false` by default; enables person highlight reel auto-generation endpoints
 
 ## Infrastructure Access
 
@@ -264,7 +318,7 @@ Critical env vars:
 
 Contracts are **volume-mounted** into Docker containers, NOT installed from PyPI during builds. However, `pyproject.toml` version constraints are still checked during `docker build` (pip install step). The Dockerfile strips the contracts dependency via `sed`, but if any other dep transitively requires contracts, the PyPI version is used.
 
-**Rule**: Never set `>=X.Y.Z` in pyproject.toml if that version doesn't exist on PyPI yet. The current safe floor is `>=0.8.0` (latest on PyPI). To publish a new version, tag `vX.Y.Z` in the contracts repo.
+**Rule**: Never set `>=X.Y.Z` in pyproject.toml if that version doesn't exist on PyPI yet. The current safe floor is `>=0.8.0` (latest on PyPI: 0.8.2). To publish a new version, tag `vX.Y.Z` in the contracts repo.
 
 ## Data Backfill Patterns
 
@@ -288,6 +342,8 @@ When fixing data that lives in both PostgreSQL and OpenSearch:
 - Google Drive incremental sync: forgetting to add new fields to the `changes().list()` fields parameter (only full scan fields auto-include everything)
 - Setting `DRIVE_SPEECH_SPLIT_ENABLED=true` without the STT worker deployed (videos get stuck in `awaiting_stt`)
 - Setting `AI_TAGS_ENABLED=true` without `VLM_TAGS_ENABLED=true` (ai_tags only flow through the VLM path)
+- Importing from `shorts_render` internals in `highlight_reel` module (hexagonal boundary — use service interface via DI)
+- Adding I/O imports (DB, OpenSearch, S3) to `highlight_reel/domain.py` (must stay pure)
 
 ## Documentation
 
