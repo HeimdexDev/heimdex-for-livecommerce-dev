@@ -33,8 +33,9 @@ KMEANS_MAX_ITERATIONS = 10
 KMEANS_RESIZE_PX = 128
 
 # Gaussian spread for single-color query vectors
-QUERY_HUE_SIGMA = 1.0  # spread across neighboring hue buckets
-QUERY_SAT_SIGMA = 0.5  # spread across saturation levels
+# Tighter sigma = more precise color matching, less bleed to neighbors
+QUERY_HUE_SIGMA = 0.5  # spread across neighboring hue buckets (was 1.0)
+QUERY_SAT_SIGMA = 0.3  # spread across saturation levels (was 0.5)
 
 
 def extract_dominant_colors(
