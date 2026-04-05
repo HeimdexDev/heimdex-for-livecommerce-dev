@@ -39,7 +39,8 @@ async def _apply_mapping(dry_run: bool = False) -> None:
     from app.modules.search.scene_client import SceneSearchClient
 
     client = SceneSearchClient()
-    index_name = client.index_name
+    # Use alias to target whichever physical index is active
+    index_name = client.alias_name
 
     logger.info(f"Target index: {index_name}")
     logger.info(f"Mapping to add: color_embedding ({COLOR_EMBEDDING_DIMENSION}-dim kNN), dominant_colors (keyword)")
