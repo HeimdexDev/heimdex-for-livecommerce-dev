@@ -112,15 +112,24 @@ export default function ColorPicker({ value, onChange }: ColorPickerProps) {
           {/* Divider + custom color */}
           <div className="mt-3 flex items-center gap-2 border-t border-gray-100 pt-3">
             <input
+              id="color-custom-input"
               type="color"
               defaultValue="#6366f1"
               className="h-8 w-8 shrink-0 cursor-pointer appearance-none rounded-lg border-0 bg-transparent p-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded-lg [&::-webkit-color-swatch]:border-0"
-              onChange={(e) => {
-                onChange(e.target.value);
-                setIsOpen(false);
-              }}
             />
-            <span className="text-xs text-gray-400">직접 선택</span>
+            <button
+              type="button"
+              onClick={() => {
+                const input = document.getElementById("color-custom-input") as HTMLInputElement | null;
+                if (input) {
+                  onChange(input.value);
+                  setIsOpen(false);
+                }
+              }}
+              className="rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-200"
+            >
+              적용
+            </button>
           </div>
         </div>
       )}
