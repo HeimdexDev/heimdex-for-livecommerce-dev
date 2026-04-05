@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gc
 import io
 import logging
 
@@ -85,10 +86,16 @@ async def _backfill(limit: int, batch_size: int, dry_run: bool) -> None:
 
             try:
                 obj = s3.get_object(Bucket=bucket, Key=s3_key)
-                img = Image.open(io.BytesIO(obj["Body"].read())).convert("RGB")
+                raw = obj["Body"].read()
+                obj["Body"].close()
+                buf = io.BytesIO(raw)
+                img = Image.open(buf).convert("RGB")
                 colors, weights = extract_dominant_colors(img, k=5)
                 histogram = rgb_to_hsl_histogram(colors, weights)
                 hex_colors = colors_to_hex(colors[:5])
+                img.close()
+                buf.close()
+                del raw
                 updates.append((doc_id, {"color_embedding": histogram, "dominant_colors": hex_colors}))
                 success += 1
             except s3.exceptions.NoSuchKey:
@@ -107,6 +114,7 @@ async def _backfill(limit: int, batch_size: int, dry_run: bool) -> None:
             await client.client.bulk(body=actions, params={"refresh": "true"})
 
         logger.info("progress: total=%d success=%d errors=%d", total, success, errors)
+        gc.collect()
 
         body["search_after"] = hits[-1]["sort"]
 
