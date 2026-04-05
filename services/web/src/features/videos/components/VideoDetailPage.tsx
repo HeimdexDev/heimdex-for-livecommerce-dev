@@ -154,6 +154,8 @@ function VideoInfoPanel({
   isReprocessing: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const { settings } = useOrgSettings();
+  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
   const title = meta?.video_title || videoId;
   const lastEnd = scenes.length > 0 ? scenes[scenes.length - 1].end_ms : 0;
   const firstStart = scenes.length > 0 ? scenes[0].start_ms : 0;
@@ -210,12 +212,15 @@ function VideoInfoPanel({
 
   return (
     <div>
-      <div className="aspect-video w-full overflow-hidden rounded-lg bg-black">
+      <div className={cn(
+        "w-full overflow-hidden rounded-lg bg-black",
+        getThumbnailAspectClass(aspectRatio),
+      )}>
         <video
           ref={videoRef}
           src={playbackUrl}
           controls
-          className="h-full w-full"
+          className="h-full w-full object-contain"
           poster={posterUrl}
         />
       </div>

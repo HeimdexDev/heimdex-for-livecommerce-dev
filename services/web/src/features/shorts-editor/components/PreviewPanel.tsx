@@ -5,6 +5,8 @@ import type { EditorClip, EditorSubtitle } from "../lib/types";
 import { getActiveSubtitles } from "../lib/source-time";
 import { formatTimelineTimestamp } from "../lib/timeline-math";
 import { usePlaybackSync } from "../hooks/usePlaybackSync";
+import { useOrgSettings } from "@/lib/orgSettings";
+import { getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
 interface PreviewPanelProps {
   clips: EditorClip[];
@@ -55,13 +57,19 @@ export function PreviewPanel({
     onPlayingChange,
   });
 
+  const { settings } = useOrgSettings();
+  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
+
   const activeSubtitles = getActiveSubtitles(subtitles, playheadMs);
   const progressPct = totalDurationMs > 0 ? (playheadMs / totalDurationMs) * 100 : 0;
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-4">
-      {/* 9:16 preview container */}
-      <div className="relative aspect-[9/16] w-full max-w-[280px] overflow-hidden rounded-lg bg-black">
+      {/* Preview container — matches org aspect ratio */}
+      <div className={cn(
+        "relative w-full overflow-hidden rounded-lg bg-black",
+        aspectRatio === "9:16" ? "aspect-[9/16] max-w-[280px]" : "aspect-video max-w-[480px]",
+      )}>
         {/* Main video element */}
         <video
           ref={videoRef}
