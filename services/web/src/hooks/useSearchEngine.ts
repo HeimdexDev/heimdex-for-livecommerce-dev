@@ -198,7 +198,7 @@ export function useSearchEngine(
   // ── handleSearch — takes a raw query string (slash commands parsed in component) ──
   const handleSearch = useCallback(
     async (query: string) => {
-      if (!query.trim()) return;
+      if (!query.trim() && !colorHex) return;
       if (!isSearchMode) {
         sortBeforeSearchRef.current = sortBy;
       }
@@ -227,7 +227,7 @@ export function useSearchEngine(
 
   // ── Auto re-search when filters change ──────────────────────────────────
   useEffect(() => {
-    if (activeQuery) {
+    if (activeQuery || colorHex) {
       performSearch(activeQuery);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

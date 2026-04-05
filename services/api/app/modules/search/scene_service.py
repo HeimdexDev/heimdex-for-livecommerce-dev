@@ -141,7 +141,12 @@ class SceneSearchService:
             color_hex=color_hex,
         )
 
-        match search_mode:
+        # Auto-route to semantic when color_hex is set (color kNN only runs there)
+        effective_mode = search_mode
+        if color_hex and effective_mode != "semantic":
+            effective_mode = "semantic"
+
+        match effective_mode:
             case "metadata":
                 return await self._search_metadata(ctx, alpha)
             case "semantic":
@@ -291,20 +296,29 @@ class SceneSearchService:
         # --- Color weight (activated by color picker) ---
         color_w = 0.0
         color_query_vec: list[float] | None = None
+        has_query = bool(ctx.query and ctx.query.strip())
+
         if ctx.color_hex:
             from app.modules.search.color_extraction import hex_to_color_histogram
 
             color_query_vec = hex_to_color_histogram(ctx.color_hex)
-            color_w = 0.40
-            # Redistribute: scale down other weights to fit within remaining 0.60
-            scale = 1.0 - color_w
-            bm25_w *= scale
-            text_w *= scale
-            vis_w *= scale
+            if has_query:
+                # Color + text: color gets 0.40, rest scaled to 0.60
+                color_w = 0.40
+                scale = 1.0 - color_w
+                bm25_w *= scale
+                text_w *= scale
+                vis_w *= scale
+            else:
+                # Color-only: 100% color signal, no text signals
+                color_w = 1.0
+                bm25_w = 0.0
+                text_w = 0.0
+                vis_w = 0.0
 
         logger.info(
             "semantic_search_with_intent",
-            query=ctx.query[:50],
+            query=ctx.query[:50] if ctx.query else "",
             intent_type=intent.intent_type,
             visual_enabled=visual_enabled,
             bm25_weight=round(bm25_w, 3),
@@ -312,26 +326,30 @@ class SceneSearchService:
             visual_weight=round(vis_w, 3),
             color_weight=round(color_w, 3),
             color_hex=ctx.color_hex,
+            color_only=not has_query and color_w > 0,
             matched_patterns=intent.matched_patterns,
         )
 
-        # --- Generate embeddings in parallel ---
-        embed_coros: list[Any] = [get_query_embedding(ctx.query)]
-        if vis_w > 0:
-            embed_coros.append(get_visual_query_embedding(ctx.query))
-
-        embed_results = await asyncio.gather(*embed_coros)
-        query_embedding = embed_results[0]
-        visual_embedding = embed_results[1] if len(embed_results) > 1 else None
+        # --- Generate embeddings in parallel (skip if no text query) ---
+        query_embedding: list[float] | None = None
+        visual_embedding: list[float] | None = None
+        if has_query:
+            embed_coros: list[Any] = [get_query_embedding(ctx.query)]
+            if vis_w > 0:
+                embed_coros.append(get_visual_query_embedding(ctx.query))
+            embed_results = await asyncio.gather(*embed_coros)
+            query_embedding = embed_results[0]
+            visual_embedding = embed_results[1] if len(embed_results) > 1 else None
 
         # --- Dispatch OpenSearch queries in parallel (intent-gated) ---
         search_coros: list[Any] = []
         search_keys: list[str] = []
 
-        # Text kNN — always runs in semantic mode
-        search_keys.append("text_knn")
-        search_coros.append(
-            self.scene_opensearch.search_vector(
+        # Text kNN — only when query text exists and weight > 0
+        if has_query and text_w > 0 and query_embedding is not None:
+            search_keys.append("text_knn")
+            search_coros.append(
+                self.scene_opensearch.search_vector(
                 embedding=query_embedding,
                 org_id=ctx.org_id_str,
                 filters=ctx.filter_dict,
@@ -363,8 +381,8 @@ class SceneSearchService:
                 )
             )
 
-        # BM25 — only when weight > 0
-        if bm25_w > 0:
+        # BM25 — only when weight > 0 and query text exists
+        if bm25_w > 0 and has_query:
             search_keys.append("bm25")
             search_coros.append(
                 self.scene_opensearch.search_lexical(
@@ -380,7 +398,7 @@ class SceneSearchService:
         search_results = await asyncio.gather(*search_coros)
         result_map = dict(zip(search_keys, search_results))
 
-        vector_results = result_map["text_knn"]
+        vector_results = result_map.get("text_knn", [])
         visual_results = result_map.get("visual_knn", [])
         lexical_results = result_map.get("bm25", [])
         color_results = result_map.get("color_knn", [])
