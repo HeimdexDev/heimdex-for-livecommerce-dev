@@ -3,9 +3,11 @@
 import { useState } from "react";
 import { useImageSelectionContext } from "./ImageSelectionContext";
 import { getApiBaseUrl } from "@/lib/api/utils";
+import { useAuth } from "@/lib/auth";
 
 export function ImageDownloadBar() {
   const selection = useImageSelectionContext();
+  const { getAccessToken } = useAuth();
   const [downloading, setDownloading] = useState(false);
 
   if (!selection || selection.count === 0) return null;
@@ -23,10 +25,13 @@ export function ImageDownloadBar() {
         })),
       };
 
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const token = await getAccessToken();
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
       const res = await fetch(`${getApiBaseUrl()}/api/export/images`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
+        headers,
         body: JSON.stringify(body),
       });
 
