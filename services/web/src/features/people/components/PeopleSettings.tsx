@@ -14,6 +14,7 @@ import {
 } from "@dnd-kit/core";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import { usePeople } from "../hooks/usePeople";
+import { DateRangeCalendar, formatDateKr } from "@/components/ui/DateRangeCalendar";
 import { useAuth } from "@/lib/auth";
 import { useAgent } from "@/features/search/hooks/useAgent";
 import { getPersonTimeline, getPersonVideos, getVideoExclusions, saveVideoExclusions } from "@/lib/api/people";
@@ -830,10 +831,14 @@ export function PeopleSettings() {
     isDeleting,
     mergePeople,
     isMerging,
+    dateFrom,
+    dateTo,
+    setDateRange,
   } = usePeople();
   const { getAccessToken } = useAuth();
   const { isAvailable: agentAvailable } = useAgent();
   const [searchQuery, setSearchQuery] = useState("");
+  const [showCalendar, setShowCalendar] = useState(false);
   const [sortBy, setSortBy] = useState<"label" | "scenes" | "date">("label");
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [galleryTargetId, setGalleryTargetId] = useState<string | null>(null);
@@ -1122,6 +1127,50 @@ export function PeopleSettings() {
                     {key === "label" ? "라벨순" : key === "scenes" ? "등장 장면 수" : "업로드 날짜"}
                   </button>
                 ))}
+
+                <div className="relative ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => setShowCalendar((v) => !v)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                      dateFrom || dateTo
+                        ? "bg-indigo-100 text-indigo-700"
+                        : "bg-gray-100 text-gray-600 hover:bg-gray-200",
+                    )}
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
+                    </svg>
+                    {dateFrom && dateTo
+                      ? `${dateFrom} – ${dateTo}`
+                      : "기간 필터"}
+                  </button>
+                  {(dateFrom || dateTo) && (
+                    <button
+                      type="button"
+                      onClick={() => { setDateRange(null, null); setCurrentPage(1); }}
+                      className="ml-1 inline-flex items-center rounded-full p-0.5 text-indigo-500 hover:bg-indigo-50"
+                      title="필터 초기화"
+                    >
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                  {showCalendar && (
+                    <DateRangeCalendar
+                      startDate={dateFrom ? new Date(dateFrom) : null}
+                      endDate={dateTo ? new Date(dateTo) : null}
+                      onSelect={(start, end) => {
+                        setDateRange(formatDateKr(start), formatDateKr(end));
+                        setCurrentPage(1);
+                        setShowCalendar(false);
+                      }}
+                      onClose={() => setShowCalendar(false)}
+                    />
+                  )}
+                </div>
               </div>
 
               {!hasPeople ? (
