@@ -148,6 +148,15 @@ export function ShortsEditorPage() {
           sourceType: firstClip?.sourceType ?? "gdrive",
           clips,
         });
+
+        // Also fetch scenes so the scene list panel can display them
+        if (firstClip?.videoId) {
+          const scenesRes = await getVideoScenes(firstClip.videoId, 200, 0, getAccessToken);
+          if (!cancelled) {
+            setMeta(scenesRes);
+            if (!comp.title) setTitle(scenesRes.video_title ?? "");
+          }
+        }
       } catch (err) {
         if (!cancelled) {
           setLoadError(err instanceof Error ? err.message : "구성을 불러올 수 없습니다.");
