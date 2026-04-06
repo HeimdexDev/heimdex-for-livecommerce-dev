@@ -15,6 +15,7 @@ import type { GroupBy } from "@/features/search/hooks/useSearch";
 import type { VideoSummary, SceneResult, VideoResult, SearchMode } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
+import { useImageSelectionContext } from "@/features/images/ImageSelectionContext";
 import { parseSlashCommand, getSlashCommandSuggestions } from "@/lib/slash-commands";
 import { useOrgSettings } from "@/lib/orgSettings";
 import { getThumbnailAspectClass, getDashboardGridClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
@@ -681,6 +682,8 @@ function SceneCard({ scene, aspectRatio }: { scene: SceneResult; aspectRatio: Th
   const title = scene.video_title || "제목 없음";
   const isImage = scene.content_type === "image";
   const isYouTube = scene.source_type === "youtube";
+  const imageSelection = useImageSelectionContext();
+  const isChecked = imageSelection?.isSelected(scene.scene_id);
   const startSec = Math.round(scene.start_ms / 1000);
   const min = Math.floor(startSec / 60);
   const sec = startSec % 60;
@@ -712,6 +715,34 @@ function SceneCard({ scene, aspectRatio }: { scene: SceneResult; aspectRatio: Th
             <YouTubeIcon className="h-3 w-3" />
             YouTube
           </span>
+        )}
+        {imageSelection && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              imageSelection.toggle({
+                sceneId: scene.scene_id,
+                videoId: scene.video_id,
+                videoTitle: scene.video_title,
+              });
+            }}
+            disabled={!isChecked && !imageSelection.canSelect}
+            className={cn(
+              "absolute top-1.5 left-1.5 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all z-10",
+              isChecked
+                ? "bg-indigo-600 border-indigo-600 text-white"
+                : "border-white/80 bg-black/20 text-transparent hover:border-white hover:bg-black/40",
+              !isChecked && !imageSelection.canSelect && "opacity-30 cursor-not-allowed",
+              !isChecked && imageSelection.canSelect && "opacity-0 group-hover:opacity-100",
+              isChecked && "opacity-100",
+            )}
+            title={isChecked ? "선택 해제" : "다운로드 선택"}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+          </button>
         )}
       </div>
       <div className="mt-2 flex items-center gap-1.5">
