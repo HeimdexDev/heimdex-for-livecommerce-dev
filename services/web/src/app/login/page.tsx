@@ -13,7 +13,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      router.replace("/");
+      const returnTo = sessionStorage.getItem("heimdex_return_to") || "/";
+      sessionStorage.removeItem("heimdex_return_to");
+      router.replace(returnTo);
     }
   }, [isAuthenticated, isLoading, router]);
 
