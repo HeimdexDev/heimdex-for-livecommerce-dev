@@ -232,9 +232,55 @@ function parseTimestampMs(ts: string): number | null {
   return null;
 }
 
+// Korean sentence-ending patterns + common punctuation
+const SENTENCE_SPLIT_RE = /(?<=[.!?。])\s+|(?<=[요다죠음네까게세지]\.?\s)/g;
+const MAX_SUBTITLE_CHARS = 60;
+const SUBTITLE_FONT_SIZE = 24;
+
+/**
+ * Split long text into subtitle-friendly chunks (~60 chars max).
+ * Prefers splitting on Korean sentence endings (요, 다, 죠, etc.) and punctuation.
+ */
+function chunkSubtitleText(text: string): string[] {
+  if (text.length <= MAX_SUBTITLE_CHARS) return [text];
+
+  // First try splitting on sentence boundaries
+  const sentences = text.split(SENTENCE_SPLIT_RE).filter((s) => s.trim());
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    const candidate = current ? `${current} ${sentence}` : sentence;
+    if (candidate.length <= MAX_SUBTITLE_CHARS) {
+      current = candidate;
+    } else {
+      if (current) chunks.push(current.trim());
+      // If a single sentence is too long, split by character limit
+      if (sentence.length > MAX_SUBTITLE_CHARS) {
+        const words = sentence.split(/\s+/);
+        current = "";
+        for (const word of words) {
+          const next = current ? `${current} ${word}` : word;
+          if (next.length > MAX_SUBTITLE_CHARS) {
+            if (current) chunks.push(current.trim());
+            current = word;
+          } else {
+            current = next;
+          }
+        }
+      } else {
+        current = sentence;
+      }
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+
+  return chunks.length > 0 ? chunks : [text.slice(0, MAX_SUBTITLE_CHARS)];
+}
+
 /**
  * Generate subtitle blocks from a scene's speaker transcript.
- * Maps speaker turns to timed EditorSubtitle entries positioned on the timeline.
+ * Long turns are chunked into ~60-char segments for readable display.
  */
 export function generateSubtitlesFromTranscript(
   speakerTranscript: string | undefined | null,
@@ -244,52 +290,68 @@ export function generateSubtitlesFromTranscript(
   if (turns.length === 0) return [];
 
   const clipDuration = clip.trimEndMs - clip.trimStartMs;
-  const subtitles: EditorSubtitle[] = [];
+  const style = { ...DEFAULT_SUBTITLE_STYLE, fontSizePx: SUBTITLE_FONT_SIZE };
+
+  // Flatten all turns into text chunks for even timing
+  const allChunks: string[] = [];
+  for (const turn of turns) {
+    allChunks.push(...chunkSubtitleText(turn.text));
+  }
+
+  if (allChunks.length === 0) return [];
 
   // Check if turns have usable timestamps
   const turnsWithTs = turns
     .map((turn) => ({ turn, ms: turn.timestamp ? parseTimestampMs(turn.timestamp) : null }))
     .filter((t) => t.ms != null) as Array<{ turn: typeof turns[0]; ms: number }>;
 
+  const subtitles: EditorSubtitle[] = [];
+
   if (turnsWithTs.length > 0) {
-    // Timestamp-based: use actual positions within the scene
+    // Timestamp-based: chunk each turn, distribute chunks within the turn's time slot
     for (let i = 0; i < turnsWithTs.length; i++) {
       const { turn, ms: offsetMs } = turnsWithTs[i];
-      // offsetMs is absolute in the video; convert to relative within clip
       const relativeMs = offsetMs - clip.trimStartMs;
       if (relativeMs < 0 || relativeMs >= clipDuration) continue;
 
-      const nextOffset = i + 1 < turnsWithTs.length
+      const nextRelative = i + 1 < turnsWithTs.length
         ? turnsWithTs[i + 1].ms - clip.trimStartMs
-        : relativeMs + DEFAULT_SUBTITLE_DURATION_MS;
-      const endMs = Math.min(relativeMs + Math.min(nextOffset - relativeMs, DEFAULT_SUBTITLE_DURATION_MS), clipDuration);
+        : clipDuration;
+      const slotDuration = Math.min(nextRelative - relativeMs, DEFAULT_SUBTITLE_DURATION_MS * 3);
 
-      subtitles.push({
-        id: generateSubtitleId(),
-        text: turn.text,
-        startMs: clip.timelineStartMs + relativeMs,
-        endMs: clip.timelineStartMs + endMs,
-        style: { ...DEFAULT_SUBTITLE_STYLE },
-      });
+      const chunks = chunkSubtitleText(turn.text);
+      const chunkDuration = Math.max(1500, Math.floor(slotDuration / chunks.length));
+
+      for (let j = 0; j < chunks.length; j++) {
+        const startMs = relativeMs + j * chunkDuration;
+        if (startMs >= clipDuration) break;
+        const endMs = Math.min(startMs + chunkDuration, clipDuration);
+
+        subtitles.push({
+          id: generateSubtitleId(),
+          text: chunks[j],
+          startMs: clip.timelineStartMs + startMs,
+          endMs: clip.timelineStartMs + endMs,
+          style: { ...style },
+        });
+      }
     }
   } else {
-    // No timestamps: distribute turns evenly across the clip duration
-    const slotDuration = Math.min(
-      Math.floor(clipDuration / turns.length),
-      DEFAULT_SUBTITLE_DURATION_MS,
-    );
-    if (slotDuration < 500) return []; // too short for subtitles
+    // No timestamps: distribute all chunks evenly across clip
+    const chunkDuration = Math.max(1500, Math.floor(clipDuration / allChunks.length));
+    if (chunkDuration < 500) return [];
 
-    for (let i = 0; i < turns.length; i++) {
-      const startMs = clip.timelineStartMs + Math.floor((i / turns.length) * clipDuration);
-      const endMs = Math.min(startMs + slotDuration, clip.timelineStartMs + clipDuration);
+    for (let i = 0; i < allChunks.length; i++) {
+      const startMs = clip.timelineStartMs + i * chunkDuration;
+      if (startMs >= clip.timelineStartMs + clipDuration) break;
+      const endMs = Math.min(startMs + chunkDuration, clip.timelineStartMs + clipDuration);
 
       subtitles.push({
         id: generateSubtitleId(),
-        text: turns[i].text,
+        text: allChunks[i],
         startMs,
         endMs,
-        style: { ...DEFAULT_SUBTITLE_STYLE },
+        style: { ...style },
       });
     }
   }
