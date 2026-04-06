@@ -1012,14 +1012,28 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
       {reprocessStatus && (
         <div className={cn(
-          "mb-6 rounded-lg p-4 text-sm font-medium",
+          "mb-6 rounded-lg p-4 text-sm font-medium flex items-center justify-between",
           isReprocessing && "bg-yellow-50 text-yellow-800",
           reprocessStatus.status === "completed" && "bg-green-50 text-green-800",
           reprocessStatus.status === "failed" && "bg-red-50 text-red-800",
         )}>
-          {isReprocessing && "장면 재분석 진행 중..."}
-          {reprocessStatus.status === "completed" && `장면 재분석이 완료되었습니다. (${reprocessStatus.scene_count}개 장면)`}
-          {reprocessStatus.status === "failed" && `장면 재분석에 실패했습니다: ${reprocessStatus.error}`}
+          <span>
+            {isReprocessing && "장면 재분석 진행 중..."}
+            {reprocessStatus.status === "completed" && `장면 재분석이 완료되었습니다. (${reprocessStatus.scene_count}개 장면)`}
+            {reprocessStatus.status === "failed" && `장면 재분석에 실패했습니다: ${reprocessStatus.error}`}
+          </span>
+          {!isReprocessing && (
+            <button
+              type="button"
+              onClick={() => setReprocessStatus(null)}
+              className="ml-4 flex-shrink-0 rounded p-1 transition-colors hover:bg-black/10"
+              title="닫기"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
         </div>
       )}
 
