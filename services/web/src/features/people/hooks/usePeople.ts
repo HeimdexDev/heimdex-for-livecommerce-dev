@@ -33,6 +33,9 @@ export interface UsePeopleReturn {
   isDeleting: boolean;
   mergePeople: (request: MergePersonRequest) => Promise<MergePersonResponse | null>;
   isMerging: boolean;
+  dateFrom: string | null;
+  dateTo: string | null;
+  setDateRange: (from: string | null, to: string | null) => void;
 }
 
 export function usePeople(): UsePeopleReturn {
@@ -47,15 +50,22 @@ export function usePeople(): UsePeopleReturn {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   const [isMerging, setIsMerging] = useState(false);
+  const [dateFrom, setDateFrom] = useState<string | null>(null);
+  const [dateTo, setDateTo] = useState<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestExcludedRef = useRef<Set<string>>(new Set());
+  const latestDateRef = useRef<{ from: string | null; to: string | null }>({ from: null, to: null });
 
   const fetchPeopleList = useCallback(async (query?: string) => {
     setIsLoading(true);
     setError(null);
     try {
+      const dateOpts = {
+        dateFrom: latestDateRef.current.from,
+        dateTo: latestDateRef.current.to,
+      };
       const [peopleRes, excludeRes] = await Promise.all([
-        getPeople(getAccessToken, query),
+        getPeople(getAccessToken, query, dateOpts),
         getExcludePreferences(getAccessToken),
       ]);
       setPeople(peopleRes.people);
@@ -259,6 +269,16 @@ export function usePeople(): UsePeopleReturn {
     [getAccessToken, fetchPeopleList],
   );
 
+  const setDateRange = useCallback(
+    (from: string | null, to: string | null) => {
+      setDateFrom(from);
+      setDateTo(to);
+      latestDateRef.current = { from, to };
+      fetchPeopleList();
+    },
+    [fetchPeopleList],
+  );
+
   useEffect(() => {
     fetchPeopleList();
     return () => {
@@ -287,5 +307,8 @@ export function usePeople(): UsePeopleReturn {
     isDeleting,
     mergePeople: merge,
     isMerging,
+    dateFrom,
+    dateTo,
+    setDateRange,
   };
 }

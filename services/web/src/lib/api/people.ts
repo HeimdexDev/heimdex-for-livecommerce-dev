@@ -67,9 +67,14 @@ async function apiRequest<T>(
 export async function getPeople(
   getToken?: TokenGetter,
   query?: string,
+  options?: { dateFrom?: string | null; dateTo?: string | null },
 ): Promise<PeopleListResponse> {
-  const params = query ? `?q=${encodeURIComponent(query)}` : "";
-  return apiRequest<PeopleListResponse>(`/api/people${params}`, "GET", getToken);
+  const searchParams = new URLSearchParams();
+  if (query) searchParams.set("q", query);
+  if (options?.dateFrom) searchParams.set("date_from", options.dateFrom);
+  if (options?.dateTo) searchParams.set("date_to", options.dateTo);
+  const qs = searchParams.toString();
+  return apiRequest<PeopleListResponse>(`/api/people${qs ? `?${qs}` : ""}`, "GET", getToken);
 }
 
 export async function renamePerson(
