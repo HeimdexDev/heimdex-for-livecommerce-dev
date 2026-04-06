@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState, useEffect } from "react";
 import type { EditorSubtitle } from "../lib/types";
 import { FONT_OPTIONS } from "../constants";
+import { loadPresets, savePreset, deletePreset, type SubtitlePreset } from "../lib/subtitle-presets";
 
 interface SubtitleStylePanelProps {
   title: string;
@@ -205,6 +206,14 @@ export function SubtitleStylePanel({
             </div>
           </div>
 
+          {/* Presets */}
+          <PresetSection
+            currentStyle={subtitle.style}
+            onApplyPreset={(style) => {
+              onUpdateSubtitle(subtitleIndex, { style });
+            }}
+          />
+
           {/* Delete */}
           <button
             type="button"
@@ -220,6 +229,107 @@ export function SubtitleStylePanel({
             <p className="text-xs font-medium">자막 스타일</p>
             <p className="mt-1 text-[10px]">타임라인에서 자막을 선택하세요</p>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PresetSection({
+  currentStyle,
+  onApplyPreset,
+}: {
+  currentStyle: EditorSubtitle["style"];
+  onApplyPreset: (style: EditorSubtitle["style"]) => void;
+}) {
+  const [presets, setPresets] = useState<SubtitlePreset[]>([]);
+  const [isNaming, setIsNaming] = useState(false);
+  const [presetName, setPresetName] = useState("");
+
+  useEffect(() => {
+    setPresets(loadPresets());
+  }, []);
+
+  const handleSave = () => {
+    if (!presetName.trim()) return;
+    savePreset(presetName.trim(), currentStyle);
+    setPresets(loadPresets());
+    setPresetName("");
+    setIsNaming(false);
+  };
+
+  const handleDelete = (id: string) => {
+    deletePreset(id);
+    setPresets(loadPresets());
+  };
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-500 mb-1.5">프리셋</label>
+
+      {isNaming ? (
+        <div className="flex gap-1.5 mb-2">
+          <input
+            type="text"
+            value={presetName}
+            onChange={(e) => setPresetName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") setIsNaming(false); }}
+            placeholder="프리셋 이름"
+            autoFocus
+            className="flex-1 rounded-lg border border-gray-200 px-2 py-1.5 text-xs focus:border-indigo-500 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={handleSave}
+            className="rounded-lg bg-indigo-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-600"
+          >
+            저장
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setIsNaming(true)}
+          className="w-full rounded-lg bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700 hover:bg-indigo-100 transition-colors mb-2"
+        >
+          현재 스타일 저장
+        </button>
+      )}
+
+      {presets.length > 0 && (
+        <div className="space-y-1">
+          {presets.map((preset) => (
+            <div
+              key={preset.id}
+              className="flex items-center gap-2 rounded-lg border border-gray-100 px-2.5 py-1.5 hover:bg-gray-50 transition-colors"
+            >
+              {/* Color swatch preview */}
+              <div
+                className="h-5 w-5 shrink-0 rounded border border-gray-200"
+                style={{
+                  backgroundColor: preset.style.backgroundColor ?? preset.style.fontColor,
+                  opacity: preset.style.backgroundColor ? preset.style.backgroundOpacity : 1,
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => onApplyPreset({ ...preset.style })}
+                className="flex-1 text-left text-xs text-gray-700 truncate"
+              >
+                {preset.name}
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDelete(preset.id);
+                }}
+                className="shrink-0 text-[10px] text-gray-400 hover:text-red-500"
+              >
+                삭제
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
