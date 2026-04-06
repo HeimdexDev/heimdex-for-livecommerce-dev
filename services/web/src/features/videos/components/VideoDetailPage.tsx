@@ -613,6 +613,23 @@ function ScenesPanel({
     return displayScenes.slice(start, start + SCENES_PER_PAGE);
   }, [displayScenes, currentPage]);
 
+  // Auto-paginate to the active scene's page when navigating from search
+  const activeSceneRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (activeSceneMs == null || displayScenes.length === 0) return;
+    const idx = displayScenes.findIndex((s) => s.start_ms === activeSceneMs);
+    if (idx < 0) return;
+    const targetPage = Math.floor(idx / SCENES_PER_PAGE) + 1;
+    if (targetPage !== currentPage) setCurrentPage(targetPage);
+  }, [activeSceneMs, displayScenes]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll the active scene card into view after pagination settles
+  useEffect(() => {
+    if (activeSceneRef.current) {
+      activeSceneRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [currentPage, activeSceneMs]);
+
   const handleSearch = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     const q = searchQuery.trim();
@@ -793,20 +810,24 @@ function ScenesPanel({
               {activeSearch ? "검색 결과가 없습니다." : "장면이 없습니다."}
             </div>
           ) : (
-            paginatedScenes.map((scene, i) => (
-              <SceneCard
-                key={scene.scene_id}
-                scene={scene}
-                index={(currentPage - 1) * SCENES_PER_PAGE + i}
-                videoId={videoId}
-                agentAvailable={agentAvailable}
-                isSelected={selectedIds.has(scene.scene_id)}
-                onToggle={toggleSelection}
-                onSeek={onSeekToScene}
-                isPlaying={activeSceneMs === scene.start_ms}
-                aspectRatio={aspectRatio}
-              />
-            ))
+            paginatedScenes.map((scene, i) => {
+              const playing = activeSceneMs === scene.start_ms;
+              return (
+                <div key={scene.scene_id} ref={playing ? activeSceneRef : undefined}>
+                  <SceneCard
+                    scene={scene}
+                    index={(currentPage - 1) * SCENES_PER_PAGE + i}
+                    videoId={videoId}
+                    agentAvailable={agentAvailable}
+                    isSelected={selectedIds.has(scene.scene_id)}
+                    onToggle={toggleSelection}
+                    onSeek={onSeekToScene}
+                    isPlaying={playing}
+                    aspectRatio={aspectRatio}
+                  />
+                </div>
+              );
+            })
           )}
         </div>
       )}
