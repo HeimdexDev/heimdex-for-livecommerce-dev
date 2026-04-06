@@ -894,6 +894,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
   const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
 
   const [reprocessStatus, setReprocessStatus] = useState<ReprocessJobResponse | null>(null);
+  const [reprocessDismissed, setReprocessDismissed] = useState(false);
   const [isReprocessDialogOpen, setIsReprocessDialogOpen] = useState(false);
 
   const handleViewChange = useCallback((newView: ViewMode) => {
@@ -927,6 +928,12 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
         setScenes(scenesRes.scenes);
         setTotalScenes(scenesRes.total);
         setReprocessStatus(statusRes);
+        if (statusRes && (statusRes.status === "completed" || statusRes.status === "failed")) {
+          const dismissKey = `heimdex_reprocess_dismissed_${videoId}`;
+          if (localStorage.getItem(dismissKey) === statusRes.status) {
+            setReprocessDismissed(true);
+          }
+        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -1010,7 +1017,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
         <span className="text-gray-700">{videoTitle}</span>
       </div>
 
-      {reprocessStatus && (
+      {reprocessStatus && !reprocessDismissed && (
         <div className={cn(
           "mb-6 rounded-lg p-4 text-sm font-medium flex items-center justify-between",
           isReprocessing && "bg-yellow-50 text-yellow-800",
@@ -1025,7 +1032,11 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
           {!isReprocessing && (
             <button
               type="button"
-              onClick={() => setReprocessStatus(null)}
+              onClick={() => {
+                const dismissKey = `heimdex_reprocess_dismissed_${videoId}`;
+                localStorage.setItem(dismissKey, reprocessStatus.status);
+                setReprocessDismissed(true);
+              }}
               className="ml-4 flex-shrink-0 rounded p-1 transition-colors hover:bg-black/10"
               title="닫기"
             >
