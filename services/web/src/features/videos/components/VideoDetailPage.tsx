@@ -1104,8 +1104,8 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
         </button>
       </nav>
 
-      <div className="flex gap-8">
-        <div className="w-[45%] flex-shrink-0">
+      <div className="flex items-start gap-8">
+        <div className="sticky top-4 w-[45%] flex-shrink-0 self-start">
           <VideoInfoPanel
             videoId={videoId}
             meta={meta}
