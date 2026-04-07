@@ -61,6 +61,14 @@ export interface VideoScene {
   people_cluster_ids: string[];
   ingest_time: string | null;
   keyframe_timestamp_ms: number;
+  is_edited?: boolean;
+  edited_fields?: string[];
+}
+
+export interface SceneOverrideResponse {
+  scene_id: string;
+  overridden_fields: string[];
+  updated_at: string;
 }
 
 export interface VideoScenesResponse {

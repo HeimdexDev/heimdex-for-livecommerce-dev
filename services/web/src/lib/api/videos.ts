@@ -3,6 +3,7 @@ import {
   ReprocessJobResponse,
   ReprocessParams,
   SceneGroupsResponse,
+  SceneOverrideResponse,
   VideoFilters,
   VideoListResponse,
   VideoScenesResponse,
@@ -222,4 +223,56 @@ export async function getVideoSceneGroups(
     `/api/videos/${encodeURIComponent(videoId)}/scene-groups${qs ? `?${qs}` : ""}`,
     getToken,
   );
+}
+
+/**
+ * Apply user overrides to a scene's caption, transcript, or tags.
+ */
+export async function patchSceneOverride(
+  videoId: string,
+  sceneId: string,
+  body: Partial<{
+    scene_caption: string;
+    transcript_raw: string;
+    speaker_transcript: string;
+    ai_tags: string[];
+  }>,
+  getToken: TokenGetter,
+): Promise<SceneOverrideResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = await getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/videos/${encodeURIComponent(videoId)}/scenes/${encodeURIComponent(sceneId)}/override`,
+    { method: "PATCH", headers, body: JSON.stringify(body) },
+  );
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => null);
+    throw ApiError.fromResponse(response.status, errorBody);
+  }
+  return response.json();
+}
+
+/**
+ * Reset a single field override back to the worker-generated value.
+ */
+export async function resetSceneOverride(
+  videoId: string,
+  sceneId: string,
+  fieldName: string,
+  getToken: TokenGetter,
+): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = await getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/videos/${encodeURIComponent(videoId)}/scenes/${encodeURIComponent(sceneId)}/override/${encodeURIComponent(fieldName)}`,
+    { method: "DELETE", headers },
+  );
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => null);
+    throw ApiError.fromResponse(response.status, errorBody);
+  }
 }

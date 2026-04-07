@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useAgent } from "@/features/search/hooks/useAgent";
-import { getVideoScenes, getReprocessStatus, reprocessScenes } from "@/lib/api/videos";
+import { getVideoScenes, getReprocessStatus, reprocessScenes, patchSceneOverride, resetSceneOverride } from "@/lib/api/videos";
 import { getAgentPlaybackUrl, getAgentThumbnailUrl, getCloudPlaybackUrl, getCloudThumbnailUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { formatTimestamp } from "@/lib/api/utils";
@@ -12,6 +12,8 @@ import type { VideoScene, VideoScenesResponse, ReprocessJobResponse, ReprocessPa
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
+import { InlineEditField } from "./InlineEditField";
+import { TagEditor } from "./TagEditor";
 import { ReprocessDialog } from "./ReprocessDialog";
 import { SceneGroupCard } from "./SceneGroupCard";
 import { VideoPeoplePanel } from "./VideoPeoplePanel";
@@ -382,6 +384,8 @@ export function SceneCard({
   onSeek,
   isPlaying,
   aspectRatio,
+  onSaveOverride,
+  onResetOverride,
 }: {
   scene: VideoScene;
   index: number;
@@ -392,6 +396,8 @@ export function SceneCard({
   onSeek?: (startMs: number) => void;
   isPlaying?: boolean;
   aspectRatio: ThumbnailAspectRatio;
+  onSaveOverride?: (sceneId: string, fieldName: string, value: string | string[]) => Promise<void>;
+  onResetOverride?: (sceneId: string, fieldName: string) => Promise<void>;
 }) {
   const [summaryExpanded, setSummaryExpanded] = useState(false);
   const [subtitleExpanded, setSubtitleExpanded] = useState(false);
@@ -465,14 +471,23 @@ export function SceneCard({
                   {tag}
                 </span>
               ))}
-              {aiTags.map((tag) => (
-                <span
-                  key={`ai-${tag}`}
-                  className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700"
-                >
-                  {tag}
-                </span>
-              ))}
+              {onSaveOverride ? (
+                <TagEditor
+                  tags={scene.ai_tags ?? []}
+                  isEdited={scene.edited_fields?.includes("ai_tags")}
+                  onSave={async (newTags) => { await onSaveOverride(scene.scene_id, "ai_tags", newTags); }}
+                  onReset={onResetOverride ? async () => { await onResetOverride(scene.scene_id, "ai_tags"); } : undefined}
+                />
+              ) : (
+                aiTags.map((tag) => (
+                  <span
+                    key={`ai-${tag}`}
+                    className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700"
+                  >
+                    {tag}
+                  </span>
+                ))
+              )}
             </div>
           )}
         </div>
@@ -504,14 +519,26 @@ export function SceneCard({
               </div>
               {summaryExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
             </button>
-            <p className={cn(
-              "mt-2 text-sm leading-relaxed text-gray-600",
-              !summaryExpanded && "line-clamp-2",
-            )}>
-              {captionText
-                ? (summaryExpanded ? captionText : captionPreview)
-                : (summaryExpanded ? scene.transcript_raw : transcriptPreview)}
-            </p>
+            {summaryExpanded && onSaveOverride ? (
+              <div className="mt-2">
+                <InlineEditField
+                  value={captionText || scene.transcript_raw}
+                  fieldName={captionText ? "scene_caption" : "transcript_raw"}
+                  isEdited={scene.edited_fields?.includes(captionText ? "scene_caption" : "transcript_raw")}
+                  onSave={async (field, val) => { await onSaveOverride(scene.scene_id, field, val); }}
+                  onReset={onResetOverride ? async (field) => { await onResetOverride(scene.scene_id, field); } : undefined}
+                />
+              </div>
+            ) : (
+              <p className={cn(
+                "mt-2 text-sm leading-relaxed text-gray-600",
+                !summaryExpanded && "line-clamp-2",
+              )}>
+                {captionText
+                  ? (summaryExpanded ? captionText : captionPreview)
+                  : (summaryExpanded ? scene.transcript_raw : transcriptPreview)}
+              </p>
+            )}
           </div>
 
           {hasSpeakers ? (
@@ -604,8 +631,36 @@ function ScenesPanel({
   const [groupingEnabled, setGroupingEnabled] = useState(false);
   const sceneGroups = useSceneGroups(videoId, getToken);
 
-  const displayScenes = searchResults ?? initialScenes;
+  const [sceneOverrides, setSceneOverrides] = useState<Record<string, Partial<VideoScene>>>({});
+  const displayScenes = (searchResults ?? initialScenes).map((s) => {
+    const ov = sceneOverrides[s.scene_id];
+    return ov ? { ...s, ...ov } : s;
+  });
   const displayTotal = searchResults !== null ? searchTotal : initialTotal;
+
+  const handleSaveOverride = useCallback(async (sceneId: string, fieldName: string, value: string | string[]) => {
+    const body: Record<string, string | string[]> = { [fieldName]: value };
+    await patchSceneOverride(videoId, sceneId, body, getToken);
+    setSceneOverrides((prev) => ({
+      ...prev,
+      [sceneId]: {
+        ...prev[sceneId],
+        [fieldName]: value,
+        is_edited: true,
+        edited_fields: [...new Set([...(prev[sceneId]?.edited_fields ?? []), fieldName])],
+      },
+    }));
+  }, [videoId, getToken]);
+
+  const handleResetOverride = useCallback(async (sceneId: string, fieldName: string) => {
+    await resetSceneOverride(videoId, sceneId, fieldName, getToken);
+    setSceneOverrides((prev) => {
+      const existing = { ...prev[sceneId] };
+      delete existing[fieldName as keyof VideoScene];
+      const fields = (existing.edited_fields ?? []).filter((f) => f !== fieldName);
+      return { ...prev, [sceneId]: { ...existing, edited_fields: fields, is_edited: fields.length > 0 } };
+    });
+  }, [videoId, getToken]);
 
   const totalPages = Math.max(1, Math.ceil(displayScenes.length / SCENES_PER_PAGE));
   const paginatedScenes = useMemo(() => {
@@ -824,6 +879,8 @@ function ScenesPanel({
                     onSeek={onSeekToScene}
                     isPlaying={playing}
                     aspectRatio={aspectRatio}
+                    onSaveOverride={handleSaveOverride}
+                    onResetOverride={handleResetOverride}
                   />
                 </div>
               );
