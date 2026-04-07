@@ -44,29 +44,6 @@ class SearchEventRepository:
         await self.session.flush()
         return event
 
-    async def list_by_date_range(
-        self,
-        *,
-        org_id: UUID | None = None,
-        date_from: datetime,
-        date_to: datetime,
-        limit: int = 10_000,
-    ) -> list[SearchEvent]:
-        stmt = (
-            select(SearchEvent)
-            .where(
-                SearchEvent.created_at >= date_from,
-                SearchEvent.created_at < date_to,
-            )
-            .order_by(SearchEvent.created_at.asc())
-            .limit(limit)
-        )
-        if org_id is not None:
-            stmt = stmt.where(SearchEvent.org_id == org_id)
-
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
     async def list_by_date_range_with_labels(
         self,
         *,

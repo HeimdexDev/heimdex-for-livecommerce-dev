@@ -76,9 +76,9 @@ def _rows_to_parquet(rows: list[dict[str, Any]]) -> bytes:
     arrays = [
         pa.array([r["id"] for r in rows], type=pa.int64()),
         pa.array([str(r["org_id"]) for r in rows], type=pa.string()),
-        pa.array([r.get("org_name") or "" for r in rows], type=pa.string()),
+        pa.array([r.get("org_name") for r in rows], type=pa.string()),
         pa.array([str(r["user_id"]) for r in rows], type=pa.string()),
-        pa.array([r.get("user_email") or "" for r in rows], type=pa.string()),
+        pa.array([r.get("user_email") for r in rows], type=pa.string()),
         pa.array([r["query_text"] for r in rows], type=pa.string()),
         pa.array([r["search_mode"] for r in rows], type=pa.string()),
         pa.array([r.get("result_count") for r in rows], type=pa.int32()),
@@ -130,6 +130,7 @@ def _upload_to_bq(data: bytes, project: str, dataset: str, target: date) -> None
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        # TODO: remove ALLOW_FIELD_ADDITION after BQ table has org_name+user_email columns
         schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION],
     )
 
