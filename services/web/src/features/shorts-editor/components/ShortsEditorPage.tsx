@@ -72,6 +72,17 @@ export function ShortsEditorPage() {
     [state.subtitles, updateSubtitle],
   );
 
+  const handleSubtitleFontSizeChange = useCallback(
+    (index: number, fontSizePx: number) => {
+      const sub = state.subtitles[index];
+      if (!sub) return;
+      updateSubtitle(index, {
+        style: { ...sub.style, fontSizePx },
+      });
+    },
+    [state.subtitles, updateSubtitle],
+  );
+
   // Load from scene IDs (entry from ShortsCreatePage or ShortsPlanPanel)
   useEffect(() => {
     if (!videoId || shortId) return;
@@ -298,6 +309,7 @@ export function ShortsEditorPage() {
             onPlayingChange={setPlaying}
             onSelectSubtitle={selectSubtitle}
             onUpdateSubtitlePosition={handleSubtitlePositionChange}
+            onUpdateSubtitleFontSize={handleSubtitleFontSizeChange}
           />
         }
         rightPanel={

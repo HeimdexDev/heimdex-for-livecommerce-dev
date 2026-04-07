@@ -20,6 +20,7 @@ interface PreviewPanelProps {
   onPlayingChange: (playing: boolean) => void;
   onSelectSubtitle: (index: number | null) => void;
   onUpdateSubtitlePosition: (index: number, positionX: number, positionY: number) => void;
+  onUpdateSubtitleFontSize: (index: number, fontSizePx: number) => void;
 }
 
 function PlayIcon() {
@@ -49,6 +50,7 @@ export function PreviewPanel({
   onPlayingChange,
   onSelectSubtitle,
   onUpdateSubtitlePosition,
+  onUpdateSubtitleFontSize,
 }: PreviewPanelProps) {
   const {
     videoRef,
@@ -71,13 +73,22 @@ export function PreviewPanel({
   const progressPct = totalDurationMs > 0 ? (playheadMs / totalDurationMs) * 100 : 0;
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<{ subtitleIndex: number; startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const dragRef = useRef<{
+    mode: "move" | "resize";
+    subtitleIndex: number;
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+    origFontSizePx: number;
+    lockedWidth: number | null;
+  } | null>(null);
 
   const getSubtitleIndex = useCallback((subtitleId: string): number => {
     return subtitles.findIndex((s) => s.id === subtitleId);
   }, [subtitles]);
 
-  const handlePointerDown = useCallback((e: React.PointerEvent, sub: EditorSubtitle) => {
+  const handleMovePointerDown = useCallback((e: React.PointerEvent, sub: EditorSubtitle) => {
     e.preventDefault();
     e.stopPropagation();
     const idx = getSubtitleIndex(sub.id);
@@ -86,14 +97,48 @@ export function PreviewPanel({
     onSelectSubtitle(idx);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
 
+    // Lock the element width to prevent reflow during drag
+    const el = (e.target as HTMLElement).closest("[data-subtitle-box]") as HTMLElement | null;
+    const lockedWidth = el ? el.offsetWidth : null;
+
     dragRef.current = {
+      mode: "move",
       subtitleIndex: idx,
       startX: e.clientX,
       startY: e.clientY,
       origX: sub.style.positionX,
       origY: sub.style.positionY,
+      origFontSizePx: sub.style.fontSizePx,
+      lockedWidth,
     };
   }, [getSubtitleIndex, onSelectSubtitle]);
+
+  const handleResizePointerDown = useCallback((e: React.PointerEvent, sub: EditorSubtitle) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const idx = getSubtitleIndex(sub.id);
+    if (idx < 0) return;
+
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const centerX = rect.left + sub.style.positionX * rect.width;
+    const centerY = rect.top + sub.style.positionY * rect.height;
+    const startDist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
+
+    dragRef.current = {
+      mode: "resize",
+      subtitleIndex: idx,
+      startX: startDist, // reuse startX to store initial distance
+      startY: 0,
+      origX: sub.style.positionX,
+      origY: sub.style.positionY,
+      origFontSizePx: sub.style.fontSizePx,
+      lockedWidth: null,
+    };
+  }, [getSubtitleIndex]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     const drag = dragRef.current;
@@ -101,14 +146,24 @@ export function PreviewPanel({
     if (!drag || !container) return;
 
     const rect = container.getBoundingClientRect();
-    const deltaX = (e.clientX - drag.startX) / rect.width;
-    const deltaY = (e.clientY - drag.startY) / rect.height;
 
-    const newX = Math.max(0, Math.min(1, drag.origX + deltaX));
-    const newY = Math.max(0, Math.min(1, drag.origY + deltaY));
-
-    onUpdateSubtitlePosition(drag.subtitleIndex, newX, newY);
-  }, [onUpdateSubtitlePosition]);
+    if (drag.mode === "move") {
+      const deltaX = (e.clientX - drag.startX) / rect.width;
+      const deltaY = (e.clientY - drag.startY) / rect.height;
+      const newX = Math.max(0, Math.min(1, drag.origX + deltaX));
+      const newY = Math.max(0, Math.min(1, drag.origY + deltaY));
+      onUpdateSubtitlePosition(drag.subtitleIndex, newX, newY);
+    } else {
+      const centerX = rect.left + drag.origX * rect.width;
+      const centerY = rect.top + drag.origY * rect.height;
+      const currentDist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
+      const initialDist = drag.startX; // stored initial distance
+      if (initialDist < 1) return;
+      const scale = currentDist / initialDist;
+      const newSize = Math.round(Math.max(8, Math.min(200, drag.origFontSizePx * scale)));
+      onUpdateSubtitleFontSize(drag.subtitleIndex, newSize);
+    }
+  }, [onUpdateSubtitlePosition, onUpdateSubtitleFontSize]);
 
   const handlePointerUp = useCallback(() => {
     dragRef.current = null;
@@ -138,28 +193,33 @@ export function PreviewPanel({
         {activeSubtitles.map((sub) => {
           const idx = getSubtitleIndex(sub.id);
           const isSelected = idx >= 0 && idx === selectedSubtitleIndex;
+          const isDraggingThis = dragRef.current?.subtitleIndex === idx && dragRef.current?.mode === "move";
 
           return (
             <div
               key={sub.id}
+              data-subtitle-box
               className={cn(
                 "absolute",
-                isSelected ? "cursor-grabbing z-10" : "cursor-grab",
+                isSelected ? "cursor-grab z-10" : "cursor-grab",
               )}
               style={{
                 left: `${sub.style.positionX * 100}%`,
                 top: `${sub.style.positionY * 100}%`,
                 transform: "translate(-50%, -50%)",
                 pointerEvents: "auto",
+                ...(isDraggingThis && dragRef.current?.lockedWidth
+                  ? { width: `${dragRef.current.lockedWidth}px` }
+                  : {}),
               }}
-              onPointerDown={(e) => handlePointerDown(e, sub)}
+              onPointerDown={(e) => handleMovePointerDown(e, sub)}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onClick={(e) => e.stopPropagation()}
             >
               <p
                 className={cn(
-                  "whitespace-nowrap text-center select-none",
+                  "whitespace-pre-wrap text-center select-none",
                   isSelected && "ring-2 ring-indigo-400 ring-offset-1 rounded",
                 )}
                 style={{
@@ -180,6 +240,27 @@ export function PreviewPanel({
               >
                 {sub.text}
               </p>
+
+              {/* Resize corner handles */}
+              {isSelected && (
+                <>
+                  {(["nw", "ne", "sw", "se"] as const).map((corner) => (
+                    <div
+                      key={corner}
+                      className={cn(
+                        "absolute h-3 w-3 rounded-full bg-indigo-500 border-2 border-white",
+                        corner === "nw" && "-top-1.5 -left-1.5 cursor-nwse-resize",
+                        corner === "ne" && "-top-1.5 -right-1.5 cursor-nesw-resize",
+                        corner === "sw" && "-bottom-1.5 -left-1.5 cursor-nesw-resize",
+                        corner === "se" && "-bottom-1.5 -right-1.5 cursor-nwse-resize",
+                      )}
+                      onPointerDown={(e) => handleResizePointerDown(e, sub)}
+                      onPointerMove={handlePointerMove}
+                      onPointerUp={handlePointerUp}
+                    />
+                  ))}
+                </>
+              )}
             </div>
           );
         })}
