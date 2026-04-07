@@ -647,7 +647,7 @@ function ScenesPanel({
         ...prev[sceneId],
         [fieldName]: value,
         is_edited: true,
-        edited_fields: [...new Set([...(prev[sceneId]?.edited_fields ?? []), fieldName])],
+        edited_fields: Array.from(new Set([...(prev[sceneId]?.edited_fields ?? []), fieldName])),
       },
     }));
   }, [videoId, getToken]);
