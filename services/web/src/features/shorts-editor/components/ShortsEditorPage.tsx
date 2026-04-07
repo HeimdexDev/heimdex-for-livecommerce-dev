@@ -241,19 +241,6 @@ export function ShortsEditorPage() {
     );
   }
 
-  if (state.clips.length === 0) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gray-50">
-        <p className="text-sm text-gray-500">편집할 장면이 없습니다.</p>
-        <Link href="/shorts" className="text-sm text-indigo-600 hover:text-indigo-700">
-          <span className="inline-flex items-center gap-1.5">
-            <BackArrowIcon />
-            쇼츠 목록으로 돌아가기
-          </span>
-        </Link>
-      </div>
-    );
-  }
 
   return (
     <div className="h-screen overflow-hidden bg-gray-100">
