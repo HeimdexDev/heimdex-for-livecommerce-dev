@@ -101,6 +101,11 @@ async def patch_scene_override(
         originals=originals,
     )
 
+    # Eagerly capture response data before any thread calls
+    # (flush() expires ORM attributes; accessing them later in sync context crashes)
+    response_fields = override.overridden_fields.split(",") if override.overridden_fields else []
+    response_updated_at = override.updated_at.isoformat()
+
     # Dual-write to OpenSearch
     partial: dict = {}
     for field_name, value in fields.items():
@@ -131,8 +136,8 @@ async def patch_scene_override(
 
     return SceneOverrideResponse(
         scene_id=scene_id,
-        overridden_fields=override.overridden_fields.split(",") if override.overridden_fields else [],
-        updated_at=override.updated_at.isoformat(),
+        overridden_fields=response_fields,
+        updated_at=response_updated_at,
     )
 
 
