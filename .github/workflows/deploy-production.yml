@@ -143,10 +143,10 @@ jobs:
                 else
                   # Use if-statements instead of `echo|grep && ... || true` to avoid
                   # pipefail + set -e interaction in appleboy/ssh-action (script_stop: true).
-                  if echo "$DIFF_FILES" | grep -qE '^services/api/|^services/worker_sdk/'; then DEPLOY_API=true; fi
+                  if echo "$DIFF_FILES" | grep -qE '^services/api/'; then DEPLOY_API=true; fi
                   if echo "$DIFF_FILES" | grep -q '^services/web/'; then DEPLOY_WEB=true; fi
-                  if echo "$DIFF_FILES" | grep -qE '^services/drive-worker/|^services/worker_sdk/'; then DEPLOY_WORKER=true; fi
-                  if echo "$DIFF_FILES" | grep -qE '^services/youtube-worker/|^services/worker_sdk/'; then DEPLOY_YOUTUBE=true; fi
+                  if echo "$DIFF_FILES" | grep -qE '^services/drive-worker/'; then DEPLOY_WORKER=true; fi
+                  if echo "$DIFF_FILES" | grep -qE '^services/youtube-worker/'; then DEPLOY_YOUTUBE=true; fi
                   # Shared config changes trigger all
                   if echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example|requirements)'; then DEPLOY_API=true; DEPLOY_WEB=true; DEPLOY_WORKER=true; DEPLOY_YOUTUBE=true; fi
                 fi

@@ -84,7 +84,6 @@ services/
 ├── drive-face-worker/        # Face detection + clustering
 ├── youtube-worker/           # YouTube content sync
 ├── shorts-render-worker/     # Short-form video generation
-├── worker_sdk/               # Shared worker utilities
 └── (deprecated: drive-caption-worker, drive-stt-worker, drive-ocr-worker, llama-caption-server, worker)
 ```
 
@@ -383,6 +382,14 @@ Contracts are **volume-mounted** into Docker containers, NOT installed from PyPI
 
 **Rule**: Never set `>=X.Y.Z` in pyproject.toml if that version doesn't exist on PyPI yet. The current safe floor is `>=0.8.0` (latest on PyPI: 0.8.2). To publish a new version, tag `vX.Y.Z` in the contracts repo.
 
+## Cross-Repo Dependency: heimdex-worker-sdk
+
+The worker SDK is installed from **PyPI** during Docker builds (`pip install "heimdex-worker-sdk==0.1.0"`). For local dev, volume-mount from `../heimdex-worker-sdk` for hot-reload.
+
+**Rule**: Always pin `==X.Y.Z` in Dockerfiles. Never set a version that doesn't exist on PyPI. To publish a new version, tag `vX.Y.Z` in the `heimdex-worker-sdk` repo — CI auto-publishes to PyPI.
+
+**After changing the SDK**: Update the pinned version in ALL Dockerfiles (13 files across `services/`) and verify all workers still import correctly.
+
 ## OpenSearch Scene Index Conventions
 
 - **Doc ID format**: `{org_id}:{scene_id}` — e.g., `4d20264c-...:gd_1f7b991a_scene_037`
@@ -417,6 +424,7 @@ When fixing data that lives in both PostgreSQL and OpenSearch:
 - Using `${VAR:-default}` (colon-dash) for `NEXT_PUBLIC_API_URL` in docker-compose — must use `${VAR-default}` (single dash) so empty values are respected
 - Setting `AUTH0_ENABLED=false` with `ENVIRONMENT=staging` or `production` (crashes API)
 - Setting `heimdex-media-contracts>=X.Y.Z` where X.Y.Z is not on PyPI (breaks Docker build)
+- Setting `heimdex-worker-sdk==X.Y.Z` in Dockerfiles where X.Y.Z is not on PyPI (breaks Docker build)
 - Updating DB without updating OpenSearch (stale search results / dates)
 - Google Drive incremental sync: forgetting to add new fields to the `changes().list()` fields parameter (only full scan fields auto-include everything)
 - Setting `DRIVE_SPEECH_SPLIT_ENABLED=true` without the STT worker deployed (videos get stuck in `awaiting_stt`)

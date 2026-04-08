@@ -70,11 +70,11 @@ jobs:
               DIFF_FILES=$(git diff --name-only "$PREV" "$CURR" || true)
 
               # Use if-statements to avoid pipefail + set -e interaction
-              if echo "$DIFF_FILES" | grep -qE '^services/api/|^services/worker_sdk/'; then API_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -qE '^services/api/'; then API_CHANGED=true; fi
               if echo "$DIFF_FILES" | grep -q '^services/web/'; then WEB_CHANGED=true; fi
-              if echo "$DIFF_FILES" | grep -qE '^services/drive-worker/|^services/worker_sdk/'; then WORKER_CHANGED=true; fi
-              if echo "$DIFF_FILES" | grep -qE '^services/youtube-worker/|^services/worker_sdk/'; then YOUTUBE_CHANGED=true; fi
-              if echo "$DIFF_FILES" | grep -qE '^services/shorts-render-worker/|^services/worker_sdk/'; then SHORTS_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -qE '^services/drive-worker/'; then WORKER_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -qE '^services/youtube-worker/'; then YOUTUBE_CHANGED=true; fi
+              if echo "$DIFF_FILES" | grep -qE '^services/shorts-render-worker/'; then SHORTS_CHANGED=true; fi
 
               # Shared config changes trigger all
               if echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example)'; then API_CHANGED=true; WEB_CHANGED=true; WORKER_CHANGED=true; YOUTUBE_CHANGED=true; SHORTS_CHANGED=true; fi

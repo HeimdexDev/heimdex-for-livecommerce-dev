@@ -7,7 +7,6 @@ on:
       - "services/drive-caption-worker/**"
       - "services/drive-stt-worker/**"
       - "services/drive-ocr-worker/**"
-      - "services/worker_sdk/**"
       - "docker-compose.yml"
       - "scripts/check_no_worker_db_coupling.sh"
       - ".github/workflows/worker-coupling-check.yml"
