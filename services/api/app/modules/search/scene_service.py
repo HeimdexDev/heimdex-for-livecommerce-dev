@@ -61,7 +61,7 @@ class _SearchContext:
         "query", "org_id", "org_id_str", "filter_dict",
         "matched_person_cluster_ids", "people_label_map",
         "library_map", "facet_data", "include_ocr", "group_by",
-        "color_hex",
+        "color_hex", "color_family",
     )
 
     def __init__(
@@ -77,6 +77,7 @@ class _SearchContext:
         include_ocr: bool | None,
         group_by: str,
         color_hex: str | None = None,
+        color_family: str | None = None,
     ):
         self.query = query
         self.org_id = org_id
@@ -89,6 +90,7 @@ class _SearchContext:
         self.include_ocr = include_ocr
         self.group_by = group_by
         self.color_hex = color_hex
+        self.color_family = color_family
 
 
 class SceneSearchService:
@@ -116,6 +118,7 @@ class SceneSearchService:
         group_by: str = "scene",
         search_mode: Literal["metadata", "lexical", "semantic"] = "lexical",
         color_hex: str | None = None,
+        color_family: str | None = None,
     ) -> SceneSearchResponse | VideoSearchResponse:
         """Route to mode-specific search implementation.
 
@@ -139,11 +142,12 @@ class SceneSearchService:
             user_id=user_id,
             group_by=group_by,
             color_hex=color_hex,
+            color_family=color_family,
         )
 
-        # Auto-route to semantic when color_hex is set (color kNN only runs there)
+        # Auto-route to semantic when color is set (color kNN only runs there)
         effective_mode = search_mode
-        if color_hex and effective_mode != "semantic":
+        if (color_hex or color_family) and effective_mode != "semantic":
             effective_mode = "semantic"
 
         match effective_mode:
@@ -294,14 +298,21 @@ class SceneSearchService:
             vis_w = 0.0
 
         # --- Color weight (activated by color picker) ---
+        # color_family (broad family search) takes precedence over color_hex (exact shade)
         color_w = 0.0
         color_query_vec: list[float] | None = None
         has_query = bool(ctx.query and ctx.query.strip())
 
-        if ctx.color_hex:
+        if ctx.color_family:
+            from app.modules.search.color_extraction import family_to_color_histogram
+
+            color_query_vec = family_to_color_histogram(ctx.color_family)
+        elif ctx.color_hex:
             from app.modules.search.color_extraction import hex_to_color_histogram
 
             color_query_vec = hex_to_color_histogram(ctx.color_hex)
+
+        if color_query_vec is not None:
             if has_query:
                 # Color + text: color gets 0.40, rest scaled to 0.60
                 color_w = 0.40
@@ -326,6 +337,7 @@ class SceneSearchService:
             visual_weight=round(vis_w, 3),
             color_weight=round(color_w, 3),
             color_hex=ctx.color_hex,
+            color_family=ctx.color_family,
             color_only=not has_query and color_w > 0,
             matched_patterns=intent.matched_patterns,
         )
@@ -447,6 +459,7 @@ class SceneSearchService:
         user_id: UUID | None,
         group_by: str,
         color_hex: str | None = None,
+        color_family: str | None = None,
     ) -> _SearchContext:
         """Build the shared context used by all search modes.
 
@@ -553,6 +566,7 @@ class SceneSearchService:
             include_ocr=include_ocr,
             group_by=group_by,
             color_hex=color_hex,
+            color_family=color_family,
         )
 
     async def _backfill_web_view_links(

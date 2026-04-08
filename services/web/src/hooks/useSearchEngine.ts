@@ -47,8 +47,8 @@ export interface UseSearchEngineOptions {
   onCurrentPageChange?: (page: number) => void;
   /** Source filters as a Set for filtering */
   sourceFilters: Set<SourceType>;
-  /** Hex color for color-based search (e.g. '#ff0000') */
-  colorHex?: string;
+  /** Color family for dominant-color search (e.g. 'pink') */
+  colorFamily?: string;
 }
 
 export interface UseSearchEngineReturn {
@@ -90,7 +90,7 @@ export function useSearchEngine(
     initialQuery,
     hadSearchParamsOnMount,
     sourceFilters,
-    colorHex,
+    colorFamily,
   } = options;
 
   const { setIsLoading, setSortBy } = deps;
@@ -173,7 +173,7 @@ export function useSearchEngine(
         if (dateEnd) filters.date_to = formatDateKr(dateEnd);
 
         const res = await searchScenes(
-          { q, alpha: 0.5, filters, group_by: groupBy, search_mode: searchMode, color_hex: colorHex },
+          { q, alpha: 0.5, filters, group_by: groupBy, search_mode: searchMode, color_family: colorFamily },
           tokenGetter,
         );
         setSearchResponse(res);
@@ -193,7 +193,7 @@ export function useSearchEngine(
         setIsLoading(false);
       }
     },
-    [getAccessToken, groupBy, searchMode, contentTypes, sourceFilters, dateStart, dateEnd, referenceMode, setIsLoading, colorHex],
+    [getAccessToken, groupBy, searchMode, contentTypes, sourceFilters, dateStart, dateEnd, referenceMode, setIsLoading, colorFamily],
   );
 
   // ── handleSearch — takes a raw query string (slash commands parsed in component) ──
@@ -211,7 +211,7 @@ export function useSearchEngine(
   // ── Color-only search — dedicated path, no text query needed ─────────────
   const performColorSearch = useCallback(
     async () => {
-      if (!colorHex) return;
+      if (!colorFamily) return;
       setIsLoading(true);
       setCurrentPage(1);
       try {
@@ -234,7 +234,7 @@ export function useSearchEngine(
         if (dateEnd) filters.date_to = formatDateKr(dateEnd);
 
         const res = await searchScenes(
-          { q: "", alpha: 0.5, filters, group_by: groupBy, search_mode: "semantic", color_hex: colorHex },
+          { q: "", alpha: 0.5, filters, group_by: groupBy, search_mode: "semantic", color_family: colorFamily },
           tokenGetter,
         );
         setSearchResponse(res);
@@ -253,7 +253,7 @@ export function useSearchEngine(
         setIsLoading(false);
       }
     },
-    [getAccessToken, groupBy, contentTypes, sourceFilters, dateStart, dateEnd, colorHex, setIsLoading],
+    [getAccessToken, groupBy, contentTypes, sourceFilters, dateStart, dateEnd, colorFamily, setIsLoading],
   );
 
   // ── Clear search ────────────────────────────────────────────────────────
@@ -278,11 +278,11 @@ export function useSearchEngine(
   useEffect(() => {
     if (activeQuery) {
       performSearch(activeQuery);
-    } else if (colorHex) {
+    } else if (colorFamily) {
       performColorSearch();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupBy, searchMode, contentTypes, sourceFilters, dateStart, dateEnd, colorHex]);
+  }, [groupBy, searchMode, contentTypes, sourceFilters, dateStart, dateEnd, colorFamily]);
 
   return {
     searchResponse,

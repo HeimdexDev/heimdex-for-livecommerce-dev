@@ -19,6 +19,7 @@ export interface SearchFilters {
   ai_tags_in?: string[];
   ai_tags_not_in?: string[];
   color_hex?: string;
+  color_family?: string;
 }
 
 // Mirrors backend validation: max 50 items/list, 64 chars/item
@@ -58,6 +59,7 @@ export interface SearchRequest {
   group_by?: "video" | "scene";
   search_mode?: SearchMode;
   color_hex?: string;
+  color_family?: string;
 }
 
 export interface DebugInfo {

@@ -165,6 +165,106 @@ def colors_to_hex(colors: list[tuple[int, int, int]]) -> list[str]:
     return [f"#{r:02x}{g:02x}{b:02x}" for r, g, b in colors]
 
 
+# ---------------------------------------------------------------------------
+# Color family definitions for dominant-color-family search
+# ---------------------------------------------------------------------------
+# Each chromatic family specifies:
+#   hue_weights: {hue_bucket: weight} — which hue buckets belong to this family
+#   sat_weights: [low, mid, high] — saturation-level preference within the family
+#
+# Hue buckets (8, each spanning 0.125 of the 0-1 hue range):
+#   0: Red (0°–45°)      1: Orange (45°–90°)     2: Yellow-Green (90°–135°)
+#   3: Green (135°–180°)  4: Cyan-Teal (180°–225°) 5: Blue (225°–270°)
+#   6: Purple (270°–315°) 7: Magenta-Pink (315°–360°)
+#
+# Saturation levels: 0=low (pastels), 1=mid, 2=high (vivid)
+# Achromatic bins: [24]=black, [25]=gray, [26]=white
+
+COLOR_FAMILIES: dict[str, dict] = {
+    "red": {
+        "hue_weights": {0: 1.0, 7: 0.5, 1: 0.2},
+        "sat_weights": [0.3, 0.7, 1.0],
+    },
+    "pink": {
+        "hue_weights": {7: 1.0, 0: 0.8, 6: 0.3, 1: 0.1},
+        "sat_weights": [1.0, 0.8, 0.4],
+    },
+    "orange": {
+        "hue_weights": {1: 1.0, 0: 0.4, 2: 0.3},
+        "sat_weights": [0.4, 0.7, 1.0],
+    },
+    "yellow": {
+        "hue_weights": {2: 1.0, 1: 0.3, 3: 0.2},
+        "sat_weights": [0.5, 0.8, 1.0],
+    },
+    "green": {
+        "hue_weights": {3: 1.0, 4: 0.8, 2: 0.3, 5: 0.2},
+        "sat_weights": [0.4, 0.7, 1.0],
+    },
+    "teal": {
+        "hue_weights": {4: 1.0, 5: 0.8, 3: 0.3},
+        "sat_weights": [0.5, 0.8, 1.0],
+    },
+    "blue": {
+        "hue_weights": {5: 1.0, 6: 0.7, 4: 0.3},
+        "sat_weights": [0.4, 0.7, 1.0],
+    },
+    "purple": {
+        "hue_weights": {6: 1.0, 7: 0.6, 5: 0.3},
+        "sat_weights": [0.4, 0.7, 1.0],
+    },
+    "brown": {
+        "hue_weights": {1: 1.0, 0: 0.7, 2: 0.3, 7: 0.2},
+        "sat_weights": [1.0, 0.6, 0.2],
+    },
+    "white": {"achromatic": "white"},
+    "gray": {"achromatic": "gray"},
+    "black": {"achromatic": "black"},
+}
+
+VALID_COLOR_FAMILIES = frozenset(COLOR_FAMILIES.keys())
+
+
+def family_to_color_histogram(family: str) -> list[float]:
+    """Build a broad 27-dim query vector for a color family.
+
+    Unlike ``hex_to_color_histogram`` which targets a single shade,
+    this produces a wide vector covering all hues and saturations
+    that belong to the family.  The kNN cosine similarity then
+    naturally rewards images whose dominant palette falls within
+    the family and penalises images where the family color is
+    only a minor accent.
+    """
+    if family not in COLOR_FAMILIES:
+        raise ValueError(f"Unknown color family: {family!r}. Valid: {sorted(COLOR_FAMILIES)}")
+
+    defn = COLOR_FAMILIES[family]
+    histogram = [0.0] * HISTOGRAM_DIM
+
+    if "achromatic" in defn:
+        base = NUM_HUE_BUCKETS * NUM_SAT_LEVELS
+        kind = defn["achromatic"]
+        if kind == "black":
+            histogram[base] = 1.0
+            histogram[base + 1] = 0.3
+        elif kind == "white":
+            histogram[base + 2] = 1.0
+            histogram[base + 1] = 0.3
+        else:  # gray
+            histogram[base + 1] = 1.0
+            histogram[base] = 0.2
+            histogram[base + 2] = 0.2
+    else:
+        hue_weights: dict[int, float] = defn["hue_weights"]
+        sat_weights: list[float] = defn["sat_weights"]
+        for hue_bucket, hue_w in hue_weights.items():
+            for sat_level in range(NUM_SAT_LEVELS):
+                idx = hue_bucket * NUM_SAT_LEVELS + sat_level
+                histogram[idx] = hue_w * sat_weights[sat_level]
+
+    return _l2_normalize(histogram)
+
+
 # --- Internal helpers ---
 
 

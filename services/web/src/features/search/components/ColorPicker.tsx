@@ -4,30 +4,40 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 interface ColorPickerProps {
+  /** Selected color family ID (e.g. "pink"), or undefined for no selection */
   value: string | undefined;
-  onChange: (hex: string | undefined) => void;
+  /** Called with family ID to select, or undefined to clear */
+  onChange: (family: string | undefined) => void;
 }
 
-const COLOR_SWATCHES = [
+/**
+ * Broad color families for dominant-color search.
+ * Each chip represents a family, not an exact shade.
+ * The representative hex is for display only — the backend
+ * receives the family ID and builds a broad query vector.
+ */
+const COLOR_FAMILIES = [
   // Warm
-  { hex: "#ef4444", label: "빨강" },
-  { hex: "#f97316", label: "주황" },
-  { hex: "#eab308", label: "노랑" },
-  { hex: "#f472b6", label: "분홍" },
-  { hex: "#a855f7", label: "보라" },
+  { id: "red", hex: "#ef4444", label: "빨강" },
+  { id: "orange", hex: "#f97316", label: "주황" },
+  { id: "yellow", hex: "#eab308", label: "노랑" },
+  { id: "pink", hex: "#f472b6", label: "분홍" },
+  { id: "purple", hex: "#a855f7", label: "보라" },
   // Cool
-  { hex: "#3b82f6", label: "파랑" },
-  { hex: "#06b6d4", label: "하늘" },
-  { hex: "#22c55e", label: "초록" },
-  { hex: "#14b8a6", label: "청록" },
-  { hex: "#6366f1", label: "남색" },
+  { id: "blue", hex: "#3b82f6", label: "파랑" },
+  { id: "teal", hex: "#14b8a6", label: "청록" },
+  { id: "green", hex: "#22c55e", label: "초록" },
   // Neutral
-  { hex: "#f5f5f4", label: "흰색" },
-  { hex: "#d1d5db", label: "밝은 회색" },
-  { hex: "#6b7280", label: "회색" },
-  { hex: "#92400e", label: "갈색" },
-  { hex: "#171717", label: "검정" },
+  { id: "brown", hex: "#92400e", label: "갈색" },
+  { id: "white", hex: "#f5f5f4", label: "흰색" },
+  { id: "gray", hex: "#9ca3af", label: "회색" },
+  { id: "black", hex: "#171717", label: "검정" },
 ];
+
+/** Look up the display hex for a family ID (for the trigger chip). */
+function familyHex(familyId: string): string {
+  return COLOR_FAMILIES.find((f) => f.id === familyId)?.hex ?? "#6b7280";
+}
 
 export default function ColorPicker({ value, onChange }: ColorPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -70,9 +80,9 @@ export default function ColorPicker({ value, onChange }: ColorPickerProps) {
           <>
             <span
               className="inline-block h-3 w-3 rounded-full ring-1 ring-inset ring-black/10"
-              style={{ backgroundColor: value }}
+              style={{ backgroundColor: familyHex(value) }}
             />
-            색상
+            {COLOR_FAMILIES.find((f) => f.id === value)?.label ?? "색상"}
             <span className="text-gray-400 hover:text-gray-600">✕</span>
           </>
         ) : (
@@ -86,50 +96,30 @@ export default function ColorPicker({ value, onChange }: ColorPickerProps) {
       {/* Dropdown */}
       {isOpen && !value && (
         <div className="absolute left-0 top-full z-50 mt-1.5 w-[220px] rounded-xl border border-gray-200 bg-white p-3 shadow-xl">
-          <p className="mb-2 text-[11px] font-medium text-gray-400">색상 선택</p>
+          <p className="mb-2 text-[11px] font-medium text-gray-400">색상 계열 선택</p>
 
-          {/* Swatch grid */}
-          <div className="grid grid-cols-5 gap-2">
-            {COLOR_SWATCHES.map(({ hex, label }) => (
+          {/* Family chip grid */}
+          <div className="grid grid-cols-4 gap-2">
+            {COLOR_FAMILIES.map(({ id, hex, label }) => (
               <button
-                key={hex}
+                key={id}
                 type="button"
                 title={label}
                 onClick={() => {
-                  onChange(hex);
+                  onChange(id);
                   setIsOpen(false);
                 }}
-                className="group relative h-8 w-8 rounded-lg transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-primary-400 focus:ring-offset-1"
-                style={{ backgroundColor: hex }}
+                className="group flex flex-col items-center gap-1 rounded-lg p-1.5 transition-colors hover:bg-gray-50"
               >
                 <span
-                  className="absolute inset-0 rounded-lg ring-1 ring-inset ring-black/10"
+                  className="h-7 w-7 rounded-lg ring-1 ring-inset ring-black/10 transition-transform group-hover:scale-110"
+                  style={{ backgroundColor: hex }}
                 />
+                <span className="text-[10px] leading-none text-gray-500 group-hover:text-gray-700">
+                  {label}
+                </span>
               </button>
             ))}
-          </div>
-
-          {/* Divider + custom color */}
-          <div className="mt-3 flex items-center gap-2 border-t border-gray-100 pt-3">
-            <input
-              id="color-custom-input"
-              type="color"
-              defaultValue="#6366f1"
-              className="h-8 w-8 shrink-0 cursor-pointer appearance-none rounded-lg border-0 bg-transparent p-0 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded-lg [&::-webkit-color-swatch]:border-0"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                const input = document.getElementById("color-custom-input") as HTMLInputElement | null;
-                if (input) {
-                  onChange(input.value);
-                  setIsOpen(false);
-                }
-              }}
-              className="rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-200"
-            >
-              적용
-            </button>
           </div>
         </div>
       )}

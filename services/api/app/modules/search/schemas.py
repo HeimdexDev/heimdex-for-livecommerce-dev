@@ -83,6 +83,13 @@ class SearchRequest(BaseModel):
         pattern=r"^#[0-9a-fA-F]{6}$",
         description="Hex color for color-based search (e.g. '#ff0000'). Activates color kNN signal.",
     )
+    color_family: str | None = Field(
+        default=None,
+        description=(
+            "Broad color family name (e.g. 'pink', 'blue'). "
+            "Activates dominant-color-family search. Takes precedence over color_hex."
+        ),
+    )
 
 
 class DebugInfo(BaseModel):

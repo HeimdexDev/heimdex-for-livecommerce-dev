@@ -8,11 +8,14 @@ import pytest
 from PIL import Image
 
 from app.modules.search.color_extraction import (
+    COLOR_FAMILIES,
     HISTOGRAM_DIM,
     NUM_HUE_BUCKETS,
     NUM_SAT_LEVELS,
+    VALID_COLOR_FAMILIES,
     colors_to_hex,
     extract_dominant_colors,
+    family_to_color_histogram,
     hex_to_color_histogram,
     rgb_to_hsl_histogram,
 )
@@ -265,3 +268,224 @@ class TestEndToEnd:
         sim_red = sum(a * b for a, b in zip(query, red_hist))
         sim_blue = sum(a * b for a, b in zip(query, blue_hist))
         assert sim_red > sim_blue
+
+
+# --- Color family definitions ---
+
+
+class TestColorFamilyDefinitions:
+    def test_all_families_exist(self):
+        expected = {"red", "pink", "orange", "yellow", "green", "teal",
+                    "blue", "purple", "brown", "white", "gray", "black"}
+        assert set(COLOR_FAMILIES.keys()) == expected
+
+    def test_valid_families_frozenset(self):
+        assert VALID_COLOR_FAMILIES == frozenset(COLOR_FAMILIES.keys())
+
+    def test_chromatic_families_have_hue_weights(self):
+        chromatic = {"red", "pink", "orange", "yellow", "green", "teal",
+                     "blue", "purple", "brown"}
+        for name in chromatic:
+            defn = COLOR_FAMILIES[name]
+            assert "hue_weights" in defn, f"{name} missing hue_weights"
+            assert "sat_weights" in defn, f"{name} missing sat_weights"
+            assert len(defn["sat_weights"]) == NUM_SAT_LEVELS
+
+    def test_achromatic_families_have_achromatic_key(self):
+        for name in ("white", "gray", "black"):
+            assert "achromatic" in COLOR_FAMILIES[name]
+
+
+# --- family_to_color_histogram ---
+
+
+class TestFamilyToColorHistogram:
+    def test_dimension(self):
+        for family in COLOR_FAMILIES:
+            hist = family_to_color_histogram(family)
+            assert len(hist) == HISTOGRAM_DIM, f"{family}: wrong dimension"
+
+    def test_l2_normalized(self):
+        for family in COLOR_FAMILIES:
+            hist = family_to_color_histogram(family)
+            _assert_l2_normalized(hist)
+
+    def test_invalid_family_raises(self):
+        with pytest.raises(ValueError, match="Unknown color family"):
+            family_to_color_histogram("neon")
+
+    def test_red_family_concentrates_in_red_hue_buckets(self):
+        hist = family_to_color_histogram("red")
+        # Red family: buckets 0 and 7 should dominate
+        bucket_0_weight = sum(hist[0:NUM_SAT_LEVELS])
+        bucket_7_weight = sum(hist[7 * NUM_SAT_LEVELS: 8 * NUM_SAT_LEVELS])
+        total_chromatic = sum(hist[:NUM_HUE_BUCKETS * NUM_SAT_LEVELS])
+        assert (bucket_0_weight + bucket_7_weight) / total_chromatic > 0.5
+
+    def test_pink_family_prefers_lower_saturation(self):
+        hist = family_to_color_histogram("pink")
+        # Pink should have more weight in low-sat bins than high-sat bins
+        # across its primary hue buckets (0 and 7)
+        low_sat = hist[0 * 3 + 0] + hist[7 * 3 + 0]   # sat level 0
+        high_sat = hist[0 * 3 + 2] + hist[7 * 3 + 2]   # sat level 2
+        assert low_sat > high_sat, "Pink should prefer low saturation"
+
+    def test_black_family_in_achromatic_bins(self):
+        hist = family_to_color_histogram("black")
+        black_bin = hist[NUM_HUE_BUCKETS * NUM_SAT_LEVELS]
+        chromatic_sum = sum(hist[:NUM_HUE_BUCKETS * NUM_SAT_LEVELS])
+        assert black_bin > 0.5
+        assert chromatic_sum < 0.01
+
+    def test_white_family_in_achromatic_bins(self):
+        hist = family_to_color_histogram("white")
+        white_bin = hist[NUM_HUE_BUCKETS * NUM_SAT_LEVELS + 2]
+        assert white_bin > 0.5
+
+    def test_family_vectors_are_broader_than_hex_vectors(self):
+        """Family vectors should have more non-zero bins than a single hex."""
+        family_hist = family_to_color_histogram("blue")
+        hex_hist = hex_to_color_histogram("#3b82f6")
+        family_nonzero = sum(1 for v in family_hist if v > 0.01)
+        hex_nonzero = sum(1 for v in hex_hist if v > 0.01)
+        assert family_nonzero >= hex_nonzero
+
+
+# --- Dominance-over-accent ranking ---
+
+
+def _mixed_image(
+    primary: tuple[int, int, int],
+    accent: tuple[int, int, int],
+    primary_fraction: float,
+    size: int = 128,
+) -> Image.Image:
+    """Create an image with primary_fraction of primary color, rest accent."""
+    img = Image.new("RGB", (size, size), accent)
+    primary_rows = int(size * primary_fraction)
+    for y in range(primary_rows):
+        for x in range(size):
+            img.putpixel((x, y), primary)
+    return img
+
+
+class TestDominanceOverAccent:
+    """Core product behavior: dominant-color images should rank above accent-only images."""
+
+    def test_mostly_pink_beats_mostly_white_with_pink_accent(self):
+        """80% pink image should rank higher than 10% pink image for 'pink' query."""
+        query = family_to_color_histogram("pink")
+
+        # 80% pink + 20% white
+        img_dominant = _mixed_image((255, 182, 193), (255, 255, 255), 0.8)
+        dom_colors, dom_weights = extract_dominant_colors(img_dominant, k=5)
+        dom_hist = rgb_to_hsl_histogram(dom_colors, dom_weights)
+
+        # 10% pink + 90% white
+        img_accent = _mixed_image((255, 182, 193), (255, 255, 255), 0.1)
+        acc_colors, acc_weights = extract_dominant_colors(img_accent, k=5)
+        acc_hist = rgb_to_hsl_histogram(acc_colors, acc_weights)
+
+        sim_dominant = sum(a * b for a, b in zip(query, dom_hist))
+        sim_accent = sum(a * b for a, b in zip(query, acc_hist))
+        assert sim_dominant > sim_accent
+
+    def test_mostly_blue_beats_mostly_gray_with_blue_accent(self):
+        """80% blue image should rank higher than 10% blue image for 'blue' query."""
+        query = family_to_color_histogram("blue")
+
+        img_dominant = _mixed_image((30, 64, 175), (180, 180, 180), 0.8)
+        dom_colors, dom_weights = extract_dominant_colors(img_dominant, k=5)
+        dom_hist = rgb_to_hsl_histogram(dom_colors, dom_weights)
+
+        img_accent = _mixed_image((30, 64, 175), (180, 180, 180), 0.1)
+        acc_colors, acc_weights = extract_dominant_colors(img_accent, k=5)
+        acc_hist = rgb_to_hsl_histogram(acc_colors, acc_weights)
+
+        sim_dominant = sum(a * b for a, b in zip(query, dom_hist))
+        sim_accent = sum(a * b for a, b in zip(query, acc_hist))
+        assert sim_dominant > sim_accent
+
+    def test_red_only_image_does_not_match_pink_better_than_pink_image(self):
+        """A pure vivid red should not outscore a soft pink for 'pink' query."""
+        query = family_to_color_histogram("pink")
+
+        pink_img = _solid_image(255, 182, 193)  # light pink
+        pink_colors, pink_weights = extract_dominant_colors(pink_img, k=3)
+        pink_hist = rgb_to_hsl_histogram(pink_colors, pink_weights)
+
+        red_img = _solid_image(255, 0, 0)  # pure vivid red
+        red_colors, red_weights = extract_dominant_colors(red_img, k=3)
+        red_hist = rgb_to_hsl_histogram(red_colors, red_weights)
+
+        sim_pink = sum(a * b for a, b in zip(query, pink_hist))
+        sim_red = sum(a * b for a, b in zip(query, red_hist))
+        assert sim_pink > sim_red, "Soft pink should score higher than vivid red for pink family"
+
+
+class TestFamilyBreadth:
+    """Family vectors should match various shades within the same family."""
+
+    def test_hot_pink_and_pastel_pink_both_match_pink_family(self):
+        query = family_to_color_histogram("pink")
+
+        hot_pink = hex_to_color_histogram("#ff69b4")
+        pastel_pink = hex_to_color_histogram("#ffb6c1")
+        pure_blue = hex_to_color_histogram("#0000ff")
+
+        sim_hot = sum(a * b for a, b in zip(query, hot_pink))
+        sim_pastel = sum(a * b for a, b in zip(query, pastel_pink))
+        sim_blue = sum(a * b for a, b in zip(query, pure_blue))
+
+        assert sim_hot > sim_blue, "Hot pink should match pink family better than blue"
+        assert sim_pastel > sim_blue, "Pastel pink should match pink family better than blue"
+
+    def test_navy_and_sky_blue_both_match_blue_family(self):
+        query = family_to_color_histogram("blue")
+
+        navy = hex_to_color_histogram("#1e3a5f")
+        sky = hex_to_color_histogram("#87ceeb")
+        pure_red = hex_to_color_histogram("#ff0000")
+
+        sim_navy = sum(a * b for a, b in zip(query, navy))
+        sim_sky = sum(a * b for a, b in zip(query, sky))
+        sim_red = sum(a * b for a, b in zip(query, pure_red))
+
+        assert sim_navy > sim_red, "Navy should match blue family better than red"
+        assert sim_sky > sim_red, "Sky blue should match blue family better than red"
+
+    def test_each_family_best_matches_its_own_representative(self):
+        """Each family's query vector should have highest similarity with
+        an image of its own representative color vs a very different color."""
+        representatives = {
+            "red": "#ef4444", "pink": "#f472b6", "orange": "#f97316",
+            "yellow": "#eab308", "green": "#22c55e", "teal": "#14b8a6",
+            "blue": "#3b82f6", "purple": "#a855f7",
+        }
+        opposite_hex = "#808080"  # gray as a neutral contrast
+
+        for family, rep_hex in representatives.items():
+            query = family_to_color_histogram(family)
+            rep_hist = hex_to_color_histogram(rep_hex)
+            opp_hist = hex_to_color_histogram(opposite_hex)
+
+            sim_rep = sum(a * b for a, b in zip(query, rep_hist))
+            sim_opp = sum(a * b for a, b in zip(query, opp_hist))
+            assert sim_rep > sim_opp, (
+                f"{family} family should match {rep_hex} better than gray"
+            )
+
+
+class TestBackwardCompatHexStillWorks:
+    """Ensure hex_to_color_histogram still works for backward compat."""
+
+    def test_hex_query_still_produces_valid_vector(self):
+        hist = hex_to_color_histogram("#f472b6")
+        assert len(hist) == HISTOGRAM_DIM
+        _assert_l2_normalized(hist)
+
+    def test_hex_query_red_still_matches_red_image(self):
+        query = hex_to_color_histogram("#ff0000")
+        red_hist = rgb_to_hsl_histogram([(255, 0, 0)], [1.0])
+        blue_hist = rgb_to_hsl_histogram([(0, 0, 255)], [1.0])
+        assert sum(a * b for a, b in zip(query, red_hist)) > sum(a * b for a, b in zip(query, blue_hist))

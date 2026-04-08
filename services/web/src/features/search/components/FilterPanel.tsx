@@ -69,7 +69,7 @@ export function FilterPanel({
     (filters.library_ids?.length ?? 0) > 0 ||
     (filters.person_cluster_ids?.length ?? 0) > 0 ||
     (filters.person_cluster_ids_not_in?.length ?? 0) > 0 ||
-    filters.color_hex != null ||
+    filters.color_family != null ||
     hasTagFilters(filters);
 
   return (
@@ -88,9 +88,9 @@ export function FilterPanel({
 
       <div className="space-y-3">
         <ColorPicker
-          value={filters.color_hex}
-          onChange={(hex) =>
-            onFiltersChange({ ...filters, color_hex: hex })
+          value={filters.color_family}
+          onChange={(family) =>
+            onFiltersChange({ ...filters, color_family: family })
           }
         />
 

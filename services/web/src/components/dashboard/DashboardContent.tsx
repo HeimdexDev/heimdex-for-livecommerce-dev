@@ -718,14 +718,14 @@ export default function DashboardContent({
     (ct: ContentTypeFilter) => {
       if (defaultContentType) return;
       _setContentType(ct);
-      if (ct !== "image") setColorHex(undefined);
+      if (ct !== "image") setColorFamily(undefined);
     },
     [defaultContentType],
   );
   const [sourceFilters, setSourceFilters] = useState<Set<SourceType>>(
     () => new Set(initialState.sourceFilters as ReadonlySet<SourceType>),
   );
-  const [colorHex, setColorHex] = useState<string | undefined>();
+  const [colorFamily, setColorFamily] = useState<string | undefined>();
 
   // ── Search engine hook ──────────────────────────────────────────────────
   const [isSearchLoading, setIsSearchLoading] = useState(false);
@@ -761,7 +761,7 @@ export default function DashboardContent({
       getAccessToken,
       initialQuery: initialState.query,
       hadSearchParamsOnMount,
-      colorHex,
+      colorFamily,
     },
     { setIsLoading: setIsSearchLoading, setSortBy },
   );
@@ -964,7 +964,7 @@ export default function DashboardContent({
             <GroupByToggle value={groupBy} onChange={setGroupBy} />
             {contentType === "image" && (
               <div className="ml-1">
-                <ColorPicker value={colorHex} onChange={setColorHex} />
+                <ColorPicker value={colorFamily} onChange={setColorFamily} />
               </div>
             )}
             {!hideContentTypeToggle && (

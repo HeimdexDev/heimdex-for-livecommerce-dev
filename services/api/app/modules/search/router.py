@@ -121,6 +121,7 @@ async def search(
             group_by=request.group_by,
             search_mode=request.search_mode,
             color_hex=request.color_hex,
+            color_family=request.color_family,
         )
     else:
         result = await search_service.search(
