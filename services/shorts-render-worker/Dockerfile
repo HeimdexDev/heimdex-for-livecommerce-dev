@@ -1,11 +1,3 @@
-# ── Stage 1: Build worker SDK wheel ──────────────────────────────
-FROM python:3.11-slim AS sdk-builder
-WORKDIR /build
-COPY services/worker_sdk/pyproject.toml .
-COPY services/worker_sdk/src/ src/
-RUN pip install --no-cache-dir build && python -m build --wheel --outdir /dist
-
-# ── Stage 2: Runtime ─────────────────────────────────────────────
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1
@@ -20,8 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install worker SDK
-COPY --from=sdk-builder /dist/heimdex_worker_sdk-*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/heimdex_worker_sdk-*.whl && rm -f /tmp/*.whl
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.1.0"
 
 # Install Python dependencies.
 # heimdex-media-contracts + heimdex-media-pipelines are volume-mounted

@@ -1,9 +1,3 @@
-FROM python:3.11-slim AS sdk-builder
-WORKDIR /build
-COPY dev-heimdex-for-livecommerce/services/worker_sdk/pyproject.toml .
-COPY dev-heimdex-for-livecommerce/services/worker_sdk/src/ src/
-RUN pip install --no-cache-dir build && python -m build --wheel --outdir /dist
-
 # cuDNN is required by PaddlePaddle-GPU at import time (dlopen libcudnn.so).
 # The plain '-runtime' tag does NOT include cuDNN — must use '-cudnn8-runtime'.
 # CUDA 11.8 chosen over 12.6 for widest driver compatibility (>= 520.x).
@@ -41,8 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=sdk-builder /dist/heimdex_worker_sdk-*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/heimdex_worker_sdk-*.whl && rm -f /tmp/*.whl
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.1.0"
 
 COPY heimdex-media-contracts/ /tmp/heimdex-media-contracts/
 RUN pip install --no-cache-dir /tmp/heimdex-media-contracts \

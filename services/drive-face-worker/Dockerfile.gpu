@@ -1,9 +1,3 @@
-FROM python:3.11-slim AS sdk-builder
-WORKDIR /build
-COPY dev-heimdex-for-livecommerce/services/worker_sdk/pyproject.toml .
-COPY dev-heimdex-for-livecommerce/services/worker_sdk/src/ src/
-RUN pip install --no-cache-dir build && python -m build --wheel --outdir /dist
-
 # cuDNN is required by onnxruntime-gpu for GPU inference (CUDAExecutionProvider).
 # The plain '-runtime' tag does NOT include cuDNN — worker falls back to CPU without it.
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
@@ -43,8 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=sdk-builder /dist/heimdex_worker_sdk-*.whl /tmp/
-RUN pip install --no-cache-dir /tmp/heimdex_worker_sdk-*.whl && rm -f /tmp/*.whl
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.1.0"
 
 COPY heimdex-media-contracts/ /tmp/heimdex-media-contracts/
 RUN pip install --no-cache-dir /tmp/heimdex-media-contracts \
