@@ -23,7 +23,7 @@ Design principles:
 import logging
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import boto3
 
@@ -280,20 +280,29 @@ class GPUOrchestrator:
 
 _orchestrator: Optional[GPUOrchestrator] = None
 _init_lock = threading.Lock()
+_settings_provider: Optional[Callable] = None
+
+
+def configure_settings_provider(provider: Callable) -> None:
+    """Inject an external settings provider (e.g. the FastAPI app config).
+
+    Call once at startup before any ``ensure_worker_running()`` calls.
+    The callable must return an object whose attributes are read via
+    ``getattr(settings, "aircloud_enabled", ...)``.
+    """
+    global _settings_provider
+    _settings_provider = provider
 
 
 def _build_orchestrator_from_settings() -> Optional[GPUOrchestrator]:
     """Build a GPUOrchestrator from environment settings.
 
-    Tries API settings first (for the FastAPI process), falls back to
-    worker settings (for drive-worker).  Returns None if disabled.
+    Uses the injected settings provider if configured, otherwise falls
+    back to WorkerSettings (for drive-worker).  Returns None if disabled.
     """
-    # Try API settings
-    try:
-        from app.config import get_settings
-        settings = get_settings()
-    except ImportError:
-        # Not running inside the API — try worker settings
+    if _settings_provider is not None:
+        settings = _settings_provider()
+    else:
         try:
             from heimdex_worker_sdk.settings import get_worker_settings
             settings = get_worker_settings()

@@ -24,9 +24,17 @@ from app.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+_gpu_settings_configured = False
+
+
 def _wake_gpu_worker(job_type: str) -> None:
     """Wake the Aircloud GPU worker for this job type.  Fire-and-forget."""
+    global _gpu_settings_configured
     try:
+        if not _gpu_settings_configured:
+            from heimdex_worker_sdk.gpu_orchestrator import configure_settings_provider
+            configure_settings_provider(get_settings)
+            _gpu_settings_configured = True
         from heimdex_worker_sdk.gpu_orchestrator import ensure_worker_running
         ensure_worker_running(job_type)
     except Exception:

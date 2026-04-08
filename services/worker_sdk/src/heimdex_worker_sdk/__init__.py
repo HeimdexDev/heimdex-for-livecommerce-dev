@@ -37,6 +37,10 @@ from heimdex_worker_sdk.message_adapters import (
     sqs_to_claimed_file,
     sqs_to_claimed_processing_file,
 )
+from heimdex_worker_sdk.gpu_orchestrator import (
+    configure_settings_provider,
+    ensure_worker_running,
+)
 
 __all__ = [
     "WorkerSettings",
@@ -55,6 +59,8 @@ __all__ = [
     "VisibilityHeartbeat",
     "sqs_to_claimed_file",
     "sqs_to_claimed_processing_file",
+    "configure_settings_provider",
+    "ensure_worker_running",
     "audio_s3_key",
     "classify_mime",
     "drive_video_id",
