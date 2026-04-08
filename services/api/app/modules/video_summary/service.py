@@ -190,20 +190,21 @@ class VideoSummaryService:
         )
 
     async def _fetch_captions(self, org_id: str, video_id: str) -> list[str]:
-        scenes = await self._scene_client.get_video_scenes(org_id, video_id)
+        result = await self._scene_client.get_video_scenes(org_id, video_id)
+        scenes = result.get("scenes", []) if isinstance(result, dict) else result
         captions = []
         for scene in scenes:
-            src = scene.get("_source", {}) if isinstance(scene, dict) else {}
-            cap = src.get("scene_caption", "").strip()
+            cap = scene.get("scene_caption", "").strip() if isinstance(scene, dict) else ""
             if cap:
                 captions.append(cap)
         return captions
 
     async def _fetch_video_title(self, org_id: str, video_id: str) -> str:
-        scenes = await self._scene_client.get_video_scenes(org_id, video_id)
+        result = await self._scene_client.get_video_scenes(org_id, video_id)
+        scenes = result.get("scenes", []) if isinstance(result, dict) else result
         if scenes:
-            src = scenes[0].get("_source", {}) if isinstance(scenes[0], dict) else {}
-            return src.get("video_title", "")
+            scene = scenes[0]
+            return scene.get("video_title", "") if isinstance(scene, dict) else ""
         return ""
 
     async def _denormalize_to_opensearch(
