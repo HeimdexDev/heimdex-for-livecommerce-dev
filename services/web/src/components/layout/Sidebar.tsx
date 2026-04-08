@@ -6,7 +6,7 @@ import { LogoIcon, LogoText } from "@/components/login/HeimdexLogo";
 import { cn } from "@/lib/utils";
 
 const navItems: { label: string; href: string; badge?: string }[] = [
-  { label: "전체 아카이브 검색", href: "/" },
+  { label: "동영상 검색", href: "/" },
   { label: "이미지 검색", href: "/images", badge: "Pro" },
   { label: "파일 동기화", href: "/sync" },
   { label: "인물 라벨 관리", href: "/settings/people" },

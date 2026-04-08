@@ -114,7 +114,7 @@ export function SettingsPage() {
         <Link href="/" className="rounded-full p-1 hover:bg-gray-200">
           <BackArrowIcon />
         </Link>
-        <Link href="/" className="hover:text-gray-700">전체 아카이브 검색</Link>
+        <Link href="/" className="hover:text-gray-700">동영상 검색</Link>
         <span>{">"}</span>
         <span className="text-gray-700">설정</span>
       </div>

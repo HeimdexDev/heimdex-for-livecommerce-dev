@@ -309,7 +309,7 @@ export function ShortsCreatePage() {
         <Link href="/" className="rounded-full p-1 hover:bg-gray-200">
           <BackArrowIcon />
         </Link>
-        <Link href="/" className="hover:text-gray-700">전체 아카이브 검색</Link>
+        <Link href="/" className="hover:text-gray-700">동영상 검색</Link>
         <span>&gt;</span>
         <Link href={`/videos/${videoId}`} className="hover:text-gray-700">{videoTitle}</Link>
         <span>&gt;</span>

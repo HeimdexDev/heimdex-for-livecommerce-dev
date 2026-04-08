@@ -10,6 +10,7 @@ export default function ImageSearchContent() {
       <DashboardContent
         defaultContentType="image"
         hideContentTypeToggle
+        hideGroupByToggle
       />
       <ImageDownloadBar />
     </ImageSelectionProvider>

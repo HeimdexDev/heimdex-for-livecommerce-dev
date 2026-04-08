@@ -658,11 +658,14 @@ interface DashboardContentProps {
   defaultContentType?: ContentTypeFilter;
   /** Hide the all/video/image toggle buttons */
   hideContentTypeToggle?: boolean;
+  /** Hide the Videos/Scenes group-by toggle */
+  hideGroupByToggle?: boolean;
 }
 
 export default function DashboardContent({
   defaultContentType,
   hideContentTypeToggle = false,
+  hideGroupByToggle = false,
 }: DashboardContentProps = {}) {
   const { getAccessToken } = useAuth();
   const searchParams = useSearchParams();
@@ -961,7 +964,7 @@ export default function DashboardContent({
         <div className="mt-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <SearchModeToggle value={searchMode} onChange={setSearchMode} />
-            <GroupByToggle value={groupBy} onChange={setGroupBy} />
+            {!hideGroupByToggle && <GroupByToggle value={groupBy} onChange={setGroupBy} />}
             {contentType === "image" && (
               <div className="ml-1">
                 <ColorPicker value={colorFamily} onChange={setColorFamily} />

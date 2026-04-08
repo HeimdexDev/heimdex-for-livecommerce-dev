@@ -1202,13 +1202,13 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
   return (
     <div className="mx-auto max-w-6xl pt-4">
-      <div className="mb-4 flex items-center gap-3 text-sm text-gray-500">
-        <button type="button" onClick={() => router.back()} className="rounded-full p-1 hover:bg-gray-200">
+      <div className="mb-4 flex items-center gap-3 text-sm text-gray-500 min-w-0">
+        <button type="button" onClick={() => router.back()} className="shrink-0 rounded-full p-1 hover:bg-gray-200">
           <BackArrowIcon />
         </button>
-        <button type="button" onClick={() => router.back()} className="hover:text-gray-700">전체 아카이브 검색</button>
-        <span>&gt;</span>
-        <span className="text-gray-700">{videoTitle}</span>
+        <button type="button" onClick={() => router.back()} className="shrink-0 hover:text-gray-700">동영상 검색</button>
+        <span className="shrink-0">&gt;</span>
+        <span className="text-gray-700 truncate min-w-0">{videoTitle}</span>
       </div>
 
       {reprocessStatus && !reprocessDismissed && (

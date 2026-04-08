@@ -130,6 +130,23 @@ Dominant color family search in image search mode. Users click a broad color fam
 - **Scope**: Image search mode only. Video scenes do not need color backfill.
 - **Two endpoints**: Both `/api/search` and `/api/search/scenes` accept `color_family`. Frontend uses `/scenes`.
 
+### Video Summary (OpenAI gpt-4o-mini)
+
+AI-generated 2-4 sentence Korean summary of video content, replacing the old concatenated scene captions in "행동 요약".
+
+- **Module**: `app/modules/video_summary/` — isolated, no imports from workers/ingest/scene_overrides
+- **OpenAI client**: `openai_client.py` has zero internal imports — fully mockable
+- **Storage**: `video_summaries` table in Postgres (source of truth), `video_summary` field denormalized to all scenes in OpenSearch
+- **Override pattern**: `summary_override` column for user edits (NULL = use AI summary). Same pattern as scene_overrides.
+- **Staleness**: `input_hash` (SHA-256 of sorted captions) detects when captions changed since generation
+- **Prompt**: Versioned (`prompts.py`). Current: `v1`. Can batch-regenerate with new versions.
+- **Endpoints**: `GET/POST/PATCH/DELETE /api/videos/{video_id}/summary[/generate|/override]`
+- **Frontend**: Lazy generation on first view. InlineEditField for editing. "재생성" button when stale.
+- **BM25**: `video_summary` added to lexical search `should` clauses with boost 0.5
+- **Backfill**: Direct script (not SQS) — generates via OpenAI API, stores in Postgres, denormalizes to OpenSearch. 69/296 videos backfilled on staging (227 had <2 captions).
+- **Cost**: ~$0.00014/video (gpt-4o-mini). Full corpus under $15.
+- **Config**: `VIDEO_SUMMARY_ENABLED`, `OPENAI_API_KEY`, `VIDEO_SUMMARY_MODEL` (default: gpt-4o-mini)
+
 ### Video Playback Aspect Ratio
 
 Video player container respects org `thumbnail_aspect_ratio` setting. Affects VideoDetailPage and Shorts Editor PreviewPanel. 9:16 orgs get portrait player, 16:9 orgs get landscape.
@@ -325,6 +342,9 @@ Critical env vars:
 - `ANALYTICS_ENABLED` — `true` by default; records search events to Postgres `search_events` table (partitioned by month)
 - `ANALYTICS_EXPORT_ENABLED` — `false` by default; enables nightly S3 Parquet export via CLI. `true` on staging + production
 - `ANALYTICS_S3_BUCKET` — defaults to `DRIVE_S3_BUCKET` if empty. Staging: `heimdex-drive-staging`, production: `livenow-media-prod`
+- `VIDEO_SUMMARY_ENABLED` — `false` by default; enables AI video summary generation via OpenAI
+- `OPENAI_API_KEY` — OpenAI API key for video summary generation (GitHub Secret on staging)
+- `VIDEO_SUMMARY_MODEL` — `gpt-4o-mini` by default; model for summary generation
 
 ## Infrastructure Access
 
@@ -406,6 +426,7 @@ When fixing data that lives in both PostgreSQL and OpenSearch:
 - Using `value || fallback` with numeric values that can be 0 (use `value ?? fallback` or `value != null` instead — JS treats 0 as falsy)
 - Using `HEAD` requests to check if API endpoints exist (many FastAPI routes only support GET/POST — use GET or skip the check)
 - Passing `org_id` as first arg to `mget_scenes()` — it only takes `doc_ids: list[str]` where doc_id = `{org_id}:{scene_id}`
+- Assuming `get_video_scenes()` returns a list — it returns `{"scenes": [...], "total": N}` dict. Extract `result["scenes"]` first.
 - Silently swallowing exceptions with bare `except Exception: pass` in API endpoints (log at minimum with `logger.warning`)
 - Running `npx vitest` from repo root instead of `services/web/` (picks up Playwright e2e files, causes false failures)
 - Not adjusting `selectedClipIndex`/`selectedSubtitleIndex` when removing items before the selected index in array-based selection (off-by-one after splice)
