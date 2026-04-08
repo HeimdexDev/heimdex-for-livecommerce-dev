@@ -3,7 +3,7 @@ import time
 from typing import Any, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from app.config import get_settings
 from app.dependencies import get_scene_search_service, get_search_service
@@ -86,6 +86,7 @@ def _build_metadata(request: SearchRequest) -> dict[str, Any]:
 @router.post("")
 async def search(
     request: SearchRequest,
+    raw_request: Request,
     org_ctx: OrgContext = Depends(get_current_org),
     user: User = Depends(get_current_user),
     search_service: SearchService = Depends(get_search_service),
@@ -98,6 +99,10 @@ async def search(
     Rollback: flip the env var — no code change needed.
     """
     settings = get_settings()
+
+    # TEMP DEBUG: log raw request body to diagnose color_family issue
+    raw_body = await raw_request.body()
+    logger.info("search_raw_body", raw_body=raw_body.decode("utf-8", errors="replace")[:500])
 
     logger.info(
         "search_request_debug",
