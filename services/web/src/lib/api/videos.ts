@@ -9,6 +9,7 @@ import {
   VideoScenesResponse,
   VideoStats,
   VideoPeopleResponse,
+  VideoSummaryResponse,
 } from "@/lib/types";
 import { getApiBaseUrl } from "./utils";
 
@@ -223,6 +224,88 @@ export async function getVideoSceneGroups(
     `/api/videos/${encodeURIComponent(videoId)}/scene-groups${qs ? `?${qs}` : ""}`,
     getToken,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Video Summary
+// ---------------------------------------------------------------------------
+
+export async function getVideoSummary(
+  videoId: string,
+  getToken: TokenGetter,
+): Promise<VideoSummaryResponse | null> {
+  const headers: Record<string, string> = {};
+  const token = await getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/videos/${encodeURIComponent(videoId)}/summary`,
+    { headers },
+  );
+  if (!response.ok) {
+    if (response.status === 404) return null;
+    return null;
+  }
+  return response.json();
+}
+
+export async function generateVideoSummary(
+  videoId: string,
+  force: boolean,
+  getToken: TokenGetter,
+): Promise<VideoSummaryResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = await getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/videos/${encodeURIComponent(videoId)}/summary/generate`,
+    { method: "POST", headers, body: JSON.stringify({ force }) },
+  );
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => null);
+    throw ApiError.fromResponse(response.status, errorBody);
+  }
+  return response.json();
+}
+
+export async function editVideoSummary(
+  videoId: string,
+  summary: string,
+  getToken: TokenGetter,
+): Promise<VideoSummaryResponse> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = await getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/videos/${encodeURIComponent(videoId)}/summary`,
+    { method: "PATCH", headers, body: JSON.stringify({ summary }) },
+  );
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => null);
+    throw ApiError.fromResponse(response.status, errorBody);
+  }
+  return response.json();
+}
+
+export async function resetVideoSummary(
+  videoId: string,
+  getToken: TokenGetter,
+): Promise<VideoSummaryResponse> {
+  const headers: Record<string, string> = {};
+  const token = await getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/videos/${encodeURIComponent(videoId)}/summary/override`,
+    { method: "DELETE", headers },
+  );
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => null);
+    throw ApiError.fromResponse(response.status, errorBody);
+  }
+  return response.json();
 }
 
 /**

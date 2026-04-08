@@ -4,11 +4,11 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { useAgent } from "@/features/search/hooks/useAgent";
-import { getVideoScenes, getReprocessStatus, reprocessScenes, patchSceneOverride, resetSceneOverride } from "@/lib/api/videos";
+import { getVideoScenes, getReprocessStatus, reprocessScenes, patchSceneOverride, resetSceneOverride, getVideoSummary, generateVideoSummary, editVideoSummary, resetVideoSummary } from "@/lib/api/videos";
 import { getAgentPlaybackUrl, getAgentThumbnailUrl, getCloudPlaybackUrl, getCloudThumbnailUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { formatTimestamp } from "@/lib/api/utils";
-import type { VideoScene, VideoScenesResponse, ReprocessJobResponse, ReprocessParams } from "@/lib/types";
+import type { VideoScene, VideoScenesResponse, VideoSummaryResponse, ReprocessJobResponse, ReprocessParams } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
@@ -259,11 +259,67 @@ function VideoInfoPanel({
 function OverviewPanel({
   scenes,
   allTags,
+  videoId,
+  getToken,
 }: {
   scenes: VideoScene[];
   allTags: string[];
+  videoId: string;
+  getToken: () => Promise<string | null>;
 }) {
   const [copiedSection, setCopiedSection] = useState<string | null>(null);
+  const [summaryData, setSummaryData] = useState<VideoSummaryResponse | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState(false);
+
+  // Fetch or generate video summary on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setSummaryLoading(true);
+      setSummaryError(false);
+      try {
+        // Try to get existing summary
+        let result = await getVideoSummary(videoId, getToken);
+        if (!result && !cancelled) {
+          // No summary yet — generate one
+          try {
+            result = await generateVideoSummary(videoId, false, getToken);
+          } catch {
+            // Generation failed (feature disabled, no API key, etc.) — fall back
+          }
+        }
+        if (!cancelled) setSummaryData(result);
+      } catch {
+        if (!cancelled) setSummaryError(true);
+      } finally {
+        if (!cancelled) setSummaryLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [videoId, getToken]);
+
+  const handleSaveSummary = useCallback(async (_field: string, value: string) => {
+    const result = await editVideoSummary(videoId, value, getToken);
+    setSummaryData(result);
+  }, [videoId, getToken]);
+
+  const handleResetSummary = useCallback(async (_field: string) => {
+    const result = await resetVideoSummary(videoId, getToken);
+    setSummaryData(result);
+  }, [videoId, getToken]);
+
+  const handleRegenerate = useCallback(async () => {
+    setSummaryLoading(true);
+    try {
+      const result = await generateVideoSummary(videoId, true, getToken);
+      setSummaryData(result);
+    } catch {
+      // silently fail
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [videoId, getToken]);
 
   const fullTranscript = useMemo(
     () => scenes
@@ -281,18 +337,20 @@ function OverviewPanel({
   );
   const hasDiarization = diarizedScenes.length > 0;
 
-  const captionSummary = useMemo(() => {
+  // Fallback: concatenated scene captions (old behavior) when no AI summary
+  const captionFallback = useMemo(() => {
     const captions = scenes
       .map((s) => s.scene_caption?.trim())
       .filter((c): c is string => Boolean(c));
     if (captions.length === 0) return "";
     const unique = Array.from(new Set(captions));
-    return unique.join("\n");
+    const joined = unique.join("\n");
+    return joined.length > 500 ? joined.slice(0, 500) + "..." : joined;
   }, [scenes]);
 
-  const hasCaptions = captionSummary.length > 0;
-  const summaryText = hasCaptions ? captionSummary : fullTranscript;
-  const summary = summaryText.length > 500 ? summaryText.slice(0, 500) + "..." : summaryText;
+  const summaryText = summaryData?.summary || captionFallback || fullTranscript;
+  const hasSummary = Boolean(summaryData?.summary);
+  const displaySummary = summaryText.length > 500 ? summaryText.slice(0, 500) + "..." : summaryText;
 
   const handleCopy = useCallback(async (text: string, section: string) => {
     try {
@@ -309,8 +367,25 @@ function OverviewPanel({
       <div className="mt-2">
         <div className="flex items-center gap-3">
           <h3 className="text-lg font-bold text-gray-900">행동 요약</h3>
-          {hasCaptions && (
+          {summaryLoading && (
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500 animate-pulse">
+              생성 중...
+            </span>
+          )}
+          {!summaryLoading && hasSummary && !summaryData?.is_edited && (
             <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">AI</span>
+          )}
+          {!summaryLoading && summaryData?.is_edited && (
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600">수정됨</span>
+          )}
+          {!summaryLoading && summaryData?.is_stale && (
+            <button
+              type="button"
+              onClick={handleRegenerate}
+              className="rounded-full bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-600 hover:bg-orange-100 transition-colors"
+            >
+              재생성
+            </button>
           )}
           {allTags.slice(0, 3).map((tag) => (
             <span
@@ -321,12 +396,27 @@ function OverviewPanel({
             </span>
           ))}
         </div>
-        <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
-          {summary || "요약 정보가 없습니다."}
-        </p>
+        {hasSummary ? (
+          <div className="mt-4">
+            <InlineEditField
+              value={summaryData?.summary ?? ""}
+              fieldName="video_summary"
+              isEdited={summaryData?.is_edited}
+              onSave={handleSaveSummary}
+              onReset={summaryData?.is_edited ? handleResetSummary : undefined}
+              multiline
+              maxLength={5000}
+              placeholder="요약 정보가 없습니다."
+            />
+          </div>
+        ) : (
+          <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+            {displaySummary || "요약 정보가 없습니다."}
+          </p>
+        )}
         <button
           type="button"
-          onClick={() => handleCopy(summary, "summary")}
+          onClick={() => handleCopy(summaryText, "summary")}
           className="mt-3 inline-flex items-center gap-1.5 text-sm text-gray-400 transition-colors hover:text-gray-600"
         >
           <CopyIcon />
@@ -1218,6 +1308,8 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             <OverviewPanel
               scenes={scenes}
               allTags={allTags}
+              videoId={videoId}
+              getToken={getAccessToken}
             />
           ) : view === "scenes" ? (
             <ScenesPanel

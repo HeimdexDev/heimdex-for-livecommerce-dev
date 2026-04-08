@@ -20,3 +20,4 @@ from app.modules.youtube.models import YouTubeChannel, YouTubeVideo  # noqa: F40
 from app.modules.shorts_render.models import ShortsRenderJob  # noqa: F401
 from app.modules.scene_overrides.models import SceneOverride  # noqa: F401
 from app.modules.videos.reprocess_models import SceneReprocessJob  # noqa: F401
+from app.modules.video_summary.models import VideoSummary  # noqa: F401

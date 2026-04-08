@@ -278,6 +278,16 @@ class SceneQueryMixin:
                             }
                         }
                     },
+                    {
+                        "match": {
+                            "video_summary": {
+                                "query": query,
+                                "operator": "or",
+                                "minimum_should_match": "50%",
+                                "boost": 0.5,
+                            }
+                        }
+                    },
                 ]
             )
 
@@ -398,6 +408,19 @@ class SceneQueryMixin:
                             "operator": "or",
                             "minimum_should_match": "50%",
                             "boost": 1.0,
+                        }
+                    }
+                }
+            )
+
+            optional_should.append(
+                {
+                    "match": {
+                        "video_summary": {
+                            "query": query,
+                            "operator": "or",
+                            "minimum_should_match": "50%",
+                            "boost": 0.5,
                         }
                     }
                 }

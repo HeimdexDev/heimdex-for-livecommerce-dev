@@ -91,6 +91,8 @@ class VideoScenesResponse(BaseModel):
     capture_time: str | None = None
     earliest_ingest_time: str | None = None
     web_view_link: str | None = None
+    video_summary: str | None = None
+    video_summary_is_edited: bool = False
     scenes: list[VideoScene]
     total: int
 

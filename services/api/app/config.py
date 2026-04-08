@@ -200,6 +200,11 @@ class Settings(BaseSettings):
     aircloud_wake_debounce_seconds: int = 300   # 5 min between wake-up calls per worker
     aircloud_cooldown_checks: int = 3           # 3 × 5 min = 15 min idle before stop
 
+    # --- Video summary (OpenAI) ---
+    openai_api_key: str = ""
+    video_summary_enabled: bool = False
+    video_summary_model: str = "gpt-4o-mini"
+
     # --- Search analytics ---
     analytics_enabled: bool = True  # Record search events to Postgres
     analytics_export_enabled: bool = False  # Nightly S3 Parquet export

@@ -80,8 +80,22 @@ export interface VideoScenesResponse {
   capture_time: string | null;
   earliest_ingest_time: string | null;
   web_view_link?: string | null;
+  video_summary?: string | null;
+  video_summary_is_edited?: boolean;
   scenes: VideoScene[];
   total: number;
+}
+
+export interface VideoSummaryResponse {
+  video_id: string;
+  summary: string;
+  is_edited: boolean;
+  is_stale: boolean;
+  model: string | null;
+  prompt_version: string | null;
+  scene_count: number;
+  generated_at: string | null;
+  edited_at: string | null;
 }
 
 export interface VideoStats {

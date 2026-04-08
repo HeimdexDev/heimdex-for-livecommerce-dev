@@ -184,6 +184,11 @@ class SceneIndexMixin:
                     "analyzer": transcript_analyzer,
                     "search_analyzer": transcript_analyzer,
                 },
+                "video_summary": {
+                    "type": "text",
+                    "analyzer": transcript_analyzer,
+                    "search_analyzer": transcript_analyzer,
+                },
                 "embedding_vector": {
                     "type": "knn_vector",
                     "dimension": self.EMBEDDING_DIMENSION,
