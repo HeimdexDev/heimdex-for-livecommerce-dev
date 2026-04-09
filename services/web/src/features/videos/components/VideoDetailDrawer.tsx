@@ -172,18 +172,6 @@ export function VideoDetailDrawer({
                           {scene.transcript_raw.length > 150 ? "..." : ""}
                         </p>
                       )}
-                      {(scene.keyword_tags.length > 0 || scene.product_tags.length > 0) && (
-                        <div className="mt-1.5 flex flex-wrap gap-1">
-                          {[...scene.keyword_tags, ...scene.product_tags].slice(0, 5).map((tag) => (
-                            <span
-                              key={tag}
-                              className="inline-block px-1.5 py-0.5 text-xs bg-blue-50 text-blue-700 rounded"
-                            >
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>

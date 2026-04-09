@@ -29,7 +29,6 @@ function formatRelativeTime(iso: string): string {
 
 export function VideoCard({ video, onSelect, agentAvailable }: VideoCardProps) {
   const duration = video.last_scene_end_ms - video.first_scene_start_ms;
-  const allTags = [...video.keyword_tags, ...video.product_tags].slice(0, 5);
   const { settings } = useOrgSettings();
   const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
 
@@ -99,19 +98,6 @@ export function VideoCard({ video, onSelect, agentAvailable }: VideoCardProps) {
               <span>{video.people_count} {video.people_count === 1 ? "person" : "people"}</span>
             )}
           </div>
-
-          {allTags.length > 0 && (
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {allTags.map((tag) => (
-                <span
-                  key={tag}
-                  className="inline-block px-1.5 py-0.5 text-xs bg-blue-50 text-blue-700 rounded"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
 
           {(video.capture_time || video.latest_ingest_time) && (
             <p className="mt-1.5 text-xs text-gray-400">

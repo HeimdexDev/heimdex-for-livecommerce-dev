@@ -217,18 +217,6 @@ export function SceneListPanel({
                     </p>
                   ) : null}
 
-                  {scene.keyword_tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {scene.keyword_tags.slice(0, 3).map((tag) => (
-                        <span
-                          key={tag}
-                          className="inline-block rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] text-indigo-700"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
             </div>

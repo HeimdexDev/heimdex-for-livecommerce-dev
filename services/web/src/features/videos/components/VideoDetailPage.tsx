@@ -258,12 +258,10 @@ function VideoInfoPanel({
 
 function OverviewPanel({
   scenes,
-  allTags,
   videoId,
   getToken,
 }: {
   scenes: VideoScene[];
-  allTags: string[];
   videoId: string;
   getToken: () => Promise<string | null>;
 }) {
@@ -387,14 +385,6 @@ function OverviewPanel({
               재생성
             </button>
           )}
-          {allTags.slice(0, 3).map((tag) => (
-            <span
-              key={tag}
-              className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-3 py-0.5 text-xs font-medium text-indigo-700"
-            >
-              {tag}
-            </span>
-          ))}
         </div>
         {hasSummary ? (
           <div className="mt-4">
@@ -513,8 +503,6 @@ export function SceneCard({
     ? captionText.slice(0, 100) + "..."
     : captionText;
 
-  const tags = [...scene.keyword_tags, ...scene.product_tags].slice(0, 3);
-
   return (
     <div
       className={cn(
@@ -550,18 +538,6 @@ export function SceneCard({
               </svg>
             </div>
           </button>
-          {tags.length > 0 && (
-            <div className="px-3 py-2 flex flex-wrap gap-1">
-              {tags.map((tag) => (
-                <span
-                  key={tag}
-                  className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-xs text-indigo-700"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
         </div>
 
         <div className="flex-1 min-w-0 p-4">
@@ -1160,15 +1136,6 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
     }
   };
 
-  const allTags = useMemo(() => {
-    const tags = new Set<string>();
-    for (const s of scenes) {
-      for (const t of s.keyword_tags) tags.add(t);
-      for (const t of s.product_tags) tags.add(t);
-    }
-    return Array.from(tags);
-  }, [scenes]);
-
   const videoTitle = meta?.video_title || videoId;
 
   if (isLoading) {
@@ -1270,25 +1237,12 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             isReprocessing={isReprocessing}
           />
 
-          {view === "scenes" && allTags.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-1">
-              {allTags.slice(0, 3).map((tag) => (
-                <span
-                  key={tag}
-                  className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2.5 py-0.5 text-xs text-indigo-700"
-                >
-                  {tag}
-                </span>
-              ))}
-            </div>
-          )}
         </div>
 
         <div className="flex-1 min-w-0">
           {view === "overview" ? (
             <OverviewPanel
               scenes={scenes}
-              allTags={allTags}
               videoId={videoId}
               getToken={getAccessToken}
             />

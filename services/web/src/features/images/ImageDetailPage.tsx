@@ -140,18 +140,6 @@ export function ImageDetailPage({ imageId }: ImageDetailPageProps) {
                 </div>
               )}
 
-              {scene.keyword_tags.length > 0 && (
-                <div className="rounded-xl bg-white p-5 shadow-sm">
-                  <h3 className="text-xs font-medium text-gray-400">태그</h3>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {scene.keyword_tags.map((tag) => (
-                      <span key={tag} className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-600">
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>
