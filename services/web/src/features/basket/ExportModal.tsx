@@ -66,12 +66,22 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
     }
   }, [isOpen, fetchPremiereInfo]);
 
-  // --- Auto-detect Google Drive mount path from OAuth email ---
+  // --- Auto-detect Google Drive mount path from agent or OAuth ---
   useEffect(() => {
     if (!isOpen) return;
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved && !saved.includes("email@gmail.com")) return; // already has a real path
 
+    // Prefer agent-detected mounts (accurate for local machine).
+    if (premiereInfo?.google_drive_mounts?.length) {
+      const mount = premiereInfo.google_drive_mounts[0];
+      setDrivePath(mount);
+      setSelectedDriveOption(mount);
+      localStorage.setItem(STORAGE_KEY, mount);
+      return;
+    }
+
+    // Fallback: try OAuth email if agent not available.
     (async () => {
       try {
         const status = await getOAuthStatus(getAccessToken);
@@ -88,7 +98,7 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
         // proceed with default
       }
     })();
-  }, [isOpen, getAccessToken]);
+  }, [isOpen, getAccessToken, premiereInfo]);
 
   // --- Shared state ---
   const [activeTab, setActiveTab] = useState<ExportTab>("proxy-pack");

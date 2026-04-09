@@ -43,6 +43,7 @@ export interface PremiereInfoResponse {
   version?: string;
   export_dir?: string;
   last_project_path?: string;
+  google_drive_mounts?: string[];
 }
 
 export interface OpenPremiereResponse {
