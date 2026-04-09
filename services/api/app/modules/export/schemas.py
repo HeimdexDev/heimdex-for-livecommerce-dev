@@ -141,6 +141,19 @@ class ProxyPackStatusResponse(BaseModel):
     expires_at: str | None = None
 
 
+class PremierePackageUrlResponse(BaseModel):
+    """Response for the agent-friendly premiere package endpoint.
+
+    Returns a presigned S3 URL instead of streaming ZIP bytes,
+    so the Heimdex Agent can download the package independently.
+    """
+
+    download_url: str
+    filename: str
+    clip_count: int
+    expires_in_seconds: int
+
+
 # --- Image Export ---
 
 

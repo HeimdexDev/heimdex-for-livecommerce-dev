@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 from typing import Annotated, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse, Response
@@ -41,6 +41,7 @@ from app.modules.export.schemas import (
     ExportImagesRequest,
     ExportPremierePackageRequest,
     ExportPremiereRequest,
+    PremierePackageUrlResponse,
     ProxyPackRequest,
     ProxyPackInitResponse,
     ProxyPackStatusResponse,
@@ -417,25 +418,17 @@ _DEFAULT_WIDTH = 1920
 _DEFAULT_HEIGHT = 1080
 
 
-@router.post("/premiere-package")
-async def export_premiere_package(
+async def _build_premiere_package(
     body: ExportPremierePackageRequest,
-    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
-):
-    """Generate a Premiere Pro export package (ZIP) with FCPXML 1.8 timeline.
+    org_ctx: OrgContext,
+    db: AsyncSession,
+    file_repo: DriveFileRepository,
+) -> tuple[bytes, str, int]:
+    """Build a Premiere Pro FCPXML ZIP package.
 
-    The package contains:
-    - {sequence_name}.fcpxml — FCPXML 1.8 timeline referencing Google Drive media
-    - manifest.json — canonical mapping with export metadata
-    - README.txt — import instructions (Korean + English)
-    - scenes.csv — spreadsheet for editors
-
-    Clips reference original media via file:// URLs resolved from the user's
-    Google Drive mount path + DriveConnection metadata. No agent required.
+    Returns (zip_bytes, safe_filename, clip_count).
+    Shared by both the direct-download and presigned-URL endpoints.
     """
-
     # Normalize mount path
     mount = body.drive_mount_path.rstrip("/").rstrip("\\")
 
@@ -570,6 +563,30 @@ async def export_premiere_package(
     zip_bytes = package_premiere_export(fcpxml_content, export_clip_metas, pkg_options)
 
     safe_name = _sanitize_filename(body.sequence_name)
+    return zip_bytes, safe_name, len(body.clips)
+
+
+@router.post("/premiere-package")
+async def export_premiere_package(
+    body: ExportPremierePackageRequest,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
+):
+    """Generate a Premiere Pro export package (ZIP) with FCPXML 1.8 timeline.
+
+    The package contains:
+    - {sequence_name}.fcpxml — FCPXML 1.8 timeline referencing Google Drive media
+    - manifest.json — canonical mapping with export metadata
+    - README.txt — import instructions (Korean + English)
+    - scenes.csv — spreadsheet for editors
+
+    Clips reference original media via file:// URLs resolved from the user's
+    Google Drive mount path + DriveConnection metadata. No agent required.
+    """
+    zip_bytes, safe_name, clip_count = await _build_premiere_package(
+        body, org_ctx, db, file_repo
+    )
     filename = f"{safe_name}_premiere.zip"
 
     logger.info(
@@ -577,7 +594,7 @@ async def export_premiere_package(
         extra={
             "org_id": str(org_ctx.org_id),
             "sequence_name": body.sequence_name,
-            "clip_count": len(body.clips),
+            "clip_count": clip_count,
             "zip_size_bytes": len(zip_bytes),
             "format": "fcpxml_1.8",
         },
@@ -588,8 +605,53 @@ async def export_premiere_package(
         media_type="application/zip",
         headers={
             "Content-Disposition": _content_disposition(filename),
-            "X-Clip-Count": str(len(body.clips)),
+            "X-Clip-Count": str(clip_count),
         },
+    )
+
+
+@router.post("/premiere-package-url", response_model=PremierePackageUrlResponse)
+async def export_premiere_package_url(
+    body: ExportPremierePackageRequest,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
+):
+    """Generate a Premiere Pro export package and return a presigned download URL.
+
+    Same output as /premiere-package, but uploads the ZIP to S3 and returns
+    a time-limited presigned URL. Designed for the Heimdex Agent to download
+    the package independently from the browser session.
+    """
+    zip_bytes, safe_name, clip_count = await _build_premiere_package(
+        body, org_ctx, db, file_repo
+    )
+    filename = f"{safe_name}_premiere.zip"
+
+    settings = get_settings()
+    s3 = S3Client(bucket=settings.drive_s3_bucket)
+    s3_key = f"{org_ctx.org_id}/exports/premiere/{uuid4()}/{filename}"
+    expires_in = 900  # 15 minutes
+
+    await s3.upload_bytes_async(zip_bytes, s3_key, content_type="application/zip")
+    download_url = await s3.generate_presigned_url_async(s3_key, expires_in=expires_in)
+
+    logger.info(
+        "premiere_package_url_generated",
+        extra={
+            "org_id": str(org_ctx.org_id),
+            "sequence_name": body.sequence_name,
+            "clip_count": clip_count,
+            "zip_size_bytes": len(zip_bytes),
+            "s3_key": s3_key,
+        },
+    )
+
+    return PremierePackageUrlResponse(
+        download_url=download_url,
+        filename=filename,
+        clip_count=clip_count,
+        expires_in_seconds=expires_in,
     )
 
 

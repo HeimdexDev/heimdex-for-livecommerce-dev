@@ -296,6 +296,53 @@ export async function exportPremierePackage(
 }
 
 
+// --- Premiere Package URL (for Heimdex Agent) ---
+
+export interface PremierePackageUrlResponse {
+  download_url: string;
+  filename: string;
+  clip_count: number;
+  expires_in_seconds: number;
+}
+
+/**
+ * Request a presigned S3 URL for the Premiere Pro export package.
+ * The Heimdex Agent downloads from this URL independently.
+ */
+export async function getPremierePackageUrl(
+  request: PremierePackageRequest,
+  getToken?: TokenGetter,
+): Promise<PremierePackageUrlResponse> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (getToken) {
+    try {
+      const token = await getToken();
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+    } catch {
+      // proceed without auth
+    }
+  }
+
+  const response = await fetch(`${getApiBaseUrl()}/api/export/premiere-package-url`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(request),
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.detail ?? `Export failed (${response.status})`);
+  }
+
+  return response.json();
+}
+
+
 // --- Proxy Pack Export (async via SQS worker) ---
 
 export interface ProxyPackClipInput {

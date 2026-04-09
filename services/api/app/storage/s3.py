@@ -161,6 +161,24 @@ class S3Client:
             ExpiresIn=expires_in,
         )
 
+    def upload_bytes(
+        self,
+        data: bytes,
+        s3_key: str,
+        content_type: str = "application/octet-stream",
+    ) -> None:
+        """Upload in-memory bytes to S3."""
+        self._client.put_object(
+            Bucket=self._bucket,
+            Key=s3_key,
+            Body=data,
+            ContentType=content_type,
+        )
+        logger.info(
+            "s3_uploaded",
+            extra={"key": s3_key, "size": len(data)},
+        )
+
     def delete(self, s3_key: str) -> None:
         """Delete a single object."""
         self._client.delete_object(Bucket=self._bucket, Key=s3_key)
@@ -191,6 +209,14 @@ class S3Client:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None, partial(self.upload_file, local_path, s3_key, content_type)
+        )
+
+    async def upload_bytes_async(
+        self, data: bytes, s3_key: str, content_type: str = "application/octet-stream"
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, partial(self.upload_bytes, data, s3_key, content_type)
         )
 
     def delete_prefix(self, prefix: str) -> int:

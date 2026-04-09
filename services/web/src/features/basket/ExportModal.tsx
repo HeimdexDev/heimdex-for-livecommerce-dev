@@ -1,13 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import {
   exportPremierePackage,
+  getPremierePackageUrl,
   initiateProxyPack,
   pollProxyPackStatus,
   type ProxyPackStatusResponse,
 } from "@/lib/cloud-export";
+import {
+  getPremiereInfo,
+  openInPremiere,
+  type PremiereInfoResponse,
+} from "@/lib/agent-export";
+import { useAgent } from "@/features/search/hooks/useAgent";
 import { useSceneBasket, type BasketItem } from "./useSceneBasket";
 
 const STORAGE_KEY = "heimdex_drive_mount_path";
@@ -33,6 +40,29 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
   const basket = useSceneBasket();
   const items = overrideItems ?? basket.items;
   const { getAccessToken } = useAuth();
+  const { isAvailable: agentAvailable } = useAgent();
+
+  // --- Premiere Pro state ---
+  const [premiereInfo, setPremiereInfo] = useState<PremiereInfoResponse | null>(null);
+  const [openingInPremiere, setOpeningInPremiere] = useState(false);
+  const [premiereSuccess, setPremiereSuccess] = useState(false);
+
+  // Fetch Premiere info when modal opens and agent is available
+  const fetchPremiereInfo = useCallback(async () => {
+    if (!agentAvailable) {
+      setPremiereInfo(null);
+      return;
+    }
+    const info = await getPremiereInfo();
+    setPremiereInfo(info);
+  }, [agentAvailable]);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchPremiereInfo();
+      setPremiereSuccess(false);
+    }
+  }, [isOpen, fetchPremiereInfo]);
 
   // --- Shared state ---
   const [activeTab, setActiveTab] = useState<ExportTab>("proxy-pack");
@@ -242,6 +272,60 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
   const handleDownload = () => {
     if (proxyStatus?.download_url) {
       window.open(proxyStatus.download_url, "_blank");
+    }
+  };
+
+  // --- Open in Premiere Pro handler ---
+  const handleOpenInPremiere = async () => {
+    if (items.length === 0) {
+      setError("내보낼 장면이 없습니다.");
+      return;
+    }
+
+    setOpeningInPremiere(true);
+    setError("");
+    setSuccess("");
+    setPremiereSuccess(false);
+
+    try {
+      // Step 1: Get presigned URL from cloud API
+      const { download_url, filename } = await getPremierePackageUrl(
+        {
+          sequence_name: sequenceName,
+          drive_mount_path: drivePath,
+          clips: items.map((item) => ({
+            scene_id: item.scene_id,
+            video_id: item.video_id,
+            video_title: item.video_title,
+            start_ms: item.start_ms,
+            end_ms: item.end_ms,
+            label: item.label,
+            keyword_tags: item.keyword_tags ?? [],
+            transcript_raw: item.transcript_raw ?? "",
+          })),
+          clip_gap_ms: clipGapMs,
+          include_markers: includeMarkers,
+          include_transcript_markers: includeTranscriptMarkers,
+        },
+        getAccessToken
+      );
+
+      // Step 2: Tell agent to download + open in Premiere
+      const result = await openInPremiere(download_url, filename);
+
+      if (result.status === "success") {
+        setPremiereSuccess(true);
+        setSuccess("Premiere Pro에서 열었습니다.");
+      } else {
+        const msg = result.export_path
+          ? `${result.error}\n파일 위치: ${result.export_path}`
+          : result.error ?? "Premiere Pro 열기에 실패했습니다.";
+        setError(msg);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Premiere Pro 열기에 실패했습니다.");
+    } finally {
+      setOpeningInPremiere(false);
     }
   };
 
@@ -470,11 +554,54 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
             </button>
           )}
 
+          {/* Open in Premiere Pro (via Heimdex Agent) */}
+          {activeTab === "proxy-pack" && (
+            <div className="space-y-2">
+              {agentAvailable && premiereInfo?.installed && (
+                <button
+                  type="button"
+                  onClick={handleOpenInPremiere}
+                  disabled={openingInPremiere || loading}
+                  className="w-full bg-blue-600 text-white py-2.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {openingInPremiere ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                      Premiere Pro에서 여는 중...
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                      Premiere Pro에서 열기
+                    </>
+                  )}
+                </button>
+              )}
+
+              {agentAvailable && premiereInfo && !premiereInfo.installed && (
+                <p className="text-xs text-gray-500 text-center">
+                  Premiere Pro가 설치되어 있지 않습니다.
+                </p>
+              )}
+
+              {!agentAvailable && (
+                <p className="text-xs text-gray-400 text-center">
+                  Heimdex Agent를 설치하면 Premiere Pro에서 바로 열 수 있습니다.
+                </p>
+              )}
+            </div>
+          )}
+
           {activeTab === "proxy-pack" && !proxyJobId && (
             <button
               type="button"
               onClick={handleProxyPackExport}
-              disabled={loading}
+              disabled={loading || openingInPremiere}
               className="w-full bg-primary-600 text-white py-2.5 rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {loading && (
