@@ -80,6 +80,10 @@ def _build_metadata(request: SearchRequest) -> dict[str, Any]:
         meta["person_cluster_ids"] = request.filters.person_cluster_ids
     if request.include_ocr is not None:
         meta["include_ocr"] = request.include_ocr
+    if request.color_family:
+        meta["color_family"] = request.color_family
+    elif request.color_hex:
+        meta["color_hex"] = request.color_hex
     return meta
 
 

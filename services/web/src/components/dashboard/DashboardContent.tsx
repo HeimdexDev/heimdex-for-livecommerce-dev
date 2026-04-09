@@ -18,6 +18,7 @@ import { DateRangeCalendar, isSameDay, isInRange, formatDateKr } from "@/compone
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
 import { useImageSelectionContext } from "@/features/images/ImageSelectionContext";
 import { parseSlashCommand, getSlashCommandSuggestions } from "@/lib/slash-commands";
+import { trackColorSearch, trackSearchPageView, trackSearchResultClick } from "@/lib/analytics/gtag";
 import { useOrgSettings } from "@/lib/orgSettings";
 import { getThumbnailAspectClass, getDashboardGridClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 import {
@@ -967,7 +968,13 @@ export default function DashboardContent({
             {!hideGroupByToggle && <GroupByToggle value={groupBy} onChange={setGroupBy} />}
             {contentType === "image" && (
               <div className="ml-1">
-                <ColorPicker value={colorFamily} onChange={setColorFamily} />
+                <ColorPicker
+                value={colorFamily}
+                onChange={(family) => {
+                  setColorFamily(family);
+                  if (family) trackColorSearch(family, !!query.trim());
+                }}
+              />
               </div>
             )}
             {!hideContentTypeToggle && (
@@ -1194,7 +1201,22 @@ export default function DashboardContent({
         {/* Results grid */}
         {!isLoading && hasResults && (
           <>
-            <div className={cn("mt-6 grid gap-5", getDashboardGridClass(aspectRatio))}>
+            <div
+              className={cn("mt-6 grid gap-5", getDashboardGridClass(aspectRatio))}
+              onClick={(e) => {
+                if (!isSearchMode) return;
+                const link = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
+                if (!link) return;
+                const children = Array.from(e.currentTarget.children);
+                const idx = children.findIndex(child => child.contains(link));
+                if (idx < 0) return;
+                const videoId = link.pathname.split("/").pop() ?? "";
+                trackSearchResultClick({
+                  pageNumber: currentPage, position: idx + 1,
+                  colorFamily, query: activeQuery, videoId,
+                });
+              }}
+            >
               {isSearchMode
                 ? searchResponse?.result_type === "video"
                   ? (paginatedResults as VideoResult[]).map((video) => (
@@ -1212,13 +1234,20 @@ export default function DashboardContent({
               <Pagination
                 currentPage={currentPage}
                 totalPages={totalPages}
-                onPageChange={setCurrentPage}
+                onPageChange={(page) => {
+                  setCurrentPage(page);
+                  trackSearchPageView({ pageNumber: page, colorFamily, query: activeQuery });
+                }}
               />
             ) : hasMore ? (
               <div className="mt-8 flex justify-center">
                 <button
                   type="button"
-                  onClick={loadMore}
+                  onClick={() => {
+                    loadMore();
+                    const nextPage = Math.ceil(videos.length / PAGE_SIZE) + 1;
+                    trackSearchPageView({ pageNumber: nextPage, colorFamily, query: activeQuery });
+                  }}
                   disabled={isLoadingMore}
                   className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-6 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >

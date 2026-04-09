@@ -3,6 +3,7 @@ import { Providers } from "./providers";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { SceneBasketProvider } from "@/features/basket/useSceneBasket";
 import { BasketPanel } from "@/features/basket/BasketPanel";
+import { GoogleAnalytics } from "@/components/GoogleAnalytics";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-gray-50 text-gray-900 antialiased">
+        <GoogleAnalytics />
         <Providers>
           <SceneBasketProvider>
             <AppLayout>{children}</AppLayout>
