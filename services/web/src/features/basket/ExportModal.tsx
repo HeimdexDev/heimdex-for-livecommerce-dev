@@ -14,6 +14,7 @@ import {
   openInPremiere,
   type PremiereInfoResponse,
 } from "@/lib/agent-export";
+import { getOAuthStatus } from "@/lib/api/drive";
 import { useAgent } from "@/features/search/hooks/useAgent";
 import { useSceneBasket, type BasketItem } from "./useSceneBasket";
 
@@ -64,6 +65,30 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
       setPremiereSuccess(false);
     }
   }, [isOpen, fetchPremiereInfo]);
+
+  // --- Auto-detect Google Drive mount path from OAuth email ---
+  useEffect(() => {
+    if (!isOpen) return;
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved && !saved.includes("email@gmail.com")) return; // already has a real path
+
+    (async () => {
+      try {
+        const status = await getOAuthStatus(getAccessToken);
+        if (status.connected && status.google_email) {
+          const isMacOS = typeof navigator !== "undefined" && /Mac/.test(navigator.userAgent);
+          const predicted = isMacOS
+            ? `~/Library/CloudStorage/GoogleDrive-${status.google_email}`
+            : "G:\\";
+          setDrivePath(predicted);
+          setSelectedDriveOption(predicted);
+          localStorage.setItem(STORAGE_KEY, predicted);
+        }
+      } catch {
+        // proceed with default
+      }
+    })();
+  }, [isOpen, getAccessToken]);
 
   // --- Shared state ---
   const [activeTab, setActiveTab] = useState<ExportTab>("proxy-pack");
