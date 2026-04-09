@@ -42,12 +42,14 @@ export interface PremiereInfoResponse {
   app_path?: string;
   version?: string;
   export_dir?: string;
+  last_project_path?: string;
 }
 
 export interface OpenPremiereResponse {
   status: string;
   export_path?: string;
   premiere?: string;
+  project_path?: string;
   error?: string;
 }
 
@@ -78,6 +80,7 @@ export async function getPremiereInfo(): Promise<PremiereInfoResponse | null> {
 export async function openInPremiere(
   downloadUrl: string,
   filename: string,
+  openProject: boolean = true,
 ): Promise<OpenPremiereResponse> {
   try {
     const controller = new AbortController();
@@ -85,7 +88,7 @@ export async function openInPremiere(
     const response = await fetch(`${AGENT_BASE}/local/open-premiere`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ download_url: downloadUrl, filename }),
+      body: JSON.stringify({ download_url: downloadUrl, filename, open_project: openProject }),
       signal: controller.signal,
     });
     clearTimeout(timeout);

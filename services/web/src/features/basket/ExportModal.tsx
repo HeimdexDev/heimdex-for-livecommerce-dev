@@ -46,6 +46,7 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
   const [premiereInfo, setPremiereInfo] = useState<PremiereInfoResponse | null>(null);
   const [openingInPremiere, setOpeningInPremiere] = useState(false);
   const [premiereSuccess, setPremiereSuccess] = useState(false);
+  const [projectPath, setProjectPath] = useState<string | null>(null);
 
   // Fetch Premiere info when modal opens and agent is available
   const fetchPremiereInfo = useCallback(async () => {
@@ -310,12 +311,17 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
         getAccessToken
       );
 
-      // Step 2: Tell agent to download + open in Premiere
-      const result = await openInPremiere(download_url, filename);
+      // Step 2: Tell agent to download + open in project
+      const result = await openInPremiere(download_url, filename, true);
 
       if (result.status === "success") {
         setPremiereSuccess(true);
-        setSuccess("Premiere Pro에서 열었습니다.");
+        setProjectPath(result.project_path ?? null);
+        if (result.project_path) {
+          setSuccess("Premiere Pro 프로젝트를 열었습니다. Finder에서 FCPXML 파일을 프로젝트 패널로 드래그하세요.");
+        } else {
+          setSuccess("Premiere Pro에서 열었습니다.");
+        }
       } else {
         const msg = result.export_path
           ? `${result.error}\n파일 위치: ${result.export_path}`
@@ -535,6 +541,15 @@ export function ExportModal({ isOpen, onClose, overrideItems }: ExportModalProps
           {/* Error / Success messages */}
           {error && <p className="text-sm text-red-600">{error}</p>}
           {success && <p className="text-sm text-green-600">{success}</p>}
+
+          {premiereSuccess && projectPath && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 space-y-1">
+              <p className="text-xs font-medium text-blue-800">다음 단계:</p>
+              <p className="text-xs text-blue-700">
+                Finder에서 열린 FCPXML 파일을 Premiere Pro의 프로젝트 패널로 드래그하세요.
+              </p>
+            </div>
+          )}
 
           {/* Primary action button */}
           {activeTab === "fcpxml" && (
