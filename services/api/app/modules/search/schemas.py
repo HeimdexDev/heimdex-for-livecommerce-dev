@@ -106,6 +106,7 @@ class DebugInfo(BaseModel):
     visual_contribution: float = 0.0
     color_contribution: float = 0.0
     ocr_contribution: float = 0.0
+    reranker_score: float | None = None
     fused_score: float
     quality_factor: float = 1.0
     adjusted_score: float

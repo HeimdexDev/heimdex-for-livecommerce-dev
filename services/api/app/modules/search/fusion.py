@@ -35,6 +35,7 @@ class RankedItem:
     quality_factor: float = 1.0
     fused_score: float = 0.0
     adjusted_score: float = 0.0
+    reranker_score: float | None = None
     diversification_penalty: bool = False
 
 def rrf_score(rank: int | None, k: int = 60) -> float:

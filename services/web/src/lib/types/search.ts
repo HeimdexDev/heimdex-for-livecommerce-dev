@@ -73,6 +73,7 @@ export interface DebugInfo {
   vector_contribution: number;
   color_contribution?: number;
   ocr_contribution: number;
+  reranker_score?: number | null;
   fused_score: number;
   quality_factor: number;
   adjusted_score: number;

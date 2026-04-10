@@ -170,6 +170,16 @@ async def evaluate_query(
         text_knn_weight=alpha,
         visual_weight=0.0,
     )
+
+    if settings.reranker_enabled and len(ranked) > settings.search_page_size:
+        from app.modules.search.reranker import apply_reranking
+
+        ranked = await apply_reranking(
+            query=query,
+            ranked_items=ranked[: settings.reranker_top_k],
+            remaining=ranked[settings.reranker_top_k :],
+        )
+
     diversified = diversify_results(
         ranked,
         max_per_video=settings.search_max_scenes_per_video,

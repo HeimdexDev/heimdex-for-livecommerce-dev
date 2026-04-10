@@ -427,6 +427,21 @@ class SceneSearchService:
             color_weight=color_w,
         )
 
+        # --- Cross-encoder reranking (semantic mode only) ---
+        if (
+            settings.reranker_enabled
+            and intent.intent_type != "metadata"
+            and len(ranked_items) > settings.search_page_size
+            and ctx.query.strip()
+        ):
+            from app.modules.search.reranker import apply_reranking
+
+            ranked_items = await apply_reranking(
+                query=ctx.query,
+                ranked_items=ranked_items[: settings.reranker_top_k],
+                remaining=ranked_items[settings.reranker_top_k :],
+            )
+
         diversified = diversify_results(
             ranked_items,
             max_per_video=settings.search_max_scenes_per_video,
@@ -653,6 +668,7 @@ class SceneSearchService:
                         visual_contribution=item.visual_contribution,
                         color_contribution=item.color_contribution,
                         ocr_contribution=0.0,
+                        reranker_score=item.reranker_score,
                         fused_score=item.fused_score,
                         quality_factor=item.quality_factor,
                         adjusted_score=item.adjusted_score,

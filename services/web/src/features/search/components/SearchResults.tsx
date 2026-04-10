@@ -956,6 +956,14 @@ function DebugPanel({ debug }: { debug: DebugInfo }) {
             <div />
           </>
         )}
+        {debug.reranker_score != null && (
+          <div>
+            <span className="text-gray-500">Reranker:</span>{" "}
+            <span className="text-emerald-600 font-semibold">
+              {debug.reranker_score.toFixed(4)}
+            </span>
+          </div>
+        )}
         <div>
           <span className="text-gray-500">Fused Score:</span>{" "}
           <span className="text-gray-900">

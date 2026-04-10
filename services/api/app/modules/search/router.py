@@ -84,6 +84,9 @@ def _build_metadata(request: SearchRequest) -> dict[str, Any]:
         meta["color_family"] = request.color_family
     elif request.color_hex:
         meta["color_hex"] = request.color_hex
+    settings = get_settings()
+    if settings.reranker_enabled:
+        meta["reranker_enabled"] = True
     return meta
 
 
