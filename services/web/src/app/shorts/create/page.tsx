@@ -1,25 +1,17 @@
 "use client";
 
-import { Suspense } from "react";
-import dynamic from "next/dynamic";
+import { useSearchParams } from "next/navigation";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
-const ShortsCreate = dynamic(
-  () => import("@/features/shorts").then((mod) => ({ default: mod.ShortsCreatePage })),
-  { ssr: false },
-);
+export default function ShortsCreateRedirect() {
+  const params = useSearchParams();
+  const router = useRouter();
 
-function LoadingFallback() {
-  return (
-    <div className="flex min-h-[400px] items-center justify-center">
-      <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-indigo-500" />
-    </div>
-  );
-}
+  useEffect(() => {
+    const qs = params.toString();
+    router.replace(`/export/shorts/create${qs ? `?${qs}` : ""}`);
+  }, [params, router]);
 
-export default function ShortsCreatePage() {
-  return (
-    <Suspense fallback={<LoadingFallback />}>
-      <ShortsCreate />
-    </Suspense>
-  );
+  return null;
 }

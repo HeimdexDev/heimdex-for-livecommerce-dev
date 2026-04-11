@@ -1,26 +1,17 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
-const ShortsEditorPage = dynamic(
-  () =>
-    import("@/features/shorts-editor/components/ShortsEditorPage").then(
-      (m) => m.ShortsEditorPage,
-    ),
-  { ssr: false },
-);
+export default function ShortsEditorRedirect() {
+  const params = useSearchParams();
+  const router = useRouter();
 
-export default function EditorRoute() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen items-center justify-center">
-          <div className="h-10 w-10 animate-spin rounded-full border-b-2 border-indigo-500" />
-        </div>
-      }
-    >
-      <ShortsEditorPage />
-    </Suspense>
-  );
+  useEffect(() => {
+    const qs = params.toString();
+    router.replace(`/export/shorts/editor${qs ? `?${qs}` : ""}`);
+  }, [params, router]);
+
+  return null;
 }

@@ -1,12 +1,5 @@
-"use client";
+import { permanentRedirect } from "next/navigation";
 
-import dynamic from "next/dynamic";
-
-const SavedShorts = dynamic(
-  () => import("@/features/shorts").then((mod) => ({ default: mod.SavedShortsPage })),
-  { ssr: false },
-);
-
-export default function ShortsPage() {
-  return <SavedShorts />;
+export default function ShortsRedirect() {
+  permanentRedirect("/export/shorts");
 }
