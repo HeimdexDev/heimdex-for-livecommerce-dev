@@ -114,7 +114,7 @@ function NavLink({
       className={cn(
         "relative flex items-center gap-2.5 rounded-r-md px-3 py-2 text-sm transition-colors",
         isActive
-          ? "border-l-[3px] border-indigo-500 bg-gray-100 font-medium text-gray-900"
+          ? "border-l-[3px] border-indigo-500 font-medium text-gray-900"
           : "border-l-[3px] border-transparent text-gray-600 hover:bg-gray-50",
         indent && "pl-7",
       )}
@@ -142,16 +142,18 @@ function NavGroup({
   item: NavGroupItem;
   pathname: string;
 }) {
-  const [userExpanded, setUserExpanded] = useState(readExportGroupState);
-
   const isChildActive = item.children.some((child) =>
     pathname.startsWith(child.href),
   );
-  const expanded = isChildActive || userExpanded;
+
+  const [expanded, setExpanded] = useState(() => {
+    const stored = readExportGroupState();
+    return isChildActive ? true : stored;
+  });
 
   function handleToggle() {
-    const next = !userExpanded;
-    setUserExpanded(next);
+    const next = !expanded;
+    setExpanded(next);
     writeExportGroupState(next);
   }
 
@@ -163,7 +165,7 @@ function NavGroup({
         className={cn(
           "relative flex w-full items-center gap-2.5 rounded-r-md px-3 py-2 text-sm transition-colors",
           isChildActive
-            ? "border-l-[3px] border-indigo-500 bg-gray-100 font-medium text-gray-900"
+            ? "border-l-[3px] border-indigo-500 font-medium text-gray-900"
             : "border-l-[3px] border-transparent text-gray-600 hover:bg-gray-50",
         )}
       >
