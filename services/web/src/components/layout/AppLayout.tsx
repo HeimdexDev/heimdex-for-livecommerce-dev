@@ -84,7 +84,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={toggleSidebar}
         />
-        <main className="flex-1 px-6 pb-6">{children}</main>
+        <main className="min-w-0 flex-1 overflow-hidden px-6 pb-6">{children}</main>
       </div>
     </div>
   );

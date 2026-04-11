@@ -29,13 +29,13 @@ export function PreeditLayout({
   getToken,
 }: PreeditLayoutProps) {
   return (
-    <div className="flex h-[calc(100vh-64px)] flex-col">
+    <div className="flex h-[calc(100vh-64px)] w-full flex-col overflow-hidden">
       <PreeditHeader
         title={project.title}
         onTitleChange={actions.setTitle}
       />
       <div className="flex flex-1 overflow-hidden">
-        <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-6">
+        <main className="min-w-0 flex-1 overflow-y-auto p-6">
           <RowList
             rows={project.rows}
             actions={actions}
