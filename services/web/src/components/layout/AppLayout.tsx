@@ -72,11 +72,11 @@ export function AppLayout({ children }: AppLayoutProps) {
   }
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex min-h-screen overflow-hidden">
       <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
       <div
         className={cn(
-          "flex flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
+          "flex min-w-0 flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
           sidebarCollapsed ? "ml-0" : "ml-[200px]",
         )}
       >
