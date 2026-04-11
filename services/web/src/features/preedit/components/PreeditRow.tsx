@@ -66,7 +66,7 @@ export function PreeditRow({ row, index, actions, getToken }: PreeditRowProps) {
       ref={setNodeRef}
       style={style}
       className={cn(
-        "rounded-lg border border-gray-200 bg-white p-4 transition-shadow",
+        "overflow-hidden rounded-lg border border-gray-200 bg-white p-4 transition-shadow",
         isDragging && "z-10 shadow-lg",
       )}
     >
