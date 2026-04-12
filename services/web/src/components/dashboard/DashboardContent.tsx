@@ -958,7 +958,14 @@ export default function DashboardContent({
                 : "cursor-not-allowed bg-gray-200 text-gray-400",
             )}
           >
-            검색
+            {isLoading ? (
+              <span className="flex items-center gap-2">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                검색 중
+              </span>
+            ) : (
+              "검색"
+            )}
           </button>
         </form>
 
@@ -1154,10 +1161,21 @@ export default function DashboardContent({
           />
         </div>
 
-        {/* Loading */}
+        {/* Loading skeleton */}
         {isLoading && (
-          <div className="flex items-center justify-center py-20">
-            <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-300 border-t-indigo-500" />
+          <div className={cn("mt-6 grid gap-5", getDashboardGridClass(aspectRatio))}>
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="animate-pulse">
+                <div className={cn(
+                  "rounded-lg bg-gray-200",
+                  contentType === "image" ? "aspect-square" : "aspect-video",
+                )} />
+                <div className="mt-3 space-y-2">
+                  <div className="h-4 w-3/4 rounded bg-gray-200" />
+                  <div className="h-3 w-1/2 rounded bg-gray-100" />
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
