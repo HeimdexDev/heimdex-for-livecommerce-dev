@@ -63,11 +63,12 @@ class Settings(BaseSettings):
     visual_embedding_model: str = "google/siglip2-base-patch16-256"
     visual_embedding_dimension: int = 768
     
-    # Cross-encoder reranker configuration
+    # Cross-encoder reranker (GPU service)
     reranker_enabled: bool = False
-    reranker_model: str = "BAAI/bge-reranker-base"
+    reranker_service_url: str = ""
     reranker_top_k: int = 20
     reranker_blend_weight: float = 0.7
+    reranker_timeout_ms: int = 5000
     reranker_use_mock: bool = False
 
     search_lexical_top_k: int = 200

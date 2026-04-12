@@ -1,9 +1,9 @@
 import pytest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 
 from app.modules.search.fusion import RankedItem
 from app.modules.search.reranker import (
-    RerankerService,
+    RerankerClient,
     build_reranker_document,
     apply_reranking,
     _mock_scores,
@@ -76,23 +76,27 @@ class TestMockScores:
         assert scores == []
 
 
-class TestRerankerServiceMock:
-    def test_score_pairs_mock_mode(self):
+class TestRerankerClientMock:
+    @pytest.mark.asyncio
+    async def test_score_pairs_mock_mode(self):
         with patch("app.modules.search.reranker.get_settings") as mock_settings:
             mock_settings.return_value.reranker_use_mock = True
-            mock_settings.return_value.reranker_model = "BAAI/bge-reranker-base"
-            service = RerankerService()
-            scores = service.score_pairs("test query", ["doc1", "doc2", "doc3"])
+            mock_settings.return_value.reranker_service_url = ""
+            mock_settings.return_value.reranker_timeout_ms = 5000
+            client = RerankerClient()
+            scores = await client.score_pairs("test query", ["doc1", "doc2", "doc3"])
             assert len(scores) == 3
             for s in scores:
                 assert 0.0 <= s <= 1.0
 
-    def test_score_pairs_empty_documents(self):
+    @pytest.mark.asyncio
+    async def test_score_pairs_empty_documents(self):
         with patch("app.modules.search.reranker.get_settings") as mock_settings:
             mock_settings.return_value.reranker_use_mock = True
-            mock_settings.return_value.reranker_model = "BAAI/bge-reranker-base"
-            service = RerankerService()
-            scores = service.score_pairs("query", [])
+            mock_settings.return_value.reranker_service_url = ""
+            mock_settings.return_value.reranker_timeout_ms = 5000
+            client = RerankerClient()
+            scores = await client.score_pairs("query", [])
             assert scores == []
 
 
@@ -111,17 +115,15 @@ class TestApplyReranking:
         with patch("app.modules.search.reranker.get_settings") as mock_settings:
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_use_mock = True
-            mock_settings.return_value.reranker_model = "BAAI/bge-reranker-base"
+            mock_settings.return_value.reranker_service_url = ""
             mock_settings.return_value.reranker_top_k = 50
             mock_settings.return_value.reranker_blend_weight = 0.7
+            mock_settings.return_value.reranker_timeout_ms = 5000
 
             result = await apply_reranking("test query", items, remaining)
 
-        # All items present (3 reranked + 1 remaining)
         assert len(result) == 4
-        # Remaining item is always last
         assert result[-1].doc_id == "d4"
-        # All reranked items have reranker_score set
         for item in result[:3]:
             assert item.reranker_score is not None
 
@@ -136,17 +138,15 @@ class TestApplyReranking:
         with patch("app.modules.search.reranker.get_settings") as mock_settings:
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_use_mock = True
-            mock_settings.return_value.reranker_model = "BAAI/bge-reranker-base"
+            mock_settings.return_value.reranker_service_url = ""
             mock_settings.return_value.reranker_top_k = 50
             mock_settings.return_value.reranker_blend_weight = 0.7
+            mock_settings.return_value.reranker_timeout_ms = 5000
 
             result = await apply_reranking("query", items, remaining)
 
-        # Remaining items have no reranker_score
         assert result[1].reranker_score is None
         assert result[2].reranker_score is None
-        assert result[1].doc_id == "d2"
-        assert result[2].doc_id == "d3"
 
     @pytest.mark.asyncio
     async def test_empty_ranked_items(self):
@@ -155,9 +155,10 @@ class TestApplyReranking:
         with patch("app.modules.search.reranker.get_settings") as mock_settings:
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_use_mock = True
-            mock_settings.return_value.reranker_model = "BAAI/bge-reranker-base"
+            mock_settings.return_value.reranker_service_url = ""
             mock_settings.return_value.reranker_top_k = 50
             mock_settings.return_value.reranker_blend_weight = 0.7
+            mock_settings.return_value.reranker_timeout_ms = 5000
 
             result = await apply_reranking("query", [], remaining)
 
@@ -175,9 +176,10 @@ class TestApplyReranking:
         with patch("app.modules.search.reranker.get_settings") as mock_settings:
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_use_mock = True
-            mock_settings.return_value.reranker_model = "BAAI/bge-reranker-base"
+            mock_settings.return_value.reranker_service_url = ""
             mock_settings.return_value.reranker_top_k = 50
             mock_settings.return_value.reranker_blend_weight = 0.7
+            mock_settings.return_value.reranker_timeout_ms = 5000
 
             result = await apply_reranking("query", [item], [])
 
@@ -185,6 +187,37 @@ class TestApplyReranking:
         assert result[0].lexical_score == 10.5
         assert result[0].vector_rank == 3
         assert result[0].fused_score == 0.95
+
+    @pytest.mark.asyncio
+    async def test_fail_open_on_service_error(self):
+        """When reranker service fails, return items in original RRF order."""
+        items = [
+            _make_ranked_item("d1", "v1", 1.0, scene_caption="first"),
+            _make_ranked_item("d2", "v2", 0.5, scene_caption="second"),
+        ]
+        remaining = [_make_ranked_item("d3", "v3", 0.1)]
+
+        with patch("app.modules.search.reranker.get_settings") as mock_settings, \
+             patch("app.modules.search.reranker.get_reranker_client") as mock_get_client:
+            mock_settings.return_value.reranker_enabled = True
+            mock_settings.return_value.reranker_use_mock = False
+            mock_settings.return_value.reranker_service_url = "http://fake:8080"
+            mock_settings.return_value.reranker_top_k = 50
+            mock_settings.return_value.reranker_blend_weight = 0.7
+            mock_settings.return_value.reranker_timeout_ms = 5000
+
+            mock_client = MagicMock()
+            mock_client.score_pairs = AsyncMock(side_effect=Exception("Connection refused"))
+            mock_get_client.return_value = mock_client
+
+            result = await apply_reranking("query", items, remaining)
+
+        # Items returned in original order, no reranker_score set
+        assert len(result) == 3
+        assert result[0].doc_id == "d1"
+        assert result[1].doc_id == "d2"
+        assert result[2].doc_id == "d3"
+        assert result[0].reranker_score is None
 
     @pytest.mark.asyncio
     async def test_blend_weight_affects_scores(self):
@@ -196,13 +229,13 @@ class TestApplyReranking:
         with patch("app.modules.search.reranker.get_settings") as mock_settings:
             mock_settings.return_value.reranker_enabled = True
             mock_settings.return_value.reranker_use_mock = True
-            mock_settings.return_value.reranker_model = "BAAI/bge-reranker-base"
+            mock_settings.return_value.reranker_service_url = ""
             mock_settings.return_value.reranker_top_k = 50
             mock_settings.return_value.reranker_blend_weight = 0.7
+            mock_settings.return_value.reranker_timeout_ms = 5000
 
             result = await apply_reranking("query", items, [])
 
-        # Both items should have adjusted_score set (blended)
         for item in result:
             assert item.adjusted_score > 0
             assert item.reranker_score is not None

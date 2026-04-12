@@ -22,11 +22,6 @@ RUN if [ "$PRELOAD_EMBEDDING_MODEL" = "true" ]; then \
     python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"; \
     fi
 
-ARG PRELOAD_RERANKER_MODEL=false
-RUN if [ "$PRELOAD_RERANKER_MODEL" = "true" ]; then \
-    python -c "from transformers import AutoTokenizer, AutoModelForSequenceClassification; AutoTokenizer.from_pretrained('BAAI/bge-reranker-base'); AutoModelForSequenceClassification.from_pretrained('BAAI/bge-reranker-base')"; \
-    fi
-
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 

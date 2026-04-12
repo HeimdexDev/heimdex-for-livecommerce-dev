@@ -1,129 +1,88 @@
 """
-Cross-encoder reranker for search result re-scoring.
+Cross-encoder reranker client for search result re-scoring.
 
-Uses BAAI/bge-reranker-base to rescore the top-k RRF candidates with
-query-document cross-attention, then blends the reranker score with the
-original RRF adjusted_score.
+Calls a GPU reranker service via HTTP to rescore top-k RRF candidates,
+then blends the reranker score with the original RRF adjusted_score.
 
-## Model: BAAI/bge-reranker-base
+## Architecture
 
-- **Type**: Cross-encoder (XLMRobertaForSequenceClassification)
-- **Languages**: 100+ languages including Korean (XLM-Roberta backbone)
-- **Max length**: 512 tokens (query + document concatenated)
-- **Parameters**: 278M
-- **Memory**: ~1.1GB (FP32)
-- **Latency**: ~1.7s for 20 pairs on c6i.4xlarge (16 vCPU)
+The reranker model runs on a dedicated Aircloud GPU endpoint as a
+FastAPI service. This module is an HTTP client — no torch, no model
+loading, no GPU dependency in the API process.
+
+## Fail-open
+
+If the GPU service is unavailable (timeout, connection error), reranking
+is skipped and results are returned in original RRF order. Search never
+fails due to reranker issues.
 
 ## Integration point
 
 Called from scene_service._search_semantic() between compute_weighted_rrf()
 and diversify_results(). Gated by `RERANKER_ENABLED` config flag.
-
-## Efficiency
-
-- Batch inference: all pairs scored in a single forward pass
-- FP16 autocast on CPU for reduced memory bandwidth
-- asyncio.to_thread wrapper to avoid blocking the event loop
-- Lazy model loading (singleton pattern, same as EmbeddingService)
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import struct
 from functools import lru_cache
-from typing import TYPE_CHECKING
 
 from app.config import get_settings
 from app.logging_config import get_logger
 from app.modules.search.fusion import RankedItem
 
-if TYPE_CHECKING:
-    import torch
-
 logger = get_logger(__name__)
 
 
-class RerankerService:
-    """Cross-encoder reranker with lazy model loading and LRU caching."""
+class RerankerClient:
+    """HTTP client for the GPU reranker service."""
 
     def __init__(self) -> None:
         self.settings = get_settings()
-        self._model: torch.nn.Module | None = None
-        self._tokenizer = None
+        self._client = None
 
-    def _load_model(self) -> None:
-        if self._model is not None:
-            return
+    def _get_client(self):
+        if self._client is None:
+            import httpx
 
-        if self.settings.reranker_use_mock:
-            logger.info("reranker_mock_mode", reason="RERANKER_USE_MOCK=true")
-            return
+            timeout = self.settings.reranker_timeout_ms / 1000
+            self._client = httpx.AsyncClient(
+                base_url=self.settings.reranker_service_url,
+                timeout=httpx.Timeout(timeout),
+            )
+        return self._client
 
-        logger.info(
-            "loading_reranker_model",
-            model=self.settings.reranker_model,
-        )
-
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-        self._tokenizer = AutoTokenizer.from_pretrained(self.settings.reranker_model)
-        self._model = AutoModelForSequenceClassification.from_pretrained(
-            self.settings.reranker_model,
-        )
-        self._model.eval()
-
-        param_count = sum(p.numel() for p in self._model.parameters())
-        logger.info(
-            "reranker_model_loaded",
-            model=self.settings.reranker_model,
-            parameters=f"{param_count / 1e6:.1f}M",
-        )
-
-    def score_pairs(self, query: str, documents: list[str]) -> list[float]:
-        """Score query-document pairs in a single batch.
+    async def score_pairs(self, query: str, documents: list[str]) -> list[float]:
+        """Score query-document pairs via the GPU reranker service.
 
         Returns sigmoid-normalized scores in [0, 1] range.
+        Raises on HTTP errors (caller handles fail-open).
         """
         if not documents:
             return []
 
-        self._load_model()
-
         if self.settings.reranker_use_mock:
             return _mock_scores(query, documents)
 
-        import torch
-
-        pairs = [[query, doc] for doc in documents]
-        inputs = self._tokenizer(
-            pairs,
-            padding=True,
-            truncation=True,
-            max_length=512,
-            return_tensors="pt",
+        client = self._get_client()
+        response = await client.post(
+            "/rerank",
+            json={"query": query, "documents": documents},
         )
-
-        with torch.no_grad(), torch.autocast("cpu"):
-            logits = self._model(**inputs).logits.squeeze(-1)
-
-        scores = torch.sigmoid(logits).tolist()
-        # Handle single-item case where squeeze removes all dims
-        if isinstance(scores, float):
-            scores = [scores]
-        return scores
+        response.raise_for_status()
+        return response.json()["scores"]
 
 
 @lru_cache(maxsize=1)
-def get_reranker_service() -> RerankerService:
-    return RerankerService()
+def get_reranker_client() -> RerankerClient:
+    return RerankerClient()
 
 
 def build_reranker_document(source: dict) -> str:
     """Build document text for reranker from OpenSearch _source fields.
 
     Combines scene_caption + transcript_norm + ocr_text_raw.
-    Truncation is handled by the tokenizer, not here.
+    Truncation is handled by the GPU service's tokenizer, not here.
     """
     parts = []
     for field in ("scene_caption", "transcript_norm", "ocr_text_raw"):
@@ -141,19 +100,29 @@ async def apply_reranking(
     """Rerank top-k items and append the rest unchanged.
 
     1. Build document texts from RankedItem.source
-    2. Score all pairs in a single batch (offloaded to thread)
+    2. Score all pairs via GPU service (or mock)
     3. Blend reranker scores with normalized RRF scores
     4. Sort by blended score, append remaining items
+
+    Fail-open: on any error, returns items in original RRF order.
     """
     if not ranked_items:
         return remaining
 
     settings = get_settings()
-    service = get_reranker_service()
+    client = get_reranker_client()
     documents = [build_reranker_document(item.source) for item in ranked_items]
 
-    # Offload CPU-bound inference to thread pool
-    reranker_scores = await asyncio.to_thread(service.score_pairs, query, documents)
+    try:
+        reranker_scores = await client.score_pairs(query, documents)
+    except Exception as exc:
+        logger.warning(
+            "reranker_service_error",
+            error=str(exc),
+            query=query[:50],
+            candidates=len(ranked_items),
+        )
+        return ranked_items + remaining
 
     # Min-max normalize RRF adjusted_scores to [0, 1]
     rrf_scores = [item.adjusted_score for item in ranked_items]
@@ -191,7 +160,6 @@ def _mock_scores(query: str, documents: list[str]) -> list[float]:
     for i, doc in enumerate(documents):
         h = hashlib.md5(f"{query}:{doc}".encode()).digest()
         base = struct.unpack("H", h[:2])[0] / 65535.0
-        # Scale to [0.3, 0.95] range with slight index decay
         score = 0.3 + 0.65 * base - 0.001 * i
         scores.append(max(0.0, min(1.0, score)))
     return scores

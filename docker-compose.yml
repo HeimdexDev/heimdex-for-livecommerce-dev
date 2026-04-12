@@ -97,8 +97,10 @@ services:
       - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1024}
       - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cpu}
       - EMBEDDING_USE_MOCK=${EMBEDDING_USE_MOCK:-true}
-      # Cross-encoder reranker
+      # Cross-encoder reranker (GPU service)
       - RERANKER_ENABLED=${RERANKER_ENABLED:-false}
+      - RERANKER_SERVICE_URL=${RERANKER_SERVICE_URL:-}
+      - RERANKER_TIMEOUT_MS=${RERANKER_TIMEOUT_MS:-5000}
       - RERANKER_USE_MOCK=${RERANKER_USE_MOCK:-false}
       # Speech-aware scene splitting + VLM tags
       - DRIVE_SPEECH_SPLIT_ENABLED=${DRIVE_SPEECH_SPLIT_ENABLED:-false}

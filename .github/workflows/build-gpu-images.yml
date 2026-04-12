@@ -17,6 +17,7 @@ on:
       - 'services/drive-transcode-worker/**'
       - 'services/drive-face-worker/**'
       - 'services/drive-visual-embed-worker/**'
+      - 'services/drive-reranker-worker/**'
 
 env:
   REGISTRY: ghcr.io
@@ -38,7 +39,7 @@ jobs:
       - name: Resolve workers to build
         id: resolve
         run: |
-          ALL_WORKERS='["caption","stt","ocr","transcode","face","visual-embed"]'
+          ALL_WORKERS='["caption","stt","ocr","transcode","face","visual-embed","reranker"]'
 
           # ── Manual trigger: use input directly ──
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -76,6 +77,7 @@ jobs:
           echo "$CHANGED" | grep -q '^services/drive-transcode-worker/'    && WORKERS+=("transcode")
           echo "$CHANGED" | grep -q '^services/drive-face-worker/'         && WORKERS+=("face")
           echo "$CHANGED" | grep -q '^services/drive-visual-embed-worker/' && WORKERS+=("visual-embed")
+          echo "$CHANGED" | grep -q '^services/drive-reranker-worker/'     && WORKERS+=("reranker")
 
           if [ ${#WORKERS[@]} -eq 0 ]; then
             echo "workers=[]" >> "$GITHUB_OUTPUT"

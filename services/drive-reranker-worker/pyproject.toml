@@ -1,0 +1,19 @@
+[project]
+name = "heimdex-reranker-worker"
+version = "0.1.0"
+description = "GPU cross-encoder reranker service for Heimdex search"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.0",
+    "transformers>=4.49.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+    "pydantic>=2.0",
+    "structlog>=23.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "httpx>=0.24.0",
+]
