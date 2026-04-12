@@ -7,7 +7,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "044_add_people_override"
-down_revision = "043_replace_ivfflat_with_hnsw_index"
+down_revision = "043_replace_ivfflat_with_hnsw"
 branch_labels = None
 depends_on = None
 
