@@ -1,3 +1,5 @@
+import { describe, it, expect } from "vitest";
+
 import { getThumbnailAspectClass, getDashboardGridClass, getInlineThumbnailClass, getPersonGridClass } from "@/lib/thumbnailUtils";
 
 describe("thumbnailUtils", () => {
