@@ -112,6 +112,54 @@ TRAINING_VIDEO_TITLES = [
     "Monitoring and Alerting Setup",
 ]
 
+# Live-commerce style product image filenames (simulates Drive assets).
+KOREAN_IMAGE_FILENAMES = [
+    "봄신상_립스틱_정면.jpg",
+    "여름컬렉션_원피스_상세01.jpg",
+    "겨울_패딩_후드업_뒷면.jpg",
+    "리얼핏_부츠_측면.jpg",
+    "스킨케어_로션_500ml_제품컷.jpg",
+    "네일아트_레드톤_핸드샷.jpg",
+    "뷰티_세럼_패키지_정면.jpg",
+    "가방_크로스백_베이지_스튜디오.jpg",
+    "아우터_트렌치코트_모델착장.jpg",
+    "주방용품_프라이팬_28cm.jpg",
+]
+
+ENGLISH_IMAGE_FILENAMES = [
+    "SS25_RED_SKU001_front.jpg",
+    "FW24_OUTERWEAR_NAVY_back.jpg",
+    "HERO_BANNER_SERUM_1920x1080.jpg",
+    "LOOKBOOK_SPRING_EDITORIAL_03.jpg",
+    "PDP_MAIN_SNEAKER_WHITE_side.jpg",
+    "CAMPAIGN_SUMMER_BEACH_landscape.jpg",
+    "DETAIL_SHOT_WATCH_SILVER_close.jpg",
+    "PACKSHOT_SKINCARE_KIT_studio.jpg",
+    "THUMB_NEW_ARRIVAL_BAG_beige.jpg",
+    "COLLECTION_NAVY_COAT_model.jpg",
+]
+
+# Common product-photography aspect ratios in landscape/portrait/square.
+SEED_IMAGE_DIMENSIONS: list[tuple[int, int]] = [
+    (1920, 1080),  # landscape 16:9
+    (1280, 720),   # landscape 16:9
+    (1200, 800),   # landscape 3:2
+    (1080, 1920),  # portrait 9:16 (mobile-first)
+    (720, 1280),   # portrait 9:16
+    (800, 1200),   # portrait 2:3
+    (1080, 1080),  # square 1:1
+    (1200, 1200),  # square 1:1
+]
+
+
+def _classify_orientation(width: int, height: int) -> str:
+    """Map image dimensions to landscape/portrait/square (matches ingest)."""
+    if width > height:
+        return "landscape"
+    if height > width:
+        return "portrait"
+    return "square"
+
 
 def _build_speaker_transcript(
     transcript_parts: list[str], rng: random.Random
@@ -386,9 +434,13 @@ async def seed_opensearch(org, libraries, profiles, people_clusters, drive_entri
 async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
     """Seed the scenes index with fabricated scene documents.
 
-    Each video gets 3-5 scenes (coarser than the 5-15 segments per video).
-    Scene transcripts are aggregated from random transcript samples,
-    simulating the real pipeline output.
+    Content mix:
+      - ~90% of assets are videos with 3-5 scenes each.
+      - ~10% are single-scene image assets (content_type="image") with
+        image_width/height/orientation + filename_text so the image-only
+        and mixed content_types filters have something to return locally.
+
+    Doc IDs follow the "{org_id}:{scene_id}" convention required by mget_scenes.
     """
     logger.info("seeding_scenes")
 
@@ -400,6 +452,11 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
         documents: list[tuple[str, dict]] = []
         cluster_ids = [p.person_cluster_id for p in people_clusters]
         drive_nicknames = {d.source_fingerprint_hash: d.nickname for d in drive_entries}
+        org_id_str = str(org.id)
+
+        image_ratio = 0.10  # ~10% of assets are still images
+        video_count = 0
+        image_count = 0
 
         for lib_idx, (library, profile) in enumerate(zip(libraries, profiles)):
             num_videos = random.randint(5, 10)
@@ -407,14 +464,17 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
 
             if lib_idx == 0:
                 title_pool = KOREAN_VIDEO_TITLES
+                image_pool = KOREAN_IMAGE_FILENAMES
             elif lib_idx == 2:
                 title_pool = TRAINING_VIDEO_TITLES
+                image_pool = ENGLISH_IMAGE_FILENAMES
             else:
                 title_pool = ENGLISH_VIDEO_TITLES
+                image_pool = ENGLISH_IMAGE_FILENAMES
 
             for video_idx in range(num_videos):
                 video_id = str(uuid4())
-                video_title = title_pool[video_idx % len(title_pool)]
+                is_image_asset = random.random() < image_ratio
 
                 source_type = random.choice(["gdrive", "removable_disk", "local"])
                 required_drive = None
@@ -427,6 +487,23 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
                     hours=random.randint(0, 23),
                 )
 
+                if is_image_asset:
+                    documents.append(
+                        _build_image_scene_doc(
+                            org_id_str=org_id_str,
+                            library=library,
+                            video_id=video_id,
+                            image_pool=image_pool,
+                            source_type=source_type,
+                            required_drive=required_drive,
+                            capture_time=capture_time,
+                            cluster_ids=cluster_ids,
+                        )
+                    )
+                    image_count += 1
+                    continue
+
+                video_title = title_pool[video_idx % len(title_pool)]
                 num_scenes = random.randint(3, 5)
                 current_ms = 0
 
@@ -457,7 +534,7 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
                     embedding = generate_mock_embedding(transcript_raw)
 
                     doc = {
-                        "org_id": str(org.id),
+                        "org_id": org_id_str,
                         "library_id": str(library.id),
                         "video_id": video_id,
                         "video_title": video_title,
@@ -470,6 +547,7 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
                         "speech_segment_count": num_speech_segments,
                         "speaker_transcript": speaker_transcript,
                         "speaker_count": speaker_count,
+                        "content_type": "video",
                         "source_type": source_type,
                         "required_drive_nickname": required_drive,
                         "people_cluster_ids": scene_people,
@@ -480,17 +558,85 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
                         "embedding_vector": embedding,
                     }
 
-                    documents.append((f"{str(org.id)}:{scene_id}", doc))
+                    documents.append((f"{org_id_str}:{scene_id}", doc))
+
+                video_count += 1
 
         batch_size = 100
         for i in range(0, len(documents), batch_size):
             batch = documents[i : i + batch_size]
             await client.bulk_index_scenes(batch)
 
-        logger.info("scene_seeding_complete", total_documents=len(documents))
+        logger.info(
+            "scene_seeding_complete",
+            total_documents=len(documents),
+            video_assets=video_count,
+            image_assets=image_count,
+        )
 
     finally:
         await client.close()
+
+
+def _build_image_scene_doc(
+    *,
+    org_id_str: str,
+    library,
+    video_id: str,
+    image_pool: list[str],
+    source_type: str,
+    required_drive: str | None,
+    capture_time: datetime,
+    cluster_ids: list[str],
+) -> tuple[str, dict]:
+    """Build a single-scene image asset document.
+
+    Image scenes have no spoken transcript or speaker data; filename_text
+    carries the primary text signal for BM25 search (matches ingest).
+    """
+    scene_id = f"{video_id}_scene_000"
+    filename = random.choice(image_pool)
+    width, height = random.choice(SEED_IMAGE_DIMENSIONS)
+    orientation = _classify_orientation(width, height)
+
+    # Generate the semantic vector from the filename so text search over
+    # images behaves sensibly (e.g. "립스틱" still surfaces image assets).
+    embedding = generate_mock_embedding(filename)
+
+    scene_people = random.sample(
+        cluster_ids, k=random.randint(0, min(2, len(cluster_ids)))
+    )
+
+    doc = {
+        "org_id": org_id_str,
+        "library_id": str(library.id),
+        "video_id": video_id,
+        "video_title": filename,
+        "scene_id": scene_id,
+        "start_ms": 0,
+        "end_ms": 0,
+        "transcript_raw": "",
+        "transcript_norm": "",
+        "transcript_char_count": 0,
+        "speech_segment_count": 0,
+        "speaker_transcript": "",
+        "speaker_count": 0,
+        "content_type": "image",
+        "filename_text": filename,
+        "image_width": width,
+        "image_height": height,
+        "image_orientation": orientation,
+        "source_type": source_type,
+        "required_drive_nickname": required_drive,
+        "people_cluster_ids": scene_people,
+        "capture_time": capture_time.isoformat(),
+        "ingest_time": datetime.now(timezone.utc).isoformat(),
+        "thumbnail_url": f"https://placeholder.heimdex.local/thumb/{scene_id}.jpg",
+        "keyframe_timestamp_ms": 0,
+        "embedding_vector": embedding,
+    }
+
+    return (f"{org_id_str}:{scene_id}", doc)
 
 
 async def main():
