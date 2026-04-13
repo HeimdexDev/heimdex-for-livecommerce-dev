@@ -90,6 +90,24 @@ class SearchRequest(BaseModel):
             "Activates dominant-color-family search. Takes precedence over color_hex."
         ),
     )
+    page_size: int | None = Field(
+        default=None,
+        ge=1,
+        le=120,
+        description=(
+            "Override server default page size (post-diversification result count). "
+            "None=use settings.search_page_size. Clamped to settings.search_page_size_max."
+        ),
+    )
+    max_per_video: int | None = Field(
+        default=None,
+        ge=1,
+        le=20,
+        description=(
+            "Override per-video diversification cap. None=use settings.search_max_scenes_per_video. "
+            "Raise this alongside page_size to avoid underfill on small corpora."
+        ),
+    )
 
 
 class DebugInfo(BaseModel):

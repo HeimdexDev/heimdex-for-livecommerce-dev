@@ -11,6 +11,7 @@ export default function ImageSearchContent() {
         defaultContentType="image"
         hideContentTypeToggle
         hideGroupByToggle
+        pageSize={60}
       />
       <ImageDownloadBar />
     </ImageSelectionProvider>

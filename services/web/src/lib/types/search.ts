@@ -60,6 +60,10 @@ export interface SearchRequest {
   search_mode?: SearchMode;
   color_hex?: string;
   color_family?: string;
+  /** Per-request page size override. Server clamps to search_page_size_max (120). */
+  page_size?: number;
+  /** Per-request diversification cap override. Raise alongside page_size. */
+  max_per_video?: number;
 }
 
 export interface DebugInfo {

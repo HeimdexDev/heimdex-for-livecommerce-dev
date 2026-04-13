@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     search_rrf_k: int = 20
     search_max_scenes_per_video: int = 4
     search_page_size: int = 20
+    # Hard ceiling for per-request page_size overrides (moodboard uses 60).
+    # Invariant: search_*_top_k must stay ≥ 3 × search_page_size_max so the
+    # RRF candidate pool always exceeds what diversification consumes.
+    search_page_size_max: int = 120
     ocr_search_enabled: bool = True
     ocr_bm25_boost: float = 0.6
     opensearch_facet_size: int = 500

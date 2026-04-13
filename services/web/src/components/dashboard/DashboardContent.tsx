@@ -661,12 +661,19 @@ interface DashboardContentProps {
   hideContentTypeToggle?: boolean;
   /** Hide the Videos/Scenes group-by toggle */
   hideGroupByToggle?: boolean;
+  /**
+   * Override page size for this surface. Used by moodboard (`/images`) to
+   * return 60 results per page instead of the default 20. Undefined →
+   * default behavior.
+   */
+  pageSize?: number;
 }
 
 export default function DashboardContent({
   defaultContentType,
   hideContentTypeToggle = false,
   hideGroupByToggle = false,
+  pageSize,
 }: DashboardContentProps = {}) {
   const { getAccessToken } = useAuth();
   const searchParams = useSearchParams();
@@ -766,6 +773,7 @@ export default function DashboardContent({
       initialQuery: initialState.query,
       hadSearchParamsOnMount,
       colorFamily,
+      pageSize,
     },
     { setIsLoading: setIsSearchLoading, setSortBy },
   );

@@ -119,19 +119,31 @@ class SceneSearchService:
         search_mode: Literal["metadata", "lexical", "semantic"] = "lexical",
         color_hex: str | None = None,
         color_family: str | None = None,
+        page_size: int | None = None,
+        max_per_video: int | None = None,
     ) -> SceneSearchResponse | VideoSearchResponse:
         """Route to mode-specific search implementation.
 
         When ``search_mode`` is provided it takes precedence over ``alpha``.
         Legacy callers that only send ``alpha`` default to ``"lexical"`` mode
         which preserves the previous hybrid behaviour.
+
+        ``page_size`` and ``max_per_video`` are per-request overrides for
+        diversification (used by the moodboard surface to return more
+        results). ``None`` falls back to server defaults. Clamped to
+        ``search_page_size_max``.
         """
+        effective_page_size = self._clamp_page_size(page_size)
+        effective_max_per_video = max_per_video or self.settings.search_max_scenes_per_video
+
         logger.info(
             "scene_search_started",
             org_id=str(org_id),
             query=query[:50],
             alpha=alpha,
             search_mode=search_mode,
+            page_size=effective_page_size,
+            max_per_video=effective_max_per_video,
         )
 
         ctx = await self._prepare_search_context(
@@ -152,12 +164,30 @@ class SceneSearchService:
 
         match effective_mode:
             case "metadata":
-                return await self._search_metadata(ctx, alpha)
+                return await self._search_metadata(
+                    ctx, alpha, effective_page_size, effective_max_per_video,
+                )
             case "semantic":
-                return await self._search_semantic(ctx, alpha)
+                return await self._search_semantic(
+                    ctx, alpha, effective_page_size, effective_max_per_video,
+                )
             case _:
                 # Default + explicit "lexical"
-                return await self._search_lexical(ctx, alpha)
+                return await self._search_lexical(
+                    ctx, alpha, effective_page_size, effective_max_per_video,
+                )
+
+    def _clamp_page_size(self, requested: int | None) -> int:
+        """Resolve effective page size. ``None`` → settings default.
+
+        Clamped to ``[1, search_page_size_max]``. Pydantic already enforces
+        ``le=120`` at the router layer; this is defense-in-depth for direct
+        service callers (tests, internal code paths).
+        """
+        if requested is None:
+            return self.settings.search_page_size
+        ceiling = self.settings.search_page_size_max
+        return max(1, min(requested, ceiling))
 
     # ------------------------------------------------------------------
     # Mode: metadata  (BM25 on video title / source path only)
@@ -166,6 +196,8 @@ class SceneSearchService:
         self,
         ctx: _SearchContext,
         alpha: float,
+        page_size: int,
+        max_per_video: int,
     ) -> SceneSearchResponse | VideoSearchResponse:
         """Metadata mode: search video filename / source path.
 
@@ -186,8 +218,8 @@ class SceneSearchService:
 
         diversified = diversify_results(
             ranked_items,
-            max_per_video=self.settings.search_max_scenes_per_video,
-            target_count=self.settings.search_page_size,
+            max_per_video=max_per_video,
+            target_count=page_size,
             content_types=ctx.filter_dict.get("content_types"),
         )
 
@@ -212,6 +244,8 @@ class SceneSearchService:
         self,
         ctx: _SearchContext,
         alpha: float,
+        page_size: int,
+        max_per_video: int,
     ) -> SceneSearchResponse | VideoSearchResponse:
         """Lexical mode: exact word matching on transcript, OCR, caption, title.
 
@@ -234,8 +268,8 @@ class SceneSearchService:
 
         diversified = diversify_results(
             ranked_items,
-            max_per_video=self.settings.search_max_scenes_per_video,
-            target_count=self.settings.search_page_size,
+            max_per_video=max_per_video,
+            target_count=page_size,
             content_types=ctx.filter_dict.get("content_types"),
         )
 
@@ -260,6 +294,8 @@ class SceneSearchService:
         self,
         ctx: _SearchContext,
         alpha: float,
+        page_size: int,
+        max_per_video: int,
     ) -> SceneSearchResponse | VideoSearchResponse:
         """Semantic mode: meaning-based search via weighted RRF.
 
@@ -428,10 +464,14 @@ class SceneSearchService:
         )
 
         # --- Cross-encoder reranking (semantic mode only) ---
+        # Top-slice guardrail: reranker always operates on the fixed
+        # ``reranker_top_k`` prefix (default 20) regardless of page_size.
+        # At page_size=60 the tail items 20..59 keep their pure-RRF order
+        # and the reranker never pays a latency cliff on large moodboard pages.
         if (
             settings.reranker_enabled
             and intent.intent_type != "metadata"
-            and len(ranked_items) > settings.search_page_size
+            and len(ranked_items) > settings.reranker_top_k
             and ctx.query.strip()
         ):
             from app.modules.search.reranker import apply_reranking
@@ -444,8 +484,8 @@ class SceneSearchService:
 
         diversified = diversify_results(
             ranked_items,
-            max_per_video=settings.search_max_scenes_per_video,
-            target_count=settings.search_page_size,
+            max_per_video=max_per_video,
+            target_count=page_size,
             content_types=ctx.filter_dict.get("content_types"),
         )
 

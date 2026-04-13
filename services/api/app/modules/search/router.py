@@ -84,6 +84,10 @@ def _build_metadata(request: SearchRequest) -> dict[str, Any]:
         meta["color_family"] = request.color_family
     elif request.color_hex:
         meta["color_hex"] = request.color_hex
+    if request.page_size is not None:
+        meta["page_size_requested"] = request.page_size
+    if request.max_per_video is not None:
+        meta["max_per_video_requested"] = request.max_per_video
     settings = get_settings()
     if settings.reranker_enabled:
         meta["reranker_enabled"] = True
@@ -129,6 +133,8 @@ async def search(
             search_mode=request.search_mode,
             color_hex=request.color_hex,
             color_family=request.color_family,
+            page_size=request.page_size,
+            max_per_video=request.max_per_video,
         )
     else:
         result = await search_service.search(
@@ -190,6 +196,8 @@ async def search_scenes(
         search_mode=request.search_mode,
         color_hex=request.color_hex,
         color_family=request.color_family,
+        page_size=request.page_size,
+        max_per_video=request.max_per_video,
     )
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)

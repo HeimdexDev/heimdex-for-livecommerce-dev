@@ -15,6 +15,9 @@ import type { SortOption } from "@/lib/search-state";
 // Constants
 // ---------------------------------------------------------------------------
 export const PAGE_SIZE = 20;
+// Moodboard diversification cap — raised from the default of 4 to keep
+// 60-item pages from requiring too many distinct videos.
+const MOODBOARD_MAX_PER_VIDEO = 6;
 
 type SourceType = "gdrive" | "removable_disk" | "local" | "youtube";
 const ALL_SOURCES: SourceType[] = ["gdrive", "removable_disk", "local", "youtube"];
@@ -49,6 +52,12 @@ export interface UseSearchEngineOptions {
   sourceFilters: Set<SourceType>;
   /** Color family for dominant-color search (e.g. 'pink') */
   colorFamily?: string;
+  /**
+   * Override result count (default: PAGE_SIZE=20). When set, sent as
+   * `page_size` on the search request and used for client-side slicing.
+   * Used by the image/moodboard surface to show more results at once.
+   */
+  pageSize?: number;
 }
 
 export interface UseSearchEngineReturn {
@@ -91,7 +100,11 @@ export function useSearchEngine(
     hadSearchParamsOnMount,
     sourceFilters,
     colorFamily,
+    pageSize,
   } = options;
+
+  const effectivePageSize = pageSize ?? PAGE_SIZE;
+  const isMoodboardSize = pageSize !== undefined && pageSize > PAGE_SIZE;
 
   const { setIsLoading, setSortBy } = deps;
 
@@ -132,11 +145,11 @@ export function useSearchEngine(
   // ── Paginated results ───────────────────────────────────────────────────
   const paginatedResults = useMemo(() => {
     if (!sortedResults.length) return [];
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return sortedResults.slice(start, start + PAGE_SIZE);
-  }, [sortedResults, currentPage]);
+    const start = (currentPage - 1) * effectivePageSize;
+    return sortedResults.slice(start, start + effectivePageSize);
+  }, [sortedResults, currentPage, effectivePageSize]);
 
-  const searchTotalPages = Math.max(1, Math.ceil(sortedResults.length / PAGE_SIZE));
+  const searchTotalPages = Math.max(1, Math.ceil(sortedResults.length / effectivePageSize));
   const totalPages = isSearchMode ? searchTotalPages : 1;
 
   // ── Reset pagination on sort change ─────────────────────────────────────
@@ -173,7 +186,17 @@ export function useSearchEngine(
         if (dateEnd) filters.date_to = formatDateKr(dateEnd);
 
         const res = await searchScenes(
-          { q, alpha: 0.5, filters, group_by: groupBy, search_mode: searchMode, color_family: colorFamily },
+          {
+            q,
+            alpha: 0.5,
+            filters,
+            group_by: groupBy,
+            search_mode: searchMode,
+            color_family: colorFamily,
+            ...(isMoodboardSize
+              ? { page_size: effectivePageSize, max_per_video: MOODBOARD_MAX_PER_VIDEO }
+              : {}),
+          },
           tokenGetter,
         );
         setSearchResponse(res);
@@ -193,7 +216,7 @@ export function useSearchEngine(
         setIsLoading(false);
       }
     },
-    [getAccessToken, groupBy, searchMode, contentTypes, sourceFilters, dateStart, dateEnd, referenceMode, setIsLoading, colorFamily],
+    [getAccessToken, groupBy, searchMode, contentTypes, sourceFilters, dateStart, dateEnd, referenceMode, setIsLoading, colorFamily, isMoodboardSize, effectivePageSize],
   );
 
   // ── handleSearch — takes a raw query string (slash commands parsed in component) ──
@@ -234,7 +257,17 @@ export function useSearchEngine(
         if (dateEnd) filters.date_to = formatDateKr(dateEnd);
 
         const res = await searchScenes(
-          { q: "", alpha: 0.5, filters, group_by: groupBy, search_mode: "semantic", color_family: colorFamily },
+          {
+            q: "",
+            alpha: 0.5,
+            filters,
+            group_by: groupBy,
+            search_mode: "semantic",
+            color_family: colorFamily,
+            ...(isMoodboardSize
+              ? { page_size: effectivePageSize, max_per_video: MOODBOARD_MAX_PER_VIDEO }
+              : {}),
+          },
           tokenGetter,
         );
         setSearchResponse(res);
@@ -253,7 +286,7 @@ export function useSearchEngine(
         setIsLoading(false);
       }
     },
-    [getAccessToken, groupBy, contentTypes, sourceFilters, dateStart, dateEnd, colorFamily, setIsLoading],
+    [getAccessToken, groupBy, contentTypes, sourceFilters, dateStart, dateEnd, colorFamily, setIsLoading, isMoodboardSize, effectivePageSize],
   );
 
   // ── Clear search ────────────────────────────────────────────────────────
