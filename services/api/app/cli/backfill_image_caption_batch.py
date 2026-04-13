@@ -163,6 +163,33 @@ async def select_image_rows(
 # ─── JSONL build ──────────────────────────────────────────────────────────────
 
 
+_MAX_IMAGE_DIM = 1024  # gpt-4o "detail": "low" internally downscales
+                       # to 512x512, so anything above 1024 is wasted
+                       # bytes in the Batch input file.
+_JPEG_QUALITY = 85
+
+
+def _maybe_shrink_image(image_bytes: bytes) -> tuple[bytes, str]:
+    """Resize to at most _MAX_IMAGE_DIM on the longest side, re-encode
+    as JPEG. Falls back to the original bytes (and 'image/jpeg' MIME) if
+    PIL can't decode — lets tests pass fake byte fixtures unchanged.
+
+    Returns (bytes, mime_type).
+    """
+
+    try:
+        from PIL import Image  # lazy import: keeps test suite lightweight
+        import io
+
+        with Image.open(io.BytesIO(image_bytes)) as im:
+            im.thumbnail((_MAX_IMAGE_DIM, _MAX_IMAGE_DIM))
+            buf = io.BytesIO()
+            im.convert("RGB").save(buf, format="JPEG", quality=_JPEG_QUALITY)
+            return buf.getvalue(), "image/jpeg"
+    except Exception:
+        return image_bytes, "image/jpeg"
+
+
 def build_batch_request_line(
     *,
     row: ImageRow,
@@ -177,10 +204,15 @@ def build_batch_request_line(
 
     custom_id uniquely identifies the scene and MUST round-trip in the
     response line so apply() can map results back.
+
+    Image bytes are resized client-side (max 1024 px, JPEG quality 85)
+    before base64 encoding so the 200-row staging batch fits comfortably
+    under OpenAI's 100 MB input file limit, and prod's 3000-row batch
+    stays workable without sharding.
     """
 
-    mime = _guess_mime(row.file_name)
-    b64 = base64.b64encode(image_bytes).decode("ascii")
+    shrunk_bytes, mime = _maybe_shrink_image(image_bytes)
+    b64 = base64.b64encode(shrunk_bytes).decode("ascii")
     data_url = f"data:{mime};base64,{b64}"
 
     hint = f"\n(참고: 파일명: {row.file_name})" if row.file_name else ""
