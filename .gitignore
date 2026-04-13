@@ -151,3 +151,10 @@ artifacts/
 data/
 .insightface/
 .gstack/
+
+# E2E Playwright test artifacts (local only)
+e2e/node_modules/
+e2e/artifacts/
+e2e/.omc/
+# Contains hardcoded staging password — keep local until sanitized
+e2e/premiere-export.spec.ts

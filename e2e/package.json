@@ -1,0 +1,19 @@
+{
+  "name": "heimdex-e2e",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:smoke": "playwright test e2e/smoke.spec.ts",
+    "test:consistency": "playwright test e2e/consistency.spec.ts",
+    "test:headed": "playwright test --headed",
+    "test:visual": "playwright test visual-regression.spec.ts",
+    "test:visual:update": "playwright test visual-regression.spec.ts --update-snapshots",
+    "test:staging": "BASE_URL=https://devorg.app.heimdexdemo.dev API_URL=https://devorg.app.heimdexdemo.dev playwright test smoke.spec.ts consistency.spec.ts",
+    "test:staging:visual": "BASE_URL=https://devorg.app.heimdexdemo.dev API_URL=https://devorg.app.heimdexdemo.dev playwright test visual-regression.spec.ts",
+    "report": "playwright show-report artifacts/playwright-report",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
