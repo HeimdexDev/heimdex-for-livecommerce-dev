@@ -263,7 +263,6 @@ async def cmd_prepare(args: argparse.Namespace) -> int:
     from app.config import get_settings
     from app.modules.drive.keys import enrichment_keyframe_s3_key
     from app.modules.image_caption.engines.openai_prompt import (
-        FEW_SHOT_TURNS,
         JSON_SCHEMA,
         PROMPT_VERSION,
         SYSTEM_PROMPT,
@@ -326,14 +325,41 @@ async def cmd_prepare(args: argparse.Namespace) -> int:
 
     s3 = S3Client(bucket=settings.drive_s3_bucket)
 
+    # IMPORTANT: Batch-mode messages use the system prompt ONLY — no
+    # few-shot turns. Prompt caching does not apply to Batch requests
+    # (each is independent), so including few-shots would pay the full
+    # few-shot token cost on every row and quickly blow through the
+    # org's enqueued-token limit (90k tokens for gpt-4o tier 1).
+    #
+    # Quality: few-shots demonstrated the output format; the strict
+    # JSON schema enforces format structurally, and the system prompt
+    # spells out tone/safety rules explicitly. The realtime path
+    # (ImageCaptionService) keeps few-shots because caching makes them
+    # effectively free there.
     messages_prefix: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        *FEW_SHOT_TURNS,
     ]
 
-    written = 0
+    # Chunk size: keep each output file's total enqueued-token count
+    # safely under the org's enqueued-token limit. With system-only
+    # prefix (~600 tokens) + user turn w/ low-detail image (~150
+    # tokens) = ~750 tokens per row, 100 rows = ~75k tokens (safe margin
+    # under 90k).
+    chunk_rows = args.chunk_rows
+    chunk_index = 0
+    chunk_written = 0
+    total_written = 0
     failed = 0
-    with output_path.open("w", encoding="utf-8") as f:
+    chunk_paths: list[Path] = []
+
+    def _chunk_path(idx: int) -> Path:
+        stem = output_path.stem
+        suffix = output_path.suffix or ".jsonl"
+        return output_path.with_name(f"{stem}.chunk{idx:03d}{suffix}")
+
+    fh = _chunk_path(chunk_index).open("w", encoding="utf-8")
+    chunk_paths.append(_chunk_path(chunk_index))
+    try:
         for row in rows:
             s3_key = enrichment_keyframe_s3_key(
                 str(row.org_id), row.video_id, row.scene_id
@@ -364,19 +390,37 @@ async def cmd_prepare(args: argparse.Namespace) -> int:
                 user_instruction=USER_INSTRUCTION,
                 json_schema=JSON_SCHEMA,
             )
-            f.write(json.dumps(line, ensure_ascii=False))
-            f.write("\n")
-            written += 1
+            fh.write(json.dumps(line, ensure_ascii=False))
+            fh.write("\n")
+            chunk_written += 1
+            total_written += 1
+
+            if chunk_written >= chunk_rows:
+                fh.close()
+                chunk_index += 1
+                chunk_written = 0
+                fh = _chunk_path(chunk_index).open("w", encoding="utf-8")
+                chunk_paths.append(_chunk_path(chunk_index))
+    finally:
+        fh.close()
+
+    # Drop trailing empty chunk, if any
+    final_chunks = [p for p in chunk_paths if p.exists() and p.stat().st_size > 0]
 
     logger.info(
         "prepare_done",
         extra={
-            "rows_written": written,
+            "rows_written": total_written,
             "rows_skipped": failed,
-            "output_path": str(output_path),
+            "chunk_count": len(final_chunks),
+            "chunk_rows": chunk_rows,
         },
     )
-    print(f"Wrote {written} rows (skipped {failed}) to {output_path}")
+    print(f"Wrote {total_written} rows (skipped {failed}) across {len(final_chunks)} chunk(s):")
+    for p in final_chunks:
+        size_kb = p.stat().st_size // 1024
+        rows_in = sum(1 for _ in p.open("r", encoding="utf-8"))
+        print(f"  {p}  ({rows_in} rows, {size_kb} KB)")
     return 0
 
 
@@ -646,9 +690,23 @@ def main() -> int:
     p_prep = sub.add_parser("prepare", help="Build JSONL + cost estimate")
     p_prep.add_argument("--limit", type=int, default=3000)
     p_prep.add_argument("--org", default=None, help="Org slug filter")
-    p_prep.add_argument("--output", default=None, help="JSONL output path")
+    p_prep.add_argument(
+        "--output",
+        default=None,
+        help="JSONL output path (chunks get .chunk000.jsonl, .chunk001.jsonl, ...)",
+    )
     p_prep.add_argument("--dry-run", action="store_true")
     p_prep.add_argument("--max-cost-usd", type=float, default=None)
+    p_prep.add_argument(
+        "--chunk-rows",
+        type=int,
+        default=100,
+        help=(
+            "Max rows per Batch input file. Default 100 keeps each chunk "
+            "under OpenAI's 90k-token enqueued limit for gpt-4o (system "
+            "prompt + image ~750 tokens/row × 100 = ~75k)."
+        ),
+    )
 
     p_submit = sub.add_parser("submit", help="Upload JSONL + create batch")
     p_submit.add_argument("--input", required=True, help="JSONL path from prepare")
