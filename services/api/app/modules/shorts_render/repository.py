@@ -125,11 +125,46 @@ class ShortsRenderJobRepository:
         return True
 
     async def list_expired(self, now: datetime) -> list[ShortsRenderJob]:
-        """List expired jobs that have output files (for cleanup)."""
+        """List expired jobs that have output files (for cleanup).
+
+        Excludes jobs still in flight (status rendering/queued) so a slow
+        worker's long-running job is never torn out from under it.
+        """
         result = await self.session.execute(
             select(ShortsRenderJob).where(
                 ShortsRenderJob.expires_at < now,
                 ShortsRenderJob.output_s3_key.is_not(None),
+                ShortsRenderJob.status.in_(("completed", "failed")),
             )
         )
         return list(result.scalars().all())
+
+    async def list_expired_without_output(self, now: datetime) -> list[ShortsRenderJob]:
+        """List expired jobs that have no output (failed / orphaned queued).
+
+        Used by the cleanup sweep to drop DB rows that would otherwise
+        accumulate forever — list_expired() only returns rows with an
+        output_s3_key, so failed jobs never get cleaned up by that path.
+        """
+        result = await self.session.execute(
+            select(ShortsRenderJob).where(
+                ShortsRenderJob.expires_at < now,
+                ShortsRenderJob.output_s3_key.is_(None),
+                ShortsRenderJob.status.in_(("failed", "queued")),
+            )
+        )
+        return list(result.scalars().all())
+
+    async def delete_one_by_id_internal(self, job_id: UUID) -> bool:
+        """Delete a job by ID without org scoping.
+
+        Distinct from ``delete(org_id, job_id)`` — the cleanup sweep runs
+        as a system process with no org context. Never expose this method
+        through a user-facing endpoint.
+        """
+        job = await self._get_by_id_internal(job_id)
+        if job is None:
+            return False
+        await self.session.delete(job)
+        await self.session.flush()
+        return True

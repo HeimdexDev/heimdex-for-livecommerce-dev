@@ -2,12 +2,19 @@
 
 Orchestrates render job CRUD with scene boundary validation,
 SQS publishing (fire-and-forget), and S3 cleanup on delete.
+
+Also exposes a module-level ``cleanup_expired_renders`` entry point
+used by the nightly cleanup CLI. It lives here (not on the request-scoped
+``ShortsRenderService``) so the CLI doesn't have to construct the full
+service dependency graph.
 """
 
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from uuid import UUID
 
+from botocore.exceptions import ClientError
 from fastapi import HTTPException, status
 
 from app.config import get_settings
@@ -21,6 +28,146 @@ from app.modules.shorts_render.schemas import (
 )
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class CleanupResult:
+    """Outcome of a single ``cleanup_expired_renders`` invocation.
+
+    - ``total_expired``: jobs matched as expired (with + without output)
+    - ``s3_deleted``: S3 objects successfully deleted
+    - ``s3_skipped_not_found``: S3 keys that were already gone (idempotent)
+    - ``s3_failed``: S3 deletes that raised an unexpected error
+    - ``db_deleted``: DB rows removed
+    - ``dry_run``: True when nothing was actually deleted
+    - ``failed_keys``: list of ``(s3_key, error_message)`` for failed deletes
+    """
+    total_expired: int = 0
+    s3_deleted: int = 0
+    s3_skipped_not_found: int = 0
+    s3_failed: int = 0
+    db_deleted: int = 0
+    dry_run: bool = False
+    failed_keys: list[tuple[str, str]] = field(default_factory=list)
+
+
+async def cleanup_expired_renders(
+    repository: ShortsRenderJobRepository,
+    s3_client: Any,
+    *,
+    dry_run: bool = False,
+    now: datetime | None = None,
+) -> CleanupResult:
+    """Delete expired shorts-render jobs from S3 and the DB.
+
+    Per-job atomic: a failure on job N does not abort the sweep for jobs
+    N+1..end. S3 deletes that return NoSuchKey are treated as already-done
+    (idempotent). DB rows are only removed after the corresponding S3
+    delete succeeds (or the object was already missing) — never orphan a
+    file by deleting the row first.
+
+    Separately drops DB rows for failed/orphaned jobs that never produced
+    an S3 output; those would otherwise accumulate forever because
+    ``list_expired()`` filters on ``output_s3_key IS NOT NULL``.
+
+    Args:
+        repository: bound to an AsyncSession; caller owns the commit
+        s3_client: anything with a ``delete(key)`` method. Typed as Any so
+            the CLI can pass the real ``S3Client`` while tests pass a mock
+            without satisfying an import-time protocol.
+        dry_run: when True, iterate and log but do not call S3 or the DB
+        now: override wall-clock for tests. Defaults to ``datetime.now(utc)``.
+    """
+    current_time = now or datetime.now(timezone.utc)
+    result = CleanupResult(dry_run=dry_run)
+
+    with_output = await repository.list_expired(current_time)
+    without_output = await repository.list_expired_without_output(current_time)
+    result.total_expired = len(with_output) + len(without_output)
+
+    if result.total_expired == 0:
+        logger.info("cleanup_shorts_renders_noop", now=current_time.isoformat())
+        return result
+
+    logger.info(
+        "cleanup_shorts_renders_started",
+        dry_run=dry_run,
+        now=current_time.isoformat(),
+        with_output=len(with_output),
+        without_output=len(without_output),
+    )
+
+    # --- Jobs with output: S3 delete → DB delete ---
+    for job in with_output:
+        s3_key = job.output_s3_key
+        if s3_key is None:
+            # list_expired() filters on IS NOT NULL; this is defensive only
+            continue
+
+        if dry_run:
+            logger.info(
+                "cleanup_would_delete",
+                job_id=str(job.id),
+                s3_key=s3_key,
+                expires_at=job.expires_at.isoformat() if job.expires_at else None,
+            )
+            continue
+
+        try:
+            s3_client.delete(s3_key)
+            result.s3_deleted += 1
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code in ("NoSuchKey", "404"):
+                # Already gone — still fine to drop the DB row
+                result.s3_skipped_not_found += 1
+                logger.info(
+                    "cleanup_s3_already_gone",
+                    job_id=str(job.id),
+                    s3_key=s3_key,
+                )
+            else:
+                result.s3_failed += 1
+                result.failed_keys.append((s3_key, str(e)))
+                logger.warning(
+                    "cleanup_s3_delete_failed",
+                    job_id=str(job.id),
+                    s3_key=s3_key,
+                    error=str(e),
+                )
+                # Skip DB delete so the row stays and we can retry next run
+                continue
+
+        deleted = await repository.delete_one_by_id_internal(cast(UUID, job.id))
+        if deleted:
+            result.db_deleted += 1
+
+    # --- Failed / orphaned jobs: DB delete only (no S3 key to touch) ---
+    for job in without_output:
+        if dry_run:
+            logger.info(
+                "cleanup_would_delete_db_only",
+                job_id=str(job.id),
+                status=job.status,
+                expires_at=job.expires_at.isoformat() if job.expires_at else None,
+            )
+            continue
+
+        deleted = await repository.delete_one_by_id_internal(cast(UUID, job.id))
+        if deleted:
+            result.db_deleted += 1
+
+    logger.info(
+        "cleanup_shorts_renders_completed",
+        dry_run=dry_run,
+        total_expired=result.total_expired,
+        s3_deleted=result.s3_deleted,
+        s3_skipped_not_found=result.s3_skipped_not_found,
+        s3_failed=result.s3_failed,
+        db_deleted=result.db_deleted,
+    )
+
+    return result
 
 
 def _to_response(job: ShortsRenderJob, download_url: str | None = None) -> RenderJobResponse:
