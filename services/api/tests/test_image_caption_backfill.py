@@ -44,7 +44,7 @@ class TestBuildBatchRequestLine:
             org_id=uuid4(),
             video_id="vid123",
             file_name="brand_shot.jpg",
-            scene_id="vid123_s000",
+            scene_id="vid123_scene_000",
         )
 
     def _build(self, row: ImageRow):

@@ -150,10 +150,11 @@ async def select_image_rows(
             org_id=r[1],
             video_id=r[2],
             file_name=r[3] or "",
-            # For drive-worker image processing the scene id is derived
-            # from the video id once, no per-file randomness. Use the same
-            # deterministic scheme: video_id + fixed suffix.
-            scene_id=f"{r[2]}_s000",
+            # Matches drive-worker/src/tasks/process.py:112 exactly —
+            # image scenes use f"{video_id}_scene_000" (not "_s000").
+            # Getting this wrong means every S3 keyframe fetch returns
+            # a 404 and the whole backfill silently skips every row.
+            scene_id=f"{r[2]}_scene_000",
         )
         for r in rows
     ]
