@@ -34,13 +34,55 @@ class SceneIngestMixin:
         await self.client.bulk(body=actions, params={"refresh": self.settings.opensearch_bulk_refresh})
         logger.info("scene_bulk_indexed_documents", count=len(documents))
 
+    async def _resolve_doc_indices(self, doc_ids: list[str]) -> dict[str, str]:
+        """Map each doc_id to the actual backing index it lives in.
+
+        During an alias migration (e.g. heimdex_scenes → v4 AND v5), the
+        alias points at multiple concrete indices. Direct mget / bulk ops
+        with a hardcoded _index silently miss any doc that lives in the
+        other backing index. We resolve each doc_id via an ids-query
+        against the alias, which routes through all backing indices and
+        returns the actual _index for each hit.
+
+        Returns {doc_id: index_name} for docs that exist anywhere in the
+        alias. Missing doc_ids (not yet indexed) are omitted from the
+        returned map; callers should fall back to ``self.index_name``
+        for new writes.
+        """
+        if not doc_ids:
+            return {}
+
+        response = await self.client.search(
+            index=self.alias_name,
+            body={
+                "query": {"ids": {"values": doc_ids}},
+                "_source": False,
+                "size": len(doc_ids),
+            },
+        )
+        return {
+            hit["_id"]: hit["_index"]
+            for hit in response.get("hits", {}).get("hits", [])
+        }
+
     async def bulk_partial_update_scenes(self, updates: list[tuple[str, dict[str, Any]]]) -> None:
         if not updates:
             return
 
+        # Resolve each doc to its actual backing index so the partial
+        # update lands where the doc actually lives. Without this, a
+        # bulk update with _index=self.index_name silently routes to the
+        # wrong index when the alias has multiple backing indices — the
+        # update either gets dropped (mget miss) or creates a duplicate
+        # in the wrong index. See _resolve_doc_indices for context.
+        doc_id_to_index = await self._resolve_doc_indices(
+            [doc_id for doc_id, _ in updates]
+        )
+
         actions: list[dict[str, Any]] = []
         for doc_id, partial in updates:
-            actions.append({"update": {"_index": self.index_name, "_id": doc_id}})
+            target_index = doc_id_to_index.get(doc_id, self.index_name)
+            actions.append({"update": {"_index": target_index, "_id": doc_id}})
             actions.append({"doc": partial})
 
         await self.client.bulk(body=actions, params={"refresh": self.settings.opensearch_bulk_refresh})
@@ -50,13 +92,25 @@ class SceneIngestMixin:
         if not doc_ids:
             return {}
 
-        body = {"docs": [{"_index": self.index_name, "_id": did} for did in doc_ids]}
-        response = await self.client.mget(body=body)
+        # Use an ids-query via the alias rather than a direct mget. Direct
+        # mget with _index=self.index_name silently misses docs that live
+        # in a different backing index when the alias spans multiple
+        # concrete indices (e.g. during a v4→v5 migration cutover that
+        # hasn't been completed). The ids-query routes through the alias
+        # and returns matching docs from any backing index. See
+        # _resolve_doc_indices for the same pattern on the write path.
+        response = await self.client.search(
+            index=self.alias_name,
+            body={
+                "query": {"ids": {"values": doc_ids}},
+                "_source": True,
+                "size": len(doc_ids),
+            },
+        )
 
         result: dict[str, dict[str, Any]] = {}
-        for doc in response.get("docs", []):
-            if doc.get("found"):
-                result[doc["_id"]] = doc["_source"]
+        for hit in response.get("hits", {}).get("hits", []):
+            result[hit["_id"]] = hit.get("_source") or {}
         return result
 
     async def get_scene_transcripts(
