@@ -243,15 +243,20 @@ class TestRateLimit:
 
     def test_window_rolls_after_expiry(self):
         """Entries older than _WINDOW_SECONDS are dropped."""
+        import time
         import app.modules.shorts_render.rate_limit as rl
 
         org_id = uuid4()
         user_id = uuid4()
         key = f"{org_id}:{user_id}"
 
-        # Plant _MAX_REQUESTS entries in the past (older than window)
+        # Plant _MAX_REQUESTS entries 2× the window in the past.
+        # Must compute relative to time.monotonic() — on a fresh process
+        # (e.g. CI) monotonic() returns a small number, so a literal 0.0
+        # is NOT older than now - window and won't get cleaned.
+        stale_time = time.monotonic() - (_WINDOW_SECONDS * 2)
         with rl._lock:
-            rl._buckets[key] = [0.0] * _MAX_REQUESTS  # 0.0 is way before now
+            rl._buckets[key] = [stale_time] * _MAX_REQUESTS
 
         # Next request should succeed — the stale entries get cleaned
         check_shorts_render_rate_limit(org_id, user_id)
