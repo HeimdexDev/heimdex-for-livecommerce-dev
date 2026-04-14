@@ -50,7 +50,16 @@ def compute_options_hash(options: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+# Presigned URL TTL for playback / manifest / mask fetches exposed to
+# the frontend. 1 hour matches how long a typical blur-detail-page
+# session lasts; the frontend refetches on mount.
+_BLUR_ARTIFACT_URL_TTL_SECONDS = 3600
+
+
 def _to_response(job: BlurJob) -> BlurJobResponse:
+    """Sync view — no presigned URLs. Used for freshly-created rows
+    where URL generation would be wasted (queued, nothing to serve).
+    """
     return BlurJobResponse(
         id=cast(UUID, job.id),
         file_id=job.file_id,
@@ -61,12 +70,60 @@ def _to_response(job: BlurJob) -> BlurJobResponse:
         source_kind=job.source_kind,
         blurred_s3_key=job.blurred_s3_key,
         manifest_s3_key=job.manifest_s3_key,
+        mask_s3_keys=job.mask_s3_keys,
         detections_summary=job.detections_summary,
         error=job.error,
+        progress_pct=job.progress_pct,
+        phase=job.phase,
         requested_at=job.requested_at,
         started_at=job.started_at,
         completed_at=job.completed_at,
     )
+
+
+async def _to_response_presigned(job: BlurJob) -> BlurJobResponse:
+    """Async view — populates ``blurred_playback_url``, ``manifest_url``,
+    and ``mask_urls`` for done jobs.
+
+    Loose coupling: presigned URL generation is isolated in this helper
+    so callers that don't need URLs (create, cancel) stay synchronous
+    and cheap. All three URLs are best-effort — a transient S3 hiccup
+    yields ``None`` rather than 500-ing the whole list endpoint.
+    """
+    resp = _to_response(job)
+    if job.status != BLUR_STATUS_DONE:
+        return resp
+
+    try:
+        from app.storage.s3 import S3Client
+
+        settings = get_settings()
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+    except Exception:
+        logger.exception("blur_s3_client_failed", job_id=str(job.id))
+        return resp
+
+    async def _presign(key: str | None) -> str | None:
+        if not key:
+            return None
+        try:
+            return await s3.generate_presigned_url_async(
+                key, expires_in=_BLUR_ARTIFACT_URL_TTL_SECONDS,
+            )
+        except Exception:
+            logger.exception("blur_presign_failed", job_id=str(job.id), s3_key=key)
+            return None
+
+    resp.blurred_playback_url = await _presign(job.blurred_s3_key)
+    resp.manifest_url = await _presign(job.manifest_s3_key)
+    if job.mask_s3_keys:
+        mask_urls: dict[str, str] = {}
+        for category, key in job.mask_s3_keys.items():
+            url = await _presign(key)
+            if url is not None:
+                mask_urls[category] = url
+        resp.mask_urls = mask_urls or None
+    return resp
 
 
 class BlurService:
@@ -215,7 +272,7 @@ class BlurService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Blur job not found",
             )
-        return _to_response(job)
+        return await _to_response_presigned(job)
 
     async def list_blur_jobs_for_file(
         self,
@@ -226,8 +283,9 @@ class BlurService:
         offset: int,
     ) -> BlurJobListResponse:
         jobs, total = await self.repository.list_by_file(org_id, file_id, limit, offset)
+        items = [await _to_response_presigned(j) for j in jobs]
         return BlurJobListResponse(
-            items=[_to_response(j) for j in jobs],
+            items=items,
             total=total,
         )
 
@@ -292,20 +350,26 @@ class BlurService:
                 detail="Cannot delete an active job — cancel it first.",
             )
 
-        if job.blurred_s3_key or job.manifest_s3_key:
+        if job.blurred_s3_key or job.manifest_s3_key or job.mask_s3_keys:
             try:
                 from app.storage.s3 import S3Client
                 settings = get_settings()
                 s3 = S3Client(bucket=settings.drive_s3_bucket)
-                for key in (job.blurred_s3_key, job.manifest_s3_key):
-                    if key:
-                        try:
-                            s3.delete(key)
-                        except Exception:
-                            logger.exception(
-                                "blur_s3_delete_failed",
-                                job_id=str(job_id), s3_key=key,
-                            )
+                keys_to_delete: list[str] = []
+                if job.blurred_s3_key:
+                    keys_to_delete.append(job.blurred_s3_key)
+                if job.manifest_s3_key:
+                    keys_to_delete.append(job.manifest_s3_key)
+                if job.mask_s3_keys:
+                    keys_to_delete.extend(v for v in job.mask_s3_keys.values() if v)
+                for key in keys_to_delete:
+                    try:
+                        s3.delete(key)
+                    except Exception:
+                        logger.exception(
+                            "blur_s3_delete_failed",
+                            job_id=str(job_id), s3_key=key,
+                        )
             except Exception:
                 logger.exception("blur_s3_client_failed", job_id=str(job_id))
 

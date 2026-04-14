@@ -642,6 +642,51 @@ def publish_blur_job(
     _publish("blur", body, dedup_id)
 
 
+def publish_blur_export(
+    *,
+    export_id: UUID,
+    blur_job_id: UUID,
+    file_id: UUID,
+    org_id: UUID,
+    video_id: str,
+    source_s3_key: str,
+    mask_s3_keys: dict[str, str],
+    categories: list[str],
+    export_format: str,
+) -> None:
+    """Publish a user-triggered blur layer export to the blur queue.
+
+    Called from ``BlurExportService.create_export`` after the
+    ``blur_exports`` row is flushed. Rides the same
+    ``heimdex-blur-queue`` as ``blur.job_created``; the worker's
+    dispatcher routes by ``type`` so no new SQS infrastructure is
+    required. Fire-and-forget, failure fallback lives in the caller.
+    """
+    settings = get_settings()
+    if not settings.sqs_enabled:
+        return
+
+    now = datetime.now(timezone.utc)
+    body = {
+        "version": "1",
+        "type": "blur.export_created",
+        "timestamp": now.isoformat(),
+        "export_id": str(export_id),
+        "blur_job_id": str(blur_job_id),
+        "file_id": str(file_id),
+        "org_id": str(org_id),
+        "video_id": video_id,
+        "source_s3_key": source_s3_key,
+        "mask_s3_keys": mask_s3_keys,
+        "options": {
+            "categories": list(categories),
+            "format": export_format,
+        },
+    }
+    dedup_id = f"{export_id}:blur-export:{now.strftime('%Y%m%dT%H%M')}"
+    _publish("blur", body, dedup_id)
+
+
 def publish_shorts_render_job(
     *,
     job_id: UUID,

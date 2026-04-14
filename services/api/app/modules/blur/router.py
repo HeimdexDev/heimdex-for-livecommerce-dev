@@ -14,12 +14,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
-from app.dependencies import get_blur_service
+from fastapi.responses import RedirectResponse
+
+from app.dependencies import get_blur_export_service, get_blur_service
 from app.modules.auth.service import get_current_user
+from app.modules.blur.export_service import BlurExportService
 from app.modules.blur.rate_limit import require_blur_rate_limit
 from app.modules.blur.schemas import (
+    BlurExportResponse,
     BlurJobListResponse,
     BlurJobResponse,
+    CreateBlurExportRequest,
     CreateBlurJobRequest,
 )
 from app.modules.blur.service import BlurService
@@ -113,3 +118,70 @@ async def delete_blur_job(
 ) -> Response:
     await service.delete_blur_job(org_id=org_ctx.org_id, job_id=job_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ---------- layer export (ProRes 4444 + alpha) ----------
+
+
+@router.post(
+    "/jobs/{job_id}/export",
+    response_model=BlurExportResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_blur_export(
+    job_id: UUID,
+    body: CreateBlurExportRequest,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    user: Annotated[User, Depends(get_current_user)],
+    export_service: Annotated[BlurExportService, Depends(get_blur_export_service)],
+    _rate_limit: Annotated[None, Depends(require_blur_rate_limit)] = None,
+) -> BlurExportResponse:
+    """Enqueue a layer export for a done blur job.
+
+    Customer picks a category subset (must be a subset of the parent's
+    ``mask_s3_keys``) and a format (``prores_4444`` for v1). Returns
+    202 with the new export row. Rate-limited by the same bucket as
+    blur job creation.
+    """
+    return await export_service.create_export(
+        org_id=org_ctx.org_id,
+        user_id=cast(UUID, user.id),
+        blur_job_id=job_id,
+        payload=body,
+    )
+
+
+@router.get(
+    "/exports/{export_id}",
+    response_model=BlurExportResponse,
+)
+async def get_blur_export(
+    export_id: UUID,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    user: Annotated[User, Depends(get_current_user)],
+    export_service: Annotated[BlurExportService, Depends(get_blur_export_service)],
+) -> BlurExportResponse:
+    return await export_service.get_export(
+        org_id=org_ctx.org_id, export_id=export_id,
+    )
+
+
+@router.get(
+    "/exports/{export_id}/download",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+)
+async def download_blur_export(
+    export_id: UUID,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    user: Annotated[User, Depends(get_current_user)],
+    export_service: Annotated[BlurExportService, Depends(get_blur_export_service)],
+) -> RedirectResponse:
+    """Redirect to a fresh presigned URL for the exported ``.mov``.
+
+    ``307 Temporary Redirect`` keeps the method semantics (GET stays
+    GET) and makes ``<a href="...">`` downloads work without JS.
+    """
+    url = await export_service.generate_download_url(
+        org_id=org_ctx.org_id, export_id=export_id,
+    )
+    return RedirectResponse(url=url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)

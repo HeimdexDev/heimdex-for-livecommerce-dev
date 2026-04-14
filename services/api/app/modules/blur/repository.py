@@ -253,6 +253,7 @@ class BlurJobRepository:
         status: str,
         blurred_s3_key: str | None = None,
         manifest_s3_key: str | None = None,
+        mask_s3_keys: dict[str, str] | None = None,
         detections_summary: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> BlurJob | None:
@@ -279,10 +280,18 @@ class BlurJobRepository:
             values["blurred_s3_key"] = blurred_s3_key
         if manifest_s3_key is not None:
             values["manifest_s3_key"] = manifest_s3_key
+        if mask_s3_keys is not None:
+            values["mask_s3_keys"] = mask_s3_keys
         if detections_summary is not None:
             values["detections_summary"] = detections_summary
         if error is not None:
             values["error"] = error
+        # On a done/failed terminal we zero the live progress fields so
+        # the UI switches cleanly from "running" to the final status
+        # without a stale progress_pct stuck at 98.
+        if status in (BLUR_STATUS_DONE, BLUR_STATUS_FAILED):
+            values["progress_pct"] = 100 if status == BLUR_STATUS_DONE else 0
+            values["phase"] = None
 
         result = await self.session.execute(
             update(BlurJob)
@@ -300,3 +309,42 @@ class BlurJobRepository:
         if result.rowcount == 0:
             return None
         return await self.get_by_id_internal(job_id)
+
+    async def update_progress(
+        self,
+        *,
+        job_id: UUID,
+        lease_token: UUID,
+        progress_pct: float,
+        phase: str,
+        lease_seconds: int,
+    ) -> bool:
+        """Write a progress heartbeat AND refresh the lease atomically.
+
+        Called from the worker on every few seconds of pipeline
+        activity. Lease-token guarded so a stale worker can't bump the
+        progress bar on a job that a watchdog has already handed off.
+
+        Returns True on success, False if the row is no longer running
+        or the lease token doesn't match — the worker should treat
+        False as "stop and exit cleanly".
+        """
+        # Clamp to int at the DB boundary — storing float here buys us
+        # nothing in the UI and complicates the migration.
+        pct_int = max(0, min(100, int(round(progress_pct))))
+        new_expiry = datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)
+        result = await self.session.execute(
+            update(BlurJob)
+            .where(
+                BlurJob.id == job_id,
+                BlurJob.lease_token == lease_token,
+                BlurJob.status == BLUR_STATUS_RUNNING,
+            )
+            .values(
+                progress_pct=pct_int,
+                phase=phase,
+                lease_expires_at=new_expiry,
+            )
+        )
+        await self.session.flush()
+        return result.rowcount > 0

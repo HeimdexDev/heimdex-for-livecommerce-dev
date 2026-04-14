@@ -188,6 +188,25 @@ def get_blur_service(
     return BlurService(repo, drive_file_repo)
 
 
+def get_blur_export_repository(db: AsyncSession = Depends(get_db_session)):
+    """Blur layer export repository factory."""
+    from app.modules.blur.export_repository import BlurExportRepository
+    return BlurExportRepository(db)
+
+
+def get_blur_export_service(
+    export_repo=Depends(get_blur_export_repository),
+    blur_job_repo=Depends(get_blur_repository),
+):
+    """Blur layer export service factory.
+
+    Depends on both repositories: the export repo for CRUD, and the
+    blur-job repo for parent-job validation (done + has mask layers).
+    """
+    from app.modules.blur.export_service import BlurExportService
+    return BlurExportService(export_repo, blur_job_repo)
+
+
 def get_text_template_repository(db: AsyncSession = Depends(get_db_session)):
     """Text template repository factory."""
     from app.modules.text_templates.repository import TextTemplateRepository

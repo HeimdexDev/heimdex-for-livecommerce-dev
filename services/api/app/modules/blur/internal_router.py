@@ -35,6 +35,7 @@ from app.modules.blur.schemas import (
     BlurJobClaim,
     BlurJobCompletePayload,
     BlurJobHeartbeatPayload,
+    BlurJobProgressPayload,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,12 +174,19 @@ async def complete_blur_job(
         if payload.detections_summary is not None
         else None
     )
+    # Normalize v0.10 per-category mask keys to plain ``dict[str,str]``
+    # on the way into Postgres — JSONB is schemaless, but we want the
+    # worker's BlurCategory-keyed dict to land as string keys.
+    mask_s3_keys: dict[str, str] | None = None
+    if payload.mask_s3_keys is not None:
+        mask_s3_keys = {str(k): v for k, v in payload.mask_s3_keys.items()}
     refreshed = await repo.complete(
         job_id=job_id,
         lease_token=payload.lease_token,
         status=payload.status,
         blurred_s3_key=payload.blurred_s3_key,
         manifest_s3_key=payload.manifest_s3_key,
+        mask_s3_keys=mask_s3_keys,
         detections_summary=summary,
         error=payload.error,
     )
@@ -194,3 +202,40 @@ async def complete_blur_job(
         status=payload.status,
     )
     return {"ok": True, "job_id": str(job_id), "status": payload.status}
+
+
+@router.post("/{job_id}/progress")
+async def progress_blur_job(
+    job_id: UUID,
+    payload: BlurJobProgressPayload,
+    _token: Annotated[str, Depends(verify_internal_token)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> dict[str, object]:
+    """Worker progress heartbeat.
+
+    Writes ``progress_pct`` and ``phase`` on the row AND refreshes
+    ``lease_expires_at`` in the same atomic UPDATE, so progress bumps
+    double as a keepalive. Lease-token guarded: a stale worker that
+    lost its lease to the watchdog can't bump the progress of a job
+    that another worker owns.
+
+    Returning 409 on lease mismatch tells the worker to exit cleanly
+    — there's no work it can safely continue doing without the lease.
+    """
+    settings = get_settings()
+    repo = BlurJobRepository(db)
+    ok = await repo.update_progress(
+        job_id=job_id,
+        lease_token=payload.lease_token,
+        progress_pct=payload.progress_pct,
+        phase=payload.phase,
+        lease_seconds=settings.blur_lease_seconds,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Lease lost — job no longer running or lease token mismatched"
+            ),
+        )
+    return {"ok": True, "job_id": str(job_id)}

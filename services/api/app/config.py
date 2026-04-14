@@ -219,6 +219,11 @@ class Settings(BaseSettings):
     # /api/blur/videos/{id} router returns 404 and no SQS traffic
     # or Aircloud wake-ups are produced.
     blur_enabled: bool = False
+    # BLUR_EXPORT_ENABLED gates the NLE-compatible ProRes 4444 layer
+    # export subsystem (POST /api/blur/jobs/{id}/export). Keeps the
+    # feature dark in envs where drive-blur-worker hasn't been
+    # upgraded to the dispatcher version yet.
+    blur_export_enabled: bool = False
     blur_max_active_per_org: int = 5       # queued+running cap per org
     blur_lease_seconds: int = 1800         # 30 min worker lease (matches SQS visibility)
     blur_daily_budget_usd_per_org: float = 50.0  # reserved for a later circuit breaker
