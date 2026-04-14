@@ -22,7 +22,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     HF_HOME=/models/hf \
-    MPLCONFIGDIR=/tmp/matplotlib \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     LANG=C.UTF-8 \
@@ -74,7 +73,11 @@ RUN pip install --no-cache-dir /tmp/heimdex-media-pipelines \
 
 # Create the runtime user BEFORE pre-warming so SCRFD weights land in
 # the home dir that the runtime FaceAnalysis() call actually reads from.
-RUN useradd -m -u 1000 appuser
+# Also pre-create the matplotlib cache dir — matplotlib mkdirs it on
+# import, and failing to write to ~/.cache/matplotlib prints a noisy
+# warning + falls back to a throwaway /tmp location on every cold start.
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p /home/appuser/.cache/matplotlib
 
 # Pre-warm OWLv2 weights into HF_HOME so Aircloud cold-starts don't pay
 # the 400 MB HuggingFace download cost on every wake. Fails the build if
