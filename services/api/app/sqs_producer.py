@@ -25,33 +25,38 @@ logger = get_logger(__name__)
 
 
 _gpu_settings_configured = False
+_gpu_import_failed_logged = False
 
 
 def _wake_gpu_worker(job_type: str) -> None:
     """Wake the Aircloud GPU worker for this job type.  Fire-and-forget.
 
-    KNOWN LATENT BUG (2026-04-14):
-        ``heimdex-worker-sdk`` is NOT listed in ``services/api/pyproject.toml``
-        and is NOT volume-mounted into the api container via compose. Every
-        call below hits ``ModuleNotFoundError`` on the first ``from
-        heimdex_worker_sdk...`` import, which the bare ``except Exception``
-        swallows silently. The API has never been the thing waking GPU
-        workers — drive-worker's APScheduler ``check_and_manage`` cron is
-        the real wake path, and it runs every 5 minutes, which is why
-        GPU jobs have ~up-to-5-min wake latency instead of the ~50ms this
-        fast-path was designed for.
+    History: prior to 2026-04-14 ``heimdex-worker-sdk`` was not listed in
+    ``services/api/pyproject.toml`` and every call below hit a silent
+    ``ModuleNotFoundError`` caught by a bare ``except Exception``. That
+    meant the api-side fast-wake path was effectively disabled for all
+    GPU workers, and the only wake mechanism was drive-worker's
+    APScheduler ``check_and_manage`` cron (5-minute interval). The fix:
+    added the dependency to pyproject.toml, rebuilt the api image, and
+    tightened the error handling below so a regression can't silently
+    recur — an ``ImportError`` now logs exactly once and other
+    exceptions log at WARNING level so ops has visibility into
+    orchestrator failures.
 
-        Fix (separate PR, tracked as TODO):
-          1. Add ``"heimdex-worker-sdk>=0.2.0"`` to the api pyproject
-          2. Rebuild the api image
-          3. Verify via a test publish that ``aircloud_endpoint_started``
-             log lines appear in the api container
-        Leaving as-is for now because (a) the 5-minute latency is already
-        what production has been delivering for all workers, and (b) fixing
-        here would change behavior for face/caption/stt/ocr/transcode/
-        visual-embed simultaneously, which deserves its own measurement.
+    Error handling contract (must stay fire-and-forget):
+
+      * ImportError → log once (module_unavailable), no-op afterward.
+        This is a deploy-time bug that should NEVER happen in
+        production but we don't want to blow up the HTTP request if
+        it does.
+      * Any other exception → log at WARNING and swallow. Real
+        Aircloud / network failures must not fail the user's
+        ``POST /api/<x>/...`` call — the SQS message was already
+        sent successfully before this function ran; a failed wake
+        just means up-to-5-min latency until the drive-worker cron
+        compensates.
     """
-    global _gpu_settings_configured
+    global _gpu_settings_configured, _gpu_import_failed_logged
     try:
         if not _gpu_settings_configured:
             from heimdex_worker_sdk.gpu_orchestrator import configure_settings_provider
@@ -59,8 +64,26 @@ def _wake_gpu_worker(job_type: str) -> None:
             _gpu_settings_configured = True
         from heimdex_worker_sdk.gpu_orchestrator import ensure_worker_running
         ensure_worker_running(job_type)
+    except ImportError:
+        if not _gpu_import_failed_logged:
+            logger.error(
+                "gpu_orchestrator_module_unavailable",
+                job_type=job_type,
+                hint=(
+                    "heimdex-worker-sdk is missing from the api image — "
+                    "add it to services/api/pyproject.toml dependencies "
+                    "and rebuild"
+                ),
+            )
+            _gpu_import_failed_logged = True
     except Exception:
-        pass
+        # ``logger.exception`` matches the existing pattern in
+        # ``_publish`` (structlog-wrapped stdlib; captures exc_info
+        # automatically via the current traceback).
+        logger.exception(
+            "gpu_orchestrator_wake_failed",
+            job_type=job_type,
+        )
 
 
 # ── Queue URL mapping ──────────────────────────────────────────────────
