@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "heimdex-worker-sdk==0.1.0"
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.2.0"
 
 COPY services/drive-worker/pyproject.toml .
 RUN pip install --no-cache-dir -e . 2>/dev/null || \

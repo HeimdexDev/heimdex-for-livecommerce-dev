@@ -28,7 +28,29 @@ _gpu_settings_configured = False
 
 
 def _wake_gpu_worker(job_type: str) -> None:
-    """Wake the Aircloud GPU worker for this job type.  Fire-and-forget."""
+    """Wake the Aircloud GPU worker for this job type.  Fire-and-forget.
+
+    KNOWN LATENT BUG (2026-04-14):
+        ``heimdex-worker-sdk`` is NOT listed in ``services/api/pyproject.toml``
+        and is NOT volume-mounted into the api container via compose. Every
+        call below hits ``ModuleNotFoundError`` on the first ``from
+        heimdex_worker_sdk...`` import, which the bare ``except Exception``
+        swallows silently. The API has never been the thing waking GPU
+        workers — drive-worker's APScheduler ``check_and_manage`` cron is
+        the real wake path, and it runs every 5 minutes, which is why
+        GPU jobs have ~up-to-5-min wake latency instead of the ~50ms this
+        fast-path was designed for.
+
+        Fix (separate PR, tracked as TODO):
+          1. Add ``"heimdex-worker-sdk>=0.2.0"`` to the api pyproject
+          2. Rebuild the api image
+          3. Verify via a test publish that ``aircloud_endpoint_started``
+             log lines appear in the api container
+        Leaving as-is for now because (a) the 5-minute latency is already
+        what production has been delivering for all workers, and (b) fixing
+        here would change behavior for face/caption/stt/ocr/transcode/
+        visual-embed simultaneously, which deserves its own measurement.
+    """
     global _gpu_settings_configured
     try:
         if not _gpu_settings_configured:
