@@ -14,7 +14,6 @@ Feature-gated: only registered when DRIVE_CONNECTOR_ENABLED=true.
 Lease tokens: Each claimed connection receives a UUID lease_token with 10-min expiry.
 Checkpoint/upsert must present the matching lease_token; mismatches yield 409.
 """
-import hashlib
 import json
 import time
 import uuid as _uuid
@@ -55,6 +54,11 @@ from app.modules.drive.internal_sync_schemas import (
     UpsertFilesResponse,
 )
 from app.modules.drive.models import DriveConnection, DriveFile, DriveSecret
+from app.modules.drive.sync_service import (
+    DriveFileUpsertService,
+    UpsertOutcome,
+    drive_video_id as _drive_video_id_impl,
+)
 from app.modules.search.scene_client import SceneSearchClient
 from app.sqs_producer import publish_processing_job
 
@@ -68,13 +72,8 @@ _MAX_UPSERT_ITEMS = 500
 # ── Helpers ───────────────────────────────────────────────────────────
 
 def _drive_video_id(org_id: str, google_file_id: str) -> str:
-    """Deterministic video_id for Drive files.
-
-    Canonical implementation: worker_sdk/drive_keys.py::drive_video_id
-    Kept in sync — must produce identical output.
-    """
-    digest = hashlib.sha256(f"{org_id}:{google_file_id}".encode()).hexdigest()[:16]
-    return f"gd_{digest}"
+    """Backward-compat shim — canonical impl lives in sync_service."""
+    return _drive_video_id_impl(org_id, google_file_id)
 
 
 def _enforce_connection_lease(
@@ -399,177 +398,84 @@ async def upsert_files(
 
     _enforce_connection_lease(connection, request.lease_token)
 
-    org_id = connection.org_id
-    org_id_str = str(org_id)
-
     if not request.items:
         return UpsertFilesResponse(
-            created_count=0, updated_count=0, unchanged_count=0, enqueued_jobs={},
+            created_count=0,
+            revived_count=0,
+            updated_count=0,
+            unchanged_count=0,
+            enqueued_jobs={},
         )
 
-    provider_ids = [item.provider_file_id for item in request.items]
-    existing_result = await db.execute(
-        select(DriveFile).where(
-            DriveFile.org_id == org_id,
-            DriveFile.google_file_id.in_(provider_ids),
-            DriveFile.is_deleted.is_(False),
-        )
-    )
-    existing_files = existing_result.scalars().all()
-    existing_files_map: dict[str, DriveFile] = {f.google_file_id: f for f in existing_files}
-    existing_google_ids: set[str] = set(existing_files_map.keys())
+    service = DriveFileUpsertService(db)
+    outcome: UpsertOutcome = await service.upsert_batch(connection, request.items)
 
-    created_count = 0
-    updated_count = 0
-    new_files: list[DriveFile] = []
-    modified_files: list[DriveFile] = []
-    metadata_updates: list[dict[str, str]] = []
-    unchanged_count = 0
-    seen_in_batch: set[str] = set()
-
-    for item in request.items:
-        if item.provider_file_id in seen_in_batch:
-            unchanged_count += 1
-            continue
-        seen_in_batch.add(item.provider_file_id)
-
-        if item.provider_file_id in existing_google_ids:
-            existing_file = existing_files_map[item.provider_file_id]
-
-            changes_made = False
-
-            if (
-                item.md5_checksum
-                and existing_file.md5_checksum
-                and item.md5_checksum != existing_file.md5_checksum
-            ):
-                existing_file.md5_checksum = item.md5_checksum
-                existing_file.file_size_bytes = item.size
-                existing_file.google_modified_time = item.modified_time
-                existing_file.processing_status = "pending"
-                existing_file.enrichment_state = "pending"
-                existing_file.stt_status = "pending"
-                existing_file.ocr_status = "pending"
-                existing_file.caption_status = "pending"
-                existing_file.face_status = "pending"
-                existing_file.proxy_s3_key = None
-                existing_file.scene_count = 0
-                existing_file.retry_count = 0
-                existing_file.last_error = None
-                modified_files.append(existing_file)
-                changes_made = True
-
-            if item.name != existing_file.file_name:
-                existing_file.file_name = item.name
-                metadata_updates.append({"video_id": existing_file.video_id, "video_title": item.name})
-                changes_made = True
-
-            if item.drive_path and item.drive_path != existing_file.drive_path:
-                existing_file.drive_path = item.drive_path
-                metadata_updates.append({"video_id": existing_file.video_id, "source_path": item.drive_path})
-                changes_made = True
-
-            if item.web_view_link and item.web_view_link != existing_file.web_view_link:
-                existing_file.web_view_link = item.web_view_link
-                changes_made = True
-
-            # Backfill google_created_time if not yet set (write-once)
-            if item.created_time and existing_file.google_created_time is None:
-                existing_file.google_created_time = item.created_time
-                changes_made = True
-
-            if changes_made:
-                updated_count += 1
-            else:
-                unchanged_count += 1
-            continue
-
-        video_id = _drive_video_id(org_id_str, item.provider_file_id)
-        drive_file = DriveFile(
-            org_id=org_id,
-            connection_id=connection_id,
-            google_file_id=item.provider_file_id,
-            file_name=item.name,
-            mime_type=item.mime_type,
-            file_size_bytes=item.size,
-            md5_checksum=item.md5_checksum,
-            google_modified_time=item.modified_time,
-            google_created_time=item.created_time,
-            drive_path=item.drive_path,
-            web_view_link=item.web_view_link,
-            video_id=video_id,
-            processing_status="pending",
-            enrichment_state="pending",
-            stt_status="pending",
-            ocr_status="pending",
-        )
-        db.add(drive_file)
-        new_files.append(drive_file)
-        created_count += 1
-
-    if created_count > 0 or updated_count > 0:
+    if outcome.has_db_changes:
         await db.flush()
 
-
-    # SQS dual-write: publish processing jobs for newly created files.
-    # Fire-and-forget — failures are logged but never block the DB commit.
-    for f in new_files:
-        publish_processing_job(
-            file_id=f.id,
-            org_id=org_id,
-            connection_id=connection_id,
-            video_id=f.video_id,
-            google_file_id=f.google_file_id,
-            file_name=f.file_name,
-            mime_type=f.mime_type,
-            file_size_bytes=f.file_size_bytes,
-            library_id=connection.library_id,
-            scope_type=connection.scope_type,
-            drive_id=connection.drive_id,
-            google_created_time=f.google_created_time.isoformat() if f.google_created_time else None,
-            google_modified_time=f.google_modified_time.isoformat() if f.google_modified_time else None,
-        )
-
-    for f in modified_files:
-        publish_processing_job(
-            file_id=f.id,
-            org_id=org_id,
-            connection_id=connection_id,
-            video_id=f.video_id,
-            google_file_id=f.google_file_id,
-            file_name=f.file_name,
-            mime_type=f.mime_type,
-            file_size_bytes=f.file_size_bytes,
-            library_id=connection.library_id,
-            scope_type=connection.scope_type,
-            drive_id=connection.drive_id,
-            google_created_time=f.google_created_time.isoformat() if f.google_created_time else None,
-            google_modified_time=f.google_modified_time.isoformat() if f.google_modified_time else None,
-        )
+    # SQS dual-write: created + revived + modified_for_reprocess all represent
+    # fresh pipeline work. Fire-and-forget — failures are logged but never
+    # block the DB commit. Metadata-only updates (rename/move) do NOT
+    # re-publish, matching the prior inline behavior.
+    for f in outcome.created:
+        _publish_processing_job_for(f, connection)
+    for f in outcome.revived:
+        _publish_processing_job_for(f, connection)
+    for f in outcome.modified_for_reprocess:
+        _publish_processing_job_for(f, connection)
 
     latency_ms = int((time.monotonic() - t0) * 1000)
     logger.info(
         "internal_sync_files_upserted",
         connection_id=str(connection_id),
-        created_count=created_count,
-        updated_count=updated_count,
-        unchanged_count=unchanged_count,
-        metadata_updates_count=len(metadata_updates),
+        created_count=outcome.created_count,
+        revived_count=outcome.revived_count,
+        updated_count=outcome.updated_count,
+        unchanged_count=outcome.unchanged_count,
+        metadata_updates_count=len(outcome.metadata_updates),
         total_items=len(request.items),
         latency_ms=latency_ms,
         lease_token=_mask_lease_token(request.lease_token),
     )
 
-    enqueued_jobs: dict[str, int] = {}
-    if created_count + len(modified_files) > 0:
-        enqueued_jobs = {"processing": created_count + len(modified_files)}
+    enqueued_total = (
+        outcome.created_count
+        + outcome.revived_count
+        + len(outcome.modified_for_reprocess)
+    )
+    enqueued_jobs: dict[str, int] = (
+        {"processing": enqueued_total} if enqueued_total > 0 else {}
+    )
 
     return UpsertFilesResponse(
-        created_count=created_count,
-        updated_count=updated_count,
-        unchanged_count=unchanged_count,
+        created_count=outcome.created_count,
+        revived_count=outcome.revived_count,
+        updated_count=outcome.updated_count,
+        unchanged_count=outcome.unchanged_count,
         enqueued_jobs=enqueued_jobs,
-        metadata_updates=metadata_updates,
+        metadata_updates=outcome.metadata_updates,
+    )
+
+
+def _publish_processing_job_for(f: DriveFile, connection: DriveConnection) -> None:
+    publish_processing_job(
+        file_id=f.id,
+        org_id=connection.org_id,
+        connection_id=connection.id,
+        video_id=f.video_id,
+        google_file_id=f.google_file_id,
+        file_name=f.file_name,
+        mime_type=f.mime_type,
+        file_size_bytes=f.file_size_bytes,
+        library_id=connection.library_id,
+        scope_type=connection.scope_type,
+        drive_id=connection.drive_id,
+        google_created_time=f.google_created_time.isoformat()
+        if f.google_created_time
+        else None,
+        google_modified_time=f.google_modified_time.isoformat()
+        if f.google_modified_time
+        else None,
     )
 
 

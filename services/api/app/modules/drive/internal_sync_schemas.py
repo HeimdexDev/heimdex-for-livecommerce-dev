@@ -110,9 +110,17 @@ class UpsertFilesRequest(BaseModel):
 
 
 class UpsertFilesResponse(BaseModel):
-    """Response for POST /internal/drive/sync/connections/{id}/upsert_files."""
+    """Response for POST /internal/drive/sync/connections/{id}/upsert_files.
+
+    ``revived_count`` is a new field (2026-04) that reports how many
+    previously soft-deleted rows were resurrected in this batch. Older clients
+    can continue to ignore it — it defaults to 0 and sits alongside the
+    existing counts. See ``sync_service.DriveFileUpsertService`` for revive
+    semantics.
+    """
 
     created_count: int
+    revived_count: int = 0
     updated_count: int
     unchanged_count: int
     enqueued_jobs: dict[str, int] = Field(default_factory=dict)

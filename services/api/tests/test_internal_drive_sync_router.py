@@ -102,35 +102,55 @@ def _mock_db_select_then_update(entity):
     return db
 
 
-def _mock_db_for_upsert(connection, existing_google_ids):
+def _mock_db_for_upsert(connection, existing_google_ids, soft_deleted_ids=None):
+    """Mock DB session for the upsert flow.
+
+    ``existing_google_ids`` — live rows (``is_deleted=False``).
+    ``soft_deleted_ids`` — soft-deleted rows (``is_deleted=True``). The
+    service MUST find these via the existing-files query (the
+    ``uq_drive_files_org_file`` constraint spans soft-deleted rows, so
+    missing them causes the 2026-04 discover outage reproducer).
+    """
     db = AsyncMock()
     conn_result = MagicMock()
     conn_result.scalar_one_or_none.return_value = connection
     file_result = MagicMock()
+    soft_deleted_ids = set(soft_deleted_ids or ())
+    all_ids = set(existing_google_ids) | soft_deleted_ids
     existing_files = []
     existing_files_map = {}
-    for gid in existing_google_ids:
+    for gid in all_ids:
         f = MagicMock()
         f.google_file_id = gid
         f.file_name = "video.mp4"
         f.md5_checksum = None
         f.file_size_bytes = None
         f.google_modified_time = None
-        f.processing_status = "indexed"
+        f.google_created_time = None
+        f.processing_status = "deleted" if gid in soft_deleted_ids else "indexed"
         f.enrichment_state = "done"
         f.stt_status = "done"
         f.ocr_status = "done"
         f.caption_status = "done"
         f.face_status = "done"
         f.proxy_s3_key = "proxy"
+        f.original_s3_key = "original"
+        f.audio_s3_key = "audio"
+        f.keyframe_s3_prefix = "keyframes/"
+        f.thumbnail_s3_prefix = "thumbs/"
         f.scene_count = 10
         f.retry_count = 1
         f.last_error = "old"
+        f.enrichment_error = None
+        f.caption_error = None
+        f.face_error = None
         f.drive_path = None
         f.web_view_link = None
         f.video_id = f"vid_{gid}"
         f.id = uuid4()
         f.mime_type = "video/mp4"
+        f.is_deleted = gid in soft_deleted_ids
+        f.deleted_at = datetime.now(timezone.utc) if gid in soft_deleted_ids else None
         existing_files.append(f)
         existing_files_map[gid] = f
     file_scalars = MagicMock()
@@ -541,6 +561,167 @@ class TestUpsertFiles:
         assert result.unchanged_count == 3
         assert db.add.call_count == 0
         db.flush.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_upsert_revives_soft_deleted_file(self):
+        """Regression: 2026-04 staging/prod discover outage.
+
+        A previously soft-deleted row still owns its (org_id, google_file_id)
+        unique constraint slot. When Drive discovery re-lists the file, the
+        service MUST reuse the existing row (revive) instead of trying to
+        db.add() a new one — otherwise the flush raises UniqueViolationError
+        and aborts the whole batch.
+        """
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_for_upsert(
+            conn,
+            existing_google_ids=set(),
+            soft_deleted_ids={"gf_zombie"},
+        )
+
+        items = [
+            _make_discovered_file(
+                provider_file_id="gf_zombie",
+                name="resurrected.mp4",
+                size=123,
+                md5_checksum="new_md5",
+            )
+        ]
+        request = UpsertFilesRequest(lease_token=token, items=items)
+
+        with patch(
+            "app.modules.drive.internal_sync_router.publish_processing_job"
+        ) as pub:
+            result = await upsert_files(
+                connection_id=conn.id, request=request, _token="valid", db=db,
+            )
+
+        # Counts: one revive, zero created/updated/unchanged.
+        assert result.created_count == 0
+        assert result.revived_count == 1
+        assert result.updated_count == 0
+        assert result.unchanged_count == 0
+
+        # The row must have been mutated in place, NOT added as a new row.
+        assert db.add.call_count == 0
+        db.flush.assert_awaited_once()
+
+        # Row state: resurrected, pipeline reset, metadata refreshed.
+        revived = db._existing_files_map["gf_zombie"]
+        assert revived.is_deleted is False
+        assert revived.deleted_at is None
+        assert revived.processing_status == "pending"
+        assert revived.enrichment_state == "pending"
+        assert revived.stt_status == "pending"
+        assert revived.ocr_status == "pending"
+        assert revived.caption_status is None
+        assert revived.face_status is None
+        assert revived.proxy_s3_key is None
+        assert revived.original_s3_key is None
+        assert revived.scene_count == 0
+        assert revived.retry_count == 0
+        assert revived.last_error is None
+        assert revived.file_name == "resurrected.mp4"
+        assert revived.md5_checksum == "new_md5"
+        assert revived.file_size_bytes == 123
+
+        # Revived rows are fresh pipeline work → must enqueue a processing job.
+        pub.assert_called_once()
+        assert result.enqueued_jobs == {"processing": 1}
+
+    @pytest.mark.asyncio
+    async def test_upsert_batch_with_mix_of_live_and_soft_deleted(self):
+        """A mixed batch must not drop any row on the floor.
+
+        Combines: 1 brand-new + 1 unchanged-live + 1 soft-deleted-revived.
+        All three must land. Regression-guards against any future refactor
+        that re-introduces the ``is_deleted=False`` filter.
+        """
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_for_upsert(
+            conn,
+            existing_google_ids={"gf_live"},
+            soft_deleted_ids={"gf_zombie"},
+        )
+
+        items = [
+            _make_discovered_file(provider_file_id="gf_new"),
+            _make_discovered_file(provider_file_id="gf_live"),
+            _make_discovered_file(provider_file_id="gf_zombie"),
+        ]
+        request = UpsertFilesRequest(lease_token=token, items=items)
+
+        with patch(
+            "app.modules.drive.internal_sync_router.publish_processing_job"
+        ) as pub:
+            result = await upsert_files(
+                connection_id=conn.id, request=request, _token="valid", db=db,
+            )
+
+        assert result.created_count == 1
+        assert result.revived_count == 1
+        assert result.unchanged_count == 1
+        assert result.updated_count == 0
+        # New + revived both publish SQS; unchanged does not.
+        assert pub.call_count == 2
+        assert result.enqueued_jobs == {"processing": 2}
+
+    @pytest.mark.asyncio
+    async def test_upsert_revive_is_idempotent_across_cycles(self):
+        """Calling upsert twice on the same soft-deleted id must not re-revive.
+
+        After the first call, the row's ``is_deleted`` is False — the second
+        call should treat it as an unchanged live row, not revive it again.
+        This guards the discover-every-30s loop from flip-flopping a file.
+        """
+        token = str(uuid4())
+        conn = _make_connection(
+            lease_token=token,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        db = _mock_db_for_upsert(
+            conn,
+            existing_google_ids=set(),
+            soft_deleted_ids={"gf_0"},
+        )
+
+        # Seed the revived row's file_name so the second call's name check
+        # does not register a change.
+        revived = db._existing_files_map["gf_0"]
+        items = [_make_discovered_file(provider_file_id="gf_0", name="video.mp4")]
+        request = UpsertFilesRequest(lease_token=token, items=items)
+
+        with patch("app.modules.drive.internal_sync_router.publish_processing_job"):
+            first = await upsert_files(
+                connection_id=conn.id, request=request, _token="valid", db=db,
+            )
+        assert first.revived_count == 1
+        assert revived.is_deleted is False
+
+        # Simulate a second cycle: re-mock DB, this time the row is live.
+        db2 = _mock_db_for_upsert(
+            conn,
+            existing_google_ids={"gf_0"},
+            soft_deleted_ids=set(),
+        )
+        # Align file_name so no metadata drift is recorded.
+        db2._existing_files_map["gf_0"].file_name = "video.mp4"
+
+        with patch("app.modules.drive.internal_sync_router.publish_processing_job") as pub2:
+            second = await upsert_files(
+                connection_id=conn.id, request=request, _token="valid", db=db2,
+            )
+        assert second.revived_count == 0
+        assert second.unchanged_count == 1
+        pub2.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_upsert_mixed_new_and_existing(self):
