@@ -66,21 +66,21 @@ def _build_blur_pipeline(settings):
 
 
 def _make_sqs_callback(api_base_url, internal_api_key, settings, pipeline):
-    """Bind the per-message handler to its long-lived dependencies."""
-    sqs_to_blur_claim = importlib.import_module(
-        "src.tasks.blur_video"
-    ).sqs_to_blur_claim
-    process_blur_message = importlib.import_module(
-        "src.tasks.blur_video"
-    ).process_blur_message
+    """Bind the per-message dispatcher to its long-lived dependencies.
+
+    The dispatcher routes by message ``type`` field to either the
+    blur-job handler or the layer-export handler. One queue, two
+    message types — keeps the worker footprint unchanged while
+    unlocking v0.10 layer exports.
+    """
+    dispatch = importlib.import_module("src.dispatcher").dispatch
 
     def callback(message) -> None:
-        claim_ref = sqs_to_blur_claim(message)
-        process_blur_message(
+        dispatch(
+            message,
             api_base_url=api_base_url,
             internal_api_key=internal_api_key,
             settings=settings,
-            claim_ref=claim_ref,
             pipeline=pipeline,
         )
 
