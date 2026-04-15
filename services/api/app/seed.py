@@ -1,7 +1,8 @@
 import asyncio
-import hashlib
+import json
 import random
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -18,10 +19,6 @@ from app.modules.text_templates.models import TextTemplate
 from app.modules.search.client import OpenSearchClient
 from app.modules.search.scene_client import SceneSearchClient
 from app.modules.search.embedding import generate_mock_embedding
-from app.modules.search.color_extraction import (
-    colors_to_hex,
-    rgb_to_hsl_histogram,
-)
 
 setup_logging()
 logger = get_logger(__name__)
@@ -67,120 +64,22 @@ ENGLISH_TRANSCRIPTS = [
     "Let's review the action items from yesterday's meeting.",
 ]
 
-# Human-readable video titles for seed data (simulates agent-derived filenames)
-KOREAN_VIDEO_TITLES = [
-    "2025년 1분기 전사 회의",
-    "신규 프로젝트 킥오프 미팅",
-    "마케팅 전략 수정 회의",
-    "고객 피드백 분석 결과 공유",
-    "제품 출시 최종 점검",
-    "팀 워크샵 아이디어 발표",
-    "클라우드 마이그레이션 완료 보고",
-    "AI 추천 시스템 기술 세미나",
-    "보안 취약점 패치 리뷰",
-    "UX 개선 A/B 테스트 결과",
-    "데이터베이스 최적화 성과 발표",
-    "모바일 앱 업데이트 데모",
-    "고객지원 프로세스 개선 회의",
-    "신규 파트너십 논의",
-    "분기별 실적 보고",
-]
+# Seed fixtures (scene metadata + color data generated offline from real
+# live-commerce footage by scripts/extract_seed_fixtures.py).
+FIXTURE_PATH = Path(__file__).parent / "db" / "seed" / "fixtures" / "scenes.json"
 
-ENGLISH_VIDEO_TITLES = [
-    "Q1 2025 Quarterly Results Review",
-    "Product Roadmap Planning Session",
-    "Customer Satisfaction Deep Dive",
-    "Scalability Workshop Part 1",
-    "Feature Launch Retrospective",
-    "Team Collaboration Best Practices",
-    "Security Audit Findings Review",
-    "Platform Migration Status Update",
-    "User Engagement Analytics Demo",
-    "Sprint Planning - Week 12",
-    "Onboarding Training Session",
-    "API Integration Workshop",
-    "Performance Optimization Results",
-    "Cross-Team Sync Meeting",
-    "Year-End Review Presentation",
-]
 
-TRAINING_VIDEO_TITLES = [
-    "New Employee Onboarding Guide",
-    "Git Workflow Training",
-    "Cloud Infrastructure Basics",
-    "CI/CD Pipeline Setup Tutorial",
-    "Code Review Best Practices",
-    "Incident Response Playbook",
-    "Data Privacy Compliance Training",
-    "Agile Methodology Overview",
-    "Kubernetes Deployment Training",
-    "Monitoring and Alerting Setup",
-]
+def _load_scene_fixtures() -> list[dict]:
+    """Load the seed scene fixtures produced by extract_seed_fixtures.py.
 
-# Live-commerce style product image filenames (simulates Drive assets).
-KOREAN_IMAGE_FILENAMES = [
-    "봄신상_립스틱_정면.jpg",
-    "여름컬렉션_원피스_상세01.jpg",
-    "겨울_패딩_후드업_뒷면.jpg",
-    "리얼핏_부츠_측면.jpg",
-    "스킨케어_로션_500ml_제품컷.jpg",
-    "네일아트_레드톤_핸드샷.jpg",
-    "뷰티_세럼_패키지_정면.jpg",
-    "가방_크로스백_베이지_스튜디오.jpg",
-    "아우터_트렌치코트_모델착장.jpg",
-    "주방용품_프라이팬_28cm.jpg",
-]
-
-ENGLISH_IMAGE_FILENAMES = [
-    "SS25_RED_SKU001_front.jpg",
-    "FW24_OUTERWEAR_NAVY_back.jpg",
-    "HERO_BANNER_SERUM_1920x1080.jpg",
-    "LOOKBOOK_SPRING_EDITORIAL_03.jpg",
-    "PDP_MAIN_SNEAKER_WHITE_side.jpg",
-    "CAMPAIGN_SUMMER_BEACH_landscape.jpg",
-    "DETAIL_SHOT_WATCH_SILVER_close.jpg",
-    "PACKSHOT_SKINCARE_KIT_studio.jpg",
-    "THUMB_NEW_ARRIVAL_BAG_beige.jpg",
-    "COLLECTION_NAVY_COAT_model.jpg",
-]
-
-# Representative RGB palettes for seeded color vectors. Keeps color search
-# feeling realistic (products in warm/cool ranges) without requiring real
-# images or a k-means pass over actual pixels.
-SEED_COLOR_PALETTES: list[list[tuple[int, int, int]]] = [
-    # Warm reds / coral (라이브커머스 뷰티)
-    [(214, 69, 65), (232, 122, 108), (248, 210, 200), (95, 30, 35), (255, 244, 240)],
-    # Pastel pinks
-    [(246, 180, 197), (255, 219, 226), (210, 120, 150), (255, 245, 248), (120, 70, 90)],
-    # Navy / blue denim
-    [(34, 52, 96), (88, 110, 156), (200, 210, 230), (10, 18, 40), (235, 240, 248)],
-    # Forest green
-    [(42, 89, 55), (95, 140, 90), (180, 200, 170), (20, 40, 25), (230, 235, 220)],
-    # Mustard / warm yellow
-    [(220, 170, 60), (240, 210, 130), (245, 235, 200), (110, 80, 20), (30, 28, 20)],
-    # Monochrome neutrals (black/white/gray)
-    [(30, 30, 32), (90, 90, 95), (180, 180, 185), (240, 240, 242), (140, 140, 145)],
-    # Beige / nude
-    [(220, 198, 170), (240, 222, 198), (180, 150, 118), (110, 80, 55), (250, 240, 228)],
-    # Teal / mint
-    [(58, 158, 160), (130, 200, 200), (210, 235, 232), (25, 80, 82), (240, 248, 246)],
-    # Purple / lavender
-    [(138, 88, 180), (190, 150, 222), (230, 215, 245), (60, 30, 90), (245, 238, 252)],
-    # Orange / terracotta
-    [(224, 118, 62), (244, 170, 120), (252, 220, 190), (120, 55, 22), (250, 235, 218)],
-]
-
-# Common product-photography aspect ratios in landscape/portrait/square.
-SEED_IMAGE_DIMENSIONS: list[tuple[int, int]] = [
-    (1920, 1080),  # landscape 16:9
-    (1280, 720),   # landscape 16:9
-    (1200, 800),   # landscape 3:2
-    (1080, 1920),  # portrait 9:16 (mobile-first)
-    (720, 1280),   # portrait 9:16
-    (800, 1200),   # portrait 2:3
-    (1080, 1080),  # square 1:1
-    (1200, 1200),  # square 1:1
-]
+    Each entry carries the complete color signal (dominant_colors,
+    color_embedding, color_family) and temporal anchors (start_ms, end_ms,
+    keyframe_timestamp_ms) derived from real assets. Seed runtime only adds
+    org/library ids and the random metadata fields (transcript, speaker,
+    people, source_type) on top.
+    """
+    with FIXTURE_PATH.open(encoding="utf-8") as f:
+        return json.load(f)["scenes"]
 
 
 def _classify_orientation(width: int, height: int) -> str:
@@ -190,32 +89,6 @@ def _classify_orientation(width: int, height: int) -> str:
     if height > width:
         return "portrait"
     return "square"
-
-
-def _synthesize_color_data(
-    scene_id: str,
-) -> tuple[list[str], list[float]]:
-    """Pick a palette deterministically per scene_id, compute dominant hex +
-    27-dim HSL histogram using the same helpers the ingest pipeline uses.
-
-    Deterministic: re-running seed produces identical color_embedding vectors,
-    which keeps color-search regression tests stable.
-    """
-    seed_int = int(hashlib.md5(scene_id.encode("utf-8")).hexdigest()[:8], 16)
-    rng = random.Random(seed_int)
-
-    palette = list(rng.choice(SEED_COLOR_PALETTES))
-    rng.shuffle(palette)
-
-    # Dirichlet-like weights — one dominant color + smaller accents.
-    raw = [rng.random() for _ in palette]
-    raw[0] *= 3.0  # bias the first color to be dominant
-    total = sum(raw) or 1.0
-    weights = [w / total for w in raw]
-
-    histogram = rgb_to_hsl_histogram(palette, weights)
-    hex_colors = colors_to_hex(palette)
-    return hex_colors, histogram
 
 
 def _build_speaker_transcript(transcript_parts: list[str]) -> tuple[str, int]:
@@ -267,9 +140,7 @@ async def seed_database():
         logger.info("created_users", count=2)
         
         libraries = [
-            Library(org_id=org.id, name="회사 회의 영상", created_by_user_id=admin.id),
-            Library(org_id=org.id, name="Product Demos", created_by_user_id=admin.id),
-            Library(org_id=org.id, name="Training Videos", created_by_user_id=member.id),
+            Library(org_id=org.id, name="라이브커머스 영상", created_by_user_id=admin.id),
         ]
         session.add_all(libraries)
         await session.flush()
@@ -487,15 +358,27 @@ async def seed_opensearch(org, libraries, profiles, people_clusters, drive_entri
 
 
 async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
-    """Seed the scenes index with fabricated scene documents.
+    """Seed the scenes index from fixture data extracted from real assets.
 
-    Content mix:
-      - ~90% of assets are videos with 3-5 scenes each.
-      - ~10% are single-scene image assets (content_type="image") with
-        image_width/height/orientation + filename_text so the image-only
-        and mixed content_types filters have something to return locally.
+    scenes.json (produced by scripts/extract_seed_fixtures.py and patched
+    with real timestamps by scripts/recover_timestamps.py) owns the fields
+    that must stay stable across reseeds so the color-search work has a
+    realistic, reproducible corpus:
+      - scene_id / video_id / video_title
+      - content_type ("video" or "image")
+      - start_ms / end_ms / keyframe_timestamp_ms
+      - image_width / image_height
+      - dominant_colors + color_embedding (27-dim HSL histogram)
 
-    Doc IDs follow the "{org_id}:{scene_id}" convention required by mget_scenes.
+    Seed runtime fills the random, per-run fields (transcript, speaker
+    transcript, people_cluster_ids, source_type, required_drive, capture
+    time). Fields owned by Jaehee's workers (visual_embedding,
+    keyword_tags, product_tags, ai_tags) are inserted as zero/empty
+    placeholders and rebased in when those workers land.
+
+    All scenes from the same video_id share a single source_type /
+    required drive nickname / capture_time, matching how the real ingest
+    pipeline assigns those at the video level.
     """
     logger.info("seeding_scenes")
 
@@ -504,121 +387,61 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
     try:
         await client.ensure_index_exists()
 
-        documents: list[tuple[str, dict]] = []
+        fixtures = _load_scene_fixtures()
         cluster_ids = [p.person_cluster_id for p in people_clusters]
         drive_nicknames = {d.source_fingerprint_hash: d.nickname for d in drive_entries}
+
+        library = libraries[0]
         org_id_str = str(org.id)
 
-        image_ratio = 0.10  # ~10% of assets are still images
+        scenes_by_video: dict[str, list[dict]] = {}
+        for fixture in fixtures:
+            scenes_by_video.setdefault(fixture["video_id"], []).append(fixture)
+
+        documents: list[tuple[str, dict]] = []
         video_count = 0
         image_count = 0
 
-        for lib_idx, (library, profile) in enumerate(zip(libraries, profiles)):
-            num_videos = random.randint(5, 10)
-            is_korean_lib = lib_idx == 0
+        for video_id, video_fixtures in scenes_by_video.items():
+            source_type = random.choice(["gdrive", "removable_disk", "local"])
+            required_drive = None
+            if source_type == "removable_disk":
+                fingerprint = random.choice(list(drive_nicknames.keys()))
+                required_drive = drive_nicknames[fingerprint]
 
-            if lib_idx == 0:
-                title_pool = KOREAN_VIDEO_TITLES
-                image_pool = KOREAN_IMAGE_FILENAMES
-            elif lib_idx == 2:
-                title_pool = TRAINING_VIDEO_TITLES
-                image_pool = ENGLISH_IMAGE_FILENAMES
+            capture_time = datetime.now(timezone.utc) - timedelta(
+                days=random.randint(1, 365),
+                hours=random.randint(0, 23),
+            )
+
+            is_image = video_fixtures[0]["content_type"] == "image"
+            if is_image:
+                image_count += len(video_fixtures)
             else:
-                title_pool = ENGLISH_VIDEO_TITLES
-                image_pool = ENGLISH_IMAGE_FILENAMES
-
-            for video_idx in range(num_videos):
-                video_id = str(uuid4())
-                is_image_asset = random.random() < image_ratio
-
-                source_type = random.choice(["gdrive", "removable_disk", "local"])
-                required_drive = None
-                if source_type == "removable_disk":
-                    fingerprint = random.choice(list(drive_nicknames.keys()))
-                    required_drive = drive_nicknames[fingerprint]
-
-                capture_time = datetime.now(timezone.utc) - timedelta(
-                    days=random.randint(1, 365),
-                    hours=random.randint(0, 23),
-                )
-
-                if is_image_asset:
-                    documents.append(
-                        _build_image_scene_doc(
-                            org_id_str=org_id_str,
-                            library=library,
-                            video_id=video_id,
-                            image_pool=image_pool,
-                            source_type=source_type,
-                            required_drive=required_drive,
-                            capture_time=capture_time,
-                            cluster_ids=cluster_ids,
-                        )
-                    )
-                    image_count += 1
-                    continue
-
-                video_title = title_pool[video_idx % len(title_pool)]
-                num_scenes = random.randint(3, 5)
-                current_ms = 0
-
-                for scene_idx in range(num_scenes):
-                    scene_id = f"{video_id}_scene_{scene_idx:03d}"
-
-                    duration_ms = random.randint(10000, 90000)
-                    start_ms = current_ms
-                    end_ms = current_ms + duration_ms
-                    current_ms = end_ms
-
-                    num_speech_segments = random.randint(2, 4)
-                    transcript_pool = KOREAN_TRANSCRIPTS if (is_korean_lib or random.random() < 0.3) else ENGLISH_TRANSCRIPTS
-                    transcript_parts = [
-                        random.choice(transcript_pool)
-                        for _ in range(num_speech_segments)
-                    ]
-                    transcript_raw = " ".join(transcript_parts)
-
-                    speaker_transcript, speaker_count = _build_speaker_transcript(
-                        transcript_parts
-                    )
-
-                    scene_people = random.sample(
-                        cluster_ids, k=random.randint(0, min(3, len(cluster_ids)))
-                    )
-
-                    embedding = generate_mock_embedding(transcript_raw)
-                    dominant_colors, color_embedding = _synthesize_color_data(scene_id)
-
-                    doc = {
-                        "org_id": org_id_str,
-                        "library_id": str(library.id),
-                        "video_id": video_id,
-                        "video_title": video_title,
-                        "scene_id": scene_id,
-                        "start_ms": start_ms,
-                        "end_ms": end_ms,
-                        "transcript_raw": transcript_raw,
-                        "transcript_norm": transcript_raw.lower(),
-                        "transcript_char_count": len(transcript_raw),
-                        "speech_segment_count": num_speech_segments,
-                        "speaker_transcript": speaker_transcript,
-                        "speaker_count": speaker_count,
-                        "content_type": "video",
-                        "source_type": source_type,
-                        "required_drive_nickname": required_drive,
-                        "people_cluster_ids": scene_people,
-                        "capture_time": capture_time.isoformat(),
-                        "ingest_time": datetime.now(timezone.utc).isoformat(),
-                        "thumbnail_url": f"https://placeholder.heimdex.local/thumb/{scene_id}.jpg",
-                        "keyframe_timestamp_ms": (start_ms + end_ms) // 2,
-                        "embedding_vector": embedding,
-                        "dominant_colors": dominant_colors,
-                        "color_embedding": color_embedding,
-                    }
-
-                    documents.append((f"{org_id_str}:{scene_id}", doc))
-
                 video_count += 1
+
+            for fixture in video_fixtures:
+                if fixture["content_type"] == "image":
+                    doc_entry = _build_image_scene_doc(
+                        fixture=fixture,
+                        org_id_str=org_id_str,
+                        library=library,
+                        source_type=source_type,
+                        required_drive=required_drive,
+                        capture_time=capture_time,
+                        cluster_ids=cluster_ids,
+                    )
+                else:
+                    doc_entry = _build_video_scene_doc(
+                        fixture=fixture,
+                        org_id_str=org_id_str,
+                        library=library,
+                        source_type=source_type,
+                        required_drive=required_drive,
+                        capture_time=capture_time,
+                        cluster_ids=cluster_ids,
+                    )
+                documents.append(doc_entry)
 
         batch_size = 100
         for i in range(0, len(documents), batch_size):
@@ -636,31 +459,99 @@ async def seed_scenes(org, libraries, profiles, people_clusters, drive_entries):
         await client.close()
 
 
-def _build_image_scene_doc(
+def _build_video_scene_doc(
     *,
+    fixture: dict,
     org_id_str: str,
     library,
-    video_id: str,
-    image_pool: list[str],
     source_type: str,
     required_drive: str | None,
     capture_time: datetime,
     cluster_ids: list[str],
 ) -> tuple[str, dict]:
-    """Build a single-scene image asset document.
+    """Build a video-type scene document from a fixture entry.
+
+    transcript / speaker_transcript / people_cluster_ids are generated
+    here — the real pipeline sources them from STT + diarization, which
+    the color-focused seed does not model. visual_embedding /
+    keyword_tags / product_tags / ai_tags are zero/empty placeholders
+    because those fields belong to Jaehee's workers.
+    """
+    scene_id = fixture["scene_id"]
+    video_id = fixture["video_id"]
+
+    num_speech_segments = random.randint(2, 4)
+    transcript_parts = [
+        random.choice(KOREAN_TRANSCRIPTS)
+        for _ in range(num_speech_segments)
+    ]
+    transcript_raw = " ".join(transcript_parts)
+    speaker_transcript, speaker_count = _build_speaker_transcript(transcript_parts)
+    embedding = generate_mock_embedding(transcript_raw)
+
+    scene_people = random.sample(
+        cluster_ids, k=random.randint(0, min(3, len(cluster_ids)))
+    )
+
+    doc = {
+        "org_id": org_id_str,
+        "library_id": str(library.id),
+        "video_id": video_id,
+        "video_title": fixture["video_title"],
+        "scene_id": scene_id,
+        "start_ms": fixture["start_ms"],
+        "end_ms": fixture["end_ms"],
+        "keyframe_timestamp_ms": fixture["keyframe_timestamp_ms"],
+        "transcript_raw": transcript_raw,
+        "transcript_norm": transcript_raw.lower(),
+        "transcript_char_count": len(transcript_raw),
+        "speech_segment_count": num_speech_segments,
+        "speaker_transcript": speaker_transcript,
+        "speaker_count": speaker_count,
+        "content_type": "video",
+        "source_type": source_type,
+        "required_drive_nickname": required_drive,
+        "people_cluster_ids": scene_people,
+        "capture_time": capture_time.isoformat(),
+        "ingest_time": datetime.now(timezone.utc).isoformat(),
+        "thumbnail_url": f"https://placeholder.heimdex.local/thumb/{scene_id}.jpg",
+        "embedding_vector": embedding,
+        "dominant_colors": fixture["dominant_colors"],
+        "color_embedding": fixture["color_embedding"],
+        "visual_embedding": [0.0] * 768,
+        "keyword_tags": [],
+        "product_tags": [],
+        "ai_tags": [],
+    }
+
+    return (f"{org_id_str}:{scene_id}", doc)
+
+
+def _build_image_scene_doc(
+    *,
+    fixture: dict,
+    org_id_str: str,
+    library,
+    source_type: str,
+    required_drive: str | None,
+    capture_time: datetime,
+    cluster_ids: list[str],
+) -> tuple[str, dict]:
+    """Build a single-scene image asset document from a fixture entry.
 
     Image scenes have no spoken transcript or speaker data; filename_text
     carries the primary text signal for BM25 search (matches ingest).
     """
-    scene_id = f"{video_id}_scene_000"
-    filename = random.choice(image_pool)
-    width, height = random.choice(SEED_IMAGE_DIMENSIONS)
+    scene_id = fixture["scene_id"]
+    video_id = fixture["video_id"]
+    filename = fixture["video_title"]
+    width = fixture["image_width"]
+    height = fixture["image_height"]
     orientation = _classify_orientation(width, height)
 
-    # Generate the semantic vector from the filename so text search over
-    # images behaves sensibly (e.g. "립스틱" still surfaces image assets).
+    # Feed the filename into the semantic vector so text search over
+    # images still surfaces them (e.g. "립스틱" hits the lipstick image).
     embedding = generate_mock_embedding(filename)
-    dominant_colors, color_embedding = _synthesize_color_data(scene_id)
 
     scene_people = random.sample(
         cluster_ids, k=random.randint(0, min(2, len(cluster_ids)))
@@ -674,6 +565,7 @@ def _build_image_scene_doc(
         "scene_id": scene_id,
         "start_ms": 0,
         "end_ms": 0,
+        "keyframe_timestamp_ms": 0,
         "transcript_raw": "",
         "transcript_norm": "",
         "transcript_char_count": 0,
@@ -691,10 +583,13 @@ def _build_image_scene_doc(
         "capture_time": capture_time.isoformat(),
         "ingest_time": datetime.now(timezone.utc).isoformat(),
         "thumbnail_url": f"https://placeholder.heimdex.local/thumb/{scene_id}.jpg",
-        "keyframe_timestamp_ms": 0,
         "embedding_vector": embedding,
-        "dominant_colors": dominant_colors,
-        "color_embedding": color_embedding,
+        "dominant_colors": fixture["dominant_colors"],
+        "color_embedding": fixture["color_embedding"],
+        "visual_embedding": [0.0] * 768,
+        "keyword_tags": [],
+        "product_tags": [],
+        "ai_tags": [],
     }
 
     return (f"{org_id_str}:{scene_id}", doc)
