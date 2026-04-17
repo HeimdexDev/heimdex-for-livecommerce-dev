@@ -17,6 +17,8 @@ from app.modules.profiles.models import LibraryProfile, ProfileStatus
 from app.modules.people.models import DriveNicknameRegistry, PeopleClusterLabel
 from app.modules.text_templates.models import TextTemplate
 from app.modules.face.models import FaceIdentity, FaceExemplar
+from app.modules.drive.models import DriveConnection, DriveFile
+from app.modules.blur.models import BlurJob
 from app.modules.search.client import OpenSearchClient
 from app.modules.search.scene_client import SceneSearchClient
 from app.modules.search.embedding import generate_mock_embedding
@@ -248,6 +250,11 @@ async def seed_database():
         face_video_ids = fixture_video_ids[:7]
         await seed_faces(session, org.id, face_video_ids)
 
+        drive_connection, drive_files = await seed_drive_files(
+            session, org, libraries[0], admin, fixture_video_ids,
+        )
+        await seed_blur_jobs(session, org, admin, drive_files)
+
         await session.commit()
 
         await seed_opensearch(org, libraries, profiles, people_clusters, drive_entries)
@@ -391,6 +398,215 @@ async def seed_faces(session: AsyncSession, org_id, face_video_ids: list[str]) -
 
     await session.flush()
     logger.info("seeded_faces", identities=identity_count, exemplars=exemplar_count)
+
+
+async def seed_drive_files(
+    session: AsyncSession, org, library, admin, fixture_video_ids: list[str],
+) -> tuple[DriveConnection, list[DriveFile]]:
+    """Create a DriveConnection and DriveFile per fixture video.
+
+    DriveFiles are the Postgres counterpart to OpenSearch scenes — they let
+    the video detail page resolve video_id → file UUID for blur, export,
+    and metadata endpoints.
+    """
+    connection = DriveConnection(
+        org_id=org.id,
+        library_id=library.id,
+        scope_type="drive",
+        drive_id="seed_shared_drive_001",
+        drive_name="Seed Shared Drive",
+        status="active",
+    )
+    session.add(connection)
+    await session.flush()
+
+    fixtures = _load_scene_fixtures()
+    video_meta: dict[str, dict] = {}
+    for f in fixtures:
+        vid = f["video_id"]
+        if vid not in video_meta:
+            video_meta[vid] = {
+                "video_title": f.get("video_title", vid),
+                "content_type": f.get("content_type", "video"),
+                "start_ms": f.get("start_ms", 0),
+                "end_ms": f.get("end_ms", 0),
+                "image_width": f.get("image_width"),
+                "image_height": f.get("image_height"),
+            }
+        else:
+            end = f.get("end_ms", 0)
+            if end > video_meta[vid]["end_ms"]:
+                video_meta[vid]["end_ms"] = end
+
+    drive_files = []
+    for vid in fixture_video_ids:
+        meta = video_meta.get(vid, {})
+        scene_count = sum(1 for f in fixtures if f["video_id"] == vid)
+        duration_ms = meta.get("end_ms", 300000)
+
+        df = DriveFile(
+            org_id=org.id,
+            connection_id=connection.id,
+            google_file_id=f"seed_{vid}",
+            file_name=f"{meta.get('video_title', vid)}.mp4",
+            mime_type="video/mp4" if meta.get("content_type") == "video" else "image/jpeg",
+            video_id=vid,
+            processing_status="indexed",
+            scene_count=scene_count,
+            proxy_s3_key=f"{org.id}/drive/proxies/{vid}/proxy.mp4",
+            proxy_duration_ms=duration_ms,
+            video_width=meta.get("image_width") or 1920,
+            video_height=meta.get("image_height") or 1080,
+            video_fps=30.0,
+        )
+        session.add(df)
+        drive_files.append(df)
+
+    await session.flush()
+    logger.info("seeded_drive_files", count=len(drive_files))
+    return connection, drive_files
+
+
+async def seed_blur_jobs(
+    session: AsyncSession, org, admin, drive_files: list[DriveFile],
+) -> None:
+    """Seed a completed blur job for the first video so the blur UI renders."""
+    import hashlib
+
+    video_files = [df for df in drive_files if df.mime_type == "video/mp4"]
+    if not video_files:
+        return
+
+    target = video_files[0]
+    job_id = uuid4()
+
+    detections_summary = {"face": 12, "license_plate": 3}
+    options = {
+        "do_faces": True,
+        "categories": ["face", "license_plate"],
+    }
+    options_hash = hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest()
+
+    now = datetime.now(timezone.utc)
+    job = BlurJob(
+        id=job_id,
+        org_id=org.id,
+        file_id=target.id,
+        video_id=target.video_id,
+        requested_by=admin.id,
+        status="done",
+        options=options,
+        options_hash=options_hash,
+        source_s3_key=target.proxy_s3_key or "",
+        source_kind="proxy",
+        blurred_s3_key=f"blurred/{target.video_id}/{job_id}/blurred.mp4",
+        manifest_s3_key=f"blurred/{target.video_id}/{job_id}/manifest.json",
+        mask_s3_keys={
+            "face": f"blurred/{target.video_id}/{job_id}/masks/face.mkv",
+            "license_plate": f"blurred/{target.video_id}/{job_id}/masks/license_plate.mkv",
+        },
+        detections_summary=detections_summary,
+        progress_pct=100,
+        phase="finalizing",
+        requested_at=now - timedelta(minutes=10),
+        started_at=now - timedelta(minutes=9),
+        completed_at=now - timedelta(minutes=5),
+    )
+    session.add(job)
+    await session.flush()
+
+    await _upload_blur_manifest(org.id, target.video_id, str(job_id))
+    logger.info("seeded_blur_job", job_id=str(job_id), video_id=target.video_id)
+
+
+async def _upload_blur_manifest(org_id, video_id: str, job_id: str) -> None:
+    """Upload a static blur manifest JSON to MinIO."""
+    import boto3
+    from botocore.config import Config as BotoConfig
+
+    settings = get_settings()
+
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=f"http://{settings.minio_endpoint}",
+        aws_access_key_id=settings.minio_access_key,
+        aws_secret_access_key=settings.minio_secret_key,
+        region_name=settings.s3_region,
+        config=BotoConfig(signature_version="s3v4"),
+    )
+
+    bucket = settings.drive_s3_bucket
+    try:
+        s3.head_bucket(Bucket=bucket)
+    except Exception:
+        s3.create_bucket(Bucket=bucket)
+
+    manifest = {
+        "schema_version": "1.0",
+        "video": {
+            "fps": 30.0,
+            "width": 1920,
+            "height": 1080,
+            "frame_count": 9000,
+        },
+        "summary": {"face": 12, "license_plate": 3},
+        "detections": _generate_mock_detections(9000, 30.0),
+        "mask_s3_keys": {
+            "face": f"blurred/{video_id}/{job_id}/masks/face.mkv",
+            "license_plate": f"blurred/{video_id}/{job_id}/masks/license_plate.mkv",
+        },
+    }
+
+    key = f"blurred/{video_id}/{job_id}/manifest.json"
+    s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=json.dumps(manifest),
+        ContentType="application/json",
+    )
+    logger.info("uploaded_blur_manifest", key=key)
+
+
+def _generate_mock_detections(frame_count: int, fps: float) -> list[dict]:
+    detections = []
+    rng = random.Random(42)
+
+    for i in range(12):
+        frame_idx = rng.randint(0, frame_count - 1)
+        detections.append({
+            "frame_idx": frame_idx,
+            "t_ms": int(frame_idx / fps * 1000),
+            "category": "face",
+            "label": "person",
+            "confidence": round(rng.uniform(0.85, 0.99), 3),
+            "bbox_norm": [
+                round(rng.uniform(0.1, 0.7), 3),
+                round(rng.uniform(0.1, 0.5), 3),
+                round(rng.uniform(0.05, 0.2), 3),
+                round(rng.uniform(0.1, 0.3), 3),
+            ],
+            "from_cache": False,
+        })
+
+    for i in range(3):
+        frame_idx = rng.randint(0, frame_count - 1)
+        detections.append({
+            "frame_idx": frame_idx,
+            "t_ms": int(frame_idx / fps * 1000),
+            "category": "license_plate",
+            "label": "license plate",
+            "confidence": round(rng.uniform(0.7, 0.95), 3),
+            "bbox_norm": [
+                round(rng.uniform(0.2, 0.6), 3),
+                round(rng.uniform(0.4, 0.8), 3),
+                round(rng.uniform(0.08, 0.15), 3),
+                round(rng.uniform(0.03, 0.08), 3),
+            ],
+            "from_cache": False,
+        })
+
+    detections.sort(key=lambda d: d["frame_idx"])
+    return detections
 
 
 async def seed_opensearch(org, libraries, profiles, people_clusters, drive_entries):

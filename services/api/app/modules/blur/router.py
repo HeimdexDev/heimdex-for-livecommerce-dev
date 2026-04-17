@@ -12,10 +12,13 @@ import logging
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from fastapi.responses import RedirectResponse
 
+from app.db.base import get_db_session
 from app.dependencies import get_blur_export_service, get_blur_service
 from app.modules.auth.service import get_current_user
 from app.modules.blur.export_service import BlurExportService
@@ -28,6 +31,7 @@ from app.modules.blur.schemas import (
     CreateBlurJobRequest,
 )
 from app.modules.blur.service import BlurService
+from app.modules.drive.models import DriveFile
 from app.modules.tenancy.context import OrgContext
 from app.modules.tenancy.middleware import get_current_org
 from app.modules.users.models import User
@@ -37,24 +41,51 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/blur", tags=["blur"])
 
 
+async def _resolve_file_id(
+    file_id_or_video_id: str,
+    org_id: UUID,
+    db: AsyncSession,
+) -> UUID:
+    """Accept either a UUID file_id or a video_id string (e.g. gd_...)."""
+    try:
+        return UUID(file_id_or_video_id)
+    except ValueError:
+        pass
+    row = await db.execute(
+        select(DriveFile.id).where(
+            DriveFile.org_id == org_id,
+            DriveFile.video_id == file_id_or_video_id,
+        ).limit(1)
+    )
+    result = row.scalar_one_or_none()
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No drive file found for video_id={file_id_or_video_id}",
+        )
+    return result
+
+
 @router.post(
     "/videos/{file_id}",
     response_model=BlurJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def create_blur_job(
-    file_id: UUID,
+    file_id: str,
     body: CreateBlurJobRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
     service: Annotated[BlurService, Depends(get_blur_service)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
     _rate_limit: Annotated[None, Depends(require_blur_rate_limit)] = None,
 ) -> BlurJobResponse:
     """Enqueue a user-triggered blur run for the given video file."""
+    resolved = await _resolve_file_id(file_id, org_ctx.org_id, db)
     return await service.create_blur_job(
         org_id=org_ctx.org_id,
         user_id=cast(UUID, user.id),
-        file_id=file_id,
+        file_id=resolved,
         payload=body,
     )
 
@@ -64,16 +95,18 @@ async def create_blur_job(
     response_model=BlurJobListResponse,
 )
 async def list_blur_jobs_for_video(
-    file_id: UUID,
+    file_id: str,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
     service: Annotated[BlurService, Depends(get_blur_service)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> BlurJobListResponse:
+    resolved = await _resolve_file_id(file_id, org_ctx.org_id, db)
     return await service.list_blur_jobs_for_file(
         org_id=org_ctx.org_id,
-        file_id=file_id,
+        file_id=resolved,
         limit=limit,
         offset=offset,
     )
