@@ -526,9 +526,14 @@ async def _upload_blur_manifest(org_id, video_id: str, job_id: str) -> None:
 
     settings = get_settings()
 
+    # Seed runs inside Docker — always use the internal hostname for uploads,
+    # even when MINIO_ENDPOINT is set to localhost for browser presigned URLs.
+    import os
+    internal_endpoint = os.environ.get("MINIO_INTERNAL_ENDPOINT", "minio:9000")
+
     s3 = boto3.client(
         "s3",
-        endpoint_url=f"http://{settings.minio_endpoint}",
+        endpoint_url=f"http://{internal_endpoint}",
         aws_access_key_id=settings.minio_access_key,
         aws_secret_access_key=settings.minio_secret_key,
         region_name=settings.s3_region,
