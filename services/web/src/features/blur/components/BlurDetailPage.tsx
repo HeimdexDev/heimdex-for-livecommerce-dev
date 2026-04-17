@@ -34,6 +34,8 @@ import {
 } from "@/lib/api/blur";
 import { useBlurExport, useBlurJob, useBlurJobsForFile } from "@/features/blur/hooks/useBlurJob";
 import { useAuth } from "@/lib/auth";
+import { getVideoScenes } from "@/lib/api/videos";
+import type { VideoScene, VideoScenesResponse } from "@/lib/types/videos";
 import { TimelineRuler, PlayheadCursor, msToPixels, pixelsToMs, formatTimelineTimestamp, DEFAULT_ZOOM, MIN_ZOOM, MAX_ZOOM } from "@/lib/timeline";
 
 // ---------- shared types sourced from the manifest JSON on S3 ----------
@@ -262,6 +264,87 @@ function BlurProgressPanel({ job }: { job: BlurJobResponse }) {
         모델 추론과 인코딩이 진행 중입니다. 몇 분 정도 걸릴 수 있습니다.
       </p>
     </div>
+  );
+}
+
+// ============================================================================
+// useBlurScenes — fetch scene list for the video
+// ============================================================================
+
+function useBlurScenes(videoId: string) {
+  const { getAccessToken } = useAuth();
+  const [scenes, setScenes] = useState<VideoScene[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getVideoScenes(videoId, 100, 0, getAccessToken)
+      .then((res) => {
+        if (!cancelled) setScenes(res.scenes);
+      })
+      .catch(() => {
+        if (!cancelled) setScenes([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [videoId, getAccessToken]);
+
+  return { scenes, loading };
+}
+
+// ============================================================================
+// BlurSceneCard — single scene card in sidebar
+// ============================================================================
+
+function BlurSceneCard({
+  scene,
+  detectionCount,
+  isActive,
+  onClick,
+}: {
+  scene: VideoScene;
+  detectionCount: number;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const durationSec = Math.max(1, Math.round((scene.end_ms - scene.start_ms) / 1000));
+  const transcript = scene.transcript_raw?.slice(0, 80) || scene.scene_caption?.slice(0, 80) || "";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full rounded-lg border p-3 text-left transition-colors ${
+        isActive
+          ? "border-blue-400 bg-blue-50"
+          : "border-gray-200 bg-white hover:bg-gray-50"
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-gray-900">
+            {formatTime(scene.start_ms)} – {formatTime(scene.end_ms)}
+          </span>
+          <span className="text-[10px] text-gray-500">{durationSec}초</span>
+        </div>
+        {detectionCount > 0 && (
+          <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700">
+            {detectionCount}
+          </span>
+        )}
+      </div>
+      {transcript && (
+        <p className="mt-1.5 line-clamp-2 text-xs text-gray-600">{transcript}</p>
+      )}
+      {scene.speaker_transcript && (
+        <p className="mt-1 line-clamp-1 text-[10px] text-gray-400">
+          {scene.speaker_transcript.split("\n")[0]}
+        </p>
+      )}
+    </button>
   );
 }
 
@@ -712,6 +795,7 @@ export function BlurDetailPage({ videoId }: BlurDetailPageProps) {
 
   const { data: job, loading: jobLoading, error: jobError } = useBlurJob(latestJobId);
   const { manifest } = useBlurManifest(job?.manifest_url ?? null);
+  const { scenes } = useBlurScenes(videoId);
 
   const [playheadMs, setPlayheadMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -834,12 +918,35 @@ export function BlurDetailPage({ videoId }: BlurDetailPageProps) {
               </div>
             )}
           </div>
-          <div className="flex-1 overflow-y-auto p-4">
-            {job.detections_summary && (
-              <BlurCategoryStats summary={job.detections_summary} />
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            {scenes.length > 0 ? (
+              scenes.map((scene) => {
+                const detCount = manifest
+                  ? manifest.detections.filter(
+                      (d) => d.t_ms >= scene.start_ms && d.t_ms < scene.end_ms,
+                    ).length
+                  : 0;
+                const isSceneActive =
+                  playheadMs >= scene.start_ms && playheadMs < scene.end_ms;
+                return (
+                  <BlurSceneCard
+                    key={scene.scene_id}
+                    scene={scene}
+                    detectionCount={detCount}
+                    isActive={isSceneActive}
+                    onClick={() => handleSeek(scene.start_ms)}
+                  />
+                );
+              })
+            ) : (
+              <>
+                {job.detections_summary && (
+                  <BlurCategoryStats summary={job.detections_summary} />
+                )}
+              </>
             )}
             {availableCategories.length > 0 && (
-              <div className="mt-4">
+              <div className="mt-2 border-t border-gray-200 pt-3">
                 <BlurExportPanel jobId={job.id} availableCategories={availableCategories} />
               </div>
             )}

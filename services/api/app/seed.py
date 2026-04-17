@@ -480,10 +480,10 @@ async def seed_blur_jobs(
     target = video_files[0]
     job_id = uuid4()
 
-    detections_summary = {"face": 12, "license_plate": 3}
+    detections_summary = {"face": 40, "license_plate": 15, "logo": 20, "card_object": 5}
     options = {
         "do_faces": True,
-        "categories": ["face", "license_plate"],
+        "categories": ["face", "license_plate", "logo", "card_object"],
     }
     options_hash = hashlib.sha256(json.dumps(options, sort_keys=True).encode()).hexdigest()
 
@@ -504,6 +504,8 @@ async def seed_blur_jobs(
         mask_s3_keys={
             "face": f"blurred/{target.video_id}/{job_id}/masks/face.mkv",
             "license_plate": f"blurred/{target.video_id}/{job_id}/masks/license_plate.mkv",
+            "logo": f"blurred/{target.video_id}/{job_id}/masks/logo.mkv",
+            "card_object": f"blurred/{target.video_id}/{job_id}/masks/card_object.mkv",
         },
         detections_summary=detections_summary,
         progress_pct=100,
@@ -552,13 +554,15 @@ async def _upload_blur_manifest(org_id, video_id: str, job_id: str) -> None:
             "fps": 30.0,
             "width": 1920,
             "height": 1080,
-            "frame_count": 9000,
+            "frame_count": 117000,
         },
-        "summary": {"face": 12, "license_plate": 3},
-        "detections": _generate_mock_detections(9000, 30.0),
+        "summary": {"face": 40, "license_plate": 15, "logo": 20, "card_object": 5},
+        "detections": _generate_mock_detections(117000, 30.0),
         "mask_s3_keys": {
             "face": f"blurred/{video_id}/{job_id}/masks/face.mkv",
             "license_plate": f"blurred/{video_id}/{job_id}/masks/license_plate.mkv",
+            "logo": f"blurred/{video_id}/{job_id}/masks/logo.mkv",
+            "card_object": f"blurred/{video_id}/{job_id}/masks/card_object.mkv",
         },
     }
 
@@ -573,42 +577,53 @@ async def _upload_blur_manifest(org_id, video_id: str, job_id: str) -> None:
 
 
 def _generate_mock_detections(frame_count: int, fps: float) -> list[dict]:
-    detections = []
+    """Generate temporally clustered detections across 4 categories.
+
+    Produces ~80 detections in ~15 clusters spread across the video,
+    simulating real detection runs where objects appear across consecutive
+    frames within a time window.
+    """
     rng = random.Random(42)
+    detections: list[dict] = []
 
-    for i in range(12):
-        frame_idx = rng.randint(0, frame_count - 1)
-        detections.append({
-            "frame_idx": frame_idx,
-            "t_ms": int(frame_idx / fps * 1000),
-            "category": "face",
-            "label": "person",
-            "confidence": round(rng.uniform(0.85, 0.99), 3),
-            "bbox_norm": [
-                round(rng.uniform(0.1, 0.7), 3),
-                round(rng.uniform(0.1, 0.5), 3),
-                round(rng.uniform(0.05, 0.2), 3),
-                round(rng.uniform(0.1, 0.3), 3),
-            ],
-            "from_cache": False,
-        })
+    categories = [
+        ("face", "person", 40, 0.85, 0.99),
+        ("license_plate", "license plate", 15, 0.70, 0.95),
+        ("logo", "brand logo", 20, 0.75, 0.97),
+        ("card_object", "credit card", 5, 0.80, 0.96),
+    ]
 
-    for i in range(3):
-        frame_idx = rng.randint(0, frame_count - 1)
-        detections.append({
-            "frame_idx": frame_idx,
-            "t_ms": int(frame_idx / fps * 1000),
-            "category": "license_plate",
-            "label": "license plate",
-            "confidence": round(rng.uniform(0.7, 0.95), 3),
-            "bbox_norm": [
-                round(rng.uniform(0.2, 0.6), 3),
-                round(rng.uniform(0.4, 0.8), 3),
-                round(rng.uniform(0.08, 0.15), 3),
-                round(rng.uniform(0.03, 0.08), 3),
-            ],
-            "from_cache": False,
-        })
+    for category, label, count, conf_lo, conf_hi in categories:
+        num_clusters = max(2, count // 5)
+        remaining = count
+
+        for cluster_idx in range(num_clusters):
+            cluster_size = min(remaining, rng.randint(3, 8))
+            if cluster_idx == num_clusters - 1:
+                cluster_size = remaining
+            remaining -= cluster_size
+
+            cluster_start = rng.randint(0, max(1, frame_count - int(fps * 5)))
+            for j in range(cluster_size):
+                frame_idx = cluster_start + int(j * fps / 2)
+                frame_idx = min(frame_idx, frame_count - 1)
+                detections.append({
+                    "frame_idx": frame_idx,
+                    "t_ms": int(frame_idx / fps * 1000),
+                    "category": category,
+                    "label": label,
+                    "confidence": round(rng.uniform(conf_lo, conf_hi), 3),
+                    "bbox_norm": [
+                        round(rng.uniform(0.1, 0.7), 3),
+                        round(rng.uniform(0.1, 0.6), 3),
+                        round(rng.uniform(0.05, 0.2), 3),
+                        round(rng.uniform(0.05, 0.25), 3),
+                    ],
+                    "from_cache": j > 0,
+                })
+
+            if remaining <= 0:
+                break
 
     detections.sort(key=lambda d: d["frame_idx"])
     return detections
