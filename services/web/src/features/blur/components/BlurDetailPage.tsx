@@ -712,12 +712,44 @@ export function BlurDetailPage({ videoId }: BlurDetailPageProps) {
   const { data: job, loading: jobLoading, error: jobError } = useBlurJob(latestJobId);
   const { manifest } = useBlurManifest(job?.manifest_url ?? null);
 
-  // Redirect back to the video if the feature is disabled on this env.
+  const [playheadMs, setPlayheadMs] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const handleSeek = useCallback((ms: number) => {
+    setPlayheadMs(ms);
+    if (videoRef.current) {
+      videoRef.current.currentTime = ms / 1000;
+    }
+  }, []);
+
+  const handleTogglePlay = useCallback(() => {
+    if (!videoRef.current) return;
+    if (isPlaying) {
+      videoRef.current.pause();
+    } else {
+      videoRef.current.play();
+    }
+    setIsPlaying((v) => !v);
+  }, [isPlaying]);
+
   useEffect(() => {
     if (disabled) {
       router.replace(`/videos/${videoId}`);
     }
   }, [disabled, router, videoId]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isPlaying) return;
+    let raf: number;
+    const tick = () => {
+      setPlayheadMs(video.currentTime * 1000);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying]);
 
   if (listLoading || jobLoading) {
     return (
@@ -752,39 +784,6 @@ export function BlurDetailPage({ videoId }: BlurDetailPageProps) {
   const isActive = job.status === "queued" || job.status === "running";
   const isDone = job.status === "done";
   const availableCategories = job.mask_s3_keys ? Object.keys(job.mask_s3_keys) : [];
-
-  const [playheadMs, setPlayheadMs] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
-
-  const handleSeek = useCallback((ms: number) => {
-    setPlayheadMs(ms);
-    if (videoRef.current) {
-      videoRef.current.currentTime = ms / 1000;
-    }
-  }, []);
-
-  const handleTogglePlay = useCallback(() => {
-    if (!videoRef.current) return;
-    if (isPlaying) {
-      videoRef.current.pause();
-    } else {
-      videoRef.current.play();
-    }
-    setIsPlaying((v) => !v);
-  }, [isPlaying]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !isPlaying) return;
-    let raf: number;
-    const tick = () => {
-      setPlayheadMs(video.currentTime * 1000);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [isPlaying]);
 
   if (!isDone) {
     return (
