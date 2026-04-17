@@ -303,11 +303,12 @@ function BlurCategoryFilter({
             onClick={() => onSelect(isActive ? null : cat)}
             className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
               isActive
-                ? "border-gray-900 bg-gray-900 text-white"
+                ? "text-white border-transparent"
                 : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
             }`}
+            style={isActive ? { backgroundColor: config.color } : undefined}
           >
-            <span className={`inline-block h-2 w-2 rounded-full ${config.bgClass}`} />
+            {!isActive && <span className={`inline-block h-2 w-2 rounded-full ${config.bgClass}`} />}
             {config.label}
             {summary[cat] != null && (
               <span className="text-[10px] opacity-70">{summary[cat]}</span>
@@ -384,8 +385,8 @@ function BlurDetectionTrack({
   onSeek: (ms: number) => void;
 }) {
   const totalWidth = msToPixels(totalDurationMs + 2000, zoom);
-  const laneHeight = 24;
-  const laneGap = 2;
+  const laneHeight = 80;
+  const laneGap = 4;
 
   const lanes = useMemo(() => {
     const byCategory: Record<string, BlurManifestDetection[]> = {};
@@ -403,15 +404,15 @@ function BlurDetectionTrack({
         const config = getCategoryConfig(category);
         const y = laneIdx * (laneHeight + laneGap);
         return (
-          <div key={category} className="absolute left-0 w-full" style={{ top: y, height: laneHeight }}>
-            <div className="h-full w-full rounded-sm bg-gray-100" style={{ width: totalWidth }} />
+          <div key={category} className="absolute left-0" style={{ top: y, height: laneHeight, width: totalWidth }}>
+            <div className="h-full w-full bg-gray-50" style={{ width: totalWidth }} />
             {dets.map((d, i) => {
               const left = msToPixels(d.t_ms, zoom);
-              const blockWidth = Math.max(4, msToPixels(1000 / 30, zoom));
+              const blockWidth = Math.max(6, msToPixels(2000, zoom));
               return (
                 <div
                   key={`${category}-${i}`}
-                  className="absolute top-0 cursor-pointer rounded-sm opacity-80 hover:opacity-100"
+                  className="absolute top-0 cursor-pointer rounded-sm opacity-85 hover:opacity-100 transition-opacity"
                   style={{
                     left,
                     width: blockWidth,
@@ -482,7 +483,7 @@ function BlurTimelineSection({
     if (next) onSeek(next.t_ms);
   }, [sortedDetections, playheadMs, onSeek]);
 
-  const trackHeight = Math.max(24, categories.length * 26);
+  const trackHeight = Math.max(80, categories.length * 84);
 
   if (manifest.detections.length === 0) {
     return (
