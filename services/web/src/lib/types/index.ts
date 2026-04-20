@@ -3,6 +3,7 @@ export * from "./search";
 export * from "./auth";
 export * from "./videos";
 export * from "./shorts";
+export * from "./shorts-auto";
 export * from "./devices";
 export * from "./people";
 export * from "./agent-intents";
