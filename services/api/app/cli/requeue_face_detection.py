@@ -100,7 +100,7 @@ async def _run(
     org_id: str | None,
 ) -> int:
     # Lazy imports — keep `--help` cheap and DB-free.
-    from sqlalchemy import select
+    from sqlalchemy import or_, select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from app.config import get_settings
@@ -127,18 +127,22 @@ async def _run(
     engine = get_async_engine()
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    statuses: list[Any] = [None]
-    if include_failed:
-        statuses.append("failed")
-
     requeued = 0
     failures = 0
     skipped_no_keyframes = 0
 
+    # Postgres ``IN (NULL)`` does not match NULL rows — NULL is not equal
+    # to anything, including itself. Build the predicate with
+    # ``IS NULL`` explicitly, OR'd with the failed case when
+    # ``--include-failed`` is set.
+    status_predicates = [DriveFile.face_status.is_(None)]
+    if include_failed:
+        status_predicates.append(DriveFile.face_status == "failed")
+
     async with factory() as session:
         stmt = (
             select(DriveFile)
-            .where(DriveFile.face_status.in_(statuses))
+            .where(or_(*status_predicates))
             .order_by(DriveFile.created_at.asc())
         )
         if org_id:
