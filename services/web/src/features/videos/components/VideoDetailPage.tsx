@@ -20,6 +20,7 @@ import { useBlurJobsForFile } from "@/features/blur/hooks/useBlurJob";
 import { createBlurJob, type BlurCategory } from "@/lib/api/blur";
 import { SceneGroupCard } from "./SceneGroupCard";
 import { VideoPeoplePanel } from "./VideoPeoplePanel";
+import { AutoShortsCTA } from "@/features/shorts-auto";
 import { useOrgSettings } from "@/lib/orgSettings";
 import { useSceneGroups } from "@/features/videos/hooks/useSceneGroups";
 import { getDetailThumbnailClass, getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
@@ -916,24 +917,27 @@ function ScenesPanel({
               : `${displayTotal}개 장면`}
           </span>
         </div>
-        <button
-          type="button"
-          disabled={selectedIds.size === 0}
-          onClick={() => {
-            if (selectedIds.size > 0) {
-              router.push(`/export/shorts/create?videoId=${videoId}&sceneIds=${Array.from(selectedIds).join(",")}`);
-            }
-          }}
-          className={cn(
-            "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
-            selectedIds.size > 0
-              ? "bg-indigo-500 text-white hover:bg-indigo-600"
-              : "bg-gray-300 text-gray-500 cursor-not-allowed",
-          )}
-        >
-          <ScissorsIcon />
-          쇼츠 제작
-        </button>
+        <div className="flex items-center gap-2">
+          <AutoShortsCTA videoId={videoId} />
+          <button
+            type="button"
+            disabled={selectedIds.size === 0}
+            onClick={() => {
+              if (selectedIds.size > 0) {
+                router.push(`/export/shorts/create?videoId=${videoId}&sceneIds=${Array.from(selectedIds).join(",")}`);
+              }
+            }}
+            className={cn(
+              "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+              selectedIds.size > 0
+                ? "bg-indigo-500 text-white hover:bg-indigo-600"
+                : "bg-gray-300 text-gray-500 cursor-not-allowed",
+            )}
+          >
+            <ScissorsIcon />
+            쇼츠 제작
+          </button>
+        </div>
       </div>
 
       {groupingEnabled && sceneGroups.data && !activeSearch ? (
