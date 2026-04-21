@@ -573,7 +573,13 @@ export function SavedShortsPage() {
           <div className="mt-12 flex flex-col items-center justify-center py-16 text-gray-400">
             <VideoFileIcon />
             <p className="mt-3 text-sm">저장된 쇼츠 영상이 없습니다.</p>
-            <p className="mt-1 text-xs text-gray-400">영상 장면 분석에서 쇼츠를 제작하고 저장해 보세요.</p>
+            <p className="mt-1 text-xs text-gray-400">영상을 선택하고 자동으로 쇼츠를 만들어 보세요.</p>
+            <Link
+              href="/"
+              className="mt-5 inline-flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100"
+            >
+              영상 목록으로 이동
+            </Link>
           </div>
         )}
 

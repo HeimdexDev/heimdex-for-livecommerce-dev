@@ -23,7 +23,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, forwardRef } from "react";
 
 import {
   BlurCategory,
@@ -34,6 +34,9 @@ import {
 } from "@/lib/api/blur";
 import { useBlurExport, useBlurJob, useBlurJobsForFile } from "@/features/blur/hooks/useBlurJob";
 import { useAuth } from "@/lib/auth";
+import { getVideoScenes } from "@/lib/api/videos";
+import type { VideoScene, VideoScenesResponse } from "@/lib/types/videos";
+import { TimelineRuler, PlayheadCursor, msToPixels, pixelsToMs, formatTimelineTimestamp, DEFAULT_ZOOM, MIN_ZOOM, MAX_ZOOM } from "@/lib/timeline";
 
 // ---------- shared types sourced from the manifest JSON on S3 ----------
 
@@ -81,6 +84,20 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
   failed: "bg-red-100 text-red-800",
   cancelled: "bg-gray-100 text-gray-700",
 };
+
+const BLUR_CATEGORY_CONFIG: Record<string, { label: string; color: string; bgClass: string }> = {
+  face: { label: "얼굴", color: "#22C55E", bgClass: "bg-green-500" },
+  license_plate: { label: "번호판", color: "#22C55E", bgClass: "bg-green-500" },
+  card_object: { label: "신용카드", color: "#22C55E", bgClass: "bg-green-500" },
+  logo: { label: "브랜드", color: "#A855F7", bgClass: "bg-purple-500" },
+  object: { label: "기타", color: "#F97316", bgClass: "bg-orange-500" },
+};
+
+const FALLBACK_CATEGORY_CONFIG = { label: "기타", color: "#6B7280", bgClass: "bg-gray-500" };
+
+function getCategoryConfig(category: string) {
+  return BLUR_CATEGORY_CONFIG[category] ?? FALLBACK_CATEGORY_CONFIG;
+}
 
 function formatTime(ms: number): string {
   const totalSec = Math.max(0, Math.floor(ms / 1000));
@@ -171,61 +188,57 @@ function BlurHeader({
 // BlurPlayer — swaps video src between original and blurred
 // ============================================================================
 
-function BlurPlayer({
-  job,
-}: {
-  job: BlurJobResponse;
-}) {
-  // Default to blurred-on when a done job exists. Persist the user's
-  // last choice in localStorage so re-opening the page stays sticky.
-  const storageKey = `heimdex_blur_view_${job.id}`;
-  const [blurOn, setBlurOn] = useState<boolean>(() => {
-    if (typeof window === "undefined") return true;
-    const stored = window.localStorage.getItem(storageKey);
-    return stored == null ? true : stored === "1";
-  });
+const BlurPlayer = forwardRef<HTMLVideoElement, { job: BlurJobResponse }>(
+  function BlurPlayer({ job }, ref) {
+    const storageKey = `heimdex_blur_view_${job.id}`;
+    const [blurOn, setBlurOn] = useState<boolean>(() => {
+      if (typeof window === "undefined") return true;
+      const stored = window.localStorage.getItem(storageKey);
+      return stored == null ? true : stored === "1";
+    });
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(storageKey, blurOn ? "1" : "0");
-  }, [blurOn, storageKey]);
+    useEffect(() => {
+      if (typeof window === "undefined") return;
+      window.localStorage.setItem(storageKey, blurOn ? "1" : "0");
+    }, [blurOn, storageKey]);
 
-  const src = blurOn ? job.blurred_playback_url : null;
-  const hasBlurred = Boolean(job.blurred_playback_url);
+    const src = blurOn ? job.blurred_playback_url : null;
+    const hasBlurred = Boolean(job.blurred_playback_url);
 
-  return (
-    <div className="rounded-xl border border-gray-200 bg-black">
-      {src ? (
-        <video
-          key={src}
-          src={src}
-          controls
-          playsInline
-          className="h-auto w-full rounded-t-xl"
-        />
-      ) : (
-        <div className="flex aspect-video items-center justify-center rounded-t-xl bg-gray-900 text-gray-400">
-          {hasBlurred
-            ? "블러 OFF 상태에서 원본 재생은 영상 상세 페이지에서 확인해주세요."
-            : "블러 결과를 불러올 수 없습니다."}
+    return (
+      <div className="rounded-xl border border-gray-200 bg-black">
+        {src ? (
+          <video
+            ref={ref}
+            key={src}
+            src={src}
+            playsInline
+            className="h-auto w-full rounded-t-xl"
+          />
+        ) : (
+          <div className="flex aspect-video items-center justify-center rounded-t-xl bg-gray-900 text-gray-400">
+            {hasBlurred
+              ? "블러 OFF 상태에서 원본 재생은 영상 상세 페이지에서 확인해주세요."
+              : "블러 결과를 불러올 수 없습니다."}
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-3 rounded-b-xl bg-white p-3">
+          <div className="text-sm text-gray-700">
+            {blurOn ? "블러 적용 중" : "블러 해제됨"}
+          </div>
+          <button
+            type="button"
+            onClick={() => setBlurOn((v) => !v)}
+            disabled={!hasBlurred}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {blurOn ? "블러 끄기" : "블러 켜기"}
+          </button>
         </div>
-      )}
-      <div className="flex items-center justify-between gap-3 rounded-b-xl bg-white p-3">
-        <div className="text-sm text-gray-700">
-          {blurOn ? "블러 적용 중" : "블러 해제됨"}
-        </div>
-        <button
-          type="button"
-          onClick={() => setBlurOn((v) => !v)}
-          disabled={!hasBlurred}
-          className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-        >
-          {blurOn ? "블러 끄기" : "블러 켜기"}
-        </button>
       </div>
-    </div>
-  );
-}
+    );
+  },
+);
 
 // ============================================================================
 // BlurProgressPanel
@@ -255,26 +268,307 @@ function BlurProgressPanel({ job }: { job: BlurJobResponse }) {
 }
 
 // ============================================================================
-// BlurTimeline — SVG lanes, one per category
+// useBlurScenes — fetch scene list for the video
 // ============================================================================
 
-function BlurTimeline({ manifest }: { manifest: BlurManifest }) {
-  // Group detections by category in source order.
-  const { lanes, totalMs } = useMemo(() => {
+function useBlurScenes(videoId: string) {
+  const { getAccessToken } = useAuth();
+  const [scenes, setScenes] = useState<VideoScene[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getVideoScenes(videoId, 100, 0, getAccessToken)
+      .then((res) => {
+        if (!cancelled) setScenes(res.scenes);
+      })
+      .catch(() => {
+        if (!cancelled) setScenes([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [videoId, getAccessToken]);
+
+  return { scenes, loading };
+}
+
+// ============================================================================
+// BlurSceneCard — single scene card in sidebar
+// ============================================================================
+
+function BlurSceneCard({
+  scene,
+  detectionCount,
+  isActive,
+  onClick,
+}: {
+  scene: VideoScene;
+  detectionCount: number;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const durationSec = Math.max(1, Math.round((scene.end_ms - scene.start_ms) / 1000));
+  const transcript = scene.transcript_raw?.slice(0, 80) || scene.scene_caption?.slice(0, 80) || "";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`w-full rounded-lg border p-3 text-left transition-colors ${
+        isActive
+          ? "border-blue-400 bg-blue-50"
+          : "border-gray-200 bg-white hover:bg-gray-50"
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-gray-900">
+            {formatTime(scene.start_ms)} – {formatTime(scene.end_ms)}
+          </span>
+          <span className="text-[10px] text-gray-500">{durationSec}초</span>
+        </div>
+        {detectionCount > 0 && (
+          <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-red-700">
+            {detectionCount}
+          </span>
+        )}
+      </div>
+      {transcript && (
+        <p className="mt-1.5 line-clamp-2 text-xs text-gray-600">{transcript}</p>
+      )}
+      {scene.speaker_transcript && (
+        <p className="mt-1 line-clamp-1 text-[10px] text-gray-400">
+          {scene.speaker_transcript.split("\n")[0]}
+        </p>
+      )}
+    </button>
+  );
+}
+
+// ============================================================================
+// BlurCategoryFilter — pill buttons to filter timeline by category
+// ============================================================================
+
+function BlurCategoryFilter({
+  categories,
+  summary,
+  selected,
+  onSelect,
+}: {
+  categories: string[];
+  summary: Record<string, number>;
+  selected: string | null;
+  onSelect: (category: string | null) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={() => onSelect(null)}
+        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+          selected === null
+            ? "border-gray-900 bg-gray-900 text-white"
+            : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+        }`}
+      >
+        전체
+      </button>
+      {categories.map((cat) => {
+        const config = getCategoryConfig(cat);
+        const isActive = selected === cat;
+        return (
+          <button
+            key={cat}
+            type="button"
+            onClick={() => onSelect(isActive ? null : cat)}
+            className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+              isActive
+                ? "text-white border-transparent"
+                : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+            }`}
+            style={isActive ? { backgroundColor: config.color } : undefined}
+          >
+            {!isActive && <span className={`inline-block h-2 w-2 rounded-full ${config.bgClass}`} />}
+            {config.label}
+            {summary[cat] != null && (
+              <span className="text-[10px] opacity-70">{summary[cat]}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================================
+// BlurTransportControls — play/pause, skip, timecode
+// ============================================================================
+
+function BlurTransportControls({
+  playheadMs,
+  totalDurationMs,
+  isPlaying,
+  onTogglePlay,
+  onSkipPrev,
+  onSkipNext,
+}: {
+  playheadMs: number;
+  totalDurationMs: number;
+  isPlaying: boolean;
+  onTogglePlay: () => void;
+  onSkipPrev: () => void;
+  onSkipNext: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <button type="button" onClick={onSkipPrev} className="rounded p-1 text-gray-600 hover:bg-gray-100">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="19 20 9 12 19 4 19 20" /><line x1="5" y1="19" x2="5" y2="5" />
+        </svg>
+      </button>
+      <button type="button" onClick={onTogglePlay} className="rounded p-1 text-gray-600 hover:bg-gray-100">
+        {isPlaying ? (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" />
+          </svg>
+        ) : (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+        )}
+      </button>
+      <button type="button" onClick={onSkipNext} className="rounded p-1 text-gray-600 hover:bg-gray-100">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="5 4 15 12 5 20 5 4" /><line x1="19" y1="5" x2="19" y2="19" />
+        </svg>
+      </button>
+      <span className="ml-2 font-mono text-xs text-gray-600">
+        {formatTimelineTimestamp(playheadMs)} / {formatTimelineTimestamp(totalDurationMs)}
+      </span>
+    </div>
+  );
+}
+
+// ============================================================================
+// BlurDetectionTrack — color-coded detection blocks on a horizontal track
+// ============================================================================
+
+function BlurDetectionTrack({
+  detections,
+  totalDurationMs,
+  zoom,
+  onSeek,
+}: {
+  detections: BlurManifestDetection[];
+  totalDurationMs: number;
+  zoom: number;
+  onSeek: (ms: number) => void;
+}) {
+  const totalWidth = msToPixels(totalDurationMs + 2000, zoom);
+  const laneHeight = 80;
+  const laneGap = 4;
+
+  const lanes = useMemo(() => {
     const byCategory: Record<string, BlurManifestDetection[]> = {};
-    for (const d of manifest.detections) {
+    for (const d of detections) {
       (byCategory[d.category] ||= []).push(d);
     }
-    const durationMs = manifest.video.frame_count > 0
-      ? Math.round((manifest.video.frame_count * 1000) / manifest.video.fps)
-      : 0;
-    return {
-      lanes: Object.entries(byCategory),
-      totalMs: durationMs || 1,
-    };
+    return Object.entries(byCategory);
+  }, [detections]);
+
+  const trackHeight = Math.max(laneHeight, lanes.length * (laneHeight + laneGap));
+
+  return (
+    <div className="relative" style={{ width: totalWidth, height: trackHeight }}>
+      {lanes.map(([category, dets], laneIdx) => {
+        const config = getCategoryConfig(category);
+        const y = laneIdx * (laneHeight + laneGap);
+        return (
+          <div key={category} className="absolute left-0" style={{ top: y, height: laneHeight, width: totalWidth }}>
+            <div className="h-full w-full bg-gray-50" style={{ width: totalWidth }} />
+            {dets.map((d, i) => {
+              const left = msToPixels(d.t_ms, zoom);
+              const blockWidth = Math.max(6, msToPixels(2000, zoom));
+              return (
+                <div
+                  key={`${category}-${i}`}
+                  className="absolute top-0 cursor-pointer rounded-sm opacity-85 hover:opacity-100 transition-opacity"
+                  style={{
+                    left,
+                    width: blockWidth,
+                    height: laneHeight,
+                    backgroundColor: config.color,
+                  }}
+                  onClick={() => onSeek(d.t_ms)}
+                  title={`${config.label} · ${formatTime(d.t_ms)} · ${(d.confidence * 100).toFixed(0)}%`}
+                />
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================================
+// BlurTimelineSection — full NLE timeline with ruler, tracks, playhead
+// ============================================================================
+
+function BlurTimelineSection({
+  manifest,
+  playheadMs,
+  isPlaying,
+  onSeek,
+  onTogglePlay,
+}: {
+  manifest: BlurManifest;
+  playheadMs: number;
+  isPlaying: boolean;
+  onSeek: (ms: number) => void;
+  onTogglePlay: () => void;
+}) {
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const totalDurationMs = useMemo(() => {
+    if (manifest.video.frame_count <= 0) return 1;
+    return Math.round((manifest.video.frame_count * 1000) / manifest.video.fps);
   }, [manifest]);
 
-  if (lanes.length === 0) {
+  const categories = useMemo(() => {
+    const cats = new Set<string>();
+    for (const d of manifest.detections) cats.add(d.category);
+    return Array.from(cats);
+  }, [manifest]);
+
+  const filteredDetections = useMemo(() => {
+    if (!selectedCategory) return manifest.detections;
+    return manifest.detections.filter((d) => d.category === selectedCategory);
+  }, [manifest, selectedCategory]);
+
+  const sortedDetections = useMemo(
+    () => [...manifest.detections].sort((a, b) => a.t_ms - b.t_ms),
+    [manifest],
+  );
+
+  const skipPrev = useCallback(() => {
+    const prev = sortedDetections.filter((d) => d.t_ms < playheadMs - 500);
+    if (prev.length > 0) onSeek(prev[prev.length - 1].t_ms);
+  }, [sortedDetections, playheadMs, onSeek]);
+
+  const skipNext = useCallback(() => {
+    const next = sortedDetections.find((d) => d.t_ms > playheadMs + 500);
+    if (next) onSeek(next.t_ms);
+  }, [sortedDetections, playheadMs, onSeek]);
+
+  const trackHeight = Math.max(80, categories.length * 84);
+
+  if (manifest.detections.length === 0) {
     return (
       <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-500">
         검출된 영역이 없습니다.
@@ -282,48 +576,66 @@ function BlurTimeline({ manifest }: { manifest: BlurManifest }) {
     );
   }
 
-  const width = 800;
-  const laneHeight = 32;
-  const laneGap = 8;
-  const height = lanes.length * (laneHeight + laneGap);
-
   return (
-    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white p-4">
-      <h3 className="mb-3 text-sm font-semibold text-gray-900">검출 타임라인</h3>
-      <svg viewBox={`0 0 ${width} ${height}`} className="w-full min-w-[600px]">
-        {lanes.map(([category, detections], laneIdx) => {
-          const y = laneIdx * (laneHeight + laneGap);
-          const label = CATEGORY_LABELS[category] ?? category;
-          return (
-            <g key={category}>
-              <rect x={0} y={y} width={width} height={laneHeight} rx={4} fill="#F3F4F6" />
-              <text x={8} y={y + laneHeight / 2 + 4} fontSize={11} fill="#374151">
-                {label} ({detections.length})
-              </text>
-              {detections.map((d, i) => {
-                const cx = 90 + ((d.t_ms / totalMs) * (width - 100));
-                return (
-                  <rect
-                    key={`${category}-${i}`}
-                    x={cx - 1}
-                    y={y + 4}
-                    width={2}
-                    height={laneHeight - 8}
-                    fill="#2563EB"
-                  >
-                    <title>
-                      {label} · {formatTime(d.t_ms)} · {(d.confidence * 100).toFixed(0)}%
-                    </title>
-                  </rect>
-                );
-              })}
-            </g>
-          );
-        })}
-      </svg>
-      <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
-        <span>0:00</span>
-        <span>{formatTime(totalMs)}</span>
+    <div className="rounded-xl border border-gray-200 bg-white">
+      <div className="flex items-center justify-between border-b border-gray-200 px-4 py-2">
+        <BlurCategoryFilter
+          categories={categories}
+          summary={manifest.summary}
+          selected={selectedCategory}
+          onSelect={setSelectedCategory}
+        />
+        <div className="flex items-center gap-4">
+          <BlurTransportControls
+            playheadMs={playheadMs}
+            totalDurationMs={totalDurationMs}
+            isPlaying={isPlaying}
+            onTogglePlay={onTogglePlay}
+            onSkipPrev={skipPrev}
+            onSkipNext={skipNext}
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z - 25))}
+              className="rounded p-1 text-gray-500 hover:bg-gray-100"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="5" y1="12" x2="19" y2="12" /></svg>
+            </button>
+            <input
+              type="range"
+              min={MIN_ZOOM}
+              max={MAX_ZOOM}
+              value={zoom}
+              onChange={(e) => setZoom(Number(e.target.value))}
+              className="h-1 w-20 accent-gray-600"
+            />
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z + 25))}
+              className="rounded p-1 text-gray-500 hover:bg-gray-100"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div ref={scrollRef} className="overflow-x-auto">
+        <div className="relative">
+          <TimelineRuler totalDurationMs={totalDurationMs} zoom={zoom} />
+          <BlurDetectionTrack
+            detections={filteredDetections}
+            totalDurationMs={totalDurationMs}
+            zoom={zoom}
+            onSeek={onSeek}
+          />
+          <PlayheadCursor
+            playheadMs={playheadMs}
+            zoom={zoom}
+            height={24 + trackHeight}
+            onSeek={onSeek}
+          />
+        </div>
       </div>
     </div>
   );
@@ -483,13 +795,46 @@ export function BlurDetailPage({ videoId }: BlurDetailPageProps) {
 
   const { data: job, loading: jobLoading, error: jobError } = useBlurJob(latestJobId);
   const { manifest } = useBlurManifest(job?.manifest_url ?? null);
+  const { scenes } = useBlurScenes(videoId);
 
-  // Redirect back to the video if the feature is disabled on this env.
+  const [playheadMs, setPlayheadMs] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const handleSeek = useCallback((ms: number) => {
+    setPlayheadMs(ms);
+    if (videoRef.current) {
+      videoRef.current.currentTime = ms / 1000;
+    }
+  }, []);
+
+  const handleTogglePlay = useCallback(() => {
+    if (!videoRef.current) return;
+    if (isPlaying) {
+      videoRef.current.pause();
+    } else {
+      videoRef.current.play();
+    }
+    setIsPlaying((v) => !v);
+  }, [isPlaying]);
+
   useEffect(() => {
     if (disabled) {
       router.replace(`/videos/${videoId}`);
     }
   }, [disabled, router, videoId]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isPlaying) return;
+    let raf: number;
+    const tick = () => {
+      setPlayheadMs(video.currentTime * 1000);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying]);
 
   if (listLoading || jobLoading) {
     return (
@@ -525,29 +870,106 @@ export function BlurDetailPage({ videoId }: BlurDetailPageProps) {
   const isDone = job.status === "done";
   const availableCategories = job.mask_s3_keys ? Object.keys(job.mask_s3_keys) : [];
 
+  if (!isDone) {
+    return (
+      <div className="mx-auto max-w-5xl space-y-4 p-6">
+        <BlurHeader videoId={videoId} job={job} />
+        {isActive && <BlurProgressPanel job={job} />}
+        {job.status === "failed" && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            블러 작업이 실패했습니다: {job.error ?? "알 수 없는 오류"}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <div className="mx-auto max-w-5xl space-y-4 p-6">
-      <BlurHeader videoId={videoId} job={job} />
+    <div className="flex h-[calc(100vh-80px)] flex-col">
+      <div className="px-6 pt-4 pb-2">
+        <BlurHeader videoId={videoId} job={job} />
+      </div>
 
-      {isActive && <BlurProgressPanel job={job} />}
-
-      {isDone && <BlurPlayer job={job} />}
-
-      {isDone && job.detections_summary && (
-        <BlurCategoryStats summary={job.detections_summary} />
-      )}
-
-      {isDone && manifest && <BlurTimeline manifest={manifest} />}
-
-      {isDone && availableCategories.length > 0 && (
-        <BlurExportPanel jobId={job.id} availableCategories={availableCategories} />
-      )}
-
-      {job.status === "failed" && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-          블러 작업이 실패했습니다: {job.error ?? "알 수 없는 오류"}
+      <div className="flex min-h-0 flex-1 lg:grid lg:grid-cols-[1fr_344px]">
+        {/* Left: Video player */}
+        <div className="flex flex-col gap-2 px-6 pb-2">
+          <BlurPlayer job={job} ref={videoRef} />
         </div>
-      )}
+
+        {/* Right: Scene sidebar */}
+        <div className="flex flex-col border-l border-gray-200 bg-gray-50">
+          <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-gray-900">블러 장면</h2>
+              {job.detections_summary && (
+                <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-medium text-gray-700">
+                  {Object.values(job.detections_summary).reduce((a, b) => a + b, 0)}
+                </span>
+              )}
+            </div>
+            {availableCategories.length > 0 && (
+              <div className="flex gap-1.5">
+                <button className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-[11px] text-gray-600 hover:bg-gray-50">
+                  오류 신고
+                </button>
+                <button className="rounded-md border border-gray-300 bg-white px-2.5 py-1 text-[11px] text-gray-600 hover:bg-gray-50">
+                  Premiere Export
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            {scenes.length > 0 ? (
+              scenes.map((scene) => {
+                const detCount = manifest
+                  ? manifest.detections.filter(
+                      (d) => d.t_ms >= scene.start_ms && d.t_ms < scene.end_ms,
+                    ).length
+                  : 0;
+                const isSceneActive =
+                  playheadMs >= scene.start_ms && playheadMs < scene.end_ms;
+                return (
+                  <BlurSceneCard
+                    key={scene.scene_id}
+                    scene={scene}
+                    detectionCount={detCount}
+                    isActive={isSceneActive}
+                    onClick={() => handleSeek(scene.start_ms)}
+                  />
+                );
+              })
+            ) : (
+              <>
+                {job.detections_summary && (
+                  <BlurCategoryStats summary={job.detections_summary} />
+                )}
+              </>
+            )}
+            {availableCategories.length > 0 && (
+              <div className="mt-2 border-t border-gray-200 pt-3">
+                <BlurExportPanel jobId={job.id} availableCategories={availableCategories} />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom: Timeline */}
+      <div className="shrink-0 border-t border-gray-200 px-6 py-2">
+        {manifest ? (
+          <BlurTimelineSection
+            manifest={manifest}
+            playheadMs={playheadMs}
+            isPlaying={isPlaying}
+            onSeek={handleSeek}
+            onTogglePlay={handleTogglePlay}
+          />
+        ) : (
+          <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-500">
+            타임라인을 불러오는 중...
+          </div>
+        )}
+      </div>
     </div>
   );
 }

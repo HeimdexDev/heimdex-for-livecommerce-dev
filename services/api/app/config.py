@@ -270,6 +270,14 @@ class Settings(BaseSettings):
     export_expiry_days: int = 3
     shorts_render_expiry_days: int = 3
 
+    # --- Auto-shorts (mode-aware AI clip selection over the existing
+    # shorts render pipeline). All flags off by default — the router 404s
+    # while ``auto_shorts_enabled`` is False so an in-progress rollout
+    # can't leak through. Caption flags are deferred to phase 4.
+    auto_shorts_enabled: bool = False
+    auto_shorts_rate_limit_per_hour: int = 10
+    auto_shorts_min_video_duration_sec: int = 300
+
     # --- CORS ---
     cors_allow_origin_regex: str = (
         r"^https?://"

@@ -182,6 +182,12 @@ services:
       - BLUR_EXPORT_ENABLED=${BLUR_EXPORT_ENABLED:-false}
       - BLUR_MAX_ACTIVE_PER_ORG=${BLUR_MAX_ACTIVE_PER_ORG:-5}
       - BLUR_LEASE_SECONDS=${BLUR_LEASE_SECONDS:-1800}
+      # Auto-shorts (mode-aware AI clip selection over the existing
+      # shorts render pipeline). Router 404s while AUTO_SHORTS_ENABLED
+      # is false so the feature ships dark.
+      - AUTO_SHORTS_ENABLED=${AUTO_SHORTS_ENABLED:-false}
+      - AUTO_SHORTS_RATE_LIMIT_PER_HOUR=${AUTO_SHORTS_RATE_LIMIT_PER_HOUR:-10}
+      - AUTO_SHORTS_MIN_VIDEO_DURATION_SEC=${AUTO_SHORTS_MIN_VIDEO_DURATION_SEC:-300}
       - BLUR_DAILY_BUDGET_USD_PER_ORG=${BLUR_DAILY_BUDGET_USD_PER_ORG:-50.0}
       # Aircloud GPU worker orchestration
       - AIRCLOUD_ENABLED=${AIRCLOUD_ENABLED:-false}
