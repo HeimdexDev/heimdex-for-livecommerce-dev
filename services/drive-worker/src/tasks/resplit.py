@@ -3,11 +3,13 @@
 import json
 import logging
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
 import requests
 
+from heimdex_worker_sdk import emit_event
 from heimdex_media_pipelines.scenes.assembler import assemble_scenes
 from heimdex_media_pipelines.scenes.keyframe import extract_all_keyframes
 from heimdex_media_pipelines.scenes.splitter import split_scenes
@@ -29,6 +31,7 @@ from heimdex_worker_sdk.youtube_keys import (
 )
 
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-worker"
 
 INGEST_BATCH_SIZE = 200
 
@@ -39,6 +42,7 @@ def handle_resplit(
     settings: Any,
 ) -> None:
     _ = api_client
+    t_start = time.monotonic()
     job_id = str(message.get("job_id", ""))
     org_id = str(message.get("org_id", ""))
     video_id = str(message.get("video_id", ""))
@@ -49,9 +53,38 @@ def handle_resplit(
     scene_params = message.get("scene_params") or {}
 
     if not all([job_id, org_id, video_id, source_type, proxy_s3_key, library_id]):
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="drive_failed",
+            category="job_failure",
+            level="ERROR",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message="resplit_missing_required_fields",
+            metadata={
+                "video_id": video_id,
+                "mode": "resplit",
+                "stage": "validation",
+                "error_class": "MissingRequiredFields",
+            },
+        )
         raise RuntimeError(f"resplit_missing_required_fields: {json.dumps(message, default=str)[:1000]}")
 
     if source_type not in {"gdrive", "youtube"}:
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="drive_failed",
+            category="job_failure",
+            level="ERROR",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=f"unsupported_resplit_source_type:{source_type}",
+            metadata={
+                "video_id": video_id,
+                "mode": "resplit",
+                "stage": "validation",
+                "error_class": "UnsupportedSourceType",
+                "source_type": source_type,
+            },
+        )
         raise RuntimeError(f"unsupported_resplit_source_type: {source_type}")
 
     temp_dir = Path(settings.drive_temp_dir) / org_id / f"resplit_{job_id}"
@@ -185,6 +218,20 @@ def handle_resplit(
                 "keyframe_s3_prefix": eff_keyframe_prefix,
             },
         )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="drive_completed",
+            category="job_success",
+            level="INFO",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "video_id": video_id,
+                "mode": "resplit",
+                "source_type": source_type,
+                "deleted_scene_count": deleted_count,
+                "indexed_scene_count": indexed_count,
+            },
+        )
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         logger.exception(
@@ -202,6 +249,21 @@ def handle_resplit(
             job_id=job_id,
             status="failed",
             error=error_msg[:500],
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="drive_failed",
+            category="job_failure",
+            level="ERROR",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=error_msg[:1000],
+            metadata={
+                "video_id": video_id,
+                "mode": "resplit",
+                "source_type": source_type,
+                "error_class": type(e).__name__,
+                "error_msg": str(e)[:500],
+            },
         )
         raise
     finally:

@@ -7,7 +7,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-ocr-worker"
 
 
 def _safe_update_job_status(api_client: Any, video_id: str, file_id: Any, **kwargs: Any) -> None:
@@ -63,6 +66,8 @@ def _process_single_ocr(
     video_id = claimed_file.video_id
     temp_dir = Path(tempfile.mkdtemp(prefix=f"ocr_{video_id}_"))
 
+    t_start = time.monotonic()
+
     try:
         s3 = S3Client(bucket=settings.drive_s3_bucket)
         manifest_key = scene_manifest_s3_key(org_id_str, video_id)
@@ -75,6 +80,22 @@ def _process_single_ocr(
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="ocr", status="failed", error=error_msg, lease_token=lease_token,
             )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="ocr_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message=error_msg[:1000],
+                metadata={
+                    "video_id": video_id,
+                    "stage": "manifest_download",
+                    "error_class": type(e).__name__,
+                    "error_msg": str(e)[:500],
+                },
+            )
             return
 
         manifest = json.loads(manifest_path.read_text())
@@ -83,6 +104,21 @@ def _process_single_ocr(
 
         if scene_count == 0:
             _safe_update_job_status(api_client, video_id, file_id, job_type="ocr", status="done", lease_token=lease_token)
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="ocr_skipped",
+                category="job_failure",
+                level="WARNING",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="no_scenes_in_manifest",
+                metadata={
+                    "video_id": video_id,
+                    "reason": "no_scenes",
+                    "error_class": "NoScenes",
+                },
+            )
             return
 
         max_frames = min(settings.drive_ocr_max_frames_per_video, scene_count)
@@ -111,6 +147,23 @@ def _process_single_ocr(
         if not downloaded_keyframes:
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="ocr", status="failed", error="no_keyframes_downloaded", lease_token=lease_token,
+            )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="ocr_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="no_keyframes_downloaded",
+                metadata={
+                    "video_id": video_id,
+                    "stage": "keyframe_download",
+                    "error_class": "NoKeyframesDownloaded",
+                    "scene_count": scene_count,
+                    "selected_count": len(selected_indices),
+                },
             )
             return
 
@@ -153,6 +206,22 @@ def _process_single_ocr(
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="ocr", status="failed", error=error_msg, lease_token=lease_token,
             )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="ocr_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message=error_msg[:1000],
+                metadata={
+                    "video_id": video_id,
+                    "stage": "reingest",
+                    "error_class": type(e).__name__,
+                    "error_msg": str(e)[:500],
+                },
+            )
             return
 
         _safe_update_job_status(api_client, video_id, file_id, job_type="ocr", status="done", lease_token=lease_token)
@@ -171,6 +240,23 @@ def _process_single_ocr(
             },
         )
 
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="ocr_completed",
+            category="job_success",
+            level="INFO",
+            org_id=org_id,
+            job_id=file_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "video_id": video_id,
+                "scene_count": scene_count,
+                "frames_processed": len(downloaded_keyframes),
+                "frames_with_text": frames_with_text,
+                "total_ocr_chars": total_ocr_chars,
+            },
+        )
+
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         _safe_update_job_status(
@@ -179,6 +265,21 @@ def _process_single_ocr(
         logger.exception(
             "ocr_processing_failed",
             extra={"org_id": org_id_str, "video_id": video_id},
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="ocr_failed",
+            category="job_failure",
+            level="ERROR",
+            org_id=org_id,
+            job_id=file_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=error_msg[:1000],
+            metadata={
+                "video_id": video_id,
+                "error_class": type(e).__name__,
+                "error_msg": str(e)[:500],
+            },
         )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

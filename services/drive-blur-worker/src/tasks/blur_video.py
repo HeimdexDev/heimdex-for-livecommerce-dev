@@ -21,6 +21,7 @@ import json
 import logging
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,10 @@ from uuid import UUID
 
 import requests
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-blur-worker"
 
 
 @dataclass
@@ -146,6 +150,8 @@ def process_blur_message(
     job_id = claim_ref.job_id
     temp_dir = Path(tempfile.mkdtemp(prefix=f"blur_{job_id}_"))
 
+    t_start = time.monotonic()
+
     try:
         # 1. Claim the job.
         resp = _post(
@@ -157,9 +163,45 @@ def process_blur_message(
                 "blur_claim_skipped",
                 extra={"job_id": str(job_id), "body": resp.text[:200]},
             )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="blur_skipped",
+                category="job_failure",
+                level="WARNING",
+                org_id=claim_ref.org_id,
+                job_id=job_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="claim_conflict_409",
+                metadata={
+                    "video_id": claim_ref.video_id,
+                    "mode": "blur_job",
+                    "stage": "claim",
+                    "reason": "claim_conflict",
+                    "error_class": "ClaimConflict",
+                    "http_status": 409,
+                },
+            )
             return
         if resp.status_code == 404:
             logger.warning("blur_claim_not_found", extra={"job_id": str(job_id)})
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="blur_skipped",
+                category="job_failure",
+                level="WARNING",
+                org_id=claim_ref.org_id,
+                job_id=job_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="claim_not_found_404",
+                metadata={
+                    "video_id": claim_ref.video_id,
+                    "mode": "blur_job",
+                    "stage": "claim",
+                    "reason": "not_found",
+                    "error_class": "JobNotFound",
+                    "http_status": 404,
+                },
+            )
             return
         resp.raise_for_status()
         claim = resp.json()
@@ -273,6 +315,23 @@ def process_blur_message(
                 "summary": result.summary(),
             },
         )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="blur_completed",
+            category="job_success",
+            level="INFO",
+            org_id=claim_ref.org_id,
+            job_id=job_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "video_id": claim_ref.video_id,
+                "mode": "blur_job",
+                "frames": result.frame_count,
+                "total_ms": int(result.total_ms),
+                "owl_infer_ms": int(result.owl_infer_ms),
+                "cancelled_mid_run": body_json.get("reason") == "cancelled",
+            },
+        )
 
     except Exception as exc:
         # Best-effort failure report. If the complete call itself fails
@@ -282,6 +341,22 @@ def process_blur_message(
         logger.exception(
             "blur_job_failed",
             extra={"job_id": str(job_id), "error": f"{type(exc).__name__}: {exc}"},
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="blur_failed",
+            category="job_failure",
+            level="ERROR",
+            org_id=claim_ref.org_id,
+            job_id=job_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=f"{type(exc).__name__}: {exc}"[:1000],
+            metadata={
+                "video_id": claim_ref.video_id,
+                "mode": "blur_job",
+                "error_class": type(exc).__name__,
+                "error_msg": str(exc)[:500],
+            },
         )
         try:
             if "lease_token" in locals():

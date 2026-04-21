@@ -6,7 +6,10 @@ import sys
 import threading
 from typing import Optional
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-face-worker"
 
 # Shared concurrency semaphore - acquired by SQS consumer for backpressure control.
 _semaphore: Optional[threading.Semaphore] = None
@@ -118,6 +121,12 @@ def main() -> None:
 
         def shutdown(*_: object) -> None:
             logger.info("shutdown_signal_received")
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="worker_stopping",
+                category="worker_lifecycle",
+                level="INFO",
+            )
             sqs_consumer.stop(timeout=30.0)
             stop_event.set()
 
@@ -128,6 +137,18 @@ def main() -> None:
             "face_worker_started",
             concurrency=getattr(settings, "drive_face_concurrency", 1),
             sqs_consumer_enabled=settings.sqs_consumer_enabled,
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="worker_started",
+            category="worker_lifecycle",
+            level="INFO",
+            metadata={
+                "concurrency": getattr(settings, "drive_face_concurrency", 1),
+                "model": "buffalo_l",
+                "providers": providers,
+                "sqs_consumer_enabled": settings.sqs_consumer_enabled,
+            },
         )
         await stop_event.wait()
 

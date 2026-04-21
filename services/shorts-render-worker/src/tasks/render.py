@@ -10,11 +10,15 @@ import logging
 import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
+
+from heimdex_worker_sdk import emit_event
 
 from src.message_adapter import RenderJobMessage
 
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "shorts-render-worker"
 
 _DEFAULT_FONT_DIR = "/fonts"
 
@@ -136,6 +140,8 @@ def process_render_job(*, api_client, settings, render_job: RenderJobMessage) ->
 
     work_dir = tempfile.mkdtemp(prefix=f"shorts_render_{job_id}_")
 
+    t_start = time.monotonic()
+
     try:
         # 1. Report rendering status
         _report_status(api_client, org_id, job_id, status="rendering")
@@ -222,6 +228,23 @@ def process_render_job(*, api_client, settings, render_job: RenderJobMessage) ->
                 "render_time_ms": result.render_time_ms,
             },
         )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="render_completed",
+            category="job_success",
+            level="INFO",
+            org_id=org_id,
+            job_id=job_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "s3_key": s3_key,
+                "output_duration_ms": result.duration_ms,
+                "output_size_bytes": result.size_bytes,
+                "render_time_ms": result.render_time_ms,
+                "clip_count": len(spec.scene_clips),
+                "subtitle_count": len(spec.subtitles),
+            },
+        )
 
     except Exception as exc:
         logger.error(
@@ -239,6 +262,20 @@ def process_render_job(*, api_client, settings, render_job: RenderJobMessage) ->
             )
         except Exception:
             logger.exception("render_status_update_failed", extra={"job_id": job_id})
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="render_failed",
+            category="job_failure",
+            level="ERROR",
+            org_id=org_id,
+            job_id=job_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=f"{type(exc).__name__}: {exc}"[:1000],
+            metadata={
+                "error_class": type(exc).__name__,
+                "error_msg": str(exc)[:500],
+            },
+        )
 
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)

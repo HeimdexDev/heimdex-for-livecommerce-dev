@@ -8,7 +8,10 @@ import wave
 from pathlib import Path
 from typing import Any
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-stt-worker"
 
 
 def _safe_update_job_status(api_client: Any, video_id: str, file_id: Any, **kwargs: Any) -> None:
@@ -55,6 +58,8 @@ def _process_single_stt(
     video_id = claimed_file.video_id
     temp_dir = Path(tempfile.mkdtemp(prefix=f"stt_{video_id}_"))
 
+    t_start = time.monotonic()
+
     try:
         s3 = S3Client(bucket=settings.drive_s3_bucket)
 
@@ -65,6 +70,23 @@ def _process_single_stt(
             error_msg = f"audio_download_failed: {type(e).__name__}: {e}"
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
+            )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="stt_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message=error_msg[:1000],
+                metadata={
+                    "video_id": video_id,
+                    "callback_mode": callback_mode,
+                    "stage": "audio_download",
+                    "error_class": type(e).__name__,
+                    "error_msg": str(e)[:500],
+                },
             )
             return
 
@@ -86,6 +108,24 @@ def _process_single_stt(
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
             )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="stt_skipped",
+                category="job_failure",
+                level="WARNING",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message=error_msg[:1000],
+                metadata={
+                    "video_id": video_id,
+                    "callback_mode": callback_mode,
+                    "reason": "audio_too_long",
+                    "error_class": "AudioTooLong",
+                    "audio_seconds": round(audio_duration, 1),
+                    "max_seconds": settings.drive_stt_max_audio_seconds,
+                },
+            )
             return
 
         # scene_split mode: no manifest needed — scenes are created later
@@ -101,6 +141,23 @@ def _process_single_stt(
                 _safe_update_job_status(
                     api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
                 )
+                emit_event(
+                    service=_SERVICE_NAME,
+                    event_name="stt_failed",
+                    category="job_failure",
+                    level="ERROR",
+                    org_id=org_id,
+                    job_id=file_id,
+                    duration_ms=int((time.monotonic() - t_start) * 1000),
+                    message=error_msg[:1000],
+                    metadata={
+                        "video_id": video_id,
+                        "callback_mode": callback_mode,
+                        "stage": "manifest_download",
+                        "error_class": type(e).__name__,
+                        "error_msg": str(e)[:500],
+                    },
+                )
                 return
 
             manifest = json.loads(manifest_path.read_text())
@@ -108,6 +165,22 @@ def _process_single_stt(
 
             if not scenes:
                 _safe_update_job_status(api_client, video_id, file_id, job_type="stt", status="done", lease_token=lease_token)
+                emit_event(
+                    service=_SERVICE_NAME,
+                    event_name="stt_skipped",
+                    category="job_failure",
+                    level="WARNING",
+                    org_id=org_id,
+                    job_id=file_id,
+                    duration_ms=int((time.monotonic() - t_start) * 1000),
+                    message="no_scenes_in_manifest",
+                    metadata={
+                        "video_id": video_id,
+                        "callback_mode": callback_mode,
+                        "reason": "no_scenes",
+                        "error_class": "NoScenes",
+                    },
+                )
                 return
 
         stt_started = time.monotonic()
@@ -173,6 +246,23 @@ def _process_single_stt(
                 _safe_update_job_status(
                     api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
                 )
+                emit_event(
+                    service=_SERVICE_NAME,
+                    event_name="stt_failed",
+                    category="job_failure",
+                    level="ERROR",
+                    org_id=org_id,
+                    job_id=file_id,
+                    duration_ms=int((time.monotonic() - t_start) * 1000),
+                    message=error_msg[:1000],
+                    metadata={
+                        "video_id": video_id,
+                        "callback_mode": callback_mode,
+                        "stage": "reingest",
+                        "error_class": type(e).__name__,
+                        "error_msg": str(e)[:500],
+                    },
+                )
                 return
 
             _safe_update_job_status(api_client, video_id, file_id, job_type="stt", status="done", lease_token=lease_token)
@@ -202,6 +292,23 @@ def _process_single_stt(
                 },
             )
 
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="stt_completed",
+            category="job_success",
+            level="INFO",
+            org_id=org_id,
+            job_id=file_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "video_id": video_id,
+                "callback_mode": callback_mode,
+                "audio_seconds": round(audio_duration, 1),
+                "model": settings.drive_stt_model,
+                "backend": settings.drive_stt_backend,
+            },
+        )
+
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         if callback_mode == "scene_split":
@@ -211,6 +318,22 @@ def _process_single_stt(
                 "stt_scene_split_failed_fallback",
                 extra={"org_id": org_id_str, "video_id": video_id, "error": error_msg},
             )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="stt_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message=error_msg[:1000],
+                metadata={
+                    "video_id": video_id,
+                    "callback_mode": callback_mode,
+                    "error_class": type(e).__name__,
+                    "error_msg": str(e)[:500],
+                },
+            )
         else:
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="stt", status="failed", error=error_msg, lease_token=lease_token,
@@ -218,6 +341,22 @@ def _process_single_stt(
             logger.exception(
                 "stt_processing_failed",
                 extra={"org_id": org_id_str, "video_id": video_id},
+            )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="stt_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message=error_msg[:1000],
+                metadata={
+                    "video_id": video_id,
+                    "callback_mode": callback_mode,
+                    "error_class": type(e).__name__,
+                    "error_msg": str(e)[:500],
+                },
             )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

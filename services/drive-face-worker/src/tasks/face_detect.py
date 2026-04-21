@@ -2,13 +2,17 @@ import importlib
 import logging
 import shutil
 import tempfile
+import time
 from pathlib import Path
 import uuid
 from typing import Any
 
 import requests
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-face-worker"
 cv2 = importlib.import_module("cv2")
 np = importlib.import_module("numpy")
 
@@ -54,6 +58,8 @@ def _process_single_face_detect(
     keyframe_s3_prefix = claimed_file.keyframe_s3_prefix
     temp_dir = Path(tempfile.mkdtemp(prefix=f"face_{video_id}_"))
 
+    t_start = time.monotonic()
+
     try:
         if not keyframe_s3_prefix:
             api_client.update_job_status(
@@ -62,6 +68,21 @@ def _process_single_face_detect(
                 status="failed",
                 error="missing_keyframe_s3_prefix",
                 lease_token=lease_token,
+            )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="face_skipped",
+                category="job_failure",
+                level="WARNING",
+                org_id=claimed_file.org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="missing_keyframe_s3_prefix",
+                metadata={
+                    "video_id": video_id,
+                    "reason": "missing_keyframe_s3_prefix",
+                    "error_class": "MissingPrecondition",
+                },
             )
             return
 
@@ -82,6 +103,22 @@ def _process_single_face_detect(
                 error="no_keyframes_downloaded",
                 lease_token=lease_token,
             )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="face_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=claimed_file.org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="no_keyframes_downloaded",
+                metadata={
+                    "video_id": video_id,
+                    "stage": "keyframe_download",
+                    "error_class": "NoKeyframesDownloaded",
+                    "keyframe_s3_prefix": keyframe_s3_prefix,
+                },
+            )
             return
 
         if face_analyzer is None:
@@ -100,6 +137,22 @@ def _process_single_face_detect(
                 job_type="face",
                 status="done",
                 lease_token=lease_token,
+            )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="face_skipped",
+                category="job_failure",
+                level="WARNING",
+                org_id=claimed_file.org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="no_faces_detected",
+                metadata={
+                    "video_id": video_id,
+                    "reason": "no_faces_detected",
+                    "error_class": "NoFacesDetected",
+                    "keyframe_count": len(downloaded),
+                },
             )
             return
 
@@ -174,6 +227,22 @@ def _process_single_face_detect(
                 "scene_count": len(scene_cluster_map),
             },
         )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="face_completed",
+            category="job_success",
+            level="INFO",
+            org_id=claimed_file.org_id,
+            job_id=file_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "video_id": video_id,
+                "keyframe_count": len(downloaded),
+                "face_count": len(detections),
+                "cluster_count": len(clusters),
+                "scene_count": len(scene_cluster_map),
+            },
+        )
     except Exception as e:
         api_client.update_job_status(
             file_id,
@@ -185,6 +254,21 @@ def _process_single_face_detect(
         logger.exception(
             "face_processing_failed",
             extra={"org_id": org_id, "video_id": video_id},
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="face_failed",
+            category="job_failure",
+            level="ERROR",
+            org_id=claimed_file.org_id,
+            job_id=file_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=f"{type(e).__name__}: {e}"[:1000],
+            metadata={
+                "video_id": video_id,
+                "error_class": type(e).__name__,
+                "error_msg": str(e)[:500],
+            },
         )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

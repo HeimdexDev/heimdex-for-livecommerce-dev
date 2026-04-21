@@ -14,7 +14,10 @@ from typing import Optional
 os.environ.setdefault("TORCH_HOME", "/models/huggingface")
 os.environ.setdefault("HF_HOME", "/models/huggingface")
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-stt-worker"
 
 # Shared concurrency semaphore — acquired by SQS consumer for backpressure control.
 _semaphore: Optional[threading.Semaphore] = None
@@ -142,6 +145,12 @@ def main() -> None:
 
         def shutdown(*_: object) -> None:
             logger.info("shutdown_signal_received")
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="worker_stopping",
+                category="worker_lifecycle",
+                level="INFO",
+            )
             sqs_consumer.stop(timeout=30.0)
             stop_event.set()
 
@@ -156,6 +165,19 @@ def main() -> None:
                 "language": settings.drive_stt_language,
                 "backend": settings.drive_stt_backend,
                 "max_audio_seconds": settings.drive_stt_max_audio_seconds,
+                "sqs_consumer_enabled": settings.sqs_consumer_enabled,
+            },
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="worker_started",
+            category="worker_lifecycle",
+            level="INFO",
+            metadata={
+                "concurrency": settings.drive_stt_concurrency,
+                "model": settings.drive_stt_model,
+                "language": settings.drive_stt_language,
+                "backend": settings.drive_stt_backend,
                 "sqs_consumer_enabled": settings.sqs_consumer_enabled,
             },
         )
