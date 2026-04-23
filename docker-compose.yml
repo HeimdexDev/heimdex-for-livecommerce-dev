@@ -188,6 +188,19 @@ services:
       - AUTO_SHORTS_ENABLED=${AUTO_SHORTS_ENABLED:-false}
       - AUTO_SHORTS_RATE_LIMIT_PER_HOUR=${AUTO_SHORTS_RATE_LIMIT_PER_HOUR:-10}
       - AUTO_SHORTS_MIN_VIDEO_DURATION_SEC=${AUTO_SHORTS_MIN_VIDEO_DURATION_SEC:-300}
+      # Auto-shorts LLM scorer (Option C from
+      # .claude/plans/shorts-auto-llm-selection.md). All flags default-off;
+      # staging flips AUTO_SHORTS_LLM_ENABLED=true + rollout_pct=100 via .env.
+      # Service falls back to the pure scorer on any LLM defect, so the
+      # flag flip is safe even before the Aircloud OpenAI quota is sized.
+      - AUTO_SHORTS_LLM_ENABLED=${AUTO_SHORTS_LLM_ENABLED:-false}
+      - AUTO_SHORTS_LLM_MODEL=${AUTO_SHORTS_LLM_MODEL:-gpt-4o-mini}
+      - AUTO_SHORTS_LLM_MAX_SCENES=${AUTO_SHORTS_LLM_MAX_SCENES:-50}
+      - AUTO_SHORTS_LLM_DAILY_BUDGET_USD=${AUTO_SHORTS_LLM_DAILY_BUDGET_USD:-25.0}
+      - AUTO_SHORTS_LLM_ESTIMATED_COST_PER_CALL_USD=${AUTO_SHORTS_LLM_ESTIMATED_COST_PER_CALL_USD:-0.003}
+      - AUTO_SHORTS_LLM_TIMEOUT_SEC=${AUTO_SHORTS_LLM_TIMEOUT_SEC:-8.0}
+      - AUTO_SHORTS_LLM_ROLLOUT_PCT=${AUTO_SHORTS_LLM_ROLLOUT_PCT:-0}
+      - AUTO_SHORTS_LLM_PROMPT_VERSION=${AUTO_SHORTS_LLM_PROMPT_VERSION:-2026-04-24-v1}
       - BLUR_DAILY_BUDGET_USD_PER_ORG=${BLUR_DAILY_BUDGET_USD_PER_ORG:-50.0}
       # Aircloud GPU worker orchestration
       - AIRCLOUD_ENABLED=${AIRCLOUD_ENABLED:-false}
