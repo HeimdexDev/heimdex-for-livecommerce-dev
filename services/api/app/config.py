@@ -278,6 +278,22 @@ class Settings(BaseSettings):
     auto_shorts_rate_limit_per_hour: int = 10
     auto_shorts_min_video_duration_sec: int = 300
 
+    # --- Auto-shorts LLM scene picker (Option C from
+    # .claude/plans/shorts-auto-llm-selection.md). LLM replaces the
+    # pure-function scorer when ``auto_shorts_llm_enabled`` is true AND
+    # the request hashes into the rollout bucket. On any LLM error
+    # (timeout, budget, 4xx, JSON/schema failure, hallucinated scene_id)
+    # the service silently falls back to the pure scorer — the user-
+    # facing endpoint must never 5xx.
+    auto_shorts_llm_enabled: bool = False
+    auto_shorts_llm_model: str = "gpt-4o-mini"
+    auto_shorts_llm_max_scenes: int = 50  # matches video_summary cap
+    auto_shorts_llm_daily_budget_usd: float = 25.0
+    auto_shorts_llm_estimated_cost_per_call_usd: float = 0.003
+    auto_shorts_llm_timeout_sec: float = 8.0
+    auto_shorts_llm_rollout_pct: int = 0  # 0-100, hashed on (org_id, video_id)
+    auto_shorts_llm_prompt_version: str = "2026-04-24-v1"
+
     # --- CORS ---
     cors_allow_origin_regex: str = (
         r"^https?://"

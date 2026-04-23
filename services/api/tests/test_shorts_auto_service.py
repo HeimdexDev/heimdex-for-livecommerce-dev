@@ -26,6 +26,12 @@ from app.modules.shorts_auto.schemas import (
     AutoSelectRequest,
     ScoringModeRequest,
 )
+from app.modules.shorts_auto.scorers import (
+    PureSceneScorer,
+    ScorerFallbackSignal,
+    SceneScorer,
+    ScoringContext,
+)
 from app.modules.shorts_auto.service import ShortsAutoService
 from heimdex_media_contracts.scenes.schemas import SceneDocument
 
@@ -75,6 +81,7 @@ def _make_service(
         selector=selector,
         drive_file_repo=drive_file_repo,
         shorts_render_service=shorts_render_service,
+        scorer=PureSceneScorer(),
     )
     return svc, selector, drive_file_repo, shorts_render_service
 
@@ -395,3 +402,61 @@ class TestAutoRender:
         assert total_timeline <= 5 * 60 * 1000, (
             f"composition exceeds 5-min cap: {total_timeline}ms"
         )
+
+
+class _FailingScorer(SceneScorer):
+    """Always raises ScorerFallbackSignal. Used to test service fallback."""
+    name = "llm"
+
+    async def score(self, scenes, context: ScoringContext):
+        raise ScorerFallbackSignal("simulated_llm_defect")
+
+
+def _make_service_with_scorer(scorer, *, drive_file=None, selector_scenes=None):
+    selector = MagicMock()
+    selector.fetch_candidates = AsyncMock(return_value=selector_scenes or [])
+    drive_file_repo = MagicMock()
+    drive_file_repo.get_by_video_id = AsyncMock(return_value=drive_file)
+    shorts_render_service = MagicMock()
+    shorts_render_service.create_render_job = AsyncMock(return_value=None)
+    return ShortsAutoService(
+        selector=selector,
+        drive_file_repo=drive_file_repo,
+        shorts_render_service=shorts_render_service,
+        scorer=scorer,
+    )
+
+
+@pytest.mark.asyncio
+class TestScorerFallback:
+    async def test_failing_primary_scorer_falls_back_to_pure(self):
+        """Service must never 5xx on a scorer defect. LLM failure →
+        pure scorer runs transparently and ``scorer`` field flips to 'pure'.
+        """
+        scenes = [
+            SceneDocument(
+                scene_id=f"vid_scene_{i:03d}",
+                video_id="vid",
+                index=i,
+                start_ms=i * 35_000,
+                end_ms=(i + 1) * 35_000,
+                keyframe_timestamp_ms=i * 35_000 + 15_000,
+                keyword_tags=["cta"],
+                transcript_char_count=150,
+            )
+            for i in range(6)
+        ]
+        svc = _make_service_with_scorer(
+            _FailingScorer(),
+            drive_file=_drive_file(),
+            selector_scenes=scenes,
+        )
+        resp = await svc.auto_select(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoSelectRequest(video_id="vid", mode=ScoringModeRequest.BOTH),
+        )
+        assert resp.scorer == "pure"
+        # Fallback must still produce clips — the service contract says
+        # "never fail the user-facing endpoint on a scorer defect".
+        assert len(resp.clips) > 0

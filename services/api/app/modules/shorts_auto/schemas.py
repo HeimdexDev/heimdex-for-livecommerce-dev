@@ -79,6 +79,10 @@ class AutoSelectResponse(BaseModel):
     clips: list[AutoClipResponse] = Field(default_factory=list)
     total_duration_ms: int = Field(default=0, ge=0)
     skipped_reason: str | None = None
+    # Which scorer actually produced ``clips``. "pure" is the deterministic
+    # fallback; "llm" is the OpenAI picker. Frontend surfaces this as a
+    # small chip so users know when AI picked their clips.
+    scorer: Literal["pure", "llm"] = "pure"
 
 
 class AutoRenderRequest(AutoSelectRequest):

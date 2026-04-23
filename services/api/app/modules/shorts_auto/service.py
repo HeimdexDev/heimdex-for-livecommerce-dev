@@ -30,6 +30,13 @@ from app.modules.shorts_auto.schemas import (
     ClipMemberResponse,
     ScoringModeRequest,
 )
+from app.modules.shorts_auto.scorers import (
+    PureSceneScorer,
+    SceneScorer,
+    ScorerBudgetExceededError,
+    ScorerFallbackSignal,
+    ScoringContext,
+)
 from app.modules.shorts_auto.selector import AutoShortsSelector
 from app.modules.shorts_render.schemas import RenderJobCreate, RenderJobResponse
 from app.modules.shorts_render.service import ShortsRenderService
@@ -41,13 +48,9 @@ from heimdex_media_contracts.composition import (
 )
 from heimdex_media_contracts.shorts.concatenator import (
     AutoClip,
-    ScoredScene,
     build_clips,
 )
-from heimdex_media_contracts.shorts.scorer import (
-    ScoringMode,
-    score_scene_for_mode,
-)
+from heimdex_media_contracts.shorts.scorer import ScoringMode
 
 logger = get_logger(__name__)
 
@@ -94,10 +97,12 @@ class ShortsAutoService:
         selector: AutoShortsSelector,
         drive_file_repo: DriveFileRepository,
         shorts_render_service: ShortsRenderService,
+        scorer: SceneScorer,
     ) -> None:
         self.selector = selector
         self.drive_file_repo = drive_file_repo
         self.shorts_render_service = shorts_render_service
+        self.scorer = scorer
 
     async def auto_select(
         self,
@@ -144,15 +149,33 @@ class ShortsAutoService:
         if not scenes:
             return _empty_response(req, "no_candidate_scenes_after_filter")
 
-        # Score (pure function, contracts-side).
-        scored: list[ScoredScene] = []
-        for scene in scenes:
-            bd = score_scene_for_mode(
-                scene,
-                contract_mode,
-                person_cluster_id=req.person_cluster_id,
+        # Score via injected scorer (pure or LLM). On LLM failure we
+        # transparently retry with the pure scorer so the endpoint never
+        # 5xxs on an LLM defect. The ``scorer_used`` string flows into
+        # the response so the UI can show "AI selected" vs fallback.
+        scoring_context = ScoringContext(
+            mode=contract_mode,
+            person_cluster_id=req.person_cluster_id,
+            target_duration_sec=req.target_duration_sec,
+            video_id=req.video_id,
+            video_title=getattr(drive_file, "file_name", None),
+        )
+        scorer_used = self.scorer.name
+        try:
+            scored = await self.scorer.score(scenes, scoring_context)
+        except (ScorerFallbackSignal, ScorerBudgetExceededError) as e:
+            logger.warning(
+                "auto_shorts_scorer_fallback",
+                org_id=str(org_id),
+                user_id=str(user_id),
+                video_id=req.video_id,
+                primary_scorer=self.scorer.name,
+                reason=type(e).__name__,
+                detail=str(e)[:200],
             )
-            scored.append(ScoredScene(scene=scene, breakdown=bd))
+            fallback = PureSceneScorer()
+            scored = await fallback.score(scenes, scoring_context)
+            scorer_used = fallback.name
 
         eligible_count = sum(1 for s in scored if s.breakdown.eligible)
         if eligible_count == 0:
@@ -180,6 +203,8 @@ class ShortsAutoService:
             video_id=req.video_id,
             mode=req.mode.value,
             person_cluster_id=req.person_cluster_id,
+            scorer=scorer_used,
+            primary_scorer=self.scorer.name,
             candidates=len(scenes),
             eligible=eligible_count,
             clips_returned=len(clips),
@@ -193,6 +218,7 @@ class ShortsAutoService:
             clips=clip_responses,
             total_duration_ms=total_duration_ms,
             skipped_reason=None,
+            scorer=scorer_used,  # type: ignore[arg-type]
         )
 
     async def auto_render(
