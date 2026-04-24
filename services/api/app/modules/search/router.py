@@ -201,6 +201,7 @@ async def search_scenes(
         color_family=request.color_family,
         page_size=request.page_size,
         max_per_video=request.max_per_video,
+        offset=request.offset,
     )
 
     elapsed_ms = int((time.monotonic() - t0) * 1000)
