@@ -324,25 +324,19 @@ class ShortsAutoService:
             prefer_continuous=req.prefer_continuous,
         )
         selection = await self.auto_select(org_id, user_id, select_req)
-        # LLM path produces exactly one curated clip regardless of
-        # ``count`` — a 60s short is one clip. Enforce ``count`` only on
-        # the pure-scorer path where ``build_clips`` genuinely packs
-        # multiple independent clips.
-        if selection.scorer == "llm":
-            if not selection.clips:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=(
-                        "LLM scorer produced no clips "
-                        f"({selection.skipped_reason or 'no_llm_picks'})"
-                    ),
-                )
-        elif len(selection.clips) < req.count:
+        # ``count`` is a hint, not a hard floor. The user-visible goal is
+        # a single rendered short; CompositionSpec packs whatever clips
+        # we have onto the timeline regardless of how many. We only 422
+        # when there's genuinely nothing to render. A stricter ratio
+        # check (e.g. < 50% of requested) is a candidate for later if
+        # render quality suffers from sparse selections.
+        if not selection.clips:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
-                    f"insufficient qualifying clips: requested {req.count}, "
-                    f"found {len(selection.clips)} ({selection.skipped_reason or 'low corpus'})"
+                    "no qualifying clips "
+                    f"({selection.skipped_reason or 'low corpus'}) "
+                    f"[scorer={selection.scorer}]"
                 ),
             )
 

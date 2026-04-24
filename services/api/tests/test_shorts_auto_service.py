@@ -243,16 +243,15 @@ class TestAutoRender:
         assert exc.value.status_code == 422
         assert "auto_caption" in exc.value.detail
 
-    async def test_insufficient_clips_returns_422(self):
-        scenes = [
-            _scene(
-                "vid_scene_000",
-                start_ms=0,
-                end_ms=35_000,
-                keyword_tags=["cta"],
-            )
-        ]
-        svc, *_ = _make_service(drive_file=_drive_file(), selector_scenes=scenes)
+    async def test_empty_selection_returns_422(self):
+        """auto_render rejects when the selection has zero clips.
+        ``count`` is now a hint, not a hard floor — under-count
+        no longer 422s (matches user goal of "one 60s short").
+        """
+        svc, *_ = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=[],  # empty → zero clips
+        )
         with pytest.raises(HTTPException) as exc:
             await svc.auto_render(
                 org_id=uuid4(),
@@ -264,7 +263,43 @@ class TestAutoRender:
                 ),
             )
         assert exc.value.status_code == 422
-        assert "insufficient" in exc.value.detail
+        assert "no qualifying clips" in exc.value.detail
+
+    async def test_under_count_selection_still_renders(self):
+        """Pre-change this returned 422 (4 < 5). Now accepted — we
+        compose whatever clips we got. Prevents the classic LLM-
+        fallback-to-pure edge case where the pure scorer only
+        produced 4 clips but the user asked for 5.
+        """
+        scenes = [
+            _scene(
+                f"vid_scene_{i:03d}",
+                index=i,
+                start_ms=i * 35_000,
+                end_ms=(i + 1) * 35_000 - 5_000,
+                keyword_tags=["cta"],
+                product_tags=["product"],
+            )
+            for i in range(4)
+        ]
+        render_resp = _render_response()
+        svc, _, _, render_service = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=scenes,
+            render_response=render_resp,
+        )
+        result = await svc.auto_render(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoRenderRequest(
+                video_id="vid",
+                mode=ScoringModeRequest.BOTH,
+                count=5,  # asked for 5
+            ),
+        )
+        # No 422; render delegates normally with the 4 clips we have.
+        assert result is render_resp
+        render_service.create_render_job.assert_awaited_once()
 
     async def test_successful_render_delegates_to_shorts_render(self):
         scenes = [
