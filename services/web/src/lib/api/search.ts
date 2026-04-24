@@ -4,6 +4,24 @@ import { getApiBaseUrl } from "./utils";
 type TokenGetter = () => Promise<string | null>;
 
 /**
+ * Thrown when the backend returns 429 on a search request. Carries the
+ * ``Retry-After`` header value so the UI can render an accurate
+ * countdown. Callers should NOT blank the existing ``searchResponse``
+ * on this error — the previous page is still valid, just the latest
+ * fetch was throttled. Mirrors ``AutoShortsRateLimitError``.
+ */
+export class SearchRateLimitError extends Error {
+  readonly isRateLimit = true;
+  readonly retryAfterSeconds: number;
+  readonly status = 429;
+  constructor(message: string, retryAfterSeconds: number) {
+    super(message);
+    this.name = "SearchRateLimitError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/**
  * Make an authenticated API request.
  */
 async function apiRequest<T>(
@@ -36,6 +54,18 @@ async function apiRequest<T>(
       headers,
     });
 
+    if (response.status === 429) {
+      const retryHeader = response.headers.get("Retry-After");
+      const parsed = Number(retryHeader);
+      const retryAfter = Number.isFinite(parsed) && parsed > 0 ? parsed : 60;
+      const body = await response.json().catch(() => null);
+      throw new SearchRateLimitError(
+        (body && typeof body.detail === "string" && body.detail) ||
+          "Search rate limit exceeded. Try again in a moment.",
+        retryAfter,
+      );
+    }
+
     if (!response.ok) {
       const body = await response.json().catch(() => null);
       throw ApiError.fromResponse(response.status, body);
@@ -43,6 +73,9 @@ async function apiRequest<T>(
 
     return response.json();
   } catch (err) {
+    if (err instanceof SearchRateLimitError) {
+      throw err;
+    }
     if (err instanceof ApiError) {
       throw err;
     }
