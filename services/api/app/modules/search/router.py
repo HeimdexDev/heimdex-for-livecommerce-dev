@@ -88,6 +88,8 @@ def _build_metadata(request: SearchRequest) -> dict[str, Any]:
         meta["page_size_requested"] = request.page_size
     if request.max_per_video is not None:
         meta["max_per_video_requested"] = request.max_per_video
+    if request.offset:
+        meta["offset"] = request.offset
     settings = get_settings()
     if settings.reranker_enabled:
         meta["reranker_enabled"] = True
@@ -135,6 +137,7 @@ async def search(
             color_family=request.color_family,
             page_size=request.page_size,
             max_per_video=request.max_per_video,
+            offset=request.offset,
         )
     else:
         result = await search_service.search(

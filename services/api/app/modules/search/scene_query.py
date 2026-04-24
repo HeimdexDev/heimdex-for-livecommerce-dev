@@ -18,6 +18,7 @@ class SceneQueryMixin:
         filters: dict[str, Any],
         size: int = 200,
         collapse_by_video: bool = False,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """BM25 against video_title / source_path / filename_text.
 
@@ -27,6 +28,10 @@ class SceneQueryMixin:
         searches where a title-match otherwise returns every scene of
         a matching video, inflating the candidate pool and starving
         downstream diversification of unique videos.
+
+        ``offset`` maps to OpenSearch ``from`` for numbered pagination.
+        Paired with ``collapse_by_video`` it skips N distinct videos
+        before returning ``size`` more.
 
         Cardinality over ``video_id`` is attached to the hit list via
         a ``_heimdex_unique_videos`` sentinel on the first hit's source
@@ -168,6 +173,7 @@ class SceneQueryMixin:
         body: dict[str, Any] = {
             "query": search_query,
             "size": size,
+            "from": offset,
             "_source": True,
         }
 

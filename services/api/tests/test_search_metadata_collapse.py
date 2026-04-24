@@ -96,10 +96,11 @@ class TestMetadataCollapse:
         os_client.search_metadata.assert_called_once()
         call_kwargs = os_client.search_metadata.call_args.kwargs
         assert call_kwargs["collapse_by_video"] is True
-        # ``size`` must be large enough to cover page_size_max; a bug that
-        # shipped this as 20 or left it at the legacy 200 would re-
-        # introduce the cap when users bump page_size.
-        assert call_kwargs["size"] >= svc.settings.search_page_size_max
+        # With numbered pagination we issue one OS call per page —
+        # ``size`` equals ``page_size`` exactly (not over-fetched to
+        # ``page_size_max``). Offset defaults to 0 for page 1.
+        assert call_kwargs["size"] == svc.settings.search_page_size
+        assert call_kwargs.get("offset", 0) == 0
 
     async def test_returns_one_video_per_collapsed_hit(
         self, search_service, org_id

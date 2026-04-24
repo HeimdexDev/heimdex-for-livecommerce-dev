@@ -121,6 +121,7 @@ class SceneSearchService:
         color_family: str | None = None,
         page_size: int | None = None,
         max_per_video: int | None = None,
+        offset: int = 0,
     ) -> SceneSearchResponse | VideoSearchResponse:
         """Route to mode-specific search implementation.
 
@@ -132,6 +133,10 @@ class SceneSearchService:
         diversification (used by the moodboard surface to return more
         results). ``None`` falls back to server defaults. Clamped to
         ``search_page_size_max``.
+
+        ``offset`` is forwarded to metadata mode for numbered pagination.
+        Lexical/semantic modes log a warning and ignore non-zero values —
+        their diversification is stateful and can't be sliced cleanly.
         """
         effective_page_size = self._clamp_page_size(page_size)
         effective_max_per_video = max_per_video or self.settings.search_max_scenes_per_video
@@ -162,10 +167,23 @@ class SceneSearchService:
         if (color_hex or color_family) and effective_mode != "semantic":
             effective_mode = "semantic"
 
+        if offset > 0 and effective_mode != "metadata":
+            # Non-metadata modes diversify over a stateful candidate pool —
+            # offset-based slicing would skip entries that the diversifier
+            # hasn't produced yet. We log the condition so a misbehaving
+            # client is visible, then carry on with page 1 semantics.
+            logger.warning(
+                "search_offset_ignored_non_metadata",
+                org_id=str(org_id),
+                mode=effective_mode,
+                offset=offset,
+            )
+
         match effective_mode:
             case "metadata":
                 return await self._search_metadata(
                     ctx, alpha, effective_page_size, effective_max_per_video,
+                    offset=offset,
                 )
             case "semantic":
                 return await self._search_semantic(
@@ -198,6 +216,7 @@ class SceneSearchService:
         alpha: float,
         page_size: int,
         max_per_video: int,
+        offset: int = 0,
     ) -> SceneSearchResponse | VideoSearchResponse:
         """Metadata mode: search video filename / source path.
 
@@ -214,18 +233,16 @@ class SceneSearchService:
         fix UI showed 4 — scene-inflated pool filled by a few videos'
         many title-matching scenes.)
         """
-        # Ask OS for up to page_size_max distinct videos. page_size caps
-        # what we return to the client; fetching up to the hard ceiling
-        # here means clients can bump page_size without re-querying OS.
-        fetch_size = min(
-            max(page_size, self.settings.search_lexical_top_k),
-            self.settings.search_page_size_max,
-        )
+        # With numbered pagination we fetch exactly ``page_size`` videos
+        # per request starting at ``offset`` — no over-fetching. The
+        # cardinality agg is page-independent so ``total_candidates``
+        # stays stable across pages.
         metadata_results = await self.scene_opensearch.search_metadata(
             query=ctx.query,
             org_id=ctx.org_id_str,
             filters=ctx.filter_dict,
-            size=fetch_size,
+            size=page_size,
+            offset=offset,
             collapse_by_video=True,
         )
 
