@@ -623,6 +623,8 @@ export default function DashboardContent({
     totalPages,
     setCurrentPage,
     handlePageChange,
+    rateLimitedAt,
+    rateLimitRetryAfter,
   } = useSearchEngine(
     {
       contentTypes: searchContentTypes,
@@ -935,6 +937,18 @@ export default function DashboardContent({
           </div>
         </div>
       </div>
+
+      {/* Rate-limit banner — transient, auto-dismisses after Retry-After
+          seconds. Preserves previously-rendered results so the user keeps
+          their context through the throttle. */}
+      {rateLimitedAt !== null && (
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+        >
+          검색 요청이 너무 많아요. {rateLimitRetryAfter}초 후 다시 시도해 주세요.
+        </div>
+      )}
 
       {/* Results section */}
       <div className="mt-4 rounded-xl bg-white p-6 shadow-sm">
