@@ -203,27 +203,52 @@ class SceneSearchService:
 
         No embedding computation, no transcript/OCR/caption matching.
         Always groups by video (metadata is file-level).
+
+        Uses OpenSearch ``collapse`` on ``video_id`` so the candidate
+        pool is already one-scene-per-video. Skips the per-video
+        diversification step that governs lexical/semantic modes —
+        metadata matches are video-level by construction, so scene-
+        level diversification would silently cap results at
+        ``page_size / max_per_video`` unique videos. (Bug verified
+        2026-04-24: livenow "센트룸" has 142 matching videos but pre-
+        fix UI showed 4 — scene-inflated pool filled by a few videos'
+        many title-matching scenes.)
         """
+        # Ask OS for up to page_size_max distinct videos. page_size caps
+        # what we return to the client; fetching up to the hard ceiling
+        # here means clients can bump page_size without re-querying OS.
+        fetch_size = min(
+            max(page_size, self.settings.search_lexical_top_k),
+            self.settings.search_page_size_max,
+        )
         metadata_results = await self.scene_opensearch.search_metadata(
             query=ctx.query,
             org_id=ctx.org_id_str,
             filters=ctx.filter_dict,
-            size=self.settings.search_lexical_top_k,
+            size=fetch_size,
+            collapse_by_video=True,
         )
+
+        # Extract true distinct-video count (sentinel planted by
+        # search_metadata when collapse is used); strip before ranking
+        # so nothing downstream sees the synthetic field.
+        total_unique: int | None = None
+        if metadata_results:
+            first_source = metadata_results[0].get("_source") or {}
+            stashed = first_source.pop("_heimdex_unique_videos", None)
+            if isinstance(stashed, int):
+                total_unique = stashed
 
         ranked_items = compute_weighted_rrf(
             metadata_results, [], [],
             bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0,
         )
 
-        diversified = diversify_results(
-            ranked_items,
-            max_per_video=max_per_video,
-            target_count=page_size,
-            content_types=ctx.filter_dict.get("content_types"),
-        )
+        # Hits are already one-per-video via collapse; just take the
+        # top ``page_size`` by score. No diversification needed.
+        page = ranked_items[:page_size]
 
-        results = self._build_scene_results(diversified, ctx.library_map)
+        results = self._build_scene_results(page, ctx.library_map)
         facets = self._build_facets(ctx.facet_data, ctx.library_map, ctx.people_label_map)
         await self._backfill_web_view_links(results, ctx.org_id)
 
@@ -235,6 +260,7 @@ class SceneSearchService:
             query=ctx.query,
             alpha=alpha,
             org_id=ctx.org_id,
+            total_candidates_override=total_unique,
         )
 
     # ------------------------------------------------------------------
@@ -768,8 +794,16 @@ class SceneSearchService:
         query: str,
         alpha: float,
         org_id: UUID,
+        total_candidates_override: int | None = None,
     ) -> VideoSearchResponse:
-        """Group scene results by video — always returns VideoSearchResponse."""
+        """Group scene results by video — always returns VideoSearchResponse.
+
+        ``total_candidates_override`` lets callers surface the TRUE
+        distinct-video count when the hits were collapsed upstream
+        (e.g. metadata mode). Without it we'd report the size of the
+        already-collapsed result set, hiding the fact that more
+        matches exist beyond the page.
+        """
         video_groups: dict[str, list[SceneResult]] = {}
         for scene in results:
             video_groups.setdefault(scene.video_id, []).append(scene)
@@ -792,7 +826,10 @@ class SceneSearchService:
             )
         video_results.sort(key=lambda v: v.score, reverse=True)
 
-        unique_video_count = len(set(item.video_id for item in ranked_items))
+        if total_candidates_override is not None:
+            unique_video_count = total_candidates_override
+        else:
+            unique_video_count = len(set(item.video_id for item in ranked_items))
 
         logger.info(
             "video_search_completed",

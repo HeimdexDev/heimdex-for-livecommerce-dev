@@ -17,7 +17,22 @@ class SceneQueryMixin:
         org_id: str,
         filters: dict[str, Any],
         size: int = 200,
+        collapse_by_video: bool = False,
     ) -> list[dict[str, Any]]:
+        """BM25 against video_title / source_path / filename_text.
+
+        When ``collapse_by_video=True`` the response is collapsed on
+        ``video_id`` so exactly one hit per unique video is returned
+        (highest scoring scene per video). Required for video-grouped
+        searches where a title-match otherwise returns every scene of
+        a matching video, inflating the candidate pool and starving
+        downstream diversification of unique videos.
+
+        Cardinality over ``video_id`` is attached to the hit list via
+        a ``_heimdex_unique_videos`` sentinel on the first hit's source
+        (``None`` when no hits). Callers that don't need the true
+        distinct count can ignore it.
+        """
         filter_clauses, must_not_clauses = self._build_filter_clauses(filters)
 
         query_word_count = len(query.split())
@@ -156,8 +171,34 @@ class SceneQueryMixin:
             "_source": True,
         }
 
+        if collapse_by_video:
+            # OpenSearch returns exactly one hit per distinct video_id,
+            # keeping the highest-scoring scene per video. Pair with a
+            # cardinality aggregation so the service layer can surface
+            # the true ``total_candidates`` count even when ``size`` is
+            # small. ``video_id`` is a keyword field with doc_values
+            # enabled in the scene mapping (verified in prod 2026-04-24).
+            body["collapse"] = {"field": "video_id"}
+            body["aggs"] = {
+                "unique_videos": {"cardinality": {"field": "video_id"}}
+            }
+
         response = await self.client.search(index=self.alias_name, body=body)
-        return response["hits"]["hits"]
+        hits = response["hits"]["hits"]
+        if collapse_by_video and hits:
+            # Stow the true distinct-video count on the first hit so the
+            # service can read it without a second OS roundtrip. Sentinel
+            # key namespaced with ``_heimdex_`` so it can never collide
+            # with a real scene field.
+            unique = (
+                response.get("aggregations", {})
+                .get("unique_videos", {})
+                .get("value")
+            )
+            if unique is not None:
+                first = hits[0]
+                first.setdefault("_source", {})["_heimdex_unique_videos"] = int(unique)
+        return hits
 
     async def search_lexical(
         self,
