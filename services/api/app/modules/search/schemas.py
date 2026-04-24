@@ -108,6 +108,19 @@ class SearchRequest(BaseModel):
             "Raise this alongside page_size to avoid underfill on small corpora."
         ),
     )
+    offset: int = Field(
+        default=0,
+        ge=0,
+        le=10_000,
+        description=(
+            "Pagination offset. Honored in metadata mode only — lexical/"
+            "semantic diversification is stateful and can't be sliced with "
+            "offset, so those modes log a warning and ignore any non-zero "
+            "value. Page N (1-indexed) is offset=(N-1)*page_size. Upper "
+            "bound mirrors OpenSearch's default index.max_result_window; "
+            "raising requires bumping the index setting."
+        ),
+    )
 
 
 class DebugInfo(BaseModel):
