@@ -21,6 +21,7 @@ import { parseSlashCommand, getSlashCommandSuggestions } from "@/lib/slash-comma
 import { trackColorSearch, trackSearchPageView, trackSearchResultClick } from "@/lib/analytics/gtag";
 import { useOrgSettings } from "@/lib/orgSettings";
 import { getThumbnailAspectClass, getDashboardGridClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
+import { Pagination } from "@/components/ui/Pagination";
 import {
   deserializeSearchState,
   hasSearchParams,
@@ -299,149 +300,6 @@ function SortDropdown({ value, onChange, options }: SortDropdownProps) {
         </div>
       )}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Pagination
-// ---------------------------------------------------------------------------
-interface PaginationProps {
-  currentPage: number;
-  totalPages: number;
-  onPageChange: (page: number) => void;
-}
-
-function Pagination({
-  currentPage,
-  totalPages,
-  onPageChange,
-}: PaginationProps) {
-  if (totalPages <= 1) return null;
-
-  const pages = useMemo(() => {
-    const result: (number | "ellipsis")[] = [];
-    const maxVisible = 5;
-
-    if (totalPages <= maxVisible + 2) {
-      for (let i = 1; i <= totalPages; i++) result.push(i);
-    } else {
-      // always show first page
-      result.push(1);
-
-      let start = Math.max(2, currentPage - 1);
-      let end = Math.min(totalPages - 1, currentPage + 1);
-
-      // adjust window
-      if (currentPage <= 3) {
-        start = 2;
-        end = Math.min(maxVisible, totalPages - 1);
-      } else if (currentPage >= totalPages - 2) {
-        start = Math.max(2, totalPages - maxVisible + 1);
-        end = totalPages - 1;
-      }
-
-      if (start > 2) result.push("ellipsis");
-      for (let i = start; i <= end; i++) result.push(i);
-      if (end < totalPages - 1) result.push("ellipsis");
-
-      // always show last page
-      result.push(totalPages);
-    }
-    return result;
-  }, [currentPage, totalPages]);
-
-  const btnBase =
-    "inline-flex h-8 w-8 items-center justify-center rounded text-sm transition-colors";
-
-  return (
-    <nav className="mt-8 flex items-center justify-center gap-1">
-      {/* first */}
-      <button
-        type="button"
-        disabled={currentPage === 1}
-        onClick={() => onPageChange(1)}
-        className={cn(
-          btnBase,
-          currentPage === 1
-            ? "cursor-not-allowed text-gray-300"
-            : "text-gray-500 hover:bg-gray-100",
-        )}
-        aria-label="처음"
-      >
-        &laquo;
-      </button>
-      {/* prev */}
-      <button
-        type="button"
-        disabled={currentPage === 1}
-        onClick={() => onPageChange(currentPage - 1)}
-        className={cn(
-          btnBase,
-          currentPage === 1
-            ? "cursor-not-allowed text-gray-300"
-            : "text-gray-500 hover:bg-gray-100",
-        )}
-        aria-label="이전"
-      >
-        &lsaquo;
-      </button>
-
-      {pages.map((p, i) =>
-        p === "ellipsis" ? (
-          <span
-            key={`ell-${i}`}
-            className="inline-flex h-8 w-8 items-center justify-center text-sm text-gray-400"
-          >
-            &hellip;
-          </span>
-        ) : (
-          <button
-            key={p}
-            type="button"
-            onClick={() => onPageChange(p)}
-            className={cn(
-              btnBase,
-              currentPage === p
-                ? "bg-indigo-500 font-medium text-white"
-                : "text-gray-600 hover:bg-gray-100",
-            )}
-          >
-            {p}
-          </button>
-        ),
-      )}
-
-      {/* next */}
-      <button
-        type="button"
-        disabled={currentPage === totalPages}
-        onClick={() => onPageChange(currentPage + 1)}
-        className={cn(
-          btnBase,
-          currentPage === totalPages
-            ? "cursor-not-allowed text-gray-300"
-            : "text-gray-500 hover:bg-gray-100",
-        )}
-        aria-label="다음"
-      >
-        &rsaquo;
-      </button>
-      {/* last */}
-      <button
-        type="button"
-        disabled={currentPage === totalPages}
-        onClick={() => onPageChange(totalPages)}
-        className={cn(
-          btnBase,
-          currentPage === totalPages
-            ? "cursor-not-allowed text-gray-300"
-            : "text-gray-500 hover:bg-gray-100",
-        )}
-        aria-label="마지막"
-      >
-        &raquo;
-      </button>
-    </nav>
   );
 }
 
@@ -764,6 +622,7 @@ export default function DashboardContent({
     currentPage,
     totalPages,
     setCurrentPage,
+    handlePageChange,
   } = useSearchEngine(
     {
       contentTypes: searchContentTypes,
@@ -1275,8 +1134,16 @@ export default function DashboardContent({
                 currentPage={currentPage}
                 totalPages={totalPages}
                 onPageChange={(page) => {
-                  setCurrentPage(page);
+                  // Metadata mode re-fetches the page from the backend;
+                  // lexical/semantic just move the client-side slice.
+                  if (searchMode === "metadata") {
+                    void handlePageChange(page);
+                  } else {
+                    setCurrentPage(page);
+                  }
                 }}
+                className="mt-8"
+                ariaLabel="검색 결과 페이지"
               />
             ) : hasMore ? (
               <div className="mt-8 flex justify-center">
