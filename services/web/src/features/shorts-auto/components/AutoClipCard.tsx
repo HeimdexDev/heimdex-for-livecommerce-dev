@@ -37,27 +37,52 @@ export function AutoClipCard({ index, clip, videoId }: AutoClipCardProps) {
   const scorePct = Math.round(Math.min(1, Math.max(0, clip.score)) * 100);
   const representativeSceneId = clip.scene_ids[0];
   const [isPlaying, setIsPlaying] = useState(false);
+  const [currentMemberIdx, setCurrentMemberIdx] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  const playbackUrl = getCloudPlaybackUrl(videoId, clip.start_ms);
+  // Use the raw proxy URL; we seek client-side to each member's span
+  // in turn. getCloudPlaybackUrl accepts a startMs but we override via
+  // seeking so passing 0 keeps the URL stable across member jumps.
+  const playbackUrl = getCloudPlaybackUrl(videoId, 0);
 
-  // LLM-produced clips stitch non-adjacent picks; (start_ms..end_ms) is
-  // the source-time envelope, not a continuous playable span. We play
-  // from the clip's first pick start_ms and let the user scrub; a full
-  // multi-member player would require client-side concat which is a
-  // bigger feature. Duration-bound the video by pausing at end_ms on
-  // continuous clips (when start..end actually corresponds to one span).
-  const continuousEndMs = clip.is_continuous ? clip.end_ms : null;
-
+  // Sequential member playback — plays member 0's span, seeks to
+  // member 1's span at its end, and so on. Skips the gap time between
+  // non-adjacent picks. Total played duration = sum(member durations).
   function handleTimeUpdate() {
-    if (continuousEndMs === null || !videoRef.current) return;
-    if (videoRef.current.currentTime * 1000 >= continuousEndMs) {
-      videoRef.current.pause();
+    const v = videoRef.current;
+    if (!v) return;
+    const members = clip.members;
+    if (!members.length) return;
+    const idx = currentMemberIdx;
+    if (idx >= members.length) return;
+
+    const nowMs = v.currentTime * 1000;
+    const cur = members[idx];
+    if (nowMs >= cur.end_ms) {
+      const next = idx + 1;
+      if (next < members.length) {
+        setCurrentMemberIdx(next);
+        // Seek forward (or backward) to the next member's start.
+        v.currentTime = members[next].start_ms / 1000;
+      } else {
+        v.pause();
+        setIsPlaying(false);
+        setCurrentMemberIdx(0);
+      }
     }
+  }
+
+  function handleLoadedMetadata() {
+    const v = videoRef.current;
+    if (!v || !clip.members.length) return;
+    // Seek to the first member's span on initial load.
+    v.currentTime = clip.members[0].start_ms / 1000;
+    setCurrentMemberIdx(0);
   }
 
   function togglePlay() {
     setIsPlaying((prev) => !prev);
+    setCurrentMemberIdx(0);
   }
 
   return (
@@ -156,15 +181,25 @@ export function AutoClipCard({ index, clip, videoId }: AutoClipCardProps) {
           <video
             ref={videoRef}
             src={playbackUrl}
-            controls
             autoPlay
+            playsInline
+            onLoadedMetadata={handleLoadedMetadata}
             onTimeUpdate={handleTimeUpdate}
-            onEnded={() => setIsPlaying(false)}
+            onEnded={() => {
+              setIsPlaying(false);
+              setCurrentMemberIdx(0);
+            }}
             className="aspect-video w-full"
             aria-label={`클립 ${index + 1} 미리보기`}
           >
             브라우저가 비디오 재생을 지원하지 않습니다.
           </video>
+          <div className="flex items-center justify-between px-3 py-2 text-xs text-gray-300">
+            <span>
+              장면 {currentMemberIdx + 1} / {clip.members.length}
+            </span>
+            <span>{formatSeconds(clip.duration_ms)} 하이라이트</span>
+          </div>
         </div>
       )}
     </article>
