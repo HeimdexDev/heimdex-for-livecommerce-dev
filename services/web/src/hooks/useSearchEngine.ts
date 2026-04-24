@@ -73,6 +73,14 @@ export interface UseSearchEngineReturn {
   currentPage: number;
   totalPages: number;
   setCurrentPage: (page: number) => void;
+  /**
+   * Change to a specific page. For metadata mode this triggers a
+   * backend re-fetch with ``offset=(page-1)*page_size`` and replaces
+   * ``searchResponse`` with the new page's results. For other modes
+   * it just moves the client-side slice within the already-returned
+   * candidate list.
+   */
+  handlePageChange: (page: number) => Promise<void>;
   /** Sort value before entering search mode (for restoring on clear) */
   sortBeforeSearch: SortOption;
 }
@@ -113,6 +121,11 @@ export function useSearchEngine(
   const [currentPage, setCurrentPage] = useState(1);
   const sortBeforeSearchRef = useRef<SortOption>(sortBy);
 
+  // Guard against races when the user clicks pages faster than the
+  // backend responds. Only the latest request's response is accepted;
+  // older in-flight calls get dropped on arrival.
+  const requestIdRef = useRef(0);
+
   const isSearchMode = searchResponse !== null;
 
   // ── Sorted results ──────────────────────────────────────────────────────
@@ -143,25 +156,58 @@ export function useSearchEngine(
   }, [searchResponse, sortBy]);
 
   // ── Paginated results ───────────────────────────────────────────────────
+  // Metadata-mode responses are pre-paginated server-side — backend
+  // returns exactly one page per offset, so we render sortedResults
+  // directly. Other modes still rely on client-side slicing over the
+  // over-fetched candidate list.
+  const isMetadataVideoResponse =
+    searchResponse?.result_type === "video" && searchMode === "metadata";
   const paginatedResults = useMemo(() => {
     if (!sortedResults.length) return [];
+    if (isMetadataVideoResponse) return sortedResults;
     const start = (currentPage - 1) * effectivePageSize;
     return sortedResults.slice(start, start + effectivePageSize);
-  }, [sortedResults, currentPage, effectivePageSize]);
+  }, [sortedResults, currentPage, effectivePageSize, isMetadataVideoResponse]);
 
-  const searchTotalPages = Math.max(1, Math.ceil(sortedResults.length / effectivePageSize));
-  const totalPages = isSearchMode ? searchTotalPages : 1;
+  const searchTotalPages = useMemo(() => {
+    if (!isSearchMode || !searchResponse) return 1;
+    if (isMetadataVideoResponse) {
+      // Server supplies the true distinct-video cardinality — never
+      // trust sortedResults.length here (it's capped at page_size).
+      return Math.max(
+        1,
+        Math.ceil(searchResponse.total_candidates / effectivePageSize),
+      );
+    }
+    return Math.max(1, Math.ceil(sortedResults.length / effectivePageSize));
+  }, [isSearchMode, searchResponse, isMetadataVideoResponse, sortedResults.length, effectivePageSize]);
+  const totalPages = searchTotalPages;
 
   // ── Reset pagination on sort change ─────────────────────────────────────
   useEffect(() => {
     setCurrentPage(1);
   }, [sortBy]);
 
+  // ── Reset pagination when the search mode changes ───────────────────────
+  // Stale `currentPage=5` from a prior metadata search would send a
+  // meaningless `offset=80` to lexical/semantic, which the backend
+  // ignores — but the page number would still render wrong. Reset.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchMode]);
+
   // ── Core search ─────────────────────────────────────────────────────────
   const performSearch = useCallback(
-    async (q: string, isRefMode: boolean = referenceMode) => {
+    async (
+      q: string,
+      isRefMode: boolean = referenceMode,
+      opts?: { offsetOverride?: number; resetPage?: boolean },
+    ) => {
+      const offsetOverride = opts?.offsetOverride ?? 0;
+      const shouldResetPage = opts?.resetPage ?? true;
       setIsLoading(true);
-      setCurrentPage(1);
+      if (shouldResetPage) setCurrentPage(1);
+      const thisRequestId = ++requestIdRef.current;
       try {
         const tokenGetter = () => getAccessToken();
         const filters: SearchFilters = {};
@@ -193,15 +239,23 @@ export function useSearchEngine(
             group_by: groupBy,
             search_mode: searchMode,
             color_family: colorFamily,
+            // Offset is metadata-only on the backend. Sending from
+            // other modes is harmless (backend logs + ignores) but
+            // wastes bytes, so only include when non-zero.
+            ...(offsetOverride > 0 && searchMode === "metadata"
+              ? { offset: offsetOverride }
+              : {}),
             ...(isMoodboardSize
               ? { page_size: effectivePageSize, max_per_video: MOODBOARD_MAX_PER_VIDEO }
               : {}),
           },
           tokenGetter,
         );
+        if (thisRequestId !== requestIdRef.current) return;
         setSearchResponse(res);
         setActiveQuery(q);
       } catch {
+        if (thisRequestId !== requestIdRef.current) return;
         const emptyResponse: SceneSearchResponse = {
           results: [],
           total_candidates: 0,
@@ -213,13 +267,30 @@ export function useSearchEngine(
         setSearchResponse(emptyResponse);
         setActiveQuery(q);
       } finally {
-        setIsLoading(false);
+        if (thisRequestId === requestIdRef.current) setIsLoading(false);
       }
     },
     [getAccessToken, groupBy, searchMode, contentTypes, sourceFilters, dateStart, dateEnd, referenceMode, setIsLoading, colorFamily, isMoodboardSize, effectivePageSize],
   );
 
+  // ── Page change — metadata mode re-fetches, others just move the slice ──
+  const handlePageChange = useCallback(
+    async (nextPage: number) => {
+      if (nextPage === currentPage) return;
+      setCurrentPage(nextPage);
+      if (!activeQuery) return;
+      if (searchMode !== "metadata") return;  // lexical/semantic: no re-fetch
+      await performSearch(activeQuery, referenceMode, {
+        offsetOverride: (nextPage - 1) * effectivePageSize,
+        resetPage: false,
+      });
+    },
+    [currentPage, activeQuery, searchMode, referenceMode, effectivePageSize, performSearch],
+  );
+
   // ── handleSearch — takes a raw query string (slash commands parsed in component) ──
+  // resetPage=true by default inside performSearch, so a fresh query
+  // always starts at page 1 regardless of prior pagination state.
   const handleSearch = useCallback(
     async (query: string) => {
       if (!query.trim()) return;
@@ -330,6 +401,7 @@ export function useSearchEngine(
     currentPage,
     totalPages,
     setCurrentPage,
+    handlePageChange,
     sortBeforeSearch: sortBeforeSearchRef.current,
   };
 }

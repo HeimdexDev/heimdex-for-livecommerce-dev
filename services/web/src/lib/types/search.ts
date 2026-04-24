@@ -64,6 +64,12 @@ export interface SearchRequest {
   page_size?: number;
   /** Per-request diversification cap override. Raise alongside page_size. */
   max_per_video?: number;
+  /**
+   * Pagination offset for metadata mode (numbered pages). Lexical and
+   * semantic modes ignore non-zero values server-side — don't send
+   * from non-metadata surfaces.
+   */
+  offset?: number;
 }
 
 export interface DebugInfo {
