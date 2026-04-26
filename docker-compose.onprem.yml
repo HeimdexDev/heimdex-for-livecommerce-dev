@@ -1,0 +1,78 @@
+# On-premise overlay — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.onprem.yml up -d
+#
+# Replaces AWS services (SQS, Aircloud) with self-hosted alternatives.
+# S3 → MinIO (already in base compose), SQS → RabbitMQ, Auth0 → dev-login.
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=heimdex
+      - RABBITMQ_DEFAULT_PASS=heimdex_dev_password
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    environment:
+      # Queue backend
+      - QUEUE_BACKEND=rabbitmq
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USERNAME=heimdex
+      - RABBITMQ_PASSWORD=heimdex_dev_password
+      - RABBITMQ_QUEUE_PREFIX=heimdex
+      # Disable cloud services
+      - SQS_ENABLED=false
+      - AUTH0_ENABLED=false
+      - AIRCLOUD_ENABLED=false
+      - DRIVE_CONNECTOR_ENABLED=false
+      # Enable blur for on-prem testing
+      - BLUR_ENABLED=true
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  drive-worker:
+    environment:
+      - QUEUE_BACKEND=rabbitmq
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USERNAME=heimdex
+      - RABBITMQ_PASSWORD=heimdex_dev_password
+      - RABBITMQ_QUEUE_PREFIX=heimdex
+      - SQS_ENABLED=false
+      - AIRCLOUD_ENABLED=false
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # GPU workers — uncomment as needed for on-prem GPU processing.
+  # Each worker consumes from its RabbitMQ queue instead of SQS.
+  #
+  # drive-caption-worker:
+  #   environment:
+  #     - QUEUE_BACKEND=rabbitmq
+  #     - RABBITMQ_HOST=rabbitmq
+  #     - RABBITMQ_USERNAME=heimdex
+  #     - RABBITMQ_PASSWORD=heimdex_dev_password
+  #     - USE_GPU=true
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - capabilities: [gpu]
+  #   depends_on:
+  #     rabbitmq:
+  #       condition: service_healthy
+
+volumes:
+  rabbitmq_data:

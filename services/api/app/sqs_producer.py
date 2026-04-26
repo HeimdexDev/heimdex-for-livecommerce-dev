@@ -1,9 +1,9 @@
 """
-SQS dual-write producer for job creation events.
+Queue producer for job creation events (SQS or RabbitMQ).
 
-Phase 1: Publishes SQS messages alongside DB writes when sqs_enabled=true.
-All sends are fire-and-forget with structured error logging.
-DB operations are NEVER affected by SQS failures.
+Publishes messages alongside DB writes when sqs_enabled=true (SQS) or
+queue_backend=rabbitmq. All sends are fire-and-forget with structured
+error logging. DB operations are NEVER affected by queue failures.
 
 Trigger points:
   1. publish_processing_job()  — called from upsert_files() after new DriveFile created
@@ -120,13 +120,21 @@ def _publish(
     body: dict[str, Any],
     deduplication_id: Optional[str] = None,
 ) -> None:
-    """Publish a single SQS message.  Fire-and-forget.
+    """Publish a single queue message.  Fire-and-forget.
 
-    * If sqs_enabled is False → immediate no-op.
-    * If SQS send fails → logs error, does NOT raise.
+    Routes to SQS or RabbitMQ based on ``queue_backend`` setting.
+
+    * If neither sqs_enabled nor queue_backend=rabbitmq → immediate no-op.
+    * If queue send fails → logs error, does NOT raise.
     * DB operations are never affected.
     """
     settings = get_settings()
+
+    if settings.queue_backend == "rabbitmq":
+        _publish_rabbitmq(job_type, body, deduplication_id)
+        return
+
+    # Default: SQS
     if not settings.sqs_enabled:
         return
 
@@ -154,14 +162,13 @@ def _publish(
                 "source": {"StringValue": "api", "DataType": "String"},
             },
         }
-        # MessageDeduplicationId is FIFO-queue only.  Standard queues
-        # reject it with InvalidParameterValueException.
         if deduplication_id and queue_url.endswith(".fifo"):
             kwargs["MessageDeduplicationId"] = deduplication_id
 
         resp = client.send_message(**kwargs)
         logger.info(
-            "sqs_job_published",
+            "queue_job_published",
+            backend="sqs",
             job_type=job_type,
             message_id=resp.get("MessageId"),
             file_id=body.get("file_id", ""),
@@ -169,7 +176,90 @@ def _publish(
         _wake_gpu_worker(job_type)
     except Exception:
         logger.exception(
-            "sqs_publish_failed",
+            "queue_publish_failed",
+            backend="sqs",
+            job_type=job_type,
+            file_id=body.get("file_id", ""),
+        )
+
+
+# ── RabbitMQ publisher ────────────────────────────────────────────────
+
+_rabbitmq_client = None
+
+
+def _get_rabbitmq_client():
+    """Lazily create and cache RabbitMQ connection."""
+    global _rabbitmq_client
+    if _rabbitmq_client is not None:
+        return _rabbitmq_client
+
+    import pika
+
+    settings = get_settings()
+    credentials = pika.PlainCredentials(
+        settings.rabbitmq_username, settings.rabbitmq_password
+    )
+    params = pika.ConnectionParameters(
+        host=settings.rabbitmq_host,
+        port=settings.rabbitmq_port,
+        virtual_host=settings.rabbitmq_vhost,
+        credentials=credentials,
+        heartbeat=600,
+        blocked_connection_timeout=300,
+    )
+    conn = pika.BlockingConnection(params)
+    _rabbitmq_client = conn.channel()
+    return _rabbitmq_client
+
+
+def _publish_rabbitmq(
+    job_type: str,
+    body: dict[str, Any],
+    deduplication_id: Optional[str] = None,
+) -> None:
+    """Publish to RabbitMQ.  Fire-and-forget."""
+    # Map job_type to queue name using the same logical names
+    queue_attr = _QUEUE_URL_ATTRS.get(job_type)
+    if queue_attr is None:
+        logger.warning("queue_unknown_job_type", job_type=job_type)
+        return
+
+    settings = get_settings()
+    # Derive queue name: "heimdex.caption", "heimdex.processing", etc.
+    logical_name = queue_attr.replace("sqs_", "").replace("_queue_url", "")
+    queue_name = f"{settings.rabbitmq_queue_prefix}.{logical_name}"
+
+    try:
+        import pika
+
+        channel = _get_rabbitmq_client()
+        channel.queue_declare(queue=queue_name, durable=True)
+        channel.basic_publish(
+            exchange="",
+            routing_key=queue_name,
+            body=json.dumps(body, default=str),
+            properties=pika.BasicProperties(
+                delivery_mode=2,
+                content_type="application/json",
+                message_id=deduplication_id or "",
+            ),
+        )
+        logger.info(
+            "queue_job_published",
+            backend="rabbitmq",
+            job_type=job_type,
+            queue=queue_name,
+            file_id=body.get("file_id", ""),
+        )
+        _wake_gpu_worker(job_type)
+    except Exception:
+        # Reset client on failure so next call reconnects
+        global _rabbitmq_client
+        _rabbitmq_client = None
+        logger.exception(
+            "queue_publish_failed",
+            backend="rabbitmq",
             job_type=job_type,
             file_id=body.get("file_id", ""),
         )

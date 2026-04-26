@@ -192,6 +192,18 @@ class Settings(BaseSettings):
     youtube_auto_delete_originals: bool = True
     youtube_original_ttl_days: int = 7  # S3 lifecycle fallback
 
+    # --- Queue backend ---
+    # "sqs" (default, cloud) or "rabbitmq" (on-prem).
+    queue_backend: str = "sqs"
+
+    # --- RabbitMQ (on-prem) ---
+    rabbitmq_host: str = "localhost"
+    rabbitmq_port: int = 5672
+    rabbitmq_username: str = "guest"
+    rabbitmq_password: str = "guest"
+    rabbitmq_vhost: str = "/"
+    rabbitmq_queue_prefix: str = "heimdex"
+
     # --- SQS (Phase 3 complete — enrichment workers are mandatory SQS consumers) ---
     sqs_enabled: bool = False
     sqs_endpoint_url: str = ""
