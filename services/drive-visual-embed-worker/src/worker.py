@@ -103,20 +103,17 @@ def main() -> None:
 
     # ── SQS Consumer (primary job source) ──────────────────────────────────────
     sqs_queue_url = getattr(settings, "sqs_visual_embed_queue_url", "")
-    if not getattr(settings, "sqs_consumer_enabled", False) or not sqs_queue_url:
+    if settings.queue_backend == "rabbitmq":
+        pass
+    elif not getattr(settings, "sqs_consumer_enabled", False) or not sqs_queue_url:
         logger.error("sqs_consumer_required_but_not_configured", extra={"queue": "visual_embed"})
         sys.exit(1)
 
-    from heimdex_worker_sdk.sqs_client import SQSJobClient
-    from heimdex_worker_sdk.sqs_consumer import SQSConsumerLoop
+    from heimdex_worker_sdk import build_queue_client, ConsumerLoop
 
-    sqs_client = SQSJobClient(
-        queue_url=sqs_queue_url,
-        region=settings.sqs_region,
-        endpoint_url=settings.sqs_endpoint_url or None,
-    )
-    sqs_consumer = SQSConsumerLoop(
-        sqs_client=sqs_client,
+    queue_client = build_queue_client("visual_embed", settings)
+    sqs_consumer = ConsumerLoop(
+        sqs_client=queue_client,
         process_callback=_make_sqs_callback(api_client, settings),
         semaphore=semaphore,
         visibility_timeout=120,  # Longer than caption — embedding batches can take time

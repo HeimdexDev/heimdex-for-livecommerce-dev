@@ -171,23 +171,20 @@ def main() -> None:
     # ── SQS Consumer (primary job source for processing) ──────────
     # Only handles processing claims. Discovery stays HTTP-only.
     import sys
-    if not settings.sqs_consumer_enabled or not settings.sqs_processing_queue_url:
+    if settings.queue_backend == "rabbitmq":
+        pass
+    elif not settings.sqs_consumer_enabled or not settings.sqs_processing_queue_url:
         logger.error(
             "sqs_consumer_required",
             extra={"sqs_consumer_enabled": settings.sqs_consumer_enabled, "queue_url": bool(settings.sqs_processing_queue_url)},
         )
         sys.exit(1)
 
-    from heimdex_worker_sdk.sqs_client import SQSJobClient
-    from heimdex_worker_sdk.sqs_consumer import SQSConsumerLoop
+    from heimdex_worker_sdk import build_queue_client, ConsumerLoop
 
-    sqs_client = SQSJobClient(
-        queue_url=settings.sqs_processing_queue_url,
-        region=settings.sqs_region,
-        endpoint_url=settings.sqs_endpoint_url or None,
-    )
-    sqs_consumer = SQSConsumerLoop(
-        sqs_client=sqs_client,
+    queue_client = build_queue_client("processing", settings)
+    sqs_consumer = ConsumerLoop(
+        sqs_client=queue_client,
         process_callback=_make_sqs_callback(api_client, settings),
         semaphore=semaphore,
         visibility_timeout=120,
@@ -196,21 +193,21 @@ def main() -> None:
     )
     sqs_consumer.start()
 
-    # ── SQS Consumer (export proxy-pack jobs) ─────────────────────
+    # ── Export proxy-pack consumer ─────────────────────────────────
     export_consumer = None
-    if settings.sqs_export_queue_url:
+    has_export_queue = (
+        settings.queue_backend == "rabbitmq"
+        or bool(settings.sqs_export_queue_url)
+    )
+    if has_export_queue:
         from src.tasks.export import handle_export_proxy_pack
 
         def _export_callback(message):
             handle_export_proxy_pack(message.body, api_client, settings)
 
-        export_sqs_client = SQSJobClient(
-            queue_url=settings.sqs_export_queue_url,
-            region=settings.sqs_region,
-            endpoint_url=settings.sqs_endpoint_url or None,
-        )
-        export_consumer = SQSConsumerLoop(
-            sqs_client=export_sqs_client,
+        export_queue_client = build_queue_client("export", settings)
+        export_consumer = ConsumerLoop(
+            sqs_client=export_queue_client,
             process_callback=_export_callback,
             semaphore=semaphore,
             visibility_timeout=600,

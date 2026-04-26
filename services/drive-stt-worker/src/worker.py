@@ -114,20 +114,17 @@ def main() -> None:
     semaphore = _init_semaphore(settings.drive_stt_concurrency)
 
     # ── SQS Consumer (primary job source) ──────────────────────────────────────
-    if not settings.sqs_consumer_enabled or not settings.sqs_stt_queue_url:
+    if settings.queue_backend == "rabbitmq":
+        pass
+    elif not settings.sqs_consumer_enabled or not settings.sqs_stt_queue_url:
         logger.error("sqs_consumer_required_but_not_configured", extra={"queue": "stt"})
         sys.exit(1)
 
-    from heimdex_worker_sdk.sqs_client import SQSJobClient
-    from heimdex_worker_sdk.sqs_consumer import SQSConsumerLoop
+    from heimdex_worker_sdk import build_queue_client, ConsumerLoop
 
-    sqs_client = SQSJobClient(
-        queue_url=settings.sqs_stt_queue_url,
-        region=settings.sqs_region,
-        endpoint_url=settings.sqs_endpoint_url or None,
-    )
-    sqs_consumer = SQSConsumerLoop(
-        sqs_client=sqs_client,
+    queue_client = build_queue_client("stt", settings)
+    sqs_consumer = ConsumerLoop(
+        sqs_client=queue_client,
         process_callback=_make_sqs_callback(api_client, settings, stt_processor, diarizer),
         semaphore=semaphore,
         visibility_timeout=60,

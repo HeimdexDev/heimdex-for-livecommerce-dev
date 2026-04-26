@@ -137,18 +137,12 @@ def main() -> None:
 
     semaphore = _init_semaphore(getattr(settings, "drive_blur_concurrency", 1))
 
-    SQSJobClient = importlib.import_module("heimdex_worker_sdk.sqs_client").SQSJobClient
-    SQSConsumerLoop = importlib.import_module(
-        "heimdex_worker_sdk.sqs_consumer"
-    ).SQSConsumerLoop
+    build_queue_client = importlib.import_module("heimdex_worker_sdk").build_queue_client
+    ConsumerLoop = importlib.import_module("heimdex_worker_sdk").ConsumerLoop
 
-    sqs_client = SQSJobClient(
-        queue_url=settings.sqs_blur_queue_url,
-        region=settings.sqs_region,
-        endpoint_url=settings.sqs_endpoint_url or None,
-    )
-    sqs_consumer = SQSConsumerLoop(
-        sqs_client=sqs_client,
+    queue_client = build_queue_client("blur", settings)
+    sqs_consumer = ConsumerLoop(
+        sqs_client=queue_client,
         process_callback=_make_sqs_callback(
             settings.drive_api_base_url,
             settings.drive_internal_api_key,

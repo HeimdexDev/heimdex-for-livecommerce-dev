@@ -39,10 +39,24 @@ def main() -> None:
 
     settings = get_settings()
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    )
+    # Structured formatter appends logger.info(..., extra={...}) fields
+    # as `k=v` pairs so CloudWatch Logs captures per-event metadata
+    # (video_id, elapsed_s, etc.). Without this, every `extra` is
+    # silently dropped — see scripts/capture_scene_detect_baseline.py
+    # for the harvester's regex expectations.
+    from src.structured_logging import StructuredExtraFormatter
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, settings.log_level.upper(), logging.INFO))
+    # Remove any pre-configured handlers (e.g. from uvicorn reloaders)
+    # so we don't double-log.
+    for h in list(root_logger.handlers):
+        root_logger.removeHandler(h)
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(StructuredExtraFormatter(
+        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+    ))
+    root_logger.addHandler(_handler)
 
     if settings.drive_transcode_mode != "gpu":
         logger.info("drive_transcode_disabled", extra={"mode": settings.drive_transcode_mode})
@@ -56,20 +70,17 @@ def main() -> None:
 
     semaphore = _init_semaphore(settings.drive_worker_global_concurrency)
 
-    if not settings.sqs_consumer_enabled or not settings.sqs_transcode_queue_url:
+    if settings.queue_backend == "rabbitmq":
+        pass
+    elif not settings.sqs_consumer_enabled or not settings.sqs_transcode_queue_url:
         logger.error("sqs_consumer_required_but_not_configured", extra={"queue": "transcode"})
         sys.exit(1)
 
-    from heimdex_worker_sdk.sqs_client import SQSJobClient
-    from heimdex_worker_sdk.sqs_consumer import SQSConsumerLoop
+    from heimdex_worker_sdk import build_queue_client, ConsumerLoop
 
-    sqs_client = SQSJobClient(
-        queue_url=settings.sqs_transcode_queue_url,
-        region=settings.sqs_region,
-        endpoint_url=settings.sqs_endpoint_url or None,
-    )
-    sqs_consumer = SQSConsumerLoop(
-        sqs_client=sqs_client,
+    queue_client = build_queue_client("transcode", settings)
+    sqs_consumer = ConsumerLoop(
+        sqs_client=queue_client,
         process_callback=_make_sqs_callback(api_client, settings),
         semaphore=semaphore,
         visibility_timeout=1800,

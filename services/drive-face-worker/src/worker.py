@@ -87,23 +87,19 @@ def main() -> None:
 
     semaphore = _init_semaphore(getattr(settings, "drive_face_concurrency", 1))
 
-    if not settings.sqs_consumer_enabled or not settings.sqs_face_queue_url:
+    if settings.queue_backend == "rabbitmq":
+        pass
+    elif not settings.sqs_consumer_enabled or not settings.sqs_face_queue_url:
         logger.error("sqs_consumer_required_but_not_configured", queue="face")
         sys.exit(1)
 
-    SQSJobClient = importlib.import_module("heimdex_worker_sdk.sqs_client").SQSJobClient
-    SQSConsumerLoop = importlib.import_module(
-        "heimdex_worker_sdk.sqs_consumer"
-    ).SQSConsumerLoop
+    build_queue_client = importlib.import_module("heimdex_worker_sdk").build_queue_client
+    ConsumerLoop = importlib.import_module("heimdex_worker_sdk").ConsumerLoop
 
-    sqs_client = SQSJobClient(
-        queue_url=settings.sqs_face_queue_url,
-        region=settings.sqs_region,
-        endpoint_url=settings.sqs_endpoint_url or None,
-    )
+    queue_client = build_queue_client("face", settings)
     queue_type = "face"
-    sqs_consumer = SQSConsumerLoop(
-        sqs_client=sqs_client,
+    sqs_consumer = ConsumerLoop(
+        sqs_client=queue_client,
         process_callback=_make_sqs_callback(api_client, settings, face_analyzer),
         semaphore=semaphore,
         visibility_timeout=1800,
