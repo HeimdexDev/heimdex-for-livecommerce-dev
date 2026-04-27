@@ -194,6 +194,28 @@ describe("OAuthExpiredDialog", () => {
     expect(screen.getByText(/다시 인증해 주세요/)).toBeInTheDocument();
   });
 
+  it("renders missing-scope copy when reason='missing_scope'", () => {
+    // Locks in the scope-guard UX: when the auto-pop fires because
+    // the user's stored token is missing drive.readonly, the dialog
+    // body must explicitly tell them to check the Drive permission
+    // checkbox on Google's consent screen — otherwise they'll just
+    // re-trigger the same bug on reconnect.
+    render(
+      <OAuthExpiredDialog
+        isOpen={true}
+        googleEmail="user@example.com"
+        isLoading={false}
+        reason="missing_scope"
+        onReconnect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("Google 드라이브 권한이 누락되었습니다"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/체크/)).toBeInTheDocument();
+  });
+
   it("displays google email when provided", () => {
     render(
       <OAuthExpiredDialog

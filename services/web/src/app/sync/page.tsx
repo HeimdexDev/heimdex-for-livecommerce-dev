@@ -37,7 +37,7 @@ import { UploadProgress } from "@/components/sync/UploadProgress";
 import { StopConfirmDialog } from "@/components/sync/StopConfirmDialog";
 import { DriveFolderBrowser } from "@/components/sync/DriveFolderBrowser";
 import { DeleteConnectionDialog } from "@/components/sync/DeleteConnectionDialog";
-import { OAuthExpiredDialog } from "@/components/sync/OAuthExpiredDialog";
+import { OAuthExpiredDialog, type OAuthReauthReason } from "@/components/sync/OAuthExpiredDialog";
 import { FolderSyncTree } from "@/components/sync/FolderSyncTree";
 import type { DeviceListItem, DriveStatusResponse, DriveFolderInfo, DriveConnectionResponse, DriveOAuthStatus, DriveSyncProgress } from "@/lib/types";
 import type { FolderTreeResponse, ContentType } from "@/lib/types/drive";
@@ -149,6 +149,7 @@ function SyncContent() {
   const [folderTree, setFolderTree] = useState<FolderTreeResponse | null>(null);
   const [isEnumerating, setIsEnumerating] = useState(false);
   const [showReauthDialog, setShowReauthDialog] = useState(false);
+  const [reauthReason, setReauthReason] = useState<OAuthReauthReason>("expired");
   const syncProgressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollingRef = useRef(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -195,6 +196,14 @@ function SyncContent() {
     try {
       const status = await getOAuthStatus(getAccessToken);
       setOauthStatus(status);
+      // Auto-pop the reauth dialog when the stored token is missing
+      // drive.readonly. ``scope_ok === false`` is an explicit signal
+      // from the API; ``null`` means "legacy token, unknown" — leave
+      // it alone so we don't false-pop existing connections.
+      if (status.connected && status.scope_ok === false) {
+        setReauthReason("missing_scope");
+        setShowReauthDialog(true);
+      }
     } catch {
       setOauthStatus(null);
     }
@@ -217,6 +226,7 @@ function SyncContent() {
       setFolderTree(tree);
     } catch (err) {
       if (err instanceof ApiError && err.detail.includes("만료")) {
+        setReauthReason("expired");
         setShowReauthDialog(true);
       } else if (err instanceof ApiError) {
         setError(err.detail);
@@ -290,6 +300,26 @@ function SyncContent() {
     const id = setInterval(() => { loadDevices(); loadSources(); loadDriveStatus(); loadDriveConnections(); loadOAuthStatus(); }, DEVICE_POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [loadDevices, loadSources, loadDriveStatus, loadDriveConnections, loadOAuthStatus, loadFolderTree]);
+
+  // OAuth callback can redirect back here with
+  // ``?drive_oauth_error=missing_drive_scope`` when the user clicked
+  // through Google's consent screen but unchecked Drive. Pop the
+  // reauth dialog with the scope-specific copy and strip the param
+  // so a hard refresh doesn't re-pop after the user fixes it.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("drive_oauth_error") === "missing_drive_scope") {
+      setReauthReason("missing_scope");
+      setShowReauthDialog(true);
+      params.delete("drive_oauth_error");
+      const qs = params.toString();
+      const next = qs
+        ? `${window.location.pathname}?${qs}`
+        : window.location.pathname;
+      window.history.replaceState(null, "", next);
+    }
+  }, []);
 
   useEffect(() => {
     if (showDriveFolders) {
@@ -501,6 +531,7 @@ function SyncContent() {
       loadDriveConnections();
     } catch (err) {
       if (err instanceof ApiError && err.detail.includes("만료")) {
+        setReauthReason("expired");
         setShowReauthDialog(true);
       } else {
         console.error("Failed to create folder connection:", err);
@@ -647,6 +678,7 @@ function SyncContent() {
                 getAccessToken={getAccessToken}
                 onAuthExpired={() => {
                   setShowFolderBrowser(false);
+                  setReauthReason("expired");
                   setShowReauthDialog(true);
                 }}
               />
@@ -846,6 +878,7 @@ function SyncContent() {
         isOpen={showReauthDialog}
         googleEmail={oauthStatus?.google_email ?? null}
         isLoading={oauthLoading}
+        reason={reauthReason}
         onReconnect={() => {
           setShowReauthDialog(false);
           handleConnectGoogle();
