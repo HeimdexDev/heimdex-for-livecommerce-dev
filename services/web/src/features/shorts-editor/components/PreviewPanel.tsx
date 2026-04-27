@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import type { EditorClip, EditorSubtitle } from "../lib/types";
 import { getActiveSubtitles } from "../lib/source-time";
 import { formatTimelineTimestamp } from "../lib/timeline-math";
+import { resolveFontFamily } from "@/lib/fonts";
 import { usePlaybackSync } from "../hooks/usePlaybackSync";
 import { useOrgSettings } from "@/lib/orgSettings";
 import { getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
@@ -238,7 +239,7 @@ export function PreviewPanel({
                     isSelected && "rounded ring-2 ring-indigo-400 ring-offset-1",
                   )}
                   style={{
-                    fontFamily: sub.style.fontFamily,
+                    fontFamily: resolveFontFamily(sub.style.fontFamily),
                     fontSize: `${Math.max(8, sub.style.fontSizePx * 0.5)}px`,
                     color: sub.style.fontColor,
                     fontWeight: sub.style.fontWeight,

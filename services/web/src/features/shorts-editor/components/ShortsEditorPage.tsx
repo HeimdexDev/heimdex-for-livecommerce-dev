@@ -243,7 +243,7 @@ export function ShortsEditorPage() {
 
 
   return (
-    <div className="h-screen overflow-hidden bg-gray-100">
+    <div className="font-pretendard h-screen overflow-hidden bg-gray-100">
       <EditorHeader
         videoTitle={meta?.video_title ?? null}
         title={title}
