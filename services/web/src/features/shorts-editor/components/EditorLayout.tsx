@@ -11,14 +11,14 @@ interface EditorLayoutProps {
 
 export function EditorLayout({ leftPanel, preview, rightPanel, timeline }: EditorLayoutProps) {
   return (
-    <div className="grid h-[calc(100vh-64px)] grid-cols-[300px_1fr_360px] grid-rows-[1fr_200px] gap-0 overflow-hidden">
-      {/* Left panel — subtitle controls or clip properties */}
+    <div className="grid h-[calc(100vh-64px)] grid-cols-[300px_1fr_420px] grid-rows-[1fr_260px] gap-0 overflow-hidden">
+      {/* Left panel — text overlay authoring or clip properties */}
       <div className="overflow-y-auto border-r border-gray-200 bg-white">
         {leftPanel}
       </div>
 
-      {/* Preview panel — center */}
-      <div className="overflow-hidden bg-gray-950 flex items-center justify-center">
+      {/* Preview panel — center canvas surface */}
+      <div className="flex items-center justify-center overflow-hidden bg-neutral-100">
         {preview}
       </div>
 
