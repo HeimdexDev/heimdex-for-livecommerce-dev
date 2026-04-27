@@ -95,9 +95,13 @@ export function EditorHeader({
           <BackArrowIcon />
         </Link>
 
-        <span className="text-sm font-semibold text-gray-900 truncate max-w-64">
-          {title || videoTitle || "제목 없음"}
-        </span>
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => onTitleChange(e.target.value)}
+          placeholder={videoTitle ?? "제목 없음"}
+          className="max-w-64 truncate rounded-md border border-transparent px-2 py-1 text-sm font-semibold text-gray-900 placeholder-gray-400 hover:border-gray-200 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        />
 
         <span className="text-xs text-gray-400">
           {clipCount}개 장면 &middot; {Math.round(totalDurationMs / 1000)}초
@@ -153,8 +157,8 @@ export function EditorHeader({
             className={cn(
               "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
               canRender
-                ? "bg-indigo-500 text-white hover:bg-indigo-600"
-                : "bg-gray-200 text-gray-400 cursor-not-allowed",
+                ? "bg-indigo-600 text-white hover:bg-indigo-700"
+                : "cursor-not-allowed bg-gray-200 text-gray-400",
             )}
           >
             {isWorking && (
