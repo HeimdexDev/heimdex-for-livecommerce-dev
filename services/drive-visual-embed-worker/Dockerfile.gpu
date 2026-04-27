@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "heimdex-worker-sdk==0.1.0"
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.0"
 
 # PyTorch with CUDA 12.1 support
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
