@@ -20,7 +20,7 @@ from src.message_adapter import RenderJobMessage
 logger = logging.getLogger(__name__)
 _SERVICE_NAME = "shorts-render-worker"
 
-_DEFAULT_FONT_DIR = "/fonts"
+_DEFAULT_FONT_DIR = "/usr/share/fonts/heimdex"
 
 # Lazy-loaded at first use (avoids import errors when testing in isolation)
 CompositionSpec = None
