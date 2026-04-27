@@ -102,29 +102,33 @@ export function SceneListPanel({
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-sm font-semibold text-gray-900">장면 목록</h3>
-          <span className="text-xs text-gray-400">{activeCount}개 선택</span>
-        </div>
-        <div className="flex gap-2">
-          {onPreview && selectedClipIndex != null && (
-            <button
-              type="button"
-              onClick={() => onPreview(selectedClipIndex)}
-              className="flex-1 rounded-md bg-indigo-50 px-2.5 py-1.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 transition-colors"
-            >
-              미리보기
-            </button>
-          )}
-          {onExport && activeCount > 0 && (
-            <button
-              type="button"
-              onClick={onExport}
-              className="flex-1 rounded-md bg-rose-50 px-2.5 py-1.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100 transition-colors"
-            >
-              내보내기
-            </button>
-          )}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-gray-900">장면 목록</h3>
+            <span className="text-xs text-gray-400">{activeCount}개 선택</span>
+          </div>
+          <div className="flex gap-2">
+            {onExport && (
+              <button
+                type="button"
+                onClick={onExport}
+                disabled={activeCount === 0}
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                내보내기
+              </button>
+            )}
+            {onPreview && (
+              <button
+                type="button"
+                onClick={() => selectedClipIndex != null && onPreview(selectedClipIndex)}
+                disabled={selectedClipIndex == null}
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                미리보기
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
