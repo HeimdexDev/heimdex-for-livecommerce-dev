@@ -1,4 +1,5 @@
 import asyncio
+import os
 import importlib
 import logging
 import signal
@@ -35,6 +36,51 @@ def _make_sqs_callback(api_client, settings):
     return callback
 
 
+def _verify_fonts_or_exit() -> None:
+    """Refuse to start if any SUPPORTED_FONTS family is unresolvable.
+
+    Imports the same resolver that render-time uses, so a passing boot
+    check guarantees every render will find its font. Reads FONT_DIR
+    via the same fallback chain as `tasks.render` (env var → default).
+    """
+    from heimdex_media_contracts.composition import SUPPORTED_FONTS, FontNotFoundError
+    from heimdex_media_contracts.composition.filters import _resolve_font_path
+    from src.tasks.render import _DEFAULT_FONT_DIR
+
+    font_dir = os.environ.get("FONT_DIR", _DEFAULT_FONT_DIR)
+    missing: list[str] = []
+    for family in SUPPORTED_FONTS:
+        try:
+            _resolve_font_path(family, 400, font_dir)
+        except FontNotFoundError as exc:
+            missing.append(f"{family}: {exc}")
+
+    if missing:
+        logger.error(
+            "font_dir_missing_required_fonts",
+            extra={"font_dir": font_dir, "missing": missing},
+        )
+        try:
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="worker_boot_failed",
+                category="worker_lifecycle",
+                level="ERROR",
+                metadata={
+                    "reason": "missing_fonts",
+                    "font_dir": font_dir,
+                    "missing": missing,
+                },
+            )
+        except Exception:  # noqa: BLE001 — emit must never block exit
+            pass
+        sys.exit(2)
+    logger.info(
+        "font_dir_verified",
+        extra={"font_dir": font_dir, "supported_fonts": list(SUPPORTED_FONTS)},
+    )
+
+
 def main() -> None:
     get_settings = importlib.import_module("heimdex_worker_sdk.settings").get_worker_settings
     InternalAPIClient = importlib.import_module("heimdex_worker_sdk.internal_api").InternalAPIClient
@@ -45,6 +91,8 @@ def main() -> None:
         level=getattr(logging, settings.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+    _verify_fonts_or_exit()
 
     api_client = InternalAPIClient(
         base_url=settings.drive_api_base_url,
