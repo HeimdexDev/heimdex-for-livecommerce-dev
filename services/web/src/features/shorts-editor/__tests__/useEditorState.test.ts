@@ -253,6 +253,43 @@ describe("useEditorState", () => {
     expect(result.current.state.zoom).toBe(300);
   });
 
+  it("addOverlayAtPlayhead creates an empty overlay at the playhead and selects it", () => {
+    const { result } = renderHook(() => useEditorState());
+    act(() =>
+      result.current.initFromScenes("v", "gdrive", [
+        makeClip({ id: "c1", trimStartMs: 0, trimEndMs: 10_000 }),
+      ]),
+    );
+    act(() => result.current.setPlayhead(2000));
+
+    expect(result.current.state.subtitles).toHaveLength(0);
+
+    act(() => result.current.addOverlayAtPlayhead());
+
+    expect(result.current.state.subtitles).toHaveLength(1);
+    const sub = result.current.state.subtitles[0];
+    expect(sub.text).toBe("");
+    expect(sub.startMs).toBe(2000);
+    expect(sub.endMs).toBeGreaterThan(sub.startMs);
+    expect(result.current.state.selectedSubtitleIndex).toBe(0);
+    expect(result.current.state.isDirty).toBe(true);
+  });
+
+  it("addOverlayAtPlayhead clamps end_ms to total duration", () => {
+    const { result } = renderHook(() => useEditorState());
+    act(() =>
+      result.current.initFromScenes("v", "gdrive", [
+        makeClip({ id: "c1", trimStartMs: 0, trimEndMs: 4_000 }),
+      ]),
+    );
+    act(() => result.current.setPlayhead(3500));
+
+    act(() => result.current.addOverlayAtPlayhead());
+
+    const sub = result.current.state.subtitles[0];
+    expect(sub.endMs).toBeLessThanOrEqual(result.current.state.totalDurationMs);
+  });
+
   it("MARK_CLEAN resets isDirty", () => {
     const { result } = renderHook(() => useEditorState());
     act(() => result.current.initFromScenes("v", "gdrive", [makeClip()]));

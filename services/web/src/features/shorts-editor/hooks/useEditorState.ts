@@ -404,6 +404,24 @@ export function useEditorState() {
     dispatch({ type: "ADD_SUBTITLE", subtitle });
   }, []);
 
+  const addOverlayAtPlayhead = useCallback(() => {
+    const totalMs = state.totalDurationMs;
+    const startMs = Math.max(0, Math.min(state.playheadMs, Math.max(0, totalMs - 500)));
+    const endMs = totalMs > 0
+      ? Math.min(startMs + DEFAULT_SUBTITLE_DURATION_MS, totalMs)
+      : startMs + DEFAULT_SUBTITLE_DURATION_MS;
+    const subtitle: EditorSubtitle = {
+      id: generateSubtitleId(),
+      text: "",
+      startMs,
+      endMs,
+      style: { ...DEFAULT_SUBTITLE_STYLE },
+    };
+    const newIndex = state.subtitles.length;
+    dispatch({ type: "ADD_SUBTITLE", subtitle });
+    dispatch({ type: "SELECT_SUBTITLE", index: newIndex });
+  }, [state.playheadMs, state.totalDurationMs, state.subtitles.length]);
+
   const updateSubtitle = useCallback(
     (index: number, updates: Partial<Omit<EditorSubtitle, "id">>) => {
       dispatch({ type: "UPDATE_SUBTITLE", index, updates });
@@ -447,6 +465,7 @@ export function useEditorState() {
     setClipVolume,
     selectClip,
     addSubtitle,
+    addOverlayAtPlayhead,
     updateSubtitle,
     removeSubtitle,
     selectSubtitle,
