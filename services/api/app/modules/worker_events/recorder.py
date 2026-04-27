@@ -10,6 +10,12 @@ from .schemas import WorkerEventCategory, WorkerEventLevel
 
 logger = get_logger(__name__)
 
+# Caps concurrent DB sessions held for event recording. The asyncpg pool is
+# small (~10) and shared with user-facing request handlers; without this gate
+# an event burst (workers fire ~4 events/job × N concurrent jobs) raced with
+# real traffic and could exhaust the pool.
+_RECORDER_SEMAPHORE = asyncio.Semaphore(20)
+
 
 async def _record_worker_event(
     *,
@@ -31,26 +37,27 @@ async def _record_worker_event(
     Failures are logged and swallowed — observability must never block work.
     """
     try:
-        from app.db.base import get_async_session_factory
+        async with _RECORDER_SEMAPHORE:
+            from app.db.base import get_async_session_factory
 
-        from .repository import WorkerEventRepository
+            from .repository import WorkerEventRepository
 
-        factory = get_async_session_factory()
-        async with factory() as session:
-            repo = WorkerEventRepository(session)
-            await repo.create(
-                service=service,
-                event_name=event_name,
-                category=category,
-                level=level,
-                org_id=org_id,
-                job_id=job_id,
-                video_id=video_id,
-                duration_ms=duration_ms,
-                message=message,
-                metadata=metadata,
-            )
-            await session.commit()
+            factory = get_async_session_factory()
+            async with factory() as session:
+                repo = WorkerEventRepository(session)
+                await repo.create(
+                    service=service,
+                    event_name=event_name,
+                    category=category,
+                    level=level,
+                    org_id=org_id,
+                    job_id=job_id,
+                    video_id=video_id,
+                    duration_ms=duration_ms,
+                    message=message,
+                    metadata=metadata,
+                )
+                await session.commit()
     except Exception:
         logger.warning("worker_event_recording_failed", exc_info=True)
 
