@@ -3,13 +3,17 @@ import importlib
 import logging
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
 import boto3
 import requests
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-transcode-worker"
 
 
 def _update_youtube_status(
@@ -94,6 +98,8 @@ def _process_single_transcode(
 
     temp_dir = Path(settings.drive_temp_dir) / org_id_str / str(file_id)
     temp_dir.mkdir(parents=True, exist_ok=True)
+
+    t_start = time.monotonic()
 
     try:
         s3 = S3Client(bucket=settings.drive_s3_bucket)
@@ -304,6 +310,21 @@ def _process_single_transcode(
         except Exception:
             logger.warning("original_delete_failed", extra={"key": original_key}, exc_info=True)
 
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="transcode_completed",
+            category="job_success",
+            level="INFO",
+            org_id=org_id,
+            job_id=file_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "video_id": video_id,
+                "source_type": source_type,
+                "scene_count": len(scene_result.scenes),
+            },
+        )
+
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         try:
@@ -325,6 +346,22 @@ def _process_single_transcode(
         logger.exception(
             "transcode_processing_failed",
             extra={"org_id": org_id_str, "video_id": video_id, "file_id": str(file_id)},
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="transcode_failed",
+            category="job_failure",
+            level="ERROR",
+            org_id=org_id,
+            job_id=file_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=error_msg[:1000],
+            metadata={
+                "video_id": video_id,
+                "source_type": source_type,
+                "error_class": type(e).__name__,
+                "error_msg": str(e)[:500],
+            },
         )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)

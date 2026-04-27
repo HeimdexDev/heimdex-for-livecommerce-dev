@@ -22,3 +22,4 @@ from app.modules.blur.models import BlurJob  # noqa: F401
 from app.modules.scene_overrides.models import SceneOverride  # noqa: F401
 from app.modules.videos.reprocess_models import SceneReprocessJob  # noqa: F401
 from app.modules.video_summary.models import VideoSummary  # noqa: F401
+from app.modules.worker_events.models import WorkerEvent  # noqa: F401

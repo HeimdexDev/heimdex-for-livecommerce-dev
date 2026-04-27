@@ -8,7 +8,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-caption-worker"
 
 
 def _safe_update_job_status(api_client: Any, video_id: str, file_id: Any, **kwargs: Any) -> None:
@@ -47,6 +50,8 @@ def _process_single_caption(
     video_id = claimed_file.video_id
     temp_dir = Path(tempfile.mkdtemp(prefix=f"caption_{video_id}_"))
 
+    t_start = time.monotonic()
+
     try:
         s3 = S3Client(bucket=settings.drive_s3_bucket)
         manifest_key = scene_manifest_s3_key(org_id_str, video_id)
@@ -57,6 +62,22 @@ def _process_single_caption(
         except Exception as e:
             error_msg = f"manifest_download_failed: {type(e).__name__}: {e}"
             _safe_update_job_status(api_client, video_id, file_id, job_type="caption", status="failed", error=error_msg, lease_token=lease_token)
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="caption_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message=error_msg[:1000],
+                metadata={
+                    "video_id": video_id,
+                    "stage": "manifest_download",
+                    "error_class": type(e).__name__,
+                    "error_msg": str(e)[:500],
+                },
+            )
             return
 
         manifest = json.loads(manifest_path.read_text())
@@ -65,6 +86,21 @@ def _process_single_caption(
 
         if scene_count == 0:
             _safe_update_job_status(api_client, video_id, file_id, job_type="caption", status="done", lease_token=lease_token)
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="caption_skipped",
+                category="job_failure",
+                level="WARNING",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="no_scenes_in_manifest",
+                metadata={
+                    "video_id": video_id,
+                    "reason": "no_scenes",
+                    "error_class": "NoScenes",
+                },
+            )
             return
 
         keyframes_dir = temp_dir / "keyframes"
@@ -114,6 +150,23 @@ def _process_single_caption(
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="caption", status="failed", error="no_keyframes_downloaded", lease_token=lease_token,
             )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="caption_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="no_keyframes_downloaded",
+                metadata={
+                    "video_id": video_id,
+                    "stage": "keyframe_download",
+                    "error_class": "NoKeyframesDownloaded",
+                    "scene_count": scene_count,
+                    "download_failures": download_failures,
+                },
+            )
             return
 
         updated_scenes: list[dict[str, Any]] = []
@@ -138,6 +191,22 @@ def _process_single_caption(
         except Exception as e:
             error_msg = f"caption_reingest_failed: {type(e).__name__}: {e}"
             _safe_update_job_status(api_client, video_id, file_id, job_type="caption", status="failed", error=error_msg, lease_token=lease_token)
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="caption_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=org_id,
+                job_id=file_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message=error_msg[:1000],
+                metadata={
+                    "video_id": video_id,
+                    "stage": "reingest",
+                    "error_class": type(e).__name__,
+                    "error_msg": str(e)[:500],
+                },
+            )
             return
 
         _safe_update_job_status(api_client, video_id, file_id, job_type="caption", status="done", lease_token=lease_token)
@@ -156,12 +225,44 @@ def _process_single_caption(
             },
         )
 
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="caption_completed",
+            category="job_success",
+            level="INFO",
+            org_id=org_id,
+            job_id=file_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "video_id": video_id,
+                "scene_count": scene_count,
+                "frames_processed": len(downloaded_keyframes),
+                "frames_with_caption": frames_with_caption,
+                "total_caption_chars": total_caption_chars,
+            },
+        )
+
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         _safe_update_job_status(api_client, video_id, file_id, job_type="caption", status="failed", error=error_msg, lease_token=lease_token)
         logger.exception(
             "caption_processing_failed",
             extra={"org_id": org_id_str, "video_id": video_id},
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="caption_failed",
+            category="job_failure",
+            level="ERROR",
+            org_id=org_id,
+            job_id=file_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=error_msg[:1000],
+            metadata={
+                "video_id": video_id,
+                "error_class": type(e).__name__,
+                "error_msg": str(e)[:500],
+            },
         )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -237,6 +338,8 @@ def _process_single_scene_caption(
     keyframe_s3_key = scene_job.keyframe_s3_key
     temp_dir = Path(tempfile.mkdtemp(prefix=f"caption_scene_{scene_id}_"))
 
+    t_start = time.monotonic()
+
     try:
         s3 = S3Client(bucket=settings.drive_s3_bucket)
 
@@ -288,6 +391,23 @@ def _process_single_scene_caption(
                     "scene_caption_empty",
                     extra={"scene_id": scene_id, "video_id": video_id, "vlm_tags": True},
                 )
+                emit_event(
+                    service=_SERVICE_NAME,
+                    event_name="caption_skipped",
+                    category="job_failure",
+                    level="WARNING",
+                    org_id=org_id,
+                    duration_ms=int((time.monotonic() - t_start) * 1000),
+                    message="empty_caption_vlm_tags",
+                    metadata={
+                        "video_id": video_id,
+                        "scene_id": scene_id,
+                        "scene_index": scene_job.scene_index,
+                        "mode": "vlm_tags",
+                        "reason": "empty_caption",
+                        "error_class": "EmptyCaption",
+                    },
+                )
                 return
 
             vlm_result = tag_parser_mod.parse_vlm_tag_output(result.caption)
@@ -332,6 +452,23 @@ def _process_single_scene_caption(
                     "duration_ms": int((time.monotonic() - caption_started) * 1000),
                 },
             )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="caption_completed",
+                category="job_success",
+                level="INFO",
+                org_id=org_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                metadata={
+                    "video_id": video_id,
+                    "scene_id": scene_id,
+                    "scene_index": scene_job.scene_index,
+                    "mode": "vlm_tags",
+                    "caption_chars": len(vlm_result.caption),
+                    "parse_success": vlm_result.parse_success,
+                    "has_transcript": bool(transcript_raw),
+                },
+            )
         else:
             # Standard caption (existing behavior)
             result = engine.caption(str(keyframe_path))
@@ -340,6 +477,23 @@ def _process_single_scene_caption(
                 logger.info(
                     "scene_caption_empty",
                     extra={"scene_id": scene_id, "video_id": video_id},
+                )
+                emit_event(
+                    service=_SERVICE_NAME,
+                    event_name="caption_skipped",
+                    category="job_failure",
+                    level="WARNING",
+                    org_id=org_id,
+                    duration_ms=int((time.monotonic() - t_start) * 1000),
+                    message="empty_caption",
+                    metadata={
+                        "video_id": video_id,
+                        "scene_id": scene_id,
+                        "scene_index": scene_job.scene_index,
+                        "mode": "standard",
+                        "reason": "empty_caption",
+                        "error_class": "EmptyCaption",
+                    },
                 )
                 return
 
@@ -363,13 +517,44 @@ def _process_single_scene_caption(
                     "duration_ms": int((time.monotonic() - caption_started) * 1000),
                 },
             )
-    except Exception:
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="caption_completed",
+                category="job_success",
+                level="INFO",
+                org_id=org_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                metadata={
+                    "video_id": video_id,
+                    "scene_id": scene_id,
+                    "scene_index": scene_job.scene_index,
+                    "mode": "standard",
+                    "caption_chars": len(caption_text),
+                },
+            )
+    except Exception as e:
         logger.exception(
             "scene_caption_failed",
             extra={
                 "org_id": org_id_str,
                 "video_id": video_id,
                 "scene_id": scene_id,
+            },
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="caption_failed",
+            category="job_failure",
+            level="ERROR",
+            org_id=org_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=f"{type(e).__name__}: {e}"[:1000],
+            metadata={
+                "video_id": video_id,
+                "scene_id": scene_id,
+                "scene_index": scene_job.scene_index,
+                "error_class": type(e).__name__,
+                "error_msg": str(e)[:500],
             },
         )
         raise  # Re-raise so SQS consumer treats this as failure (retry)

@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install worker SDK
-RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.1"
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.2"
 
 # Install Python dependencies.
 # heimdex-media-contracts + heimdex-media-pipelines are volume-mounted

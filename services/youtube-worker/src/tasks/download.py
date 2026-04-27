@@ -9,7 +9,10 @@ from typing import Any
 
 import yt_dlp
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "youtube-worker"
 
 _youtube_keys = importlib.import_module("heimdex_worker_sdk.youtube_keys")
 youtube_metadata_s3_key = _youtube_keys.youtube_metadata_s3_key
@@ -76,6 +79,8 @@ def download_and_upload_video(api_client: Any, settings: Any, video_record: dict
     youtube_video = str(video_record["youtube_video_id"])
     temp_dir = Path(settings.youtube_temp_dir) / org_id / youtube_video
     temp_dir.mkdir(parents=True, exist_ok=True)
+
+    t_start = time.monotonic()
 
     try:
         _call_api(
@@ -171,6 +176,22 @@ def download_and_upload_video(api_client: Any, settings: Any, video_record: dict
                 "has_subtitles": subtitle_key is not None,
             },
         )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="youtube_completed",
+            category="job_success",
+            level="INFO",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "mode": "download_video",
+                "org_id_str": org_id,
+                "video_id": video_record.get("video_id"),
+                "youtube_video_id": youtube_video,
+                "channel_external_id": channel_ext_id,
+                "has_subtitles": subtitle_key is not None,
+                "has_metadata": metadata_key is not None,
+            },
+        )
         return True
     except Exception as exc:
         logger.exception(
@@ -187,6 +208,23 @@ def download_and_upload_video(api_client: Any, settings: Any, video_record: dict
             status="failed",
             error=f"{type(exc).__name__}: {exc}",
             org_id=org_id,
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="youtube_failed",
+            category="job_failure",
+            level="ERROR",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=f"{type(exc).__name__}: {exc}"[:1000],
+            metadata={
+                "mode": "download_video",
+                "org_id_str": org_id,
+                "video_id": video_record.get("video_id"),
+                "youtube_video_id": youtube_video,
+                "channel_external_id": channel_ext_id,
+                "error_class": type(exc).__name__,
+                "error_msg": str(exc)[:500],
+            },
         )
         return False
     finally:

@@ -23,7 +23,10 @@ import sys
 import threading
 from typing import Optional
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-blur-worker"
 
 # Shared concurrency semaphore — 1 by default. OWLv2 on the base model
 # saturates an L4/A10-class GPU on a single video; parallelizing inside
@@ -162,12 +165,29 @@ def main() -> None:
 
         def shutdown(*_: object) -> None:
             log.info("shutdown_signal_received")
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="worker_stopping",
+                category="worker_lifecycle",
+                level="INFO",
+            )
             sqs_consumer.stop(timeout=30.0)
             stop_event.set()
 
         loop.add_signal_handler(signal.SIGTERM, shutdown)
         loop.add_signal_handler(signal.SIGINT, shutdown)
         log.info("blur_worker_started")
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="worker_started",
+            category="worker_lifecycle",
+            level="INFO",
+            metadata={
+                "concurrency": getattr(settings, "drive_blur_concurrency", 1),
+                "owl_model": settings.blur_owl_model,
+                "gpu": gpu_available,
+            },
+        )
         await stop_event.wait()
 
     asyncio.run(_run())

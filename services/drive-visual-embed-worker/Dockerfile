@@ -8,7 +8,7 @@ ENV HF_HOME=/models/huggingface
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.1"
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.2"
 
 RUN pip install --no-cache-dir \
       "torch>=2.0" --index-url https://download.pytorch.org/whl/cpu \

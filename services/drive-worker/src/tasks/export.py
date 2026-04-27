@@ -14,6 +14,7 @@ import logging
 import re
 import shutil
 import tempfile
+import time
 import unicodedata
 import zipfile
 from dataclasses import dataclass
@@ -22,9 +23,11 @@ from typing import Any
 from urllib.parse import quote
 from xml.etree import ElementTree as ET
 
+from heimdex_worker_sdk import emit_event
 from heimdex_worker_sdk.internal_api import InternalAPIClient
 
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-worker"
 
 
 @dataclass(frozen=True)
@@ -44,19 +47,62 @@ def handle_export_proxy_pack(
     api_client: InternalAPIClient,
     settings: Any,
 ) -> None:
+    t_start = time.monotonic()
     export_id = message.get("export_id", "")
     if not export_id:
         logger.error("export_missing_export_id", extra={"message": message})
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="drive_failed",
+            category="job_failure",
+            level="ERROR",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message="export_missing_export_id",
+            metadata={
+                "mode": "export",
+                "stage": "validation",
+                "error_class": "MissingExportId",
+            },
+        )
         return
 
     record = _fetch_export_record(api_client, export_id)
     if record is None:
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="drive_failed",
+            category="job_failure",
+            level="ERROR",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message="export_record_fetch_failed",
+            metadata={
+                "mode": "export",
+                "stage": "fetch_record",
+                "error_class": "RecordFetchFailed",
+                "export_id": export_id,
+            },
+        )
         return
 
     if record["status"] != "pending":
         logger.info(
             "export_already_processed",
             extra={"export_id": export_id, "status": record["status"]},
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="drive_skipped",
+            category="job_failure",
+            level="WARNING",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=f"export_already_processed:{record['status']}",
+            metadata={
+                "mode": "export",
+                "reason": "already_processed",
+                "error_class": "AlreadyProcessed",
+                "export_id": export_id,
+                "current_status": record["status"],
+            },
         )
         return
 
@@ -70,6 +116,20 @@ def handle_export_proxy_pack(
         clips = _parse_clips(request_body.get("clips", []))
         if not clips:
             _update_status(api_client, export_id, "failed", error_message="No clips in request")
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="drive_failed",
+                category="job_failure",
+                level="ERROR",
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="no_clips_in_request",
+                metadata={
+                    "mode": "export",
+                    "stage": "parse_clips",
+                    "error_class": "NoClips",
+                    "export_id": export_id,
+                },
+            )
             return
 
         deduped_video_ids = list({c.video_id for c in clips})
@@ -84,6 +144,21 @@ def handle_export_proxy_pack(
 
         if not proxy_map:
             _update_status(api_client, export_id, "failed", error_message="No proxies found in S3")
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="drive_failed",
+                category="job_failure",
+                level="ERROR",
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="no_proxies_in_s3",
+                metadata={
+                    "mode": "export",
+                    "stage": "download_proxies",
+                    "error_class": "NoProxiesFound",
+                    "export_id": export_id,
+                    "video_id_count": len(deduped_video_ids),
+                },
+            )
             return
 
         sequence_name = request_body.get("sequence_name", "Heimdex Export")
@@ -135,10 +210,38 @@ def handle_export_proxy_pack(
                 "clip_count": len(clips),
             },
         )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="drive_completed",
+            category="job_success",
+            level="INFO",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "mode": "export",
+                "export_id": export_id,
+                "zip_size_bytes": zip_size,
+                "proxy_count": len(proxy_map),
+                "clip_count": len(clips),
+            },
+        )
 
     except Exception as e:
         logger.exception("export_failed", extra={"export_id": export_id})
         _update_status(api_client, export_id, "failed", error_message=str(e)[:500])
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="drive_failed",
+            category="job_failure",
+            level="ERROR",
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=f"{type(e).__name__}: {e}"[:1000],
+            metadata={
+                "mode": "export",
+                "export_id": export_id,
+                "error_class": type(e).__name__,
+                "error_msg": str(e)[:500],
+            },
+        )
         raise
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

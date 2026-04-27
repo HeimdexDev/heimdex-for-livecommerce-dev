@@ -23,6 +23,7 @@ import json
 import logging
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,9 +31,12 @@ from uuid import UUID
 
 import requests
 
+from heimdex_worker_sdk import emit_event
+
 from src.tasks.ffmpeg_compose import run_compose
 
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-blur-worker"
 
 
 @dataclass
@@ -101,6 +105,8 @@ def process_export_message(
     uploaded_key: str | None = None
     s3: Any = None
 
+    t_start = time.monotonic()
+
     try:
         # 1. Claim. The response carries the authoritative source key,
         #    the category subset of parent masks, and a fresh lease
@@ -114,11 +120,49 @@ def process_export_message(
                 "blur_export_claim_skipped",
                 extra={"export_id": str(export_id), "body": resp.text[:200]},
             )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="blur_skipped",
+                category="job_failure",
+                level="WARNING",
+                org_id=export_ref.org_id,
+                job_id=export_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="export_claim_conflict_409",
+                metadata={
+                    "video_id": export_ref.video_id,
+                    "blur_job_id": str(export_ref.blur_job_id),
+                    "mode": "export",
+                    "stage": "claim",
+                    "reason": "claim_conflict",
+                    "error_class": "ClaimConflict",
+                    "http_status": 409,
+                },
+            )
             return
         if resp.status_code == 404:
             logger.warning(
                 "blur_export_claim_not_found",
                 extra={"export_id": str(export_id)},
+            )
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="blur_skipped",
+                category="job_failure",
+                level="WARNING",
+                org_id=export_ref.org_id,
+                job_id=export_id,
+                duration_ms=int((time.monotonic() - t_start) * 1000),
+                message="export_claim_not_found_404",
+                metadata={
+                    "video_id": export_ref.video_id,
+                    "blur_job_id": str(export_ref.blur_job_id),
+                    "mode": "export",
+                    "stage": "claim",
+                    "reason": "not_found",
+                    "error_class": "ExportNotFound",
+                    "http_status": 404,
+                },
             )
             return
         resp.raise_for_status()
@@ -200,6 +244,23 @@ def process_export_message(
                 "layer_key": uploaded_key,
             },
         )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="blur_completed",
+            category="job_success",
+            level="INFO",
+            org_id=export_ref.org_id,
+            job_id=export_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            metadata={
+                "video_id": export_ref.video_id,
+                "blur_job_id": str(export_ref.blur_job_id),
+                "mode": "export",
+                "mask_count": len(ordered_masks),
+                "categories": categories,
+                "cancelled_mid_run": body_json.get("reason") == "cancelled",
+            },
+        )
 
     except Exception as exc:
         logger.exception(
@@ -207,6 +268,23 @@ def process_export_message(
             extra={
                 "export_id": str(export_id),
                 "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="blur_failed",
+            category="job_failure",
+            level="ERROR",
+            org_id=export_ref.org_id,
+            job_id=export_id,
+            duration_ms=int((time.monotonic() - t_start) * 1000),
+            message=f"{type(exc).__name__}: {exc}"[:1000],
+            metadata={
+                "video_id": export_ref.video_id,
+                "blur_job_id": str(export_ref.blur_job_id),
+                "mode": "export",
+                "error_class": type(exc).__name__,
+                "error_msg": str(exc)[:500],
             },
         )
         # Best-effort mark failed so the customer isn't stuck at

@@ -6,7 +6,10 @@ import sys
 import threading
 from typing import Optional
 
+from heimdex_worker_sdk import emit_event
+
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-ocr-worker"
 
 # Shared concurrency semaphore — acquired by SQS consumer for backpressure control.
 _semaphore: Optional[threading.Semaphore] = None
@@ -90,6 +93,12 @@ def main() -> None:
 
         def shutdown(*_: object) -> None:
             logger.info("shutdown_signal_received")
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="worker_stopping",
+                category="worker_lifecycle",
+                level="INFO",
+            )
             sqs_consumer.stop(timeout=30.0)
             stop_event.set()
 
@@ -99,6 +108,17 @@ def main() -> None:
         logger.info(
             "ocr_worker_started",
             extra={
+                "concurrency": settings.drive_ocr_concurrency,
+                "max_frames_per_video": settings.drive_ocr_max_frames_per_video,
+                "sqs_consumer_enabled": settings.sqs_consumer_enabled,
+            },
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="worker_started",
+            category="worker_lifecycle",
+            level="INFO",
+            metadata={
                 "concurrency": settings.drive_ocr_concurrency,
                 "max_frames_per_video": settings.drive_ocr_max_frames_per_video,
                 "sqs_consumer_enabled": settings.sqs_consumer_enabled,
