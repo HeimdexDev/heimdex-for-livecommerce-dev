@@ -341,6 +341,9 @@ export function ShortsEditorPage() {
             onReorderClips={editor.reorderClips}
             onUpdateSubtitle={editor.updateSubtitle}
             onAddSubtitle={editor.addSubtitle}
+            onRemoveClip={editor.removeClip}
+            onRemoveSubtitle={editor.removeSubtitle}
+            onTogglePlay={() => setPlaying(!state.isPlaying)}
             onSeek={setPlayhead}
             onZoomChange={editor.setZoom}
           />

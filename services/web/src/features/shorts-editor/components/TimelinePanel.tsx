@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import type { EditorClip, EditorSubtitle } from "../lib/types";
 import { msToPixels, formatTimelineTimestamp } from "../lib/timeline-math";
 import { MIN_ZOOM, MAX_ZOOM } from "../constants";
@@ -24,6 +24,9 @@ interface TimelinePanelProps {
   onReorderClips: (fromIndex: number, toIndex: number) => void;
   onUpdateSubtitle: (index: number, updates: Partial<Omit<EditorSubtitle, "id">>) => void;
   onAddSubtitle: (subtitle: EditorSubtitle) => void;
+  onRemoveClip: (index: number) => void;
+  onRemoveSubtitle: (index: number) => void;
+  onTogglePlay: () => void;
   onSeek: (ms: number) => void;
   onZoomChange: (zoom: number) => void;
 }
@@ -97,6 +100,46 @@ function ZoomOutIcon() {
     </svg>
   );
 }
+function TrashIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+    </svg>
+  );
+}
+
+function SkipPrevIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+      <path d="M6 6h2v12H6V6zm3.5 6L18 6v12l-8.5-6z" />
+    </svg>
+  );
+}
+
+function SkipNextIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+      <path d="M6 18l8.5-6L6 6v12zM16 6h2v12h-2V6z" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  return (
+    <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
+      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+    </svg>
+  );
+}
+
 
 export function TimelinePanel({
   clips,
@@ -113,11 +156,39 @@ export function TimelinePanel({
   onReorderClips,
   onUpdateSubtitle,
   onAddSubtitle,
+  onRemoveClip,
+  onRemoveSubtitle,
+  onTogglePlay,
   onSeek,
   onZoomChange,
 }: TimelinePanelProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const trackHeight = 120; // ruler (24px) + clip track (48px) + subtitle track (32px) + padding
+
+  const SEEK_TOLERANCE_MS = 100;
+
+  // Clip-boundary timestamps (sorted, deduped) for transport jump-to-prev/next.
+  const boundaries = useMemo(() => {
+    const set = new Set<number>([0, totalDurationMs]);
+    for (const clip of clips) set.add(clip.timelineStartMs);
+    return Array.from(set).sort((a, b) => a - b);
+  }, [clips, totalDurationMs]);
+
+  const handleSkipPrev = useCallback(() => {
+    const target = [...boundaries].reverse().find((b) => b < playheadMs - SEEK_TOLERANCE_MS) ?? 0;
+    onSeek(target);
+  }, [boundaries, playheadMs, onSeek]);
+
+  const handleSkipNext = useCallback(() => {
+    const target = boundaries.find((b) => b > playheadMs + SEEK_TOLERANCE_MS) ?? totalDurationMs;
+    onSeek(target);
+  }, [boundaries, playheadMs, totalDurationMs, onSeek]);
+
+  const hasSelection = selectedClipIndex != null || selectedSubtitleIndex != null;
+  const handleDeleteSelection = useCallback(() => {
+    if (selectedClipIndex != null) onRemoveClip(selectedClipIndex);
+    else if (selectedSubtitleIndex != null) onRemoveSubtitle(selectedSubtitleIndex);
+  }, [selectedClipIndex, selectedSubtitleIndex, onRemoveClip, onRemoveSubtitle]);
 
   // Auto-scroll to follow playhead during playback
   useEffect(() => {
@@ -146,18 +217,60 @@ export function TimelinePanel({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Toolbar */}
-      <div className="flex h-8 flex-shrink-0 items-center justify-between border-b border-gray-300 bg-gray-100 px-3">
+      {/* Toolbar — trash + timestamp (left), transport (center), zoom (right) */}
+      <div className="grid h-9 flex-shrink-0 grid-cols-3 items-center border-b border-gray-300 bg-gray-100 px-3">
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-medium text-gray-500">타임라인</span>
+          <button
+            type="button"
+            onClick={handleDeleteSelection}
+            disabled={!hasSelection}
+            aria-label="선택 항목 삭제"
+            className="rounded p-1 text-gray-500 transition-colors hover:bg-gray-200 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <TrashIcon />
+          </button>
           <TimestampInput playheadMs={playheadMs} onSeek={onSeek} />
+          <span className="font-mono text-[10px] text-gray-400">
+            / {formatTimelineTimestamp(totalDurationMs)}
+          </span>
         </div>
-        <div className="flex items-center gap-1">
+
+        <div className="flex items-center justify-center gap-1">
+          <button
+            type="button"
+            onClick={handleSkipPrev}
+            disabled={playheadMs <= SEEK_TOLERANCE_MS}
+            aria-label="이전 클립으로"
+            className="rounded p-1 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <SkipPrevIcon />
+          </button>
+          <button
+            type="button"
+            onClick={onTogglePlay}
+            disabled={clips.length === 0}
+            aria-label={isPlaying ? "일시정지" : "재생"}
+            className="rounded p-1 text-gray-700 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            {isPlaying ? <PauseIcon /> : <PlayIcon />}
+          </button>
+          <button
+            type="button"
+            onClick={handleSkipNext}
+            disabled={playheadMs >= totalDurationMs - SEEK_TOLERANCE_MS}
+            aria-label="다음 클립으로"
+            className="rounded p-1 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <SkipNextIcon />
+          </button>
+        </div>
+
+        <div className="flex items-center justify-end gap-1">
           <button
             type="button"
             onClick={handleZoomOut}
             disabled={zoom <= MIN_ZOOM}
-            className="rounded p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
+            className="rounded p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-30"
           >
             <ZoomOutIcon />
           </button>
@@ -166,7 +279,7 @@ export function TimelinePanel({
             type="button"
             onClick={handleZoomIn}
             disabled={zoom >= MAX_ZOOM}
-            className="rounded p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
+            className="rounded p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-30"
           >
             <ZoomInIcon />
           </button>
@@ -212,6 +325,7 @@ export function TimelinePanel({
             zoom={zoom}
             height={trackHeight}
             onSeek={onSeek}
+            showTooltip
           />
         </div>
       </div>
