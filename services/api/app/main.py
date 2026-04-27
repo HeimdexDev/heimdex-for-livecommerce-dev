@@ -36,7 +36,6 @@ from app.modules.scene_overrides.router import router as scene_overrides_router
 from app.modules.grouping.router import router as grouping_router
 from app.modules.video_summary.router import router as video_summary_router
 from app.modules.youtube.router import router as youtube_router
-from app.modules.worker_events.recorder import record_worker_event
 
 setup_logging()
 logger = get_logger(__name__)
@@ -59,13 +58,6 @@ async def lifespan(app: FastAPI):
     
     settings = get_settings()
     logger.info("application_starting", environment=settings.environment)
-    record_worker_event(
-        service="api",
-        event_name="application_starting",
-        category="healthcheck",
-        level="INFO",
-        metadata={"environment": settings.environment},
-    )
     settings.validate_production_guards()
     
     from app.db.base import get_async_engine
@@ -84,7 +76,6 @@ async def lifespan(app: FastAPI):
     await _startup_search_checks(opensearch_client)
     await _startup_scene_search_checks(scene_opensearch_client)
     await _ensure_search_event_partitions(engine)
-    await _ensure_worker_event_partitions(engine)
 
     if settings.embedding_use_mock:
         logger.warning(
@@ -100,12 +91,6 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("application_shutting_down")
-    record_worker_event(
-        service="api",
-        event_name="application_shutting_down",
-        category="healthcheck",
-        level="INFO",
-    )
     await opensearch_client.close()
     await scene_opensearch_client.close()
     app.state.opensearch_client = None
@@ -215,30 +200,6 @@ async def _ensure_search_event_partitions(engine) -> None:
             "search_event_partition_setup_failed",
             error=str(e),
             message="Search analytics will fail until partitions are created. "
-                    "This is non-fatal — the API will start normally.",
-        )
-
-
-async def _ensure_worker_event_partitions(engine) -> None:
-    """Create worker_events partitions for the current and next 2 months.
-
-    Uses a short-lived session independent of the request lifecycle.
-    Safe to call on every startup — all DDL is IF NOT EXISTS.
-    """
-    from app.modules.worker_events.repository import WorkerEventRepository
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    try:
-        async with factory() as session:
-            repo = WorkerEventRepository(session)
-            partitions = await repo.ensure_partitions(months_ahead=2)
-            await session.commit()
-            logger.info("worker_event_partitions_ready", partitions=partitions)
-    except Exception as e:
-        logger.warning(
-            "worker_event_partition_setup_failed",
-            error=str(e),
-            message="Worker observability writes will fail until partitions are created. "
                     "This is non-fatal — the API will start normally.",
         )
 
@@ -388,9 +349,6 @@ app.include_router(internal_blur_router)
 from app.modules.blur.export_internal_router import router as internal_blur_export_router
 app.include_router(internal_blur_export_router)
 
-from app.modules.worker_events.internal_router import router as internal_worker_events_router
-app.include_router(internal_worker_events_router)
-
 app.include_router(basket_router, prefix="/api")
 app.include_router(thumbnails_public_router, prefix="/api")
 app.include_router(videos_router, prefix="/api")
@@ -442,18 +400,6 @@ if get_settings().drive_connector_enabled:
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("unhandled_exception", error=str(exc))
-    record_worker_event(
-        service="api",
-        event_name="unhandled_exception",
-        category="system_error",
-        level="ERROR",
-        message=str(exc)[:1000],
-        metadata={
-            "path": request.url.path,
-            "method": request.method,
-            "exception_type": type(exc).__name__,
-        },
-    )
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "Internal server error"},

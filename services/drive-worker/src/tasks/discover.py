@@ -7,7 +7,6 @@ No direct database access — all state managed via InternalAPIClient.
 """
 # pyright: reportMissingImports=false
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -15,7 +14,6 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build as build_google_service
 from googleapiclient.errors import HttpError
 
-from heimdex_worker_sdk import emit_event
 from heimdex_worker_sdk.content_type import IMAGE_MIME_TYPES, is_image, is_supported_mime
 from heimdex_worker_sdk.internal_api import InternalAPIClient
 
@@ -24,7 +22,6 @@ _IMAGE_MIME_FILTER = " or ".join(f"mimeType='{m}'" for m in sorted(IMAGE_MIME_TY
 _MIME_QUERY = f"(mimeType contains 'video/' or {_IMAGE_MIME_FILTER})"
 
 logger = logging.getLogger(__name__)
-_SERVICE_NAME = "drive-worker"
 
 _MAX_UPSERT_BATCH = 500
 
@@ -121,7 +118,6 @@ def discover_new_files(api_client: InternalAPIClient, settings: Any) -> int:
 
     for conn in connections:
         org_id_str = str(conn.org_id)
-        t_conn_start = time.monotonic()
         try:
             token_info = api_client.get_drive_token(
                 conn.connection_id, lease_token=conn.lease_token,
@@ -154,22 +150,6 @@ def discover_new_files(api_client: InternalAPIClient, settings: Any) -> int:
                     "discovered": count,
                 },
             )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="drive_completed",
-                category="job_success",
-                level="INFO",
-                org_id=conn.org_id,
-                job_id=conn.connection_id,
-                duration_ms=int((time.monotonic() - t_conn_start) * 1000),
-                metadata={
-                    "mode": "discover",
-                    "scope_type": conn.scope_type,
-                    "drive_id": conn.drive_id,
-                    "folder_id": conn.folder_id,
-                    "discovered": count,
-                },
-            )
         except Exception as e:
             logger.exception(
                 "discover_connection_failed",
@@ -194,24 +174,6 @@ def discover_new_files(api_client: InternalAPIClient, settings: Any) -> int:
                     extra={"connection_id": str(conn.connection_id)},
                     exc_info=True,
                 )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="drive_failed",
-                category="job_failure",
-                level="ERROR",
-                org_id=conn.org_id,
-                job_id=conn.connection_id,
-                duration_ms=int((time.monotonic() - t_conn_start) * 1000),
-                message=f"{type(e).__name__}: {e}"[:1000],
-                metadata={
-                    "mode": "discover",
-                    "scope_type": conn.scope_type,
-                    "drive_id": conn.drive_id,
-                    "folder_id": conn.folder_id,
-                    "error_class": type(e).__name__,
-                    "error_msg": str(e)[:500],
-                },
-            )
 
     return discovered_count
 

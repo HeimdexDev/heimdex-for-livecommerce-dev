@@ -1,12 +1,8 @@
 import logging
-import time
 import importlib
 from typing import Any
 
-from heimdex_worker_sdk import emit_event
-
 logger = logging.getLogger(__name__)
-_SERVICE_NAME = "youtube-worker"
 
 _youtube_keys = importlib.import_module("heimdex_worker_sdk.youtube_keys")
 youtube_metadata_s3_key = _youtube_keys.youtube_metadata_s3_key
@@ -34,21 +30,6 @@ def cleanup_completed_videos(api_client: Any, settings: Any) -> int:
     for video in videos:
         if not video.get("all_enrichment_complete", True):
             logger.info("youtube_cleanup_skipped_incomplete", extra={"video_id": video.get("video_id")})
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="youtube_skipped",
-                category="job_failure",
-                level="WARNING",
-                duration_ms=0,
-                message="enrichment_incomplete",
-                metadata={
-                    "mode": "cleanup_video",
-                    "video_id": video.get("video_id"),
-                    "youtube_video_id": video.get("youtube_video_id"),
-                    "reason": "enrichment_incomplete",
-                    "error_class": "EnrichmentIncomplete",
-                },
-            )
             continue
         if video.get("original_deleted"):
             continue
@@ -57,8 +38,6 @@ def cleanup_completed_videos(api_client: Any, settings: Any) -> int:
         channel_ext_id = str(video.get("channel_external_id") or video.get("channel_id"))
         youtube_video = str(video["youtube_video_id"])
         video_pk = video["id"]
-
-        t_start = time.monotonic()
 
         try:
             s3.delete(youtube_original_s3_key(org_id, channel_ext_id, youtube_video))
@@ -76,40 +55,9 @@ def cleanup_completed_videos(api_client: Any, settings: Any) -> int:
                 "youtube_original_cleanup_complete",
                 extra={"video_id": video.get("video_id"), "youtube_video_id": youtube_video},
             )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="youtube_completed",
-                category="job_success",
-                level="INFO",
-                duration_ms=int((time.monotonic() - t_start) * 1000),
-                metadata={
-                    "mode": "cleanup_video",
-                    "org_id_str": org_id,
-                    "video_id": video.get("video_id"),
-                    "youtube_video_id": youtube_video,
-                    "channel_external_id": channel_ext_id,
-                },
-            )
-        except Exception as e:
+        except Exception:
             logger.exception(
                 "youtube_original_cleanup_failed",
                 extra={"video_id": video.get("video_id"), "youtube_video_id": youtube_video},
-            )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="youtube_failed",
-                category="job_failure",
-                level="ERROR",
-                duration_ms=int((time.monotonic() - t_start) * 1000),
-                message=f"{type(e).__name__}: {e}"[:1000],
-                metadata={
-                    "mode": "cleanup_video",
-                    "org_id_str": org_id,
-                    "video_id": video.get("video_id"),
-                    "youtube_video_id": youtube_video,
-                    "channel_external_id": channel_ext_id,
-                    "error_class": type(e).__name__,
-                    "error_msg": str(e)[:500],
-                },
             )
     return deleted_count

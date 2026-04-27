@@ -11,7 +11,7 @@ RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.1"
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.1.0"
 
 COPY services/youtube-worker/pyproject.toml .
 RUN pip install --no-cache-dir -e . 2>/dev/null || \

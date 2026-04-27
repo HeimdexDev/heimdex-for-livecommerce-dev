@@ -1,16 +1,12 @@
 # pyright: reportMissingModuleSource=false, reportMissingTypeArgument=false, reportArgumentType=false
 
 import logging
-import time
 import importlib
 from typing import Any
 
 import yt_dlp
 
-from heimdex_worker_sdk import emit_event
-
 logger = logging.getLogger(__name__)
-_SERVICE_NAME = "youtube-worker"
 youtube_video_id = importlib.import_module("heimdex_worker_sdk.youtube_keys").youtube_video_id
 
 
@@ -79,7 +75,6 @@ def sync_all_channels(api_client: Any, settings: Any) -> int:
         channel_id = str(channel["id"])
         org_id = str(channel.get("org_id", default_org_id))
         channel_url = channel["channel_url"]
-        t_chan_start = time.monotonic()
         try:
             cookies = getattr(settings, "youtube_cookies_path", "") or None
             discovered = enumerate_channel(channel_url, cookies_path=cookies)
@@ -126,35 +121,6 @@ def sync_all_channels(api_client: Any, settings: Any) -> int:
                     "created_count": len(new_items),
                 },
             )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="youtube_completed",
-                category="job_success",
-                level="INFO",
-                duration_ms=int((time.monotonic() - t_chan_start) * 1000),
-                metadata={
-                    "mode": "sync_channel",
-                    "channel_id": channel_id,
-                    "org_id_str": org_id,
-                    "discovered_count": len(discovered),
-                    "created_count": len(new_items),
-                },
-            )
-        except Exception as e:
+        except Exception:
             logger.exception("youtube_channel_sync_failed", extra={"channel_id": channel_id})
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="youtube_failed",
-                category="job_failure",
-                level="ERROR",
-                duration_ms=int((time.monotonic() - t_chan_start) * 1000),
-                message=f"{type(e).__name__}: {e}"[:1000],
-                metadata={
-                    "mode": "sync_channel",
-                    "channel_id": channel_id,
-                    "org_id_str": org_id,
-                    "error_class": type(e).__name__,
-                    "error_msg": str(e)[:500],
-                },
-            )
     return created_total

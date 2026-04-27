@@ -18,10 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from heimdex_worker_sdk import emit_event
-
 logger = logging.getLogger(__name__)
-_SERVICE_NAME = "drive-visual-embed-worker"
 
 ENRICH_BATCH_SIZE = 200
 
@@ -161,8 +158,6 @@ def _process_single_visual_embed(
     video_id = claimed_file.video_id
     temp_dir = Path(tempfile.mkdtemp(prefix=f"visual_embed_{video_id}_"))
 
-    t_start = time.monotonic()
-
     try:
         # 1. Load model on first call
         _load_vision_model(use_gpu=getattr(settings, "use_gpu", False))
@@ -180,23 +175,6 @@ def _process_single_visual_embed(
                 api_client, video_id, file_id, job_type="visual_embed", status="failed",
                 error=error_msg, lease_token=lease_token,
             )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="visual_embed_failed",
-                category="job_failure",
-                level="ERROR",
-                org_id=org_id,
-                job_id=file_id,
-                duration_ms=int((time.monotonic() - t_start) * 1000),
-                message=error_msg[:1000],
-                metadata={
-                    "video_id": video_id,
-                    "mode": "v1_per_video",
-                    "stage": "manifest_download",
-                    "error_class": type(e).__name__,
-                    "error_msg": str(e)[:500],
-                },
-            )
             return
 
         manifest = json.loads(manifest_path.read_text())
@@ -206,22 +184,6 @@ def _process_single_visual_embed(
         if scene_count == 0:
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="visual_embed", status="done", lease_token=lease_token,
-            )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="visual_embed_skipped",
-                category="job_failure",
-                level="WARNING",
-                org_id=org_id,
-                job_id=file_id,
-                duration_ms=int((time.monotonic() - t_start) * 1000),
-                message="no_scenes_in_manifest",
-                metadata={
-                    "video_id": video_id,
-                    "mode": "v1_per_video",
-                    "reason": "no_scenes",
-                    "error_class": "NoScenes",
-                },
             )
             return
 
@@ -263,24 +225,6 @@ def _process_single_visual_embed(
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="visual_embed", status="failed",
                 error="no_keyframes_downloaded", lease_token=lease_token,
-            )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="visual_embed_failed",
-                category="job_failure",
-                level="ERROR",
-                org_id=org_id,
-                job_id=file_id,
-                duration_ms=int((time.monotonic() - t_start) * 1000),
-                message="no_keyframes_downloaded",
-                metadata={
-                    "video_id": video_id,
-                    "mode": "v1_per_video",
-                    "stage": "keyframe_download",
-                    "error_class": "NoKeyframesDownloaded",
-                    "scene_count": scene_count,
-                    "download_failures": download_failures,
-                },
             )
             return
 
@@ -332,22 +276,6 @@ def _process_single_visual_embed(
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="visual_embed", status="done", lease_token=lease_token,
             )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="visual_embed_skipped",
-                category="job_failure",
-                level="WARNING",
-                org_id=org_id,
-                job_id=file_id,
-                duration_ms=int((time.monotonic() - t_start) * 1000),
-                message="no_enrich_payload",
-                metadata={
-                    "video_id": video_id,
-                    "mode": "v1_per_video",
-                    "reason": "no_enrich_payload",
-                    "error_class": "NoEnrichPayload",
-                },
-            )
             return
 
         try:
@@ -362,23 +290,6 @@ def _process_single_visual_embed(
             _safe_update_job_status(
                 api_client, video_id, file_id, job_type="visual_embed", status="failed",
                 error=error_msg, lease_token=lease_token,
-            )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="visual_embed_failed",
-                category="job_failure",
-                level="ERROR",
-                org_id=org_id,
-                job_id=file_id,
-                duration_ms=int((time.monotonic() - t_start) * 1000),
-                message=error_msg[:1000],
-                metadata={
-                    "video_id": video_id,
-                    "mode": "v1_per_video",
-                    "stage": "enrich",
-                    "error_class": type(e).__name__,
-                    "error_msg": str(e)[:500],
-                },
             )
             return
 
@@ -400,24 +311,6 @@ def _process_single_visual_embed(
             },
         )
 
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="visual_embed_completed",
-            category="job_success",
-            level="INFO",
-            org_id=org_id,
-            job_id=file_id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            metadata={
-                "video_id": video_id,
-                "mode": "v1_per_video",
-                "scene_count": scene_count,
-                "frames_processed": len(downloaded_keyframes),
-                "frames_embedded": len(enrich_scenes),
-                "download_failures": download_failures,
-            },
-        )
-
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         _safe_update_job_status(
@@ -427,22 +320,6 @@ def _process_single_visual_embed(
         logger.exception(
             "visual_embed_processing_failed",
             extra={"org_id": org_id_str, "video_id": video_id},
-        )
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="visual_embed_failed",
-            category="job_failure",
-            level="ERROR",
-            org_id=org_id,
-            job_id=file_id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            message=error_msg[:1000],
-            metadata={
-                "video_id": video_id,
-                "mode": "v1_per_video",
-                "error_class": type(e).__name__,
-                "error_msg": str(e)[:500],
-            },
         )
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -505,8 +382,6 @@ def _process_single_scene_visual_embed(
     keyframe_s3_key = scene_job.keyframe_s3_key
     temp_dir = Path(tempfile.mkdtemp(prefix=f"visual_embed_scene_{scene_id}_"))
 
-    t_start = time.monotonic()
-
     try:
         # 1. Load model on first call (cached for worker lifetime)
         _load_vision_model(use_gpu=getattr(settings, "use_gpu", False))
@@ -552,45 +427,13 @@ def _process_single_scene_visual_embed(
                 "embed_duration_ms": embed_duration_ms,
             },
         )
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="visual_embed_completed",
-            category="job_success",
-            level="INFO",
-            org_id=org_id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            metadata={
-                "video_id": video_id,
-                "scene_id": scene_id,
-                "scene_index": scene_job.scene_index,
-                "mode": "v2_per_scene",
-                "embed_duration_ms": embed_duration_ms,
-            },
-        )
-    except Exception as e:
+    except Exception:
         logger.exception(
             "scene_visual_embed_failed",
             extra={
                 "org_id": org_id_str,
                 "video_id": video_id,
                 "scene_id": scene_id,
-            },
-        )
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="visual_embed_failed",
-            category="job_failure",
-            level="ERROR",
-            org_id=org_id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            message=f"{type(e).__name__}: {e}"[:1000],
-            metadata={
-                "video_id": video_id,
-                "scene_id": scene_id,
-                "scene_index": scene_job.scene_index,
-                "mode": "v2_per_scene",
-                "error_class": type(e).__name__,
-                "error_msg": str(e)[:500],
             },
         )
         raise  # Re-raise so SQS consumer treats this as failure (retry)
@@ -625,8 +468,6 @@ def _process_single_scene_color_extract(
     keyframe_s3_key = scene_job.keyframe_s3_key
     temp_dir = Path(tempfile.mkdtemp(prefix=f"color_extract_{scene_id}_"))
 
-    t_start = time.monotonic()
-
     try:
         s3 = S3Client(bucket=settings.drive_s3_bucket)
         keyframe_path = temp_dir / f"{scene_id}.jpg"
@@ -657,43 +498,13 @@ def _process_single_scene_color_extract(
                 "dominant_colors": hex_colors[:3],
             },
         )
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="visual_embed_completed",
-            category="job_success",
-            level="INFO",
-            org_id=org_id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            metadata={
-                "video_id": video_id,
-                "scene_id": scene_id,
-                "mode": "v2_color_extract",
-                "dominant_colors": hex_colors[:3],
-            },
-        )
-    except Exception as e:
+    except Exception:
         logger.exception(
             "scene_color_extract_failed",
             extra={
                 "org_id": org_id_str,
                 "video_id": video_id,
                 "scene_id": scene_id,
-            },
-        )
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="visual_embed_failed",
-            category="job_failure",
-            level="ERROR",
-            org_id=org_id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            message=f"{type(e).__name__}: {e}"[:1000],
-            metadata={
-                "video_id": video_id,
-                "scene_id": scene_id,
-                "mode": "v2_color_extract",
-                "error_class": type(e).__name__,
-                "error_msg": str(e)[:500],
             },
         )
         raise

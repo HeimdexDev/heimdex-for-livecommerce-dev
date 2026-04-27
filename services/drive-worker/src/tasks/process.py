@@ -22,12 +22,10 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build as build_google_service
 from googleapiclient.http import MediaIoBaseDownload
 
-from heimdex_worker_sdk import emit_event
 from heimdex_worker_sdk.content_type import is_image
 from heimdex_worker_sdk.internal_api import InternalAPIClient
 
 logger = logging.getLogger(__name__)
-_SERVICE_NAME = "drive-worker"
 
 
 def _build_drive_web_view_link(google_file_id: str) -> str:
@@ -114,8 +112,6 @@ def _process_image(
     scene_id = f"{video_id}_scene_000"
     temp_dir = Path(settings.drive_temp_dir) / org_id_str / str(claimed_file.id)
     temp_dir.mkdir(parents=True, exist_ok=True)
-
-    t_start = time.monotonic()
 
     try:
         token_info = api_client.get_drive_token(
@@ -240,22 +236,6 @@ def _process_image(
                 "keyframe_s3_prefix": kf_prefix,
             },
         )
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="drive_completed",
-            category="job_success",
-            level="INFO",
-            org_id=claimed_file.org_id,
-            job_id=claimed_file.id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            metadata={
-                "video_id": video_id,
-                "mode": "image",
-                "format": meta.format,
-                "width": meta.width,
-                "height": meta.height,
-            },
-        )
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         logger.error("image_processing_failed", extra={
@@ -276,22 +256,6 @@ def _process_image(
                 extra={"file_id": str(claimed_file.id)},
                 exc_info=True,
             )
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="drive_failed",
-            category="job_failure",
-            level="ERROR",
-            org_id=claimed_file.org_id,
-            job_id=claimed_file.id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            message=error_msg[:1000],
-            metadata={
-                "video_id": video_id,
-                "mode": "image",
-                "error_class": type(e).__name__,
-                "error_msg": str(e)[:500],
-            },
-        )
         raise
     finally:
         if temp_dir.exists():
@@ -311,23 +275,6 @@ def _process_single_file(
                 "file_name": claimed_file.file_name,
                 "reason": "image_processing_disabled",
             })
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="drive_skipped",
-                category="job_failure",
-                level="WARNING",
-                org_id=claimed_file.org_id,
-                job_id=claimed_file.id,
-                duration_ms=0,
-                message="image_processing_disabled",
-                metadata={
-                    "video_id": claimed_file.video_id,
-                    "mode": "image",
-                    "reason": "image_processing_disabled",
-                    "error_class": "ImageProcessingDisabled",
-                    "mime_type": mime_type,
-                },
-            )
             return
         return _process_image(api_client, settings, claimed_file)
 
@@ -344,8 +291,6 @@ def _process_single_file(
     org_id_str = str(claimed_file.org_id)
     temp_dir = Path(settings.drive_temp_dir) / org_id_str / str(claimed_file.id)
     temp_dir.mkdir(parents=True, exist_ok=True)
-
-    t_start = time.monotonic()
 
     try:
         # Get access token via token broker.
@@ -385,20 +330,6 @@ def _process_single_file(
                 claimed_file=claimed_file,
                 original_path=original_path,
                 temp_dir=temp_dir,
-            )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="drive_completed",
-                category="job_success",
-                level="INFO",
-                org_id=claimed_file.org_id,
-                job_id=claimed_file.id,
-                duration_ms=int((time.monotonic() - t_start) * 1000),
-                metadata={
-                    "video_id": claimed_file.video_id,
-                    "mode": "gpu_handoff",
-                    "next_stage": "drive_transcode_worker",
-                },
             )
             return
 
@@ -454,20 +385,6 @@ def _process_single_file(
                 proxy_probe=proxy_probe,
                 proxy_size=proxy_size,
                 temp_dir=temp_dir,
-            )
-            emit_event(
-                service=_SERVICE_NAME,
-                event_name="drive_completed",
-                category="job_success",
-                level="INFO",
-                org_id=claimed_file.org_id,
-                job_id=claimed_file.id,
-                duration_ms=int((time.monotonic() - t_start) * 1000),
-                metadata={
-                    "video_id": claimed_file.video_id,
-                    "mode": "stt_split_handoff",
-                    "next_stage": "drive_stt_worker",
-                },
             )
             return
 
@@ -601,24 +518,6 @@ def _process_single_file(
             },
         )
 
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="drive_completed",
-            category="job_success",
-            level="INFO",
-            org_id=claimed_file.org_id,
-            job_id=claimed_file.id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            metadata={
-                "video_id": claimed_file.video_id,
-                "mode": "video_full",
-                "transcoded": decision.should_transcode,
-                "scene_count": len(scene_result.scenes),
-                "indexed_count": ingest_result["indexed_count"],
-                "proxy_size_bytes": proxy_size,
-            },
-        )
-
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         logger.error("file_processing_failed", extra={
@@ -638,22 +537,6 @@ def _process_single_file(
                 extra={"file_id": str(claimed_file.id)},
                 exc_info=True,
             )
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="drive_failed",
-            category="job_failure",
-            level="ERROR",
-            org_id=claimed_file.org_id,
-            job_id=claimed_file.id,
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            message=error_msg[:1000],
-            metadata={
-                "video_id": claimed_file.video_id,
-                "mode": "video_full",
-                "error_class": type(e).__name__,
-                "error_msg": str(e)[:500],
-            },
-        )
 
     finally:
         if temp_dir.exists():

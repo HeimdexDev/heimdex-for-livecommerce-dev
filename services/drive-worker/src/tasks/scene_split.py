@@ -29,12 +29,10 @@ from heimdex_worker_sdk.drive_keys import (
     thumbnail_s3_key,
     thumbnail_s3_prefix,
 )
-from heimdex_worker_sdk import emit_event
 from heimdex_worker_sdk.internal_api import InternalAPIClient
 from heimdex_worker_sdk.s3 import S3Client
 
 logger = logging.getLogger(__name__)
-_SERVICE_NAME = "drive-worker"
 
 INGEST_BATCH_SIZE = 200
 
@@ -65,8 +63,6 @@ def handle_scene_split(
         "video_id": video_id,
         "stt_available": stt_available,
     })
-
-    t_start = time.monotonic()
 
     try:
         s3 = S3Client(bucket=settings.drive_s3_bucket)
@@ -203,23 +199,6 @@ def handle_scene_split(
             "speech_used": speech_segments is not None,
         })
 
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="drive_completed",
-            category="job_success",
-            level="INFO",
-            job_id=UUID(file_id),
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            metadata={
-                "video_id": video_id,
-                "mode": "scene_split",
-                "scene_count": len(scene_result.scenes),
-                "indexed_count": indexed_count,
-                "speech_used": speech_segments is not None,
-                "stt_available": stt_available,
-            },
-        )
-
     except Exception as e:
         error_msg = f"{type(e).__name__}: {e}"
         logger.exception("scene_split_failed", extra={
@@ -234,21 +213,6 @@ def handle_scene_split(
             )
         except Exception:
             logger.warning("scene_split_status_update_failed", exc_info=True)
-        emit_event(
-            service=_SERVICE_NAME,
-            event_name="drive_failed",
-            category="job_failure",
-            level="ERROR",
-            job_id=UUID(file_id),
-            duration_ms=int((time.monotonic() - t_start) * 1000),
-            message=error_msg[:1000],
-            metadata={
-                "video_id": video_id,
-                "mode": "scene_split",
-                "error_class": type(e).__name__,
-                "error_msg": str(e)[:500],
-            },
-        )
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
