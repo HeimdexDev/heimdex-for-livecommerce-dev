@@ -1,12 +1,28 @@
 "use client";
 
+export type OAuthReauthReason = "expired" | "missing_scope";
+
 interface OAuthExpiredDialogProps {
   isOpen: boolean;
   googleEmail: string | null;
   isLoading: boolean;
   onReconnect: () => void;
   onClose: () => void;
+  /** Why the dialog is showing — drives the title/copy. Defaults to
+   *  ``"expired"`` so existing call sites stay backwards compatible. */
+  reason?: OAuthReauthReason;
 }
+
+const COPY: Record<OAuthReauthReason, { title: string; body: string }> = {
+  expired: {
+    title: "Google 연결이 만료되었습니다",
+    body: "Google 드라이브에 접근하려면 다시 인증해 주세요.",
+  },
+  missing_scope: {
+    title: "Google 드라이브 권한이 누락되었습니다",
+    body: "다시 연결할 때 Google 동의 화면에서 \"Google Drive의 모든 파일 보기 및 다운로드\" 항목을 반드시 체크해 주세요. 체크하지 않으면 새 파일이 동기화되지 않습니다.",
+  },
+};
 
 export function OAuthExpiredDialog({
   isOpen,
@@ -14,8 +30,10 @@ export function OAuthExpiredDialog({
   isLoading,
   onReconnect,
   onClose,
+  reason = "expired",
 }: OAuthExpiredDialogProps) {
   if (!isOpen) return null;
+  const { title, body } = COPY[reason];
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
@@ -47,11 +65,11 @@ export function OAuthExpiredDialog({
         </div>
 
         <h2 className="mt-4 text-center text-lg font-bold text-gray-900">
-          Google 연결이 만료되었습니다
+          {title}
         </h2>
 
         <p className="mt-2 text-center text-sm text-gray-600">
-          Google 드라이브에 접근하려면 다시 인증해 주세요.
+          {body}
         </p>
 
         {googleEmail && (

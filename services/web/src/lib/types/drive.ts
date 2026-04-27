@@ -51,6 +51,11 @@ export interface DriveOAuthStatus {
   connected: boolean;
   google_email: string | null;
   connected_at: string | null;
+  /** ``true`` = stored token has drive.readonly. ``false`` = the user
+   *  is connected but missing the Drive scope (Google's granular
+   *  consent let them deselect it) — UI should auto-pop the reauth
+   *  dialog. ``null`` = unknown (legacy token); treat as OK. */
+  scope_ok?: boolean | null;
 }
 
 export interface DriveFolderItem {
