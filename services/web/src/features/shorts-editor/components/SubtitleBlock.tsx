@@ -85,17 +85,17 @@ export function SubtitleBlock({
   return (
     <div
       className={cn(
-        "group absolute top-1 bottom-1 flex items-center overflow-hidden rounded border",
+        "group absolute bottom-1 top-1 flex items-center overflow-hidden rounded border",
         isSelected
-          ? "border-amber-400 bg-amber-500/50 ring-1 ring-amber-400 z-10"
-          : "border-amber-500/40 bg-amber-500/30 hover:border-amber-400/60",
+          ? "z-10 border-gray-700 bg-white ring-1 ring-gray-700"
+          : "border-gray-300 bg-white hover:border-gray-500",
       )}
       style={{ left: leftPx, width: Math.max(widthPx, 8) }}
       onClick={(e) => { e.stopPropagation(); onSelect(); }}
     >
       {/* Left resize handle */}
       <div
-        className="absolute left-0 top-0 bottom-0 z-20 w-1.5 cursor-col-resize opacity-0 group-hover:opacity-100 bg-amber-300/50"
+        className="absolute bottom-0 left-0 top-0 z-20 w-1.5 cursor-col-resize bg-gray-400 opacity-0 group-hover:opacity-100"
         onPointerDown={handlePointerDown("start")}
       />
 
@@ -105,7 +105,7 @@ export function SubtitleBlock({
         onPointerDown={handlePointerDown("move")}
       >
         {widthPx > 30 && (
-          <p className="truncate text-[9px] font-medium text-amber-100">
+          <p className="truncate text-[9px] font-medium text-gray-700">
             {subtitle.text || "자막"}
           </p>
         )}
@@ -113,7 +113,7 @@ export function SubtitleBlock({
 
       {/* Right resize handle */}
       <div
-        className="absolute right-0 top-0 bottom-0 z-20 w-1.5 cursor-col-resize opacity-0 group-hover:opacity-100 bg-amber-300/50"
+        className="absolute bottom-0 right-0 top-0 z-20 w-1.5 cursor-col-resize bg-gray-400 opacity-0 group-hover:opacity-100"
         onPointerDown={handlePointerDown("end")}
       />
     </div>

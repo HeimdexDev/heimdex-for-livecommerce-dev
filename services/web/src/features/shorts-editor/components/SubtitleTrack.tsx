@@ -62,13 +62,13 @@ export function SubtitleTrack({
     <div className="relative">
       {/* Track with blocks */}
       <div
-        className="relative h-8 bg-gray-900/30"
+        className="relative h-8 bg-gray-100"
         style={{ width: totalWidth }}
         onDoubleClick={handleTrackDoubleClick}
       >
         {/* Track label */}
         <div className="pointer-events-none absolute -left-0 top-0 z-10 flex h-full items-center">
-          <span className="rounded-r bg-gray-700/80 px-1.5 py-0.5 text-[9px] font-medium text-gray-400">
+          <span className="rounded-r bg-gray-200 px-1.5 py-0.5 text-[9px] font-medium text-gray-500">
             자막
           </span>
         </div>
@@ -78,7 +78,7 @@ export function SubtitleTrack({
           <button
             type="button"
             onClick={handleAddAtPlayhead}
-            className="rounded bg-amber-500/60 px-1.5 py-0.5 text-[9px] font-medium text-white hover:bg-amber-500/80 transition-colors"
+            className="rounded bg-gray-300 px-1.5 py-0.5 text-[9px] font-medium text-gray-700 transition-colors hover:bg-gray-400 hover:text-white"
           >
             + 자막
           </button>
