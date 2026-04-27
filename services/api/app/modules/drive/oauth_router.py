@@ -34,7 +34,21 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
-DRIVE_SCOPES = "openid email https://www.googleapis.com/auth/drive.readonly"
+DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+DRIVE_SCOPES = f"openid email {DRIVE_READONLY_SCOPE}"
+
+
+def _scope_includes_drive_readonly(scope_str: str | None) -> bool:
+    """True iff the granted scope string contains drive.readonly.
+
+    Google's token response returns a space-separated ``scope`` string
+    listing the actual scopes the user consented to (which may be a
+    strict subset of what we requested when granular consent is in
+    play). Empty / missing scope strings count as a hard miss.
+    """
+    if not scope_str:
+        return False
+    return DRIVE_READONLY_SCOPE in scope_str.split()
 
 # HMAC-signed state tokens (stateless CSRF protection)
 _STATE_TTL_SECONDS = 600  # 10 minutes
@@ -139,11 +153,43 @@ async def callback(
         token_data = token_response.json()
         access_token = token_data.get("access_token")
         refresh_token = token_data.get("refresh_token")
+        granted_scope = token_data.get("scope", "")
 
         if not refresh_token:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="No refresh token received. Try revoking access and reconnecting.",
+            )
+
+        # Scope guard — Google's granular consent lets users decline
+        # individual scopes even when our /authorize request asked for
+        # them. If drive.readonly was unchecked, the token is useless
+        # for sync. Refuse to overwrite the existing (working) token,
+        # revoke the partial grant so it doesn't litter the user's
+        # Google account, and bounce back to /sync with an explicit
+        # error param the frontend can render. The OAuth incident on
+        # 2026-04-27 (livenow) was exactly this scenario going
+        # un-detected — the bad token replaced a valid one and broke
+        # sync silently.
+        if not _scope_includes_drive_readonly(granted_scope):
+            logger.warning(
+                "oauth_drive_scope_not_granted",
+                extra={
+                    "org_id": org_id_str,
+                    "granted_scope": granted_scope,
+                },
+            )
+            try:
+                await http_client.post(
+                    GOOGLE_REVOKE_URL,
+                    params={"token": refresh_token},
+                    timeout=10,
+                )
+            except Exception:
+                logger.warning("oauth_partial_revoke_failed", exc_info=True)
+            return RedirectResponse(
+                url="/sync?drive_oauth_error=missing_drive_scope",
+                status_code=302,
             )
 
         # Get user email from userinfo
@@ -156,11 +202,14 @@ async def callback(
     if userinfo_response.status_code == 200:
         google_email = userinfo_response.json().get("email", "unknown")
 
-    # Encrypt the token payload
+    # Encrypt the token payload — ``scope`` lets /oauth/status surface
+    # drift later without having to call Google's tokeninfo endpoint
+    # on every status check.
     token_payload = json.dumps({
         "refresh_token": refresh_token,
         "client_id": settings.google_oauth_client_id,
         "client_secret": settings.google_oauth_client_secret,
+        "scope": granted_scope,
     })
 
     key = bytes.fromhex(settings.drive_sa_encryption_key)
@@ -196,10 +245,28 @@ async def oauth_status(
     secret = await secret_repo.get_by_org(org_ctx.org_id, secret_type="oauth_token")
     if secret is None:
         return DriveOAuthStatusResponse(connected=False)
+
+    # Inspect the encrypted blob for a stored ``scope``. Tokens written
+    # before the scope-guard rollout don't carry one — leave scope_ok
+    # as None so the UI doesn't false-pop on legacy connections.
+    scope_ok: bool | None = None
+    try:
+        settings = get_settings()
+        key = bytes.fromhex(settings.drive_sa_encryption_key)
+        plaintext = AESGCM(key).decrypt(secret.nonce, secret.encrypted_value, None)
+        secret_data = json.loads(plaintext.decode())
+        if "scope" in secret_data:
+            scope_ok = _scope_includes_drive_readonly(secret_data["scope"])
+    except Exception:
+        # Decryption / JSON parse errors shouldn't block the status
+        # response — they manifest elsewhere (sync attempts, etc).
+        logger.warning("oauth_status_scope_decode_failed", exc_info=True)
+
     return DriveOAuthStatusResponse(
         connected=True,
         google_email=secret.impersonate_email,
         connected_at=secret.created_at,
+        scope_ok=scope_ok,
     )
 
 

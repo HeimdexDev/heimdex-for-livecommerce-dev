@@ -110,6 +110,13 @@ class DriveOAuthStatusResponse(BaseModel):
     connected: bool
     google_email: Optional[str] = None
     connected_at: Optional[datetime] = None
+    # ``True`` = stored token has drive.readonly. ``False`` = the user
+    # is connected but missing the Drive scope (Google's granular
+    # consent let them deselect it) — the UI should auto-pop the
+    # reauth dialog. ``None`` = unknown (legacy token stored before
+    # we started persisting the granted scope; treat as OK to avoid
+    # false alarms).
+    scope_ok: Optional[bool] = None
 
 
 class CurrentFileInfo(BaseModel):
