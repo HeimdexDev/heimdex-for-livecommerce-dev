@@ -1,13 +1,35 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import type { VideoScene } from "@/lib/types";
 import type { EditorClip } from "../lib/types";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
+import { Pagination } from "@/components/ui/Pagination";
 import { cn } from "@/lib/utils";
 
+const PAGE_SIZE = 10;
 const MAX_VISIBLE_TURNS = 3;
+
+// Editor-local speaker-dot palette keyed on the letter label from
+// parseSpeakerTranscript. A → red, B → green per Figma. Search and person
+// pages keep their own (neutral) chip palette via turn.color.
+const SPEAKER_DOT_PALETTE: readonly string[] = [
+  "bg-red-500",
+  "bg-emerald-500",
+  "bg-blue-500",
+  "bg-amber-500",
+  "bg-violet-500",
+  "bg-cyan-500",
+];
+
+export function dotColorForLabel(label: string): string {
+  const idx = label.charCodeAt(0) - "A".charCodeAt(0);
+  if (Number.isFinite(idx) && idx >= 0) {
+    return SPEAKER_DOT_PALETTE[idx % SPEAKER_DOT_PALETTE.length];
+  }
+  return SPEAKER_DOT_PALETTE[0];
+}
 
 interface SceneListPanelProps {
   videoId: string;
@@ -37,24 +59,22 @@ function SpeakerTranscriptDisplay({ transcript }: { transcript: string }) {
   const hasMore = turns.length > MAX_VISIBLE_TURNS;
 
   return (
-    <div className="space-y-1 mb-1.5">
+    <div className="mb-1.5 space-y-1">
       {visible.map((turn, i) => (
         <div key={i} className="flex items-start gap-1.5">
           <span
+            aria-label={`speaker ${turn.label}`}
             className={cn(
-              "inline-flex items-center justify-center shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold leading-none",
-              turn.color.bg,
-              turn.color.text,
+              "mt-1 inline-block h-2 w-2 shrink-0 rounded-full",
+              dotColorForLabel(turn.label),
             )}
-          >
-            {turn.label}
-          </span>
+          />
           {turn.timestamp && (
-            <span className="shrink-0 text-[9px] text-gray-400 font-mono leading-tight pt-0.5">
+            <span className="shrink-0 pt-0.5 font-mono text-[9px] leading-tight text-gray-400">
               {turn.timestamp}
             </span>
           )}
-          <p className="text-[11px] text-gray-600 leading-tight line-clamp-2">
+          <p className="line-clamp-2 text-[11px] leading-tight text-gray-600">
             {turn.text}
           </p>
         </div>
@@ -66,7 +86,7 @@ function SpeakerTranscriptDisplay({ transcript }: { transcript: string }) {
             e.stopPropagation();
             setExpanded(!expanded);
           }}
-          className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium"
+          className="text-[10px] font-medium text-indigo-500 hover:text-indigo-700"
         >
           {expanded ? "접기" : `+${turns.length - MAX_VISIBLE_TURNS}개 더보기`}
         </button>
@@ -98,6 +118,19 @@ export function SceneListPanel({
 
   const activeCount = clipSceneIds.size;
 
+  // Client-side pagination over the already-fetched scenes (max 200 / fetch).
+  const [currentPage, setCurrentPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(scenes.length / PAGE_SIZE));
+
+  // Snap back to page 1 if the underlying list shrinks past the current page
+  // (e.g., scenes refetched from a shorter video).
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(1);
+  }, [currentPage, totalPages]);
+
+  const pageStart = (currentPage - 1) * PAGE_SIZE;
+  const pageScenes = scenes.slice(pageStart, pageStart + PAGE_SIZE);
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -105,7 +138,9 @@ export function SceneListPanel({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-gray-900">장면 목록</h3>
-            <span className="text-xs text-gray-400">{activeCount}개 선택</span>
+            <span className="text-xs text-gray-400">
+              {scenes.length}개 · {activeCount}개 선택
+            </span>
           </div>
           <div className="flex gap-2">
             {onExport && (
@@ -132,9 +167,10 @@ export function SceneListPanel({
         </div>
       </div>
 
-      {/* Scene list */}
+      {/* Scene list (paginated) */}
       <div className="flex-1 overflow-y-auto">
-        {scenes.map((scene, i) => {
+        {pageScenes.map((scene, pageIdx) => {
+          const globalIndex = pageStart + pageIdx;
           const isActive = clipSceneIds.has(scene.scene_id);
           const clipIdx = clipIndexBySceneId.get(scene.scene_id);
           const isSelected = isActive && clipIdx != null && clipIdx === selectedClipIndex;
@@ -145,17 +181,16 @@ export function SceneListPanel({
               role="button"
               tabIndex={0}
               onClick={() => {
-                if (isActive && clipIdx != null) {
-                  onSelectClip(clipIdx);
-                }
+                if (isActive && clipIdx != null) onSelectClip(clipIdx);
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && isActive && clipIdx != null) onSelectClip(clipIdx);
               }}
               className={cn(
-                "w-full text-left border-b border-gray-100 p-3 transition-colors hover:bg-gray-50 cursor-pointer",
-                isActive && !isSelected && "border-l-3 border-l-indigo-400 bg-indigo-50/40",
-                isSelected && "border-l-3 border-l-rose-500 bg-rose-50/60 ring-1 ring-inset ring-rose-300",
+                "w-full cursor-pointer border-b border-gray-100 p-3 text-left transition-colors hover:bg-gray-50",
+                isActive && !isSelected && "border-l-4 border-l-indigo-300 bg-indigo-50/30",
+                isSelected &&
+                  "border-l-4 border-l-blue-500 bg-blue-50/60 ring-1 ring-inset ring-blue-300",
               )}
             >
               <div className="flex items-start gap-3">
@@ -166,36 +201,42 @@ export function SceneListPanel({
                     e.stopPropagation();
                     onToggleScene(scene);
                   }}
+                  aria-pressed={isActive}
+                  aria-label={`${globalIndex + 1}번 장면 ${isActive ? "해제" : "선택"}`}
                   className={cn(
-                    "flex-shrink-0 mt-0.5 flex h-5 w-5 items-center justify-center rounded border-2 transition-colors",
+                    "mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded border-2 transition-colors",
                     isActive
-                      ? "border-indigo-500 bg-indigo-500 hover:bg-indigo-600 hover:border-indigo-600"
-                      : "border-gray-300 bg-white hover:border-indigo-400",
+                      ? "border-blue-500 bg-blue-500 hover:border-blue-600 hover:bg-blue-600"
+                      : "border-gray-300 bg-white hover:border-blue-400",
                   )}
                 >
                   {isActive && (
-                    <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    <svg className="h-3 w-3 text-white" fill="currentColor" viewBox="0 0 20 20">
+                      <path
+                        fillRule="evenodd"
+                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                        clipRule="evenodd"
+                      />
                     </svg>
                   )}
                 </button>
 
                 {/* Thumbnail */}
-                <div className="relative flex-shrink-0 w-16 h-10 rounded overflow-hidden bg-gray-200">
+                <div className="relative h-10 w-16 flex-shrink-0 overflow-hidden rounded bg-gray-200">
                   <SceneThumbnail
                     videoId={videoId}
                     sceneId={scene.scene_id}
                     agentAvailable={false}
-                    className="w-full h-full"
+                    className="h-full w-full"
                     sourceType="gdrive"
                   />
                 </div>
 
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-1">
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs font-medium text-gray-700">
-                        장면 {i + 1}
+                        장면 {globalIndex + 1}
                       </span>
                       {(scene.speaker_count ?? 0) > 1 && (
                         <span className="inline-flex items-center rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-medium text-gray-500">
@@ -203,7 +244,7 @@ export function SceneListPanel({
                         </span>
                       )}
                     </div>
-                    <span className="text-[10px] text-gray-400 font-mono">
+                    <span className="font-mono text-[10px] text-gray-400">
                       {formatTime(scene.start_ms)} - {formatTime(scene.end_ms)}
                     </span>
                   </div>
@@ -212,15 +253,14 @@ export function SceneListPanel({
                   {scene.speaker_transcript ? (
                     <SpeakerTranscriptDisplay transcript={scene.speaker_transcript} />
                   ) : scene.transcript_raw ? (
-                    <p className="text-xs text-gray-500 line-clamp-2 mb-1.5">
+                    <p className="mb-1.5 line-clamp-2 text-xs text-gray-500">
                       {scene.transcript_raw}
                     </p>
                   ) : scene.scene_caption ? (
-                    <p className="text-xs text-gray-400 italic line-clamp-2 mb-1.5">
+                    <p className="mb-1.5 line-clamp-2 text-xs italic text-gray-400">
                       {scene.scene_caption}
                     </p>
                   ) : null}
-
                 </div>
               </div>
             </div>
@@ -233,6 +273,18 @@ export function SceneListPanel({
           </div>
         )}
       </div>
+
+      {/* Pagination */}
+      {scenes.length > PAGE_SIZE && (
+        <div className="border-t border-gray-200 px-4 py-2">
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            onPageChange={setCurrentPage}
+            ariaLabel="장면 페이지"
+          />
+        </div>
+      )}
     </div>
   );
 }
