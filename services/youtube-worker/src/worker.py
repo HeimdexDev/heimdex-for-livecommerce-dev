@@ -4,12 +4,15 @@ import signal
 import importlib
 from pathlib import Path
 
+from heimdex_worker_sdk import emit_event
+
 from src.config import get_settings
 from src.tasks.cleanup import cleanup_completed_videos
 from src.tasks.download import process_pending_downloads
 from src.tasks.enumerate import sync_all_channels
 
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "youtube-worker"
 AsyncIOScheduler = importlib.import_module("apscheduler.schedulers.asyncio").AsyncIOScheduler
 YouTubeAPIClient = importlib.import_module("heimdex_worker_sdk.youtube_api").YouTubeAPIClient
 
@@ -105,6 +108,12 @@ def main() -> None:
 
         def shutdown(*_: object) -> None:
             logger.info("shutdown_signal_received")
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="worker_stopping",
+                category="worker_lifecycle",
+                level="INFO",
+            )
             scheduler.shutdown(wait=False)
             stop_event.set()
 
@@ -119,6 +128,17 @@ def main() -> None:
                 "cleanup_hourly": True,
                 "max_concurrent_downloads": settings.youtube_max_concurrent_downloads,
                 "temp_dir": settings.youtube_temp_dir,
+            },
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="worker_started",
+            category="worker_lifecycle",
+            level="INFO",
+            metadata={
+                "sync_interval_seconds": settings.youtube_sync_interval_seconds,
+                "max_concurrent_downloads": settings.youtube_max_concurrent_downloads,
+                "auto_delete_originals": settings.youtube_auto_delete_originals,
             },
         )
         await stop_event.wait()

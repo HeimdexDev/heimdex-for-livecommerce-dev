@@ -11,12 +11,14 @@ from pathlib import Path
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from heimdex_worker_sdk import emit_event
 from heimdex_worker_sdk.internal_api import InternalAPIClient
 
 from heimdex_worker_sdk.settings import get_worker_settings
 from src.tasks.discover import discover_new_files
 
 logger = logging.getLogger(__name__)
+_SERVICE_NAME = "drive-worker"
 
 _org_slots: dict[str, int] = defaultdict(int)
 _org_lock = threading.Lock()
@@ -253,6 +255,12 @@ def main() -> None:
 
         def shutdown(*_: object) -> None:
             logger.info("shutdown_signal_received")
+            emit_event(
+                service=_SERVICE_NAME,
+                event_name="worker_stopping",
+                category="worker_lifecycle",
+                level="INFO",
+            )
             scheduler.shutdown(wait=False)
             sqs_consumer.stop(timeout=30.0)
             if export_consumer:
@@ -271,6 +279,20 @@ def main() -> None:
                 "per_org_concurrency": settings.drive_worker_per_org_concurrency,
                 "disk_budget_gb": settings.drive_temp_disk_budget_gb,
                 "sqs_consumer_enabled": settings.sqs_consumer_enabled,
+            },
+        )
+        emit_event(
+            service=_SERVICE_NAME,
+            event_name="worker_started",
+            category="worker_lifecycle",
+            level="INFO",
+            metadata={
+                "global_concurrency": settings.drive_worker_global_concurrency,
+                "per_org_concurrency": settings.drive_worker_per_org_concurrency,
+                "discovery_poll_interval": settings.drive_worker_poll_interval_seconds,
+                "sqs_consumer_enabled": settings.sqs_consumer_enabled,
+                "export_consumer_enabled": export_consumer is not None,
+                "gpu_orchestrator_enabled": gpu_orch is not None,
             },
         )
         await stop_event.wait()
