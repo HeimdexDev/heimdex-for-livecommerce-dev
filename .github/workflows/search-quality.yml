@@ -20,9 +20,23 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: services/api
+        working-directory: dev-heimdex-for-livecommerce/services/api
     steps:
-      - uses: actions/checkout@v4
+      # Pyproject's [tool.uv.sources] declares contracts via a sibling
+      # path (../../../heimdex-media-contracts). Both repos must land
+      # side by side under the runner's workspace so `uv sync` resolves
+      # the local-path source rather than failing on a missing distribution.
+      # Mirrors the layout in .github/workflows/build-gpu-images.yml.
+      - name: Checkout SaaS repo
+        uses: actions/checkout@v4
+        with:
+          path: dev-heimdex-for-livecommerce
+
+      - name: Checkout media-contracts
+        uses: actions/checkout@v4
+        with:
+          repository: jlee-heimdex/heimdex-media-contracts
+          path: heimdex-media-contracts
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
