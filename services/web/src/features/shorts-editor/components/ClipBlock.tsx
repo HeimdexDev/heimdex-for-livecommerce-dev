@@ -8,14 +8,8 @@ import type { EditorClip } from "../lib/types";
 import { msToPixels, getClipDuration, formatTimelineTimestamp } from "../lib/timeline-math";
 import { useClipTrim } from "../hooks/useClipTrim";
 
-const CLIP_COLORS = [
-  "bg-indigo-500/80",
-  "bg-violet-500/80",
-  "bg-blue-500/80",
-  "bg-cyan-500/80",
-  "bg-teal-500/80",
-  "bg-emerald-500/80",
-];
+// Single uniform dark surface; per-clip identity comes from the thumbnail.
+const CLIP_BLOCK_BG = "bg-gray-800";
 
 interface ClipBlockProps {
   clip: EditorClip;
@@ -53,7 +47,6 @@ export function ClipBlock({
   const widthPx = msToPixels(getClipDuration(clip), zoom);
   const leftPx = msToPixels(clip.timelineStartMs, zoom);
   const durationSec = (getClipDuration(clip) / 1000).toFixed(1);
-  const colorClass = CLIP_COLORS[index % CLIP_COLORS.length];
 
   const style: React.CSSProperties = {
     left: leftPx,
@@ -67,12 +60,12 @@ export function ClipBlock({
     <div
       ref={setNodeRef}
       className={cn(
-        "group absolute top-1 bottom-1 flex cursor-pointer overflow-hidden rounded-md border transition-shadow",
+        "group absolute bottom-1 top-1 flex cursor-pointer overflow-hidden rounded-md border transition-shadow",
         isSelected
-          ? "border-white ring-2 ring-indigo-400 shadow-lg z-10"
-          : "border-white/30 hover:border-white/60",
+          ? "z-10 border-white shadow-lg ring-1 ring-white"
+          : "border-white/10 hover:border-white/30",
         isDragging && "z-20 shadow-xl",
-        colorClass,
+        CLIP_BLOCK_BG,
       )}
       style={style}
       onClick={onSelect}
