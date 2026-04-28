@@ -17,6 +17,11 @@ ARG NEXT_PUBLIC_AUTH0_CLIENT_ID
 ARG NEXT_PUBLIC_AUTH0_AUDIENCE
 ARG NEXT_PUBLIC_AUTH0_ORGANIZATION
 ARG NEXT_PUBLIC_GA_MEASUREMENT_ID
+# Shorts editor V2 panel rollout flag — defaults false at the compose level,
+# flipped to "true" via .env on staging/prod EC2 hosts after the V2 panel
+# (PR #92) and preset migration (PR #93) merge. NEXT_PUBLIC_* bakes at build
+# time, so flipping the flag requires `docker compose build web` + restart.
+ARG NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED
 
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
