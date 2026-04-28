@@ -15,12 +15,6 @@ interface CandidateListProps {
   selection: AutoSelectResponse | null;
   mode: ScoringModeRequest;
   isLoading: boolean;
-  /**
-   * Phase 1 mode-reselect — Option 5 from the plan: a summary line at
-   * the top with a "재선택" link that opens a modal. Wired to the
-   * page's modal state.
-   */
-  onReselectMode: () => void;
   selectedClipKey: string | null;
   onSelectClip: (clipKey: string) => void;
   onDownloadClip: (clipKey: string) => void;
@@ -33,16 +27,16 @@ interface CandidateListProps {
 
 /**
  * Left rail of the auto-shorts page. Renders a header with the mode
- * summary line + per-mode count, then a vertical list of
- * ``CandidateCard``s. The summary line is the Phase 1 mode-picker
- * placement (option 5 in the plan); Phase 2 will swap in a tab strip.
+ * summary + per-mode count, then a vertical list of ``CandidateCard``s.
+ * Mode switching lives in the page-level ``ModeTabs`` strip above this
+ * panel — PR 5 dropped the inline 재선택 link in favor of always-visible
+ * tabs. (Phase 1 had a 재선택 link that opened ``ModeReselectModal``.)
  */
 export function CandidateList({
   videoId,
   selection,
   mode,
   isLoading,
-  onReselectMode,
   selectedClipKey,
   onSelectClip,
   onDownloadClip,
@@ -61,36 +55,25 @@ export function CandidateList({
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-gray-900">
-              생성된 쇼츠 {clipCount > 0 && <span className="text-gray-400">({clipCount})</span>}
-            </h2>
-            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
-              <span className="font-medium text-gray-700">{modeLabel} 모드</span>
-              {clipCount > 0 && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span>총 {totalSeconds}초</span>
-                </>
-              )}
-              {scorerLabel && (
-                <>
-                  <span aria-hidden="true">·</span>
-                  <span className="rounded-full bg-indigo-50 px-1.5 py-px text-[10px] font-medium text-indigo-700">
-                    {scorerLabel}
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onReselectMode}
-            className="flex-shrink-0 text-xs font-medium text-indigo-600 hover:text-indigo-700"
-          >
-            재선택
-          </button>
+        <h2 className="text-sm font-semibold text-gray-900">
+          생성된 쇼츠 {clipCount > 0 && <span className="text-gray-400">({clipCount})</span>}
+        </h2>
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
+          <span className="font-medium text-gray-700">{modeLabel} 모드</span>
+          {clipCount > 0 && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>총 {totalSeconds}초</span>
+            </>
+          )}
+          {scorerLabel && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="rounded-full bg-indigo-50 px-1.5 py-px text-[10px] font-medium text-indigo-700">
+                {scorerLabel}
+              </span>
+            </>
+          )}
         </div>
       </div>
 

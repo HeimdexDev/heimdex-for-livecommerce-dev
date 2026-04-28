@@ -741,3 +741,172 @@ class TestMemberTranscriptPopulation:
         # No speaker text for scene 001 → falls back to transcript_norm.
         assert m_by_id["vid_scene_001"].transcript == "둘째 장면 자막"
         assert m_by_id["vid_scene_001"].scene_caption is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 PR 4: multi-clip LLM clustering
+# ---------------------------------------------------------------------------
+
+from app.modules.shorts_auto.service import (  # noqa: E402
+    _MAX_CLIP_DURATION_MS,
+    _MAX_CLIPS,
+    _MAX_INTRA_CLIP_GAP_MS,
+    _MIN_CLIPS,
+    _build_llm_clips,
+)
+
+
+def _scored(scene_id: str, *, index: int, start_ms: int, end_ms: int, score: float = 0.5, eligible: bool = True, reasons: list[str] | None = None):
+    """Minimal duck-typed scored-scene shape for the clustering tests.
+
+    Mirrors the (scene, breakdown) attribute access pattern that
+    _build_llm_clips reads. Avoids constructing real contracts
+    SceneDocument + ScoreBreakdown so the tests exercise the
+    clustering logic in isolation.
+    """
+    scene = SimpleNamespace(
+        scene_id=scene_id,
+        index=index,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    breakdown = SimpleNamespace(
+        eligible=eligible,
+        total=score,
+        reasons=reasons or [],
+    )
+    return SimpleNamespace(scene=scene, breakdown=breakdown)
+
+
+class TestLlmClipClustering:
+    """Verifies _build_llm_clips honors the 3-5 clip floor/ceiling and
+    the gap-based clustering rule. Direct unit tests on the helper —
+    no service mocks needed because clustering is pure-functional."""
+
+    def test_no_picks_returns_empty(self):
+        assert _build_llm_clips([], target_duration_sec=60) == []
+
+    def test_all_picks_close_in_time_collapse_to_one_cluster_then_per_pick_fallback(self):
+        # 3 picks within 30s of each other → 1 cluster naturally.
+        # That's < _MIN_CLIPS, so per-pick fallback kicks in → 3 clips.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000),
+            _scored("vid_scene_001", index=1, start_ms=20_000, end_ms=30_000),
+            _scored("vid_scene_002", index=2, start_ms=40_000, end_ms=50_000),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == _MIN_CLIPS
+        # Each clip is a single member (per-pick fallback).
+        for c in clips:
+            assert len(c.members) == 1
+
+    def test_three_picks_with_large_gaps_yields_three_separate_clips(self):
+        # Each pick separated by > _MAX_INTRA_CLIP_GAP_MS (60s gaps) →
+        # 3 distinct clusters, no fallback needed.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000),
+            _scored("vid_scene_001", index=5, start_ms=120_000, end_ms=130_000),
+            _scored("vid_scene_002", index=10, start_ms=240_000, end_ms=250_000),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == 3
+        # No fallback: each cluster carries one pick. Continuous flag
+        # is True for single-member clusters (no gaps to fail the
+        # adjacency check on).
+        scene_ids = [c.scene_ids[0] for c in clips]
+        assert scene_ids == ["vid_scene_000", "vid_scene_001", "vid_scene_002"]
+
+    def test_seven_well_spaced_picks_are_capped_at_five_top_scoring(self):
+        # 7 picks, each in its own cluster (large gaps). Top 5 by
+        # score are kept, sorted chronologically.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000, score=0.9),
+            _scored("vid_scene_001", index=1, start_ms=60_000, end_ms=70_000, score=0.1),  # low
+            _scored("vid_scene_002", index=2, start_ms=120_000, end_ms=130_000, score=0.8),
+            _scored("vid_scene_003", index=3, start_ms=180_000, end_ms=190_000, score=0.7),
+            _scored("vid_scene_004", index=4, start_ms=240_000, end_ms=250_000, score=0.05),  # low
+            _scored("vid_scene_005", index=5, start_ms=300_000, end_ms=310_000, score=0.6),
+            _scored("vid_scene_006", index=6, start_ms=360_000, end_ms=370_000, score=0.5),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == _MAX_CLIPS
+        # Two lowest-scored picks (scene_001, scene_004) dropped.
+        kept_ids = {c.scene_ids[0] for c in clips}
+        assert "vid_scene_001" not in kept_ids
+        assert "vid_scene_004" not in kept_ids
+        # Survivors emerge in chronological order, not score order.
+        starts = [c.start_ms for c in clips]
+        assert starts == sorted(starts)
+
+    def test_adjacent_picks_in_same_cluster_become_one_clip_with_multi_members(self):
+        # 3 picks within the gap window cluster together. Combined
+        # with 2 more well-spaced picks → 3 total clusters → no
+        # fallback. The first cluster has 3 members.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000),
+            _scored("vid_scene_001", index=1, start_ms=15_000, end_ms=25_000),  # gap=5s
+            _scored("vid_scene_002", index=2, start_ms=30_000, end_ms=40_000),  # gap=5s
+            _scored("vid_scene_010", index=10, start_ms=200_000, end_ms=210_000),  # 160s gap
+            _scored("vid_scene_020", index=20, start_ms=400_000, end_ms=410_000),  # 190s gap
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == 3
+        # First clip has the cluster of 3.
+        assert len(clips[0].members) == 3
+        assert clips[0].scene_ids == ["vid_scene_000", "vid_scene_001", "vid_scene_002"]
+        # Single-pick clusters for the other two.
+        assert len(clips[1].members) == 1
+        assert len(clips[2].members) == 1
+
+    def test_single_pick_returns_single_clip_below_floor(self):
+        # Only 1 pick total — can't manufacture _MIN_CLIPS, accept what we have.
+        picks = [_scored("vid_scene_000", index=0, start_ms=0, end_ms=30_000)]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == 1
+
+    def test_two_picks_returns_two_clips_below_floor(self):
+        # 2 picks — can't manufacture a 3rd. Accept what we have.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=30_000),
+            _scored("vid_scene_001", index=5, start_ms=120_000, end_ms=150_000),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == 2
+
+    def test_cluster_duration_capped_at_max_clip_duration_ms(self):
+        # 4 adjacent picks each 30s long = 120s total in one cluster.
+        # Cap is 90s, so trailing pick gets dropped (90s exact = first
+        # 3 fit, 4th would push to 120s).
+        picks = [
+            _scored(f"vid_scene_{i:03d}", index=i, start_ms=i * 35_000, end_ms=i * 35_000 + 30_000)
+            for i in range(4)
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        # All 4 are within the 30s gap window so they cluster together.
+        # Per-pick fallback fires (1 cluster < _MIN_CLIPS=3, but len(picks)=4
+        # ≥ 3, so per-pick fires) → 4 clips, each single-member, each
+        # within the 90s cap.
+        assert len(clips) == 4
+        for c in clips:
+            assert c.duration_ms <= _MAX_CLIP_DURATION_MS
+
+    def test_ineligible_picks_are_filtered(self):
+        # eligible=False picks must not appear in any cluster.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000, eligible=True),
+            _scored("vid_scene_999", index=99, start_ms=20_000, end_ms=30_000, eligible=False),
+            _scored("vid_scene_001", index=1, start_ms=60_000, end_ms=70_000, eligible=True),
+            _scored("vid_scene_002", index=2, start_ms=120_000, end_ms=130_000, eligible=True),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        all_member_ids = {m.scene_id for c in clips for m in c.members}
+        assert "vid_scene_999" not in all_member_ids
+
+    def test_constants_match_plan_locked_values(self):
+        # Regression guard: the plan locks 3 ≤ N ≤ 5 with a 30s gap
+        # threshold and 90s per-clip cap. Keep these honest so a
+        # casual edit doesn't silently widen the contract.
+        assert _MIN_CLIPS == 3
+        assert _MAX_CLIPS == 5
+        assert _MAX_INTRA_CLIP_GAP_MS == 30_000
+        assert _MAX_CLIP_DURATION_MS == 90_000

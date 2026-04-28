@@ -144,37 +144,44 @@ def _auto_clip_to_response(
     )
 
 
-def _build_llm_single_clip(
-    scored: list[Any],
-    *,
-    target_duration_sec: int,
-) -> list[AutoClip]:
-    """Build one AutoClip from all LLM-picked (eligible) scenes.
+# Adjacent-pick gap threshold for grouping LLM picks into the same
+# clip. 30s comfortably bridges within-segment picks without merging
+# across topic boundaries (most livecommerce videos have distinct
+# product/segment changes spaced > 30s apart).
+_MAX_INTRA_CLIP_GAP_MS = 30_000
 
-    Bypasses ``build_clips`` because the LLM curates — it hand-picks
-    the scenes that should form the short, so packing them into
-    independently-validated sub-clips fights the curation. Instead we
-    take every eligible scene, sort chronologically, and make one clip
-    whose members are the picks. If the LLM picked so many scenes that
-    the total runs over ``target_duration_sec * 2``, the trailing picks
-    are dropped to stay near target — same spirit as the 5-min
-    composition cap that lives in ``_compose``.
+# Minimum number of clips the LLM path tries to surface to the user.
+# When clustering yields fewer, we fall back to per-pick clips so the
+# UX always has multiple options.
+_MIN_CLIPS = 3
+
+# Hard ceiling on clips. The page UI can comfortably handle 3-5; more
+# than 5 dilutes attention. When clustering yields more, we keep the
+# top by sum-of-member-scores.
+_MAX_CLIPS = 5
+
+# Per-clip duration cap. Mirrors the runaway guard the single-clip
+# path used (2× target_duration ≈ 90s for the default 60s target).
+# Surfaced as a constant so it's a one-line bump if product wants
+# longer max clips.
+_MAX_CLIP_DURATION_MS = 90_000
+
+
+def _cluster_to_auto_clip(cluster: list[Any]) -> AutoClip | None:
+    """Pack one cluster of LLM-picked scenes into an AutoClip.
+
+    Members run chronologically (cluster is already sorted by caller).
+    Trailing members are dropped if they'd push past
+    ``_MAX_CLIP_DURATION_MS``. Returns ``None`` for clusters that
+    produce zero non-degenerate members so the caller can filter.
     """
-    picks = sorted(
-        (s for s in scored if s.breakdown.eligible),
-        key=lambda s: s.scene.start_ms,
-    )
-    if not picks:
-        return []
-
-    hard_cap_ms = target_duration_sec * 1000 * 2  # 2× target ≈ runaway guard
     members: list[ClipMember] = []
     total_ms = 0
-    for s in picks:
+    for s in cluster:
         dur = s.scene.end_ms - s.scene.start_ms
         if dur <= 0:
             continue
-        if total_ms + dur > hard_cap_ms and members:
+        if total_ms + dur > _MAX_CLIP_DURATION_MS and members:
             break
         members.append(
             ClipMember(
@@ -187,27 +194,94 @@ def _build_llm_single_clip(
         total_ms += dur
 
     if not members:
-        return []
+        return None
 
     scores = [m.score for m in members]
-    avg_score = sum(scores) / len(scores) if scores else 0.0
-    scene_ids = [m.scene_id for m in members]
-    # ``is_continuous`` reflects whether picks are adjacent scene indices
-    # — LLM picks are often NOT contiguous so default to False.
-    indices = sorted(s.scene.index for s in picks[: len(members)])
-    is_continuous = all(indices[i + 1] - indices[i] == 1 for i in range(len(indices) - 1))
-    return [
-        AutoClip(
-            scene_ids=scene_ids,
-            members=members,
-            start_ms=members[0].start_ms,
-            end_ms=members[-1].end_ms,
-            duration_ms=total_ms,
-            score=avg_score,
-            reasons=[r for s in picks[: len(members)] for r in s.breakdown.reasons][:5],
-            is_continuous=is_continuous,
-        )
-    ]
+    avg_score = sum(scores) / len(scores)
+    indices = sorted(s.scene.index for s in cluster[: len(members)])
+    is_continuous = all(
+        indices[i + 1] - indices[i] == 1 for i in range(len(indices) - 1)
+    )
+    reasons = [r for s in cluster[: len(members)] for r in s.breakdown.reasons][:5]
+    return AutoClip(
+        scene_ids=[m.scene_id for m in members],
+        members=members,
+        start_ms=members[0].start_ms,
+        end_ms=members[-1].end_ms,
+        duration_ms=total_ms,
+        score=avg_score,
+        reasons=reasons,
+        is_continuous=is_continuous,
+    )
+
+
+def _build_llm_clips(
+    scored: list[Any],
+    *,
+    target_duration_sec: int,
+) -> list[AutoClip]:
+    """Cluster LLM picks into 3-5 chronological AutoClips.
+
+    Replaces the prior single-clip behavior so the UI can show the user
+    multiple distinct shorts (matches the customer-asked 3-5 floor +
+    ceiling locked in the Phase 2 plan). No prompt change required —
+    clustering happens after the LLM response is parsed.
+
+    Algorithm:
+      1. Sort eligible picks chronologically (stable, by start_ms).
+      2. Cluster consecutive picks where the gap to the previous pick
+         is ≤ ``_MAX_INTRA_CLIP_GAP_MS``. Picks separated by larger
+         gaps start a new cluster (likely a new topic/segment).
+      3. If cluster count < ``_MIN_CLIPS``, fall back to per-pick
+         clips so the UI always sees multiple options when there are
+         enough picks. With fewer than ``_MIN_CLIPS`` total picks we
+         return what we have — can't manufacture clips from nothing.
+      4. If cluster count > ``_MAX_CLIPS``, keep the top
+         ``_MAX_CLIPS`` by sum of member scores, then re-sort
+         chronologically so the UI's left-rail order matches video
+         timeline.
+      5. Each cluster packs members up to ``_MAX_CLIP_DURATION_MS``
+         (90s). Trailing members past the cap are dropped — same
+         runaway guard the single-clip path had.
+
+    ``target_duration_sec`` is currently unused (cap is fixed at 90s)
+    but accepted for signature compatibility with the caller and so
+    the next iteration can introduce a target-aware soft cap if
+    eval signals call for it.
+    """
+    del target_duration_sec  # accepted for caller-compat; see docstring
+
+    picks = sorted(
+        (s for s in scored if s.breakdown.eligible),
+        key=lambda s: s.scene.start_ms,
+    )
+    if not picks:
+        return []
+
+    # Cluster by gap.
+    clusters: list[list[Any]] = [[picks[0]]]
+    for prev, cur in zip(picks, picks[1:]):
+        gap_ms = cur.scene.start_ms - prev.scene.end_ms
+        if gap_ms <= _MAX_INTRA_CLIP_GAP_MS:
+            clusters[-1].append(cur)
+        else:
+            clusters.append([cur])
+
+    # Fallback to per-pick when cluster count is below the floor — only
+    # do this if there are enough picks to actually hit the floor;
+    # otherwise the per-pick split would leave us with the same count.
+    if len(clusters) < _MIN_CLIPS and len(picks) >= _MIN_CLIPS:
+        clusters = [[p] for p in picks]
+
+    # Top-N by total cluster score, then re-sort chronologically.
+    if len(clusters) > _MAX_CLIPS:
+        clusters = sorted(
+            clusters,
+            key=lambda c: -sum(s.breakdown.total for s in c),
+        )[:_MAX_CLIPS]
+        clusters.sort(key=lambda c: c[0].scene.start_ms)
+
+    return [c for c in (_cluster_to_auto_clip(cl) for cl in clusters) if c is not None]
 
 
 def _empty_response(req: AutoSelectRequest, reason: str) -> AutoSelectResponse:
@@ -322,7 +396,7 @@ class ShortsAutoService:
         # from the picks directly — matches the user mental model of a
         # single ~60s short. Pure scorer keeps ``build_clips`` intact.
         if scorer_used == "llm":
-            clips = _build_llm_single_clip(scored, target_duration_sec=req.target_duration_sec)
+            clips = _build_llm_clips(scored, target_duration_sec=req.target_duration_sec)
         else:
             clips = build_clips(
                 scored,
