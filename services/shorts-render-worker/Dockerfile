@@ -16,12 +16,21 @@ RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.2"
 
 # Install Python dependencies.
 # heimdex-media-contracts + heimdex-media-pipelines are volume-mounted
-# in local dev (docker-compose) and pip-installed in CI/prod builds.
+# in local dev (docker-compose) and pip-installed --no-deps at startup.
+# Pillow is bundled here because pipelines' [composition] extra defines
+# it but `pip install --no-deps` doesn't honor extras — so the bake_overlay_png
+# render path would crash with ModuleNotFoundError without this line.
 RUN pip install --no-cache-dir \
       "boto3>=1.34" "pydantic-settings>=2.0" \
-      "structlog>=23.0" "requests>=2.31" "pydantic>=2.0"
+      "structlog>=23.0" "requests>=2.31" "pydantic>=2.0" \
+      "Pillow>=10.0"
 
-# Bundle Korean fonts (Task 10)
+# Bundle Korean fonts. We ship Pretendard + NotoSansKR Regular + Bold.
+# Italic variants for Korean fonts don't exist (Pretendard has weight
+# variants only; NotoSansKR italic is Latin-only). The bake_overlay_png
+# function in heimdex_media_pipelines.composition.overlay_render falls
+# back to faux-italic via PIL transform skew when ov.italic=True and no
+# *-Italic.ttf is found in font_dir — see _resolve_italic_font_path.
 COPY services/shorts-render-worker/fonts/ /usr/share/fonts/heimdex/
 COPY services/shorts-render-worker/fonts.conf /etc/fonts/conf.d/99-heimdex.conf
 RUN fc-cache -f -v
