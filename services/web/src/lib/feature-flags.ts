@@ -1,0 +1,31 @@
+/**
+ * Feature-flag accessors for the web service.
+ *
+ * Flags ride on `NEXT_PUBLIC_*` env vars so client components can read them.
+ * They are baked into the JS bundle at build time — flipping a flag means
+ * rebuilding the web container, not a runtime config change.
+ *
+ * Strict-string parsing: only the literal "true" turns a flag on. Empty,
+ * undefined, "false", "0", anything else → off. Avoids the
+ * NEXT_PUBLIC_AUTH0_ORGANIZATION class of bugs where a non-empty default
+ * accidentally enables a feature.
+ */
+
+function readBoolean(envValue: string | undefined): boolean {
+  return envValue === "true";
+}
+
+/**
+ * Shorts editor V2 redesign — object-driven panel with text + background
+ * overlays, transform/effects/preset sections matching the Figma redesign.
+ *
+ * When false, the legacy TextOverlayPanel renders.
+ * When true, the new OverlayPanel renders.
+ *
+ * Rollout: false on prod until the V2 panel ships, then flipped to true
+ * via a deploy with `NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED=true` in
+ * the web container's environment.
+ */
+export function isShortsEditorV2Enabled(): boolean {
+  return readBoolean(process.env.NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED);
+}

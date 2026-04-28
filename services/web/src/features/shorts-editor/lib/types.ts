@@ -1,3 +1,5 @@
+import type { EditorOverlay, WireOverlay } from "./overlay-types";
+
 // ============================================================================
 // Shorts Editor Types
 // ============================================================================
@@ -40,8 +42,14 @@ export interface EditorState {
   sourceType: string;
   clips: EditorClip[];
   subtitles: EditorSubtitle[];
+  // V2 overlays — coexist with V1 subtitles. Feature-flag selects which the
+  // panel + preview consume; both can be non-empty mid-migration without
+  // breaking validation. Backend serializer in composition-builder writes
+  // both fields and lets the renderer ignore whichever is empty.
+  overlays: EditorOverlay[];
   selectedClipIndex: number | null;
   selectedSubtitleIndex: number | null;
+  selectedOverlayId: string | null;
   playheadMs: number;
   isPlaying: boolean;
   totalDurationMs: number;
@@ -66,6 +74,12 @@ export type EditorAction =
   | { type: "UPDATE_SUBTITLE"; index: number; updates: Partial<Omit<EditorSubtitle, "id">> }
   | { type: "REMOVE_SUBTITLE"; index: number }
   | { type: "SELECT_SUBTITLE"; index: number | null }
+  // V2 overlay actions (text + background).
+  | { type: "ADD_OVERLAY"; overlay: EditorOverlay }
+  | { type: "UPDATE_OVERLAY"; id: string; updates: Partial<EditorOverlay> }
+  | { type: "REMOVE_OVERLAY"; id: string }
+  | { type: "SELECT_OVERLAY"; id: string | null }
+  | { type: "REORDER_OVERLAY"; id: string; direction: "front" | "back" | "forward" | "backward" }
   | { type: "SET_PLAYHEAD"; ms: number }
   | { type: "SET_PLAYING"; playing: boolean }
   | { type: "SET_ZOOM"; zoom: number }
@@ -119,6 +133,9 @@ export interface CompositionSpec {
   output: CompositionOutputSpec;
   scene_clips: CompositionSceneClip[];
   subtitles: CompositionSubtitle[];
+  // V2 overlays — empty for V1-only compositions; populated by the new editor.
+  // The wire shape lives in overlay-types.ts.
+  overlays: WireOverlay[];
   transitions: unknown[];
   title: string | null;
   version: number;

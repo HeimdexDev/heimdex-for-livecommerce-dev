@@ -1,5 +1,11 @@
 import { useReducer, useCallback } from "react";
 import type { EditorState, EditorAction, EditorClip, EditorSubtitle } from "../lib/types";
+import type { EditorOverlay } from "../lib/overlay-types";
+import {
+  createDefaultBackgroundOverlay,
+  createDefaultTextOverlay,
+  DEFAULT_OVERLAY_DURATION_MS,
+} from "../lib/overlay-defaults";
 import { recomputeTimeline, getTotalDuration } from "../lib/timeline-math";
 import { DEFAULT_ZOOM, DEFAULT_SUBTITLE_STYLE, DEFAULT_SUBTITLE_DURATION_MS } from "../constants";
 import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
@@ -9,8 +15,10 @@ const INITIAL_STATE: EditorState = {
   sourceType: "gdrive",
   clips: [],
   subtitles: [],
+  overlays: [],
   selectedClipIndex: null,
   selectedSubtitleIndex: null,
+  selectedOverlayId: null,
   playheadMs: 0,
   isPlaying: false,
   totalDurationMs: 0,
@@ -172,6 +180,92 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
         selectedSubtitleIndex: action.index,
         selectedClipIndex: action.index != null ? null : state.selectedClipIndex,
       };
+
+    case "ADD_OVERLAY": {
+      // New overlay lands at the front (highest layer_index) so the user sees
+      // it on top of existing overlays. Caller can REORDER_OVERLAY afterward.
+      const maxLayer = state.overlays.reduce(
+        (m, o) => Math.max(m, o.layerIndex),
+        -1,
+      );
+      const positioned: EditorOverlay = {
+        ...action.overlay,
+        layerIndex: maxLayer + 1,
+      };
+      return {
+        ...state,
+        overlays: [...state.overlays, positioned],
+        selectedOverlayId: positioned.id,
+        // Selecting a new overlay clears clip + subtitle selection so the
+        // panel switches to overlay-edit mode.
+        selectedClipIndex: null,
+        selectedSubtitleIndex: null,
+        isDirty: true,
+      };
+    }
+
+    case "UPDATE_OVERLAY": {
+      const overlays = state.overlays.map((o) =>
+        o.id === action.id
+          // Spread is type-safe because each overlay variant's discriminator
+          // (`kind`) can't be changed via UPDATE_OVERLAY — the schema rules
+          // it out by validation, but TS sees it as Partial<EditorOverlay>
+          // so we cast the merge result to the original variant.
+          ? ({ ...o, ...action.updates } as EditorOverlay)
+          : o,
+      );
+      return { ...state, overlays, isDirty: true };
+    }
+
+    case "REMOVE_OVERLAY": {
+      const overlays = state.overlays.filter((o) => o.id !== action.id);
+      return {
+        ...state,
+        overlays,
+        selectedOverlayId:
+          state.selectedOverlayId === action.id ? null : state.selectedOverlayId,
+        isDirty: true,
+      };
+    }
+
+    case "SELECT_OVERLAY":
+      return {
+        ...state,
+        selectedOverlayId: action.id,
+        selectedClipIndex: action.id != null ? null : state.selectedClipIndex,
+        selectedSubtitleIndex: action.id != null ? null : state.selectedSubtitleIndex,
+      };
+
+    case "REORDER_OVERLAY": {
+      const idx = state.overlays.findIndex((o) => o.id === action.id);
+      if (idx < 0) return state;
+      const sorted = [...state.overlays].sort(
+        (a, b) => a.layerIndex - b.layerIndex,
+      );
+      const sortedIdx = sorted.findIndex((o) => o.id === action.id);
+      let targetSortedIdx = sortedIdx;
+      switch (action.direction) {
+        case "back":
+          targetSortedIdx = 0;
+          break;
+        case "front":
+          targetSortedIdx = sorted.length - 1;
+          break;
+        case "backward":
+          targetSortedIdx = Math.max(0, sortedIdx - 1);
+          break;
+        case "forward":
+          targetSortedIdx = Math.min(sorted.length - 1, sortedIdx + 1);
+          break;
+      }
+      if (targetSortedIdx === sortedIdx) return state;
+      const [moved] = sorted.splice(sortedIdx, 1);
+      sorted.splice(targetSortedIdx, 0, moved);
+      // Re-pack layer indices densely from 0 to keep the dropdown labels
+      // legible ("프리셋1" stays "프리셋1") and avoids unbounded growth.
+      const overlays = sorted.map((o, i) => ({ ...o, layerIndex: i }));
+      return { ...state, overlays, isDirty: true };
+    }
 
     case "SET_PLAYHEAD":
       return { ...state, playheadMs: Math.max(0, action.ms) };
@@ -437,6 +531,60 @@ export function useEditorState() {
     dispatch({ type: "SELECT_SUBTITLE", index });
   }, []);
 
+  // ----- V2 overlay actions ------------------------------------------------
+
+  const _clampOverlayWindow = (playheadMs: number, totalMs: number) => {
+    const startMs = Math.max(0, Math.min(playheadMs, Math.max(0, totalMs - 500)));
+    const endMs = totalMs > 0
+      ? Math.min(startMs + DEFAULT_OVERLAY_DURATION_MS, totalMs)
+      : startMs + DEFAULT_OVERLAY_DURATION_MS;
+    return { startMs, endMs };
+  };
+
+  const addTextOverlayAtPlayhead = useCallback(() => {
+    const { startMs, endMs } = _clampOverlayWindow(
+      state.playheadMs,
+      state.totalDurationMs,
+    );
+    dispatch({
+      type: "ADD_OVERLAY",
+      overlay: createDefaultTextOverlay({ startMs, endMs }),
+    });
+  }, [state.playheadMs, state.totalDurationMs]);
+
+  const addBackgroundOverlayAtPlayhead = useCallback(() => {
+    const { startMs, endMs } = _clampOverlayWindow(
+      state.playheadMs,
+      state.totalDurationMs,
+    );
+    dispatch({
+      type: "ADD_OVERLAY",
+      overlay: createDefaultBackgroundOverlay({ startMs, endMs }),
+    });
+  }, [state.playheadMs, state.totalDurationMs]);
+
+  const updateOverlay = useCallback(
+    (id: string, updates: Partial<EditorOverlay>) => {
+      dispatch({ type: "UPDATE_OVERLAY", id, updates });
+    },
+    [],
+  );
+
+  const removeOverlay = useCallback((id: string) => {
+    dispatch({ type: "REMOVE_OVERLAY", id });
+  }, []);
+
+  const selectOverlay = useCallback((id: string | null) => {
+    dispatch({ type: "SELECT_OVERLAY", id });
+  }, []);
+
+  const reorderOverlay = useCallback(
+    (id: string, direction: "front" | "back" | "forward" | "backward") => {
+      dispatch({ type: "REORDER_OVERLAY", id, direction });
+    },
+    [],
+  );
+
   const setPlayhead = useCallback((ms: number) => {
     dispatch({ type: "SET_PLAYHEAD", ms });
   }, []);
@@ -469,6 +617,13 @@ export function useEditorState() {
     updateSubtitle,
     removeSubtitle,
     selectSubtitle,
+    // V2 overlay actions
+    addTextOverlayAtPlayhead,
+    addBackgroundOverlayAtPlayhead,
+    updateOverlay,
+    removeOverlay,
+    selectOverlay,
+    reorderOverlay,
     setPlayhead,
     setPlaying,
     setZoom,
