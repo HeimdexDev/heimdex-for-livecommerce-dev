@@ -7,6 +7,7 @@ import { getRenderJobStatus, type RenderJobResponse } from "@/lib/api/highlight-
 import {
   deleteRenderJob,
   downloadRenderJob,
+  updateRenderJobTitle,
 } from "@/lib/api/shorts-render";
 import type { AutoClipResponse, AutoRenderRequest, ScoringModeRequest } from "@/lib/types";
 
@@ -42,6 +43,12 @@ interface UseCandidateRenderJobsResult {
   download: (clipKey: string, filename: string) => Promise<void>;
   /** Remove a card. If it's render-job-backed, DELETE the backend record. Always clears local state. */
   remove: (clipKey: string) => Promise<void>;
+  /**
+   * Rename a render-job-backed card. No-op when the card hasn't been
+   * rendered yet (no backend row exists to update). Optimistically
+   * updates the local state; rolls back on API failure.
+   */
+  updateTitle: (clipKey: string, title: string | null) => Promise<void>;
 }
 
 const POLL_INTERVAL_MS = 5000;
@@ -250,13 +257,61 @@ export function useCandidateRenderJobs(
     [getToken],
   );
 
+  const updateTitle = useCallback(
+    async (clipKey: string, title: string | null) => {
+      const state = statesRef.current[clipKey];
+      // Only render-job-backed states have a server row to rename.
+      // No-op for ``candidate`` / ``submitting`` (no job_id yet).
+      if (
+        !state ||
+        state.kind === "candidate" ||
+        state.kind === "submitting" ||
+        (state.kind === "failed" && !state.job)
+      ) {
+        return;
+      }
+      const job = (state as { job: RenderJobResponse }).job;
+      if (!job) return;
+
+      // Optimistic update — surface the new title immediately so
+      // typing feels snappy. Roll back on API failure.
+      const optimisticJob = { ...job, title };
+      const optimisticState: CandidateState = (() => {
+        if (state.kind === "queued") return { kind: "queued", job: optimisticJob };
+        if (state.kind === "rendering") return { kind: "rendering", job: optimisticJob };
+        if (state.kind === "completed") return { kind: "completed", job: optimisticJob };
+        // failed with job
+        return { kind: "failed", job: optimisticJob, error: state.error };
+      })();
+      setOne(clipKey, optimisticState);
+
+      try {
+        const updated = await updateRenderJobTitle(job.id, title, getToken);
+        // Replace the optimistic copy with the server's authoritative
+        // version (in case the server normalized or trimmed the title).
+        const settled: CandidateState = (() => {
+          if (state.kind === "queued") return { kind: "queued", job: updated };
+          if (state.kind === "rendering") return { kind: "rendering", job: updated };
+          if (state.kind === "completed") return { kind: "completed", job: updated };
+          return { kind: "failed", job: updated, error: state.error };
+        })();
+        setOne(clipKey, settled);
+      } catch {
+        // Rollback to the pre-optimistic state. Keep the prior job's
+        // title so the user can retry without manual cleanup.
+        setOne(clipKey, state);
+      }
+    },
+    [getToken, setOne],
+  );
+
   const getState = useCallback(
     (clipKey: string): CandidateState => states[clipKey] ?? { kind: "candidate" },
     [states],
   );
 
   return useMemo(
-    () => ({ states, getState, startRender, download, remove }),
-    [states, getState, startRender, download, remove],
+    () => ({ states, getState, startRender, download, remove, updateTitle }),
+    [states, getState, startRender, download, remove, updateTitle],
   );
 }

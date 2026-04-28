@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
+import { cn } from "@/lib/utils";
 import type { AutoClipResponse, VideoScene } from "@/lib/types";
 
 import { ScriptPanel } from "./ScriptPanel";
@@ -14,6 +16,18 @@ interface InspectorPanelProps {
   /** Disabled when no clip is selected or while a render is mid-flight. */
   onDownload?: () => void;
   isDownloading?: boolean;
+  /**
+   * Server-side title for the selected clip's render job (when one
+   * exists). When ``null``, no render-job has been created yet — the
+   * title input falls back to a derived placeholder and is disabled.
+   */
+  renderJobTitle?: string | null;
+  /**
+   * Save callback fired on blur when the title changed. ``undefined``
+   * when no render-job exists (input rendered as disabled with a
+   * tooltip explaining the user has to render first).
+   */
+  onTitleSave?: (title: string | null) => Promise<void> | void;
 }
 
 /**
@@ -23,9 +37,9 @@ interface InspectorPanelProps {
  *   1. Quick actions — 편집하기 (deep link to editor) + 다운로드 (mirrors
  *      the card's button so the user has a primary action without
  *      hunting back to the list).
- *   2. 제목 — read-only Phase 1. Title editing is on the roadmap; the
- *      input is kept disabled with an explanatory tooltip rather than
- *      hidden so the surface area stays stable for Phase 3.
+ *   2. 제목 — editable when a render-job exists for the selected clip
+ *      (Phase 3 added the PATCH endpoint). Disabled before that with a
+ *      tooltip directing the user to render first.
  *   3. 원본 영상 타임라인 — span readout in M분 S초 format matching the
  *      reference design.
  *   4. 스크립트 — speaker-diarized script panel.
@@ -39,6 +53,8 @@ export function InspectorPanel({
   editorHref,
   onDownload,
   isDownloading,
+  renderJobTitle,
+  onTitleSave,
 }: InspectorPanelProps) {
   if (!clip) {
     return (
@@ -48,7 +64,8 @@ export function InspectorPanel({
     );
   }
 
-  const title = clip.scene_ids.length === 1 ? `장면 ${clip.scene_ids[0]}` : "자동 생성 클립";
+  const placeholder =
+    clip.scene_ids.length === 1 ? `장면 ${clip.scene_ids[0]}` : "자동 생성 클립";
 
   return (
     <div className="flex h-full flex-col gap-5 p-5">
@@ -76,13 +93,10 @@ export function InspectorPanel({
       </Section>
 
       <Section title="제목">
-        <input
-          type="text"
-          readOnly
-          value={title}
-          aria-readonly="true"
-          title="제목 편집은 곧 지원됩니다"
-          className="w-full cursor-not-allowed rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700"
+        <TitleInput
+          renderJobTitle={renderJobTitle ?? null}
+          placeholder={placeholder}
+          onSave={onTitleSave}
         />
       </Section>
 
@@ -136,5 +150,108 @@ function DownloadIcon() {
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.6}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
     </svg>
+  );
+}
+
+interface TitleInputProps {
+  renderJobTitle: string | null;
+  placeholder: string;
+  onSave?: (title: string | null) => Promise<void> | void;
+}
+
+/**
+ * Controlled title input that saves on blur. Three visual states:
+ *   - **disabled**: no render-job exists yet for this clip. The
+ *     placeholder displays a derived label ("장면 ..." or "자동 생성
+ *     클립"); user is directed to download first via the tooltip.
+ *   - **idle**: editable, no pending save.
+ *   - **saving**: blur fired, awaiting server. Briefly shows
+ *     "저장 중..." to confirm the action registered.
+ *
+ * Optimistic update lives in the hook (``useCandidateRenderJobs``);
+ * this component just owns the in-flight controlled value so typing
+ * doesn't lag behind the server round trip.
+ */
+function TitleInput({ renderJobTitle, placeholder, onSave }: TitleInputProps) {
+  const isEditable = onSave !== undefined;
+  // Local controlled value — initialized from the server's current
+  // title. Resets when the underlying renderJobTitle changes (e.g.,
+  // user switched between candidate cards).
+  const [draft, setDraft] = useState<string>(renderJobTitle ?? "");
+  const [savingState, setSavingState] = useState<"idle" | "saving">("idle");
+
+  useEffect(() => {
+    setDraft(renderJobTitle ?? "");
+  }, [renderJobTitle]);
+
+  const persisted = renderJobTitle ?? "";
+  const dirty = draft !== persisted;
+
+  const persistDraft = async () => {
+    if (!isEditable || !dirty || !onSave) return;
+    setSavingState("saving");
+    try {
+      // Empty string normalizes to null on the server (clears title);
+      // pass through as-is and let the API handle it. Trim once at
+      // the boundary so leading/trailing whitespace doesn't survive.
+      const trimmed = draft.trim();
+      await onSave(trimmed === "" ? null : trimmed);
+    } finally {
+      setSavingState("idle");
+    }
+  };
+
+  if (!isEditable) {
+    return (
+      <input
+        type="text"
+        readOnly
+        value={persisted || placeholder}
+        aria-readonly="true"
+        title="쇼츠를 먼저 렌더링하면 제목을 변경할 수 있어요"
+        className="w-full cursor-not-allowed rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700"
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <input
+        type="text"
+        value={draft}
+        placeholder={placeholder}
+        maxLength={255}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          void persistDraft();
+        }}
+        onKeyDown={(e) => {
+          // Enter → save and blur. Calling persistDraft directly (rather
+          // than relying on .blur() to propagate the same path) keeps
+          // jsdom-based tests deterministic — programmatic blur in jsdom
+          // doesn't always fire the React onBlur handler before assertions.
+          if (e.key === "Enter") {
+            void persistDraft();
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        aria-label="쇼츠 제목"
+        className={cn(
+          "w-full rounded-md border bg-white px-3 py-2 text-sm text-gray-900 transition-colors",
+          "border-gray-200 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400",
+          savingState === "saving" && "opacity-70",
+        )}
+      />
+      <p
+        className="text-[10px] text-gray-400"
+        aria-live="polite"
+      >
+        {savingState === "saving"
+          ? "저장 중..."
+          : dirty
+            ? "포커스 해제 시 자동 저장됩니다"
+            : " "}
+      </p>
+    </div>
   );
 }

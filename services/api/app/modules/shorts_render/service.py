@@ -392,6 +392,36 @@ class ShortsRenderService:
 
         return _to_response(job, download_url=download_url)
 
+    async def update_render_job_title(
+        self,
+        org_id: UUID,
+        user_id: UUID,
+        job_id: UUID,
+        title: str | None,
+    ) -> RenderJobResponse:
+        """Update the user-facing title on a render job.
+
+        Scoped to org + user so cross-user renaming is impossible.
+        Raises 404 when the job is missing or owned by someone else
+        — same surface as ``get_render_job`` so the FE doesn't have
+        to special-case "not yours" vs "doesn't exist".
+
+        ``download_url`` is populated for completed jobs so the
+        response shape matches ``get_render_job`` and the FE can
+        slot the result in without re-fetching.
+        """
+        job = await self.repository.update_title(org_id, user_id, job_id, title)
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Render job not found",
+            )
+
+        download_url: str | None = None
+        if job.status == "completed" and job.output_s3_key:
+            download_url = f"/api/shorts/render/{job.id}/download"
+        return _to_response(job, download_url=download_url)
+
     async def list_render_jobs(
         self,
         org_id: UUID,

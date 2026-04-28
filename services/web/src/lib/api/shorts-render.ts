@@ -95,6 +95,31 @@ export async function getShortComposition(
 }
 
 /**
+ * Rename a render job. Backend ``PATCH /api/shorts/render/{job_id}``
+ * accepts ``{ title: string | null }`` and returns the updated
+ * ``RenderJobResponse``. Owner-scoped on the server: 404 is surfaced
+ * for both "not found" and "not yours" so the FE doesn't have to
+ * special-case the distinction. ``null`` clears the title.
+ */
+export async function updateRenderJobTitle(
+  jobId: string,
+  title: string | null,
+  getToken: TokenGetter,
+): Promise<RenderJobResponse> {
+  const headers = await authHeaders(getToken);
+  const res = await fetch(`${getApiBaseUrl()}/api/shorts/render/${jobId}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Failed to update title (${res.status})`);
+  }
+  return res.json();
+}
+
+/**
  * Delete a render job (DB row + S3 output). Backend returns 204 on
  * success and 404 when the job is missing or not owned by the caller —
  * we treat 404 as a no-op success since the user-visible effect (job

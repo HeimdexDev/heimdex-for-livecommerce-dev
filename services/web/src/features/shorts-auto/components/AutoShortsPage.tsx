@@ -229,6 +229,29 @@ export function AutoShortsPage() {
     );
   }, [renderJobs, selectedClipKey]);
 
+  // Title editing wiring — only render-job-backed states have a
+  // server row to rename. Inspector falls back to a derived
+  // placeholder + disabled input until the user has rendered.
+  const inspectorTitleState = useMemo(() => {
+    if (!selectedClipKey) return { title: null as string | null, hasJob: false };
+    const state = renderJobs.getState(selectedClipKey);
+    if (state.kind === "queued" || state.kind === "rendering" || state.kind === "completed") {
+      return { title: state.job.title, hasJob: true };
+    }
+    if (state.kind === "failed" && state.job) {
+      return { title: state.job.title, hasJob: true };
+    }
+    return { title: null, hasJob: false };
+  }, [renderJobs, selectedClipKey]);
+
+  const handleTitleSave = useCallback(
+    async (title: string | null) => {
+      if (!selectedClipKey) return;
+      await renderJobs.updateTitle(selectedClipKey, title);
+    },
+    [renderJobs, selectedClipKey],
+  );
+
   const selectErrorMessage = describeError(
     autoSelect.error,
     "자동 생성에 실패했습니다.",
@@ -340,6 +363,8 @@ export function AutoShortsPage() {
               : undefined
           }
           isDownloading={inspectorIsDownloading}
+          renderJobTitle={inspectorTitleState.title}
+          onTitleSave={inspectorTitleState.hasJob ? handleTitleSave : undefined}
         />
       }
     />
