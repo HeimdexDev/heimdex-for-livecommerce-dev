@@ -431,6 +431,7 @@ export function ShortsEditorPage() {
             overlays={state.overlays}
             selectedOverlayId={state.selectedOverlayId}
             onSelectOverlay={editor.selectOverlay}
+            onUpdateOverlay={editor.updateOverlay}
             playheadMs={state.playheadMs}
             isPlaying={state.isPlaying}
             totalDurationMs={state.totalDurationMs}

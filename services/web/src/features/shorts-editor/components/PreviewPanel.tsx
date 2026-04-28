@@ -19,6 +19,9 @@ interface PreviewPanelProps {
   overlays?: EditorOverlay[];
   selectedOverlayId?: string | null;
   onSelectOverlay?: (id: string | null) => void;
+  // V2 update callback — used for drag (transform.x/y) and resize
+  // (fontSizePx for text, transform.widthPx/heightPx for background).
+  onUpdateOverlay?: (id: string, updates: Partial<EditorOverlay>) => void;
   playheadMs: number;
   isPlaying: boolean;
   totalDurationMs: number;
@@ -52,6 +55,7 @@ export function PreviewPanel({
   overlays = [],
   selectedOverlayId = null,
   onSelectOverlay,
+  onUpdateOverlay,
   playheadMs,
   isPlaying,
   totalDurationMs,
@@ -94,6 +98,21 @@ export function PreviewPanel({
     origY: number;
     origFontSizePx: number;
     lockedWidth: number | null;
+  } | null>(null);
+
+  // V2 overlay drag state — separate from V1 dragRef so the two paths
+  // don't step on each other when a session has both populated.
+  const overlayDragRef = useRef<{
+    mode: "move" | "resize";
+    overlayId: string;
+    overlayKind: "text" | "background";
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+    origFontSizePx: number;
+    origWidthPx: number;
+    origHeightPx: number;
   } | null>(null);
 
   const getSubtitleIndex = useCallback((subtitleId: string): number => {
@@ -153,33 +172,134 @@ export function PreviewPanel({
   }, [getSubtitleIndex]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    const drag = dragRef.current;
     const container = containerRef.current;
-    if (!drag || !container) return;
-
+    if (!container) return;
     const rect = container.getBoundingClientRect();
 
-    if (drag.mode === "move") {
-      const deltaX = (e.clientX - drag.startX) / rect.width;
-      const deltaY = (e.clientY - drag.startY) / rect.height;
-      const newX = Math.max(0, Math.min(1, drag.origX + deltaX));
-      const newY = Math.max(0, Math.min(1, drag.origY + deltaY));
-      onUpdateSubtitlePosition(drag.subtitleIndex, newX, newY);
-    } else {
-      const centerX = rect.left + drag.origX * rect.width;
-      const centerY = rect.top + drag.origY * rect.height;
-      const currentDist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
-      const initialDist = drag.startX; // stored initial distance
-      if (initialDist < 1) return;
-      const scale = currentDist / initialDist;
-      const newSize = Math.round(Math.max(8, Math.min(200, drag.origFontSizePx * scale)));
-      onUpdateSubtitleFontSize(drag.subtitleIndex, newSize);
+    // V1 subtitle drag --------------------------------------------------
+    const drag = dragRef.current;
+    if (drag) {
+      if (drag.mode === "move") {
+        const deltaX = (e.clientX - drag.startX) / rect.width;
+        const deltaY = (e.clientY - drag.startY) / rect.height;
+        const newX = Math.max(0, Math.min(1, drag.origX + deltaX));
+        const newY = Math.max(0, Math.min(1, drag.origY + deltaY));
+        onUpdateSubtitlePosition(drag.subtitleIndex, newX, newY);
+      } else {
+        const centerX = rect.left + drag.origX * rect.width;
+        const centerY = rect.top + drag.origY * rect.height;
+        const currentDist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
+        const initialDist = drag.startX; // stored initial distance
+        if (initialDist >= 1) {
+          const scale = currentDist / initialDist;
+          const newSize = Math.round(Math.max(8, Math.min(200, drag.origFontSizePx * scale)));
+          onUpdateSubtitleFontSize(drag.subtitleIndex, newSize);
+        }
+      }
     }
-  }, [onUpdateSubtitlePosition, onUpdateSubtitleFontSize]);
+
+    // V2 overlay drag --------------------------------------------------
+    const ovDrag = overlayDragRef.current;
+    if (ovDrag) {
+      const overlay = overlays.find((o) => o.id === ovDrag.overlayId);
+      if (!overlay || !onUpdateOverlay) return;
+
+      if (ovDrag.mode === "move") {
+        const deltaX = (e.clientX - ovDrag.startX) / rect.width;
+        const deltaY = (e.clientY - ovDrag.startY) / rect.height;
+        const newX = Math.max(0, Math.min(1, ovDrag.origX + deltaX));
+        const newY = Math.max(0, Math.min(1, ovDrag.origY + deltaY));
+        onUpdateOverlay(ovDrag.overlayId, {
+          transform: { ...overlay.transform, x: newX, y: newY },
+        } as Partial<EditorOverlay>);
+      } else {
+        const centerX = rect.left + ovDrag.origX * rect.width;
+        const centerY = rect.top + ovDrag.origY * rect.height;
+        const currentDist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
+        const initialDist = ovDrag.startX;
+        if (initialDist >= 1) {
+          const scale = currentDist / initialDist;
+          if (ovDrag.overlayKind === "text") {
+            const newSize = Math.round(
+              Math.max(8, Math.min(200, ovDrag.origFontSizePx * scale)),
+            );
+            onUpdateOverlay(ovDrag.overlayId, {
+              fontSizePx: newSize,
+            } as Partial<EditorOverlay>);
+          } else {
+            const newW = Math.round(Math.max(10, Math.min(10000, ovDrag.origWidthPx * scale)));
+            const newH = Math.round(Math.max(10, Math.min(10000, ovDrag.origHeightPx * scale)));
+            onUpdateOverlay(ovDrag.overlayId, {
+              transform: {
+                ...overlay.transform,
+                widthPx: newW,
+                heightPx: newH,
+              },
+            } as Partial<EditorOverlay>);
+          }
+        }
+      }
+    }
+  }, [onUpdateSubtitlePosition, onUpdateSubtitleFontSize, onUpdateOverlay, overlays]);
 
   const handlePointerUp = useCallback(() => {
     dragRef.current = null;
+    overlayDragRef.current = null;
   }, []);
+
+  // V2 overlay handlers — body drag = move, corner drag = resize.
+  // Selection happens on pointerdown so a drag-without-click still
+  // updates the panel selection mid-gesture.
+  const handleOverlayMovePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>, overlay: EditorOverlay) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onSelectOverlay?.(overlay.id);
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      overlayDragRef.current = {
+        mode: "move",
+        overlayId: overlay.id,
+        overlayKind: overlay.kind,
+        startX: e.clientX,
+        startY: e.clientY,
+        origX: overlay.transform.x,
+        origY: overlay.transform.y,
+        origFontSizePx:
+          overlay.kind === "text" ? overlay.fontSizePx : 0,
+        origWidthPx: overlay.transform.widthPx ?? 0,
+        origHeightPx: overlay.transform.heightPx ?? 0,
+      };
+    },
+    [onSelectOverlay],
+  );
+
+  const handleOverlayResizePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>, overlay: EditorOverlay) => {
+      e.preventDefault();
+      e.stopPropagation();
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      const container = containerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const centerX = rect.left + overlay.transform.x * rect.width;
+      const centerY = rect.top + overlay.transform.y * rect.height;
+      const startDist = Math.hypot(e.clientX - centerX, e.clientY - centerY);
+      overlayDragRef.current = {
+        mode: "resize",
+        overlayId: overlay.id,
+        overlayKind: overlay.kind,
+        startX: startDist, // reuse startX to store initial radial distance
+        startY: 0,
+        origX: overlay.transform.x,
+        origY: overlay.transform.y,
+        origFontSizePx:
+          overlay.kind === "text" ? overlay.fontSizePx : 0,
+        origWidthPx: overlay.transform.widthPx ?? 0,
+        origHeightPx: overlay.transform.heightPx ?? 0,
+      };
+    },
+    [],
+  );
 
   return (
     <div
@@ -302,6 +422,12 @@ export function PreviewPanel({
               overlay={o}
               isSelected={selectedOverlayId === o.id}
               onClick={() => onSelectOverlay?.(o.id)}
+              onMovePointerDown={(e) =>
+                handleOverlayMovePointerDown(e, o)
+              }
+              onResizePointerDown={(_corner, e) =>
+                handleOverlayResizePointerDown(e, o)
+              }
             />
           ))}
 

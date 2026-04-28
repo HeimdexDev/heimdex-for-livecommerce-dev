@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, type PointerEventHandler } from "react";
+import { type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 
 import { resolveFontFamily } from "@/lib/fonts";
 import { cn } from "@/lib/utils";
@@ -13,29 +13,45 @@ import type {
   TransformProps,
 } from "../../lib/overlay-types";
 
+type Corner = "nw" | "ne" | "sw" | "se";
+
 interface OverlayRendererProps {
   overlay: EditorOverlay;
   isSelected: boolean;
-  onPointerDown?: PointerEventHandler<HTMLDivElement>;
+  // Body drag — caller wires this to a "move" gesture that updates
+  // overlay.transform.x / .y.
+  onMovePointerDown?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  // Corner drag — caller wires this to a "resize" gesture that updates
+  // fontSizePx (text) or transform.widthPx/heightPx (background).
+  onResizePointerDown?: (
+    corner: Corner,
+    e: ReactPointerEvent<HTMLDivElement>,
+  ) => void;
   onClick?: () => void;
 }
 
 /**
  * Renders an EditorOverlay (text or background) as a positioned, styled
  * <div>/<p> in the preview canvas. Pure: no state, no network — caller
- * controls selection + drag.
+ * controls selection + drag math.
  *
- * Visual fidelity goal: what the user sees here approximates what the
- * worker bakes via PIL. Differences:
- * - Browser kerning vs PIL kerning will drift slightly. Tracked in plan
- *   as Risk 3 (rendered MP4 may not be pixel-identical to preview).
- * - Stroke is rendered via -webkit-text-stroke (text) or border (bg).
- * - Shadow uses CSS drop-shadow (filter) for the blur+spread approximation.
+ * Drag UX (matches V1 PreviewPanel's subtitle behavior):
+ * - Body pointerdown → caller-driven "move" — translates X/Y delta into
+ *   normalized transform.x/y updates.
+ * - Corner pointerdown (when selected) → caller-driven "resize" —
+ *   translates radial distance ratio into a proportional fontSizePx
+ *   (text) or widthPx/heightPx (background) update.
+ *
+ * Visual fidelity:
+ * - Browser kerning vs PIL kerning will drift slightly (Risk 3 in plan).
+ * - Stroke is rendered via -webkit-text-stroke (text) or outline (bg).
+ * - Shadow uses CSS text-shadow stack / box-shadow (with spread).
  */
 export function OverlayRenderer({
   overlay,
   isSelected,
-  onPointerDown,
+  onMovePointerDown,
+  onResizePointerDown,
   onClick,
 }: OverlayRendererProps) {
   if (overlay.kind === "text") {
@@ -43,7 +59,8 @@ export function OverlayRenderer({
       <TextOverlayBox
         overlay={overlay}
         isSelected={isSelected}
-        onPointerDown={onPointerDown}
+        onMovePointerDown={onMovePointerDown}
+        onResizePointerDown={onResizePointerDown}
         onClick={onClick}
       />
     );
@@ -52,7 +69,8 @@ export function OverlayRenderer({
     <BackgroundOverlayBox
       overlay={overlay}
       isSelected={isSelected}
-      onPointerDown={onPointerDown}
+      onMovePointerDown={onMovePointerDown}
+      onResizePointerDown={onResizePointerDown}
       onClick={onClick}
     />
   );
@@ -65,20 +83,21 @@ export function OverlayRenderer({
 function TextOverlayBox({
   overlay,
   isSelected,
-  onPointerDown,
+  onMovePointerDown,
+  onResizePointerDown,
   onClick,
 }: {
   overlay: EditorTextOverlay;
   isSelected: boolean;
-  onPointerDown?: PointerEventHandler<HTMLDivElement>;
+  onMovePointerDown?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onResizePointerDown?: (
+    corner: Corner,
+    e: ReactPointerEvent<HTMLDivElement>,
+  ) => void;
   onClick?: () => void;
 }) {
   const containerStyle = positionContainerStyle(overlay.transform, overlay.layerIndex);
 
-  // Effects → CSS. Stroke is approximated via -webkit-text-stroke; opacity
-  // is on the wrapper so it composes with shadow/stroke. Shadow uses CSS
-  // text-shadow stack (no spread on text — CSS drop-shadow on the wrapper
-  // covers spread approximately).
   const textStyle: CSSProperties = {
     fontFamily: resolveFontFamily(overlay.fontFamily),
     fontSize: `${Math.max(8, overlay.fontSizePx * 0.5)}px`,
@@ -106,10 +125,10 @@ function TextOverlayBox({
       data-overlay-id={overlay.id}
       style={{ ...containerStyle, opacity: overlay.effects.opacity }}
       className={cn(
-        "absolute select-none cursor-grab",
-        isSelected && "ring-2 ring-indigo-400",
+        "absolute select-none cursor-grab active:cursor-grabbing",
+        isSelected && "ring-2 ring-indigo-400 ring-offset-1",
       )}
-      onPointerDown={onPointerDown}
+      onPointerDown={onMovePointerDown}
       onClick={(e) => {
         e.stopPropagation();
         onClick?.();
@@ -123,6 +142,10 @@ function TextOverlayBox({
       ) : (
         <p style={textStyle}>{overlay.text}</p>
       )}
+
+      {isSelected && onResizePointerDown && (
+        <ResizeHandles onResize={onResizePointerDown} />
+      )}
     </div>
   );
 }
@@ -134,12 +157,17 @@ function TextOverlayBox({
 function BackgroundOverlayBox({
   overlay,
   isSelected,
-  onPointerDown,
+  onMovePointerDown,
+  onResizePointerDown,
   onClick,
 }: {
   overlay: EditorBackgroundOverlay;
   isSelected: boolean;
-  onPointerDown?: PointerEventHandler<HTMLDivElement>;
+  onMovePointerDown?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onResizePointerDown?: (
+    corner: Corner,
+    e: ReactPointerEvent<HTMLDivElement>,
+  ) => void;
   onClick?: () => void;
 }) {
   const containerStyle = positionContainerStyle(
@@ -169,17 +197,56 @@ function BackgroundOverlayBox({
       data-overlay-id={overlay.id}
       style={{ ...containerStyle, opacity: overlay.effects.opacity }}
       className={cn(
-        "absolute select-none cursor-grab",
-        isSelected && "ring-2 ring-indigo-400",
+        "absolute select-none cursor-grab active:cursor-grabbing",
+        isSelected && "ring-2 ring-indigo-400 ring-offset-1",
       )}
-      onPointerDown={onPointerDown}
+      onPointerDown={onMovePointerDown}
       onClick={(e) => {
         e.stopPropagation();
         onClick?.();
       }}
     >
       <div style={boxStyle} />
+
+      {isSelected && onResizePointerDown && (
+        <ResizeHandles onResize={onResizePointerDown} />
+      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Resize handles (4 corners)
+// ---------------------------------------------------------------------------
+
+const CORNER_STYLES: Record<Corner, string> = {
+  nw: "-top-1.5 -left-1.5 cursor-nwse-resize",
+  ne: "-top-1.5 -right-1.5 cursor-nesw-resize",
+  sw: "-bottom-1.5 -left-1.5 cursor-nesw-resize",
+  se: "-bottom-1.5 -right-1.5 cursor-nwse-resize",
+};
+
+function ResizeHandles({
+  onResize,
+}: {
+  onResize: (corner: Corner, e: ReactPointerEvent<HTMLDivElement>) => void;
+}) {
+  return (
+    <>
+      {(["nw", "ne", "sw", "se"] as const).map((corner) => (
+        <div
+          key={corner}
+          className={cn(
+            "absolute z-10 h-3 w-3 rounded-full border-2 border-white bg-indigo-500",
+            CORNER_STYLES[corner],
+          )}
+          onPointerDown={(e) => onResize(corner, e)}
+          // Stop click bubbling so corner clicks don't double as
+          // body-clicks (which would re-fire selection).
+          onClick={(e) => e.stopPropagation()}
+        />
+      ))}
+    </>
   );
 }
 
@@ -203,8 +270,6 @@ function positionContainerStyle(
 function textShadowAndStrokeStyles(e: EffectsProps): CSSProperties {
   const out: CSSProperties = {};
   if (e.stroke) {
-    // -webkit-text-stroke is supported across modern browsers; falls back
-    // gracefully to no stroke on older targets.
     (out as CSSProperties & { WebkitTextStroke?: string }).WebkitTextStroke =
       `${e.stroke.widthPx}px ${e.stroke.color}`;
   }
@@ -215,8 +280,6 @@ function textShadowAndStrokeStyles(e: EffectsProps): CSSProperties {
 }
 
 function cssTextShadow(s: ShadowProps): string {
-  // CSS text-shadow has no spread; we approximate by stacking offsets in a
-  // small ring so a wider/spread shadow still reads. Blur is native.
   if (s.spreadPx > 0) {
     const offsets: Array<[number, number]> = [];
     const r = Math.max(1, s.spreadPx);
@@ -233,6 +296,5 @@ function cssTextShadow(s: ShadowProps): string {
 }
 
 function cssBoxShadow(s: ShadowProps): string {
-  // box-shadow supports spread natively.
   return `${s.offsetX}px ${s.offsetY}px ${s.blurPx}px ${s.spreadPx}px ${s.color}`;
 }
