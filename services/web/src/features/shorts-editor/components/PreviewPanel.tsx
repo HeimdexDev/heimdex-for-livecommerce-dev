@@ -428,6 +428,8 @@ export function PreviewPanel({
               onResizePointerDown={(_corner, e) =>
                 handleOverlayResizePointerDown(e, o)
               }
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
             />
           ))}
 
