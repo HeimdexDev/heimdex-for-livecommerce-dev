@@ -27,6 +27,12 @@ interface OverlayRendererProps {
     corner: Corner,
     e: ReactPointerEvent<HTMLDivElement>,
   ) => void;
+  // Drag continuation — these MUST be attached to the same elements that
+  // call setPointerCapture in the pointerdown handlers, otherwise the
+  // captured element delivers events to nowhere and the gesture appears
+  // frozen. (Symptom in V2 v1: handles render but dragging does nothing.)
+  onPointerMove?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp?: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onClick?: () => void;
 }
 
@@ -52,28 +58,22 @@ export function OverlayRenderer({
   isSelected,
   onMovePointerDown,
   onResizePointerDown,
+  onPointerMove,
+  onPointerUp,
   onClick,
 }: OverlayRendererProps) {
+  const sharedProps = {
+    isSelected,
+    onMovePointerDown,
+    onResizePointerDown,
+    onPointerMove,
+    onPointerUp,
+    onClick,
+  };
   if (overlay.kind === "text") {
-    return (
-      <TextOverlayBox
-        overlay={overlay}
-        isSelected={isSelected}
-        onMovePointerDown={onMovePointerDown}
-        onResizePointerDown={onResizePointerDown}
-        onClick={onClick}
-      />
-    );
+    return <TextOverlayBox overlay={overlay} {...sharedProps} />;
   }
-  return (
-    <BackgroundOverlayBox
-      overlay={overlay}
-      isSelected={isSelected}
-      onMovePointerDown={onMovePointerDown}
-      onResizePointerDown={onResizePointerDown}
-      onClick={onClick}
-    />
-  );
+  return <BackgroundOverlayBox overlay={overlay} {...sharedProps} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +85,8 @@ function TextOverlayBox({
   isSelected,
   onMovePointerDown,
   onResizePointerDown,
+  onPointerMove,
+  onPointerUp,
   onClick,
 }: {
   overlay: EditorTextOverlay;
@@ -94,6 +96,8 @@ function TextOverlayBox({
     corner: Corner,
     e: ReactPointerEvent<HTMLDivElement>,
   ) => void;
+  onPointerMove?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp?: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onClick?: () => void;
 }) {
   const containerStyle = positionContainerStyle(overlay.transform, overlay.layerIndex);
@@ -129,6 +133,8 @@ function TextOverlayBox({
         isSelected && "ring-2 ring-indigo-400 ring-offset-1",
       )}
       onPointerDown={onMovePointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
       onClick={(e) => {
         e.stopPropagation();
         onClick?.();
@@ -144,7 +150,11 @@ function TextOverlayBox({
       )}
 
       {isSelected && onResizePointerDown && (
-        <ResizeHandles onResize={onResizePointerDown} />
+        <ResizeHandles
+          onResize={onResizePointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+        />
       )}
     </div>
   );
@@ -159,6 +169,8 @@ function BackgroundOverlayBox({
   isSelected,
   onMovePointerDown,
   onResizePointerDown,
+  onPointerMove,
+  onPointerUp,
   onClick,
 }: {
   overlay: EditorBackgroundOverlay;
@@ -168,6 +180,8 @@ function BackgroundOverlayBox({
     corner: Corner,
     e: ReactPointerEvent<HTMLDivElement>,
   ) => void;
+  onPointerMove?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp?: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onClick?: () => void;
 }) {
   const containerStyle = positionContainerStyle(
@@ -201,6 +215,8 @@ function BackgroundOverlayBox({
         isSelected && "ring-2 ring-indigo-400 ring-offset-1",
       )}
       onPointerDown={onMovePointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
       onClick={(e) => {
         e.stopPropagation();
         onClick?.();
@@ -209,7 +225,11 @@ function BackgroundOverlayBox({
       <div style={boxStyle} />
 
       {isSelected && onResizePointerDown && (
-        <ResizeHandles onResize={onResizePointerDown} />
+        <ResizeHandles
+          onResize={onResizePointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+        />
       )}
     </div>
   );
@@ -228,8 +248,12 @@ const CORNER_STYLES: Record<Corner, string> = {
 
 function ResizeHandles({
   onResize,
+  onPointerMove,
+  onPointerUp,
 }: {
   onResize: (corner: Corner, e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerMove?: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp?: (e: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
   return (
     <>
@@ -241,6 +265,8 @@ function ResizeHandles({
             CORNER_STYLES[corner],
           )}
           onPointerDown={(e) => onResize(corner, e)}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
           // Stop click bubbling so corner clicks don't double as
           // body-clicks (which would re-fire selection).
           onClick={(e) => e.stopPropagation()}
