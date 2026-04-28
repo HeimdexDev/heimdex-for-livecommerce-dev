@@ -14,6 +14,7 @@ import { TransformSection } from "./TransformSection";
 import { useOverlaySelection } from "../../hooks/useOverlaySelection";
 import { usePresets } from "../../hooks/usePresets";
 import { t } from "../../lib/i18n/strings";
+import { runOneTimePresetMigration } from "../../lib/preset-migration";
 import type {
   EditorBackgroundOverlay,
   EditorOverlay,
@@ -87,6 +88,27 @@ export function OverlayPanel({
     getToken: getAccessToken,
     enabled: true,
   });
+
+  // One-time legacy localStorage → API migration. Idempotent: the migration
+  // module itself short-circuits on a "migrated" flag in localStorage, so
+  // running this on every mount is cheap (one localStorage read) for users
+  // who never had V1 presets or have already migrated.
+  useEffect(() => {
+    let cancelled = false;
+    void runOneTimePresetMigration(getAccessToken).then((result) => {
+      if (!cancelled && result.migrated > 0) {
+        // Refresh so newly imported presets show up in the dropdown.
+        void presetsApi.reload();
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // presetsApi.reload changes reference each render — intentionally not in
+    // deps; we only want this to fire once per panel mount, not on every
+    // re-render. getAccessToken is stable (auth hook).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [getAccessToken]);
 
   return (
     <div className="flex h-full flex-col bg-white">
