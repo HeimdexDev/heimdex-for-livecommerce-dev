@@ -15,6 +15,8 @@ import { PreviewPanel } from "./PreviewPanel";
 import { TimelinePanel } from "./TimelinePanel";
 import { ClipProperties } from "./ClipProperties";
 import { TextOverlayPanel } from "./TextOverlayPanel";
+import { OverlayPanel } from "./OverlayPanel";
+import { isShortsEditorV2Enabled } from "@/lib/feature-flags";
 import { SceneListPanel } from "./SceneListPanel";
 
 function BackArrowIcon() {
@@ -268,6 +270,16 @@ export function ShortsEditorPage() {
               onVolumeChange={editor.setClipVolume}
               onRemove={editor.removeClip}
             />
+          ) : isShortsEditorV2Enabled() ? (
+            <OverlayPanel
+              state={state}
+              onAddTextOverlay={editor.addTextOverlayAtPlayhead}
+              onAddBackgroundOverlay={editor.addBackgroundOverlayAtPlayhead}
+              onUpdateOverlay={editor.updateOverlay}
+              onRemoveOverlay={editor.removeOverlay}
+              onSelectOverlay={editor.selectOverlay}
+              onReorderOverlay={editor.reorderOverlay}
+            />
           ) : (
             <TextOverlayPanel
               subtitle={
@@ -286,6 +298,9 @@ export function ShortsEditorPage() {
           <PreviewPanel
             clips={state.clips}
             subtitles={state.subtitles}
+            overlays={state.overlays}
+            selectedOverlayId={state.selectedOverlayId}
+            onSelectOverlay={editor.selectOverlay}
             playheadMs={state.playheadMs}
             isPlaying={state.isPlaying}
             totalDurationMs={state.totalDurationMs}

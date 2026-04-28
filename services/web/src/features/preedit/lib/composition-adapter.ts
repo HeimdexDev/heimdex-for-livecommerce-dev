@@ -32,6 +32,7 @@ export function buildPreeditComposition(
     aspectRatio === "9:16" ? [1080, 1920] : [1920, 1080];
 
   return {
+    overlays: [],
     output: {
       width,
       height,

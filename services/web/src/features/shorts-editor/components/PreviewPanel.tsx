@@ -3,6 +3,8 @@
 import { useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import type { EditorClip, EditorSubtitle } from "../lib/types";
+import type { EditorOverlay } from "../lib/overlay-types";
+import { OverlayRenderer } from "./preview/OverlayRenderer";
 import { getActiveSubtitles } from "../lib/source-time";
 import { formatTimelineTimestamp } from "../lib/timeline-math";
 import { resolveFontFamily } from "@/lib/fonts";
@@ -13,6 +15,10 @@ import { getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbn
 interface PreviewPanelProps {
   clips: EditorClip[];
   subtitles: EditorSubtitle[];
+  // V2 overlays — rendered alongside subtitles. Empty for V1 sessions.
+  overlays?: EditorOverlay[];
+  selectedOverlayId?: string | null;
+  onSelectOverlay?: (id: string | null) => void;
   playheadMs: number;
   isPlaying: boolean;
   totalDurationMs: number;
@@ -43,6 +49,9 @@ function PauseIcon() {
 export function PreviewPanel({
   clips,
   subtitles,
+  overlays = [],
+  selectedOverlayId = null,
+  onSelectOverlay,
   playheadMs,
   isPlaying,
   totalDurationMs,
@@ -281,6 +290,20 @@ export function PreviewPanel({
             </div>
           );
         })}
+
+        {/* V2 overlays — rendered above subtitles. The active-window check
+            mirrors getActiveSubtitles: only show overlays whose [start, end)
+            includes the current playhead. */}
+        {overlays
+          .filter((o) => o.startMs <= playheadMs && playheadMs < o.endMs)
+          .map((o) => (
+            <OverlayRenderer
+              key={o.id}
+              overlay={o}
+              isSelected={selectedOverlayId === o.id}
+              onClick={() => onSelectOverlay?.(o.id)}
+            />
+          ))}
 
         {/* No clips placeholder */}
         {clips.length === 0 && (
