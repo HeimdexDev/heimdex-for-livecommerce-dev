@@ -46,6 +46,7 @@ from heimdex_media_contracts.composition import (
     OutputSpec,
     SceneClipSpec,
 )
+from heimdex_media_contracts.scenes.schemas import SceneDocument
 from heimdex_media_contracts.shorts.concatenator import (
     AutoClip,
     ClipMember,
@@ -61,15 +62,76 @@ def _to_contract_mode(req_mode: ScoringModeRequest) -> ScoringMode:
     return ScoringMode(req_mode.value)
 
 
-def _auto_clip_to_response(clip: AutoClip) -> AutoClipResponse:
+def _resolve_member_transcript(
+    scene_id: str,
+    scenes_by_id: dict[str, SceneDocument] | None,
+    speaker_transcripts: dict[str, str] | None,
+) -> tuple[str | None, str | None]:
+    """Pick the best available transcript + scene_caption for a clip member.
+
+    Population priority for transcript:
+      1. ``speaker_transcript`` (preferred — speaker-diarized)
+      2. ``transcript_norm`` (normalized whisper output)
+      3. ``transcript_raw`` (raw whisper output)
+
+    Whitespace-only strings are treated as missing — STT can emit padding
+    or BOMs that pass the truthy check but are visually empty. Strip
+    each candidate before the ``or`` chain so a blank ``transcript_norm``
+    doesn't shadow a real ``transcript_raw``.
+
+    Empty strings collapse to ``None`` so the API response stays compact
+    and the frontend can use truthy checks.
+    """
+    scene = (scenes_by_id or {}).get(scene_id)
+
+    speaker = (speaker_transcripts or {}).get(scene_id)
+    if speaker and speaker.strip():
+        transcript: str | None = speaker
+    elif scene is None:
+        transcript = None
+    else:
+        norm = (scene.transcript_norm or "").strip()
+        raw = (scene.transcript_raw or "").strip()
+        transcript = norm or raw or None
+
+    caption = scene.scene_caption if scene is not None else None
+    if caption is not None and not caption.strip():
+        caption = None
+    return transcript, caption
+
+
+def _member_to_response(
+    m: ClipMember,
+    *,
+    scenes_by_id: dict[str, SceneDocument] | None = None,
+    speaker_transcripts: dict[str, str] | None = None,
+) -> ClipMemberResponse:
+    transcript, scene_caption = _resolve_member_transcript(
+        m.scene_id, scenes_by_id, speaker_transcripts,
+    )
+    return ClipMemberResponse(
+        scene_id=m.scene_id,
+        start_ms=m.start_ms,
+        end_ms=m.end_ms,
+        score=m.score,
+        transcript=transcript,
+        scene_caption=scene_caption,
+    )
+
+
+def _auto_clip_to_response(
+    clip: AutoClip,
+    *,
+    scenes_by_id: dict[str, SceneDocument] | None = None,
+    speaker_transcripts: dict[str, str] | None = None,
+) -> AutoClipResponse:
     return AutoClipResponse(
         scene_ids=clip.scene_ids,
         members=[
-            ClipMemberResponse(
-                scene_id=m.scene_id,
-                start_ms=m.start_ms,
-                end_ms=m.end_ms,
-                score=m.score,
+            _member_to_response(
+                m,
+                scenes_by_id=scenes_by_id,
+                speaker_transcripts=speaker_transcripts,
             )
             for m in clip.members
         ],
@@ -207,14 +269,16 @@ class ShortsAutoService:
             )
 
         # Fetch candidates with mode-aware OS pre-filter.
-        scenes = await self.selector.fetch_candidates(
+        candidates = await self.selector.fetch_candidates(
             org_id=org_id,
             video_id=req.video_id,
             mode=contract_mode,
             person_cluster_id=req.person_cluster_id,
         )
+        scenes = candidates.scenes
         if not scenes:
             return _empty_response(req, "no_candidate_scenes_after_filter")
+        scenes_by_id = {s.scene_id: s for s in scenes}
 
         # Score via injected scorer (pure or LLM). On LLM failure we
         # transparently retry with the pure scorer so the endpoint never
@@ -271,7 +335,14 @@ class ShortsAutoService:
         if not clips:
             return _empty_response(req, "no_clips_met_min_duration")
 
-        clip_responses = [_auto_clip_to_response(c) for c in clips]
+        clip_responses = [
+            _auto_clip_to_response(
+                c,
+                scenes_by_id=scenes_by_id,
+                speaker_transcripts=candidates.speaker_transcripts,
+            )
+            for c in clips
+        ]
         total_duration_ms = sum(c.duration_ms for c in clips)
 
         logger.info(
@@ -379,22 +450,26 @@ class ShortsAutoService:
         from heimdex_media_contracts.shorts.scorer import ScoringMode
 
         # Fetch all scenes for this video (scoped) then pick the matching ids.
-        scenes = await self.selector.fetch_candidates(
+        candidates = await self.selector.fetch_candidates(
             org_id=org_id,
             video_id=video_id,
             mode=ScoringMode.BOTH,
         )
-        by_id = {s.scene_id: s for s in scenes}
+        by_id = {s.scene_id: s for s in candidates.scenes}
         ordered = [by_id[sid] for sid in scene_ids if sid in by_id]
         if not ordered:
             return None
 
         members = [
-            ClipMemberResponse(
-                scene_id=s.scene_id,
-                start_ms=s.start_ms,
-                end_ms=s.end_ms,
-                score=1.0,  # user selected them; score is moot
+            _member_to_response(
+                ClipMember(
+                    scene_id=s.scene_id,
+                    start_ms=s.start_ms,
+                    end_ms=s.end_ms,
+                    score=1.0,  # user selected them; score is moot
+                ),
+                scenes_by_id=by_id,
+                speaker_transcripts=candidates.speaker_transcripts,
             )
             for s in ordered
         ]

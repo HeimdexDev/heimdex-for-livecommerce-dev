@@ -44,12 +44,20 @@ class AutoSelectRequest(BaseModel):
 class ClipMemberResponse(BaseModel):
     """Per-scene span inside an AutoClip. Emitted so consumers can map
     directly to ``SceneClipSpec`` entries without re-fetching scene bounds.
+
+    ``transcript`` and ``scene_caption`` are optional enrichments included
+    so the auto-shorts inspector panel can render a script without a
+    second per-scene fetch. Both default to ``None`` — backwards
+    compatible with older clients. Population priority for ``transcript``:
+    speaker_transcript (preferred), transcript_norm, transcript_raw.
     """
 
     scene_id: str = Field(min_length=1)
     start_ms: int = Field(ge=0)
     end_ms: int = Field(ge=0)
     score: float = Field(ge=0.0, le=1.0)
+    transcript: str | None = None
+    scene_caption: str | None = None
 
 
 class AutoClipResponse(BaseModel):

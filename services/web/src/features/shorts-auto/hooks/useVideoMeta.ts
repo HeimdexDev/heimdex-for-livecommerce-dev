@@ -14,15 +14,16 @@ interface State {
 }
 
 /**
- * Load a video's scene metadata once for rendering the header
- * (title, thumbnail base, source type). Separate from `useAutoSelect`
- * so the page can show the video context even if the auto-select call
- * hasn't been made yet.
- *
- * Uses `page_size=1` — we only need the top-level video fields
- * (video_title, source_type); scene thumbnails for clips come from
- * `AutoClipResponse` scene_ids and `SceneThumbnail` component.
+ * Load a video's scene metadata + the full scene list. The script panel
+ * in the inspector wants per-scene transcripts as a fallback path when
+ * ``ClipMemberResponse.transcript`` is undefined for an older backend,
+ * and the full list lets us render speaker turns without a second
+ * fetch per clip. Bumped from page_size=1 to 200 in PR 3 of the
+ * auto-shorts UI redesign — only consumer is ``AutoShortsPage``, so
+ * the cost is one round trip per page load.
  */
+const SCENES_PAGE_SIZE = 200;
+
 export function useVideoMeta(videoId: string, getToken: TokenGetter): State {
   const [state, setState] = useState<State>({
     meta: null,
@@ -39,7 +40,7 @@ export function useVideoMeta(videoId: string, getToken: TokenGetter): State {
     let cancelled = false;
     setState({ meta: null, isLoading: true, error: null });
 
-    getVideoScenes(videoId, 1, 0, getToken)
+    getVideoScenes(videoId, SCENES_PAGE_SIZE, 0, getToken)
       .then((res) => {
         if (cancelled) return;
         setState({ meta: res, isLoading: false, error: null });

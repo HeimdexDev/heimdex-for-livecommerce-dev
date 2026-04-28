@@ -38,10 +38,18 @@ export interface ClipMemberResponse {
   end_ms: number;
   score: number;
   /**
-   * Short per-pick reason from the LLM scorer. Absent when the pure
-   * scorer produced the clip. Safe to render inline as a tooltip.
+   * Speaker-diarized transcript for this scene when available, falling
+   * back to ``transcript_norm`` then ``transcript_raw`` server-side.
+   * Whitespace-only strings collapse to ``null``. Used by the
+   * inspector script panel without a per-scene fetch.
    */
-  reason?: string | null;
+  transcript?: string | null;
+  /**
+   * Vision-captioned scene description, surfaced as a fallback when no
+   * transcript exists. ``null`` when the source ``scene_caption`` is
+   * empty or whitespace-only.
+   */
+  scene_caption?: string | null;
 }
 
 /**

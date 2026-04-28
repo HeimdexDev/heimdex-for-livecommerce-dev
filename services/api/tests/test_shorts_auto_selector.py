@@ -120,10 +120,10 @@ class TestQueryConstruction:
             ]
         )
         selector = AutoShortsSelector(client)
-        scenes = await selector.fetch_candidates(uuid4(), "vid", ScoringMode.BOTH)
-        assert len(scenes) == 2
-        assert scenes[0].scene_id == "vid_scene_000"
-        assert scenes[0].people_cluster_ids == ["p1"]
+        result = await selector.fetch_candidates(uuid4(), "vid", ScoringMode.BOTH)
+        assert len(result.scenes) == 2
+        assert result.scenes[0].scene_id == "vid_scene_000"
+        assert result.scenes[0].people_cluster_ids == ["p1"]
 
     async def test_malformed_scene_skipped_does_not_break_request(self):
         client = _mock_scene_client(
@@ -133,16 +133,62 @@ class TestQueryConstruction:
             ]
         )
         selector = AutoShortsSelector(client)
-        scenes = await selector.fetch_candidates(uuid4(), "vid", ScoringMode.BOTH)
+        result = await selector.fetch_candidates(uuid4(), "vid", ScoringMode.BOTH)
         # Bad doc dropped, good doc kept
-        assert len(scenes) == 1
-        assert scenes[0].scene_id == "vid_scene_000"
+        assert len(result.scenes) == 1
+        assert result.scenes[0].scene_id == "vid_scene_000"
 
     async def test_empty_results(self):
         client = _mock_scene_client(hits=[])
         selector = AutoShortsSelector(client)
-        scenes = await selector.fetch_candidates(uuid4(), "vid", ScoringMode.BOTH)
-        assert scenes == []
+        result = await selector.fetch_candidates(uuid4(), "vid", ScoringMode.BOTH)
+        assert result.scenes == []
+        assert result.speaker_transcripts == {}
+
+    async def test_source_fields_include_speaker_transcript(self):
+        """Regression guard: speaker_transcript must be requested from OS
+        so the auto-shorts inspector script panel has speaker turns to
+        render. Removing it from _SOURCE_FIELDS would silently degrade
+        the script panel to non-diarized fallback.
+        """
+        client = _mock_scene_client()
+        selector = AutoShortsSelector(client)
+        await selector.fetch_candidates(uuid4(), "vid", ScoringMode.BOTH)
+        body = client.client.search.call_args.kwargs["body"]
+        assert "speaker_transcript" in body["_source"]
+
+    async def test_speaker_transcript_extracted_when_present(self):
+        client = _mock_scene_client(
+            hits=[
+                _scene_hit(
+                    "vid_scene_000",
+                    index=0,
+                    start_ms=0,
+                    end_ms=10_000,
+                    speaker_transcript="A 0:00 안녕하세요\nB 0:03 반갑습니다",
+                ),
+                _scene_hit(
+                    "vid_scene_001",
+                    index=1,
+                    start_ms=10_000,
+                    end_ms=20_000,
+                    # no speaker_transcript field at all
+                ),
+                _scene_hit(
+                    "vid_scene_002",
+                    index=2,
+                    start_ms=20_000,
+                    end_ms=30_000,
+                    speaker_transcript="   ",  # whitespace-only — should be skipped
+                ),
+            ]
+        )
+        selector = AutoShortsSelector(client)
+        result = await selector.fetch_candidates(uuid4(), "vid", ScoringMode.BOTH)
+        assert len(result.scenes) == 3
+        assert result.speaker_transcripts == {
+            "vid_scene_000": "A 0:00 안녕하세요\nB 0:03 반갑습니다",
+        }
 
 
 class TestDeriveIndexFromSceneId:
@@ -201,6 +247,6 @@ async def test_selector_survives_scenes_missing_index_field():
     ]
     client = _mock_scene_client(hits=hits)
     selector = AutoShortsSelector(client)
-    scenes = await selector.fetch_candidates(uuid4(), "gd_005f45675035f730", ScoringMode.BOTH)
-    assert len(scenes) == 1
-    assert scenes[0].index == 42
+    result = await selector.fetch_candidates(uuid4(), "gd_005f45675035f730", ScoringMode.BOTH)
+    assert len(result.scenes) == 1
+    assert result.scenes[0].index == 42

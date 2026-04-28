@@ -4,32 +4,11 @@ import { useMemo, useState, useEffect } from "react";
 import type { VideoScene } from "@/lib/types";
 import type { EditorClip } from "../lib/types";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
-import { parseSpeakerTranscript } from "@/lib/speaker-transcript";
+import { SpeakerTranscriptDisplay } from "@/lib/speaker-transcript-display";
 import { Pagination } from "@/components/ui/Pagination";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 10;
-const MAX_VISIBLE_TURNS = 3;
-
-// Editor-local speaker-dot palette keyed on the letter label from
-// parseSpeakerTranscript. A → red, B → green per Figma. Search and person
-// pages keep their own (neutral) chip palette via turn.color.
-const SPEAKER_DOT_PALETTE: readonly string[] = [
-  "bg-red-500",
-  "bg-emerald-500",
-  "bg-blue-500",
-  "bg-amber-500",
-  "bg-violet-500",
-  "bg-cyan-500",
-];
-
-export function dotColorForLabel(label: string): string {
-  const idx = label.charCodeAt(0) - "A".charCodeAt(0);
-  if (Number.isFinite(idx) && idx >= 0) {
-    return SPEAKER_DOT_PALETTE[idx % SPEAKER_DOT_PALETTE.length];
-  }
-  return SPEAKER_DOT_PALETTE[0];
-}
 
 interface SceneListPanelProps {
   videoId: string;
@@ -47,52 +26,6 @@ function formatTime(ms: number): string {
   const m = Math.floor(totalSec / 60);
   const s = totalSec % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
-}
-
-function SpeakerTranscriptDisplay({ transcript }: { transcript: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const turns = useMemo(() => parseSpeakerTranscript(transcript), [transcript]);
-
-  if (turns.length === 0) return null;
-
-  const visible = expanded ? turns : turns.slice(0, MAX_VISIBLE_TURNS);
-  const hasMore = turns.length > MAX_VISIBLE_TURNS;
-
-  return (
-    <div className="mb-1.5 space-y-1">
-      {visible.map((turn, i) => (
-        <div key={i} className="flex items-start gap-1.5">
-          <span
-            aria-label={`speaker ${turn.label}`}
-            className={cn(
-              "mt-1 inline-block h-2 w-2 shrink-0 rounded-full",
-              dotColorForLabel(turn.label),
-            )}
-          />
-          {turn.timestamp && (
-            <span className="shrink-0 pt-0.5 font-mono text-[9px] leading-tight text-gray-400">
-              {turn.timestamp}
-            </span>
-          )}
-          <p className="line-clamp-2 text-[11px] leading-tight text-gray-600">
-            {turn.text}
-          </p>
-        </div>
-      ))}
-      {hasMore && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setExpanded(!expanded);
-          }}
-          className="text-[10px] font-medium text-indigo-500 hover:text-indigo-700"
-        >
-          {expanded ? "접기" : `+${turns.length - MAX_VISIBLE_TURNS}개 더보기`}
-        </button>
-      )}
-    </div>
-  );
 }
 
 export function SceneListPanel({
@@ -251,7 +184,10 @@ export function SceneListPanel({
 
                   {/* Speaker-diarized transcript (preferred) */}
                   {scene.speaker_transcript ? (
-                    <SpeakerTranscriptDisplay transcript={scene.speaker_transcript} />
+                    <SpeakerTranscriptDisplay
+                      transcript={scene.speaker_transcript}
+                      className="mb-1.5"
+                    />
                   ) : scene.transcript_raw ? (
                     <p className="mb-1.5 line-clamp-2 text-xs text-gray-500">
                       {scene.transcript_raw}

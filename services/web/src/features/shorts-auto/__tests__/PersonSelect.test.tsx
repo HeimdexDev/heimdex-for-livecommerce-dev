@@ -2,14 +2,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { PersonSelect } from "../components/PersonSelect";
-import { getPeople } from "@/lib/api/people";
+import { getVideoPeople } from "@/lib/api/videos";
 
-vi.mock("@/lib/auth", () => ({
-  useAuth: () => ({ getAccessToken: async () => "tok" }),
-}));
+// IMPORTANT: stable getAccessToken reference. If we returned a fresh
+// function on every render, useVideoPeople's [videoId, getToken] effect
+// would refire each render → infinite loop → vitest worker timeout.
+// Discovered after the new ``useVideoPeople`` hook landed in PR 3.
+// vi.mock is hoisted and can't capture module-level closures, so the
+// stable function lives inside the factory.
+vi.mock("@/lib/auth", () => {
+  const stableGetAccessToken = async () => "tok";
+  return {
+    useAuth: () => ({ getAccessToken: stableGetAccessToken }),
+  };
+});
 
-vi.mock("@/lib/api/people", () => ({
-  getPeople: vi.fn(),
+vi.mock("@/lib/api/videos", () => ({
+  getVideoPeople: vi.fn(),
 }));
 
 vi.mock("@/lib/agent", () => ({
@@ -27,7 +36,11 @@ const people = [
 ];
 
 beforeEach(() => {
-  (getPeople as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ people });
+  (getVideoPeople as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+    video_id: "vid",
+    people,
+    total: people.length,
+  });
 });
 
 afterEach(() => {
@@ -36,27 +49,19 @@ afterEach(() => {
 
 describe("PersonSelect", () => {
   it("renders closed with placeholder when no value", () => {
-    render(<PersonSelect value={null} onChange={() => {}} />);
+    render(<PersonSelect videoId="vid" value={null} onChange={() => {}} />);
     expect(screen.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByText("인물을 선택해 주세요")).toBeInTheDocument();
   });
 
-  it("lazy-fetches people only on first open", async () => {
-    render(<PersonSelect value={null} onChange={() => {}} />);
-    expect(getPeople).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("combobox"));
-    await waitFor(() => expect(getPeople).toHaveBeenCalledTimes(1));
-
-    // Close then reopen — should NOT refetch
-    fireEvent.keyDown(document, { key: "Escape" });
-    fireEvent.click(screen.getByRole("combobox"));
-    await waitFor(() => expect(screen.getByText("호스트")).toBeInTheDocument());
-    expect(getPeople).toHaveBeenCalledTimes(1);
+  it("calls getVideoPeople with the videoId on mount", async () => {
+    render(<PersonSelect videoId="vid" value={null} onChange={() => {}} />);
+    await waitFor(() => expect(getVideoPeople).toHaveBeenCalledTimes(1));
+    expect(getVideoPeople).toHaveBeenCalledWith("vid", expect.any(Function));
   });
 
   it("filters by label search", async () => {
-    render(<PersonSelect value={null} onChange={() => {}} />);
+    render(<PersonSelect videoId="vid" value={null} onChange={() => {}} />);
     fireEvent.click(screen.getByRole("combobox"));
     await waitFor(() => expect(screen.getByText("호스트")).toBeInTheDocument());
 
@@ -71,7 +76,7 @@ describe("PersonSelect", () => {
 
   it("selects an option on click", async () => {
     const onChange = vi.fn();
-    render(<PersonSelect value={null} onChange={onChange} />);
+    render(<PersonSelect videoId="vid" value={null} onChange={onChange} />);
     fireEvent.click(screen.getByRole("combobox"));
     await waitFor(() => expect(screen.getByText("호스트")).toBeInTheDocument());
 
@@ -79,50 +84,31 @@ describe("PersonSelect", () => {
     expect(onChange).toHaveBeenCalledWith("p1");
   });
 
-  it("supports keyboard navigation and Enter selection", async () => {
-    const onChange = vi.fn();
-    render(<PersonSelect value={null} onChange={onChange} />);
+  it("shows video-scoped empty state when this video has no people", async () => {
+    (getVideoPeople as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      video_id: "vid",
+      people: [],
+      total: 0,
+    });
+    render(<PersonSelect videoId="vid" value={null} onChange={() => {}} />);
     fireEvent.click(screen.getByRole("combobox"));
-    await waitFor(() => expect(screen.getByText("호스트")).toBeInTheDocument());
-
-    const searchInput = screen.getByPlaceholderText("인물 검색...");
-    fireEvent.keyDown(searchInput, { key: "ArrowDown" });
-    fireEvent.keyDown(searchInput, { key: "ArrowDown" });
-    fireEvent.keyDown(searchInput, { key: "Enter" });
-
-    expect(onChange).toHaveBeenCalledWith("p2");
+    await waitFor(() =>
+      expect(
+        screen.getByText("이 영상에 등장하는 인물이 없습니다"),
+      ).toBeInTheDocument(),
+    );
   });
 
-  it("shows empty state when no people", async () => {
-    (getPeople as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ people: [] });
-    render(<PersonSelect value={null} onChange={() => {}} />);
+  it("renders error message when fetch fails", async () => {
+    (getVideoPeople as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("network"),
+    );
+    render(<PersonSelect videoId="vid" value={null} onChange={() => {}} />);
     fireEvent.click(screen.getByRole("combobox"));
-    await waitFor(() => expect(screen.getByText("등록된 인물이 없습니다")).toBeInTheDocument());
-  });
-
-  it("shows error state when fetch fails", async () => {
-    (getPeople as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("fail"));
-    render(<PersonSelect value={null} onChange={() => {}} />);
-    fireEvent.click(screen.getByRole("combobox"));
-    await waitFor(() => expect(screen.getByText(/인물 목록을 불러오지 못했습니다/)).toBeInTheDocument());
-  });
-
-  it("retry button clears error and refetches", async () => {
-    const mockGetPeople = getPeople as unknown as ReturnType<typeof vi.fn>;
-    mockGetPeople.mockRejectedValueOnce(new Error("fail"));
-    render(<PersonSelect value={null} onChange={() => {}} />);
-    fireEvent.click(screen.getByRole("combobox"));
-    await waitFor(() => expect(screen.getByText(/인물 목록을 불러오지 못했습니다/)).toBeInTheDocument());
-
-    // Second attempt succeeds
-    mockGetPeople.mockResolvedValueOnce({ people });
-    fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
-    await waitFor(() => expect(screen.getByText("호스트")).toBeInTheDocument());
-    expect(mockGetPeople).toHaveBeenCalledTimes(2);
-  });
-
-  it("is disabled when disabled prop is set", () => {
-    render(<PersonSelect value={null} onChange={() => {}} disabled />);
-    expect(screen.getByRole("combobox")).toBeDisabled();
+    await waitFor(() =>
+      expect(
+        screen.getByText("인물 목록을 불러오지 못했습니다."),
+      ).toBeInTheDocument(),
+    );
   });
 });

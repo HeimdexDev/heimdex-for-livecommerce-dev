@@ -1,11 +1,10 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/lib/auth";
-import { cn } from "@/lib/utils";
 import {
   AutoShortsFeatureDisabledError,
   AutoShortsRateLimitError,
@@ -13,92 +12,184 @@ import {
 } from "@/lib/api/shorts-auto";
 import type { ScoringModeRequest } from "@/lib/types";
 
-import { useAutoRender } from "../hooks/useAutoRender";
 import { useAutoSelect } from "../hooks/useAutoSelect";
 import { useVideoMeta } from "../hooks/useVideoMeta";
-import { AutoSelectPreview } from "./AutoSelectPreview";
-import { ModePicker } from "./ModePicker";
-import { PersonSelect } from "./PersonSelect";
-import { BackArrowIcon, ChevronRightIcon, MagicWandIcon } from "./icons";
+import {
+  clipKeyOf,
+  useCandidateRenderJobs,
+} from "../hooks/useCandidateRenderJobs";
+import { AutoShortsLayout } from "./AutoShortsLayout";
+import { CandidateList } from "./CandidateList";
+import { CenterPlayer } from "./CenterPlayer";
+import { InspectorPanel } from "./InspectorPanel";
+import { ModeReselectModal } from "./ModeReselectModal";
+import { BackArrowIcon, MagicWandIcon } from "./icons";
 
 /**
- * /export/shorts/auto — orchestrator page.
+ * /export/shorts/auto — orchestrator page (PR 3 redesign).
  *
- * Owns all state. Delegates:
- *  - mode selection → ModePicker
- *  - person selection → PersonSelect (human mode only)
- *  - preview display → AutoSelectPreview
- *  - API calls → useAutoSelect / useAutoRender
- *  - video header → useVideoMeta
+ * Owns:
+ *   - mode + person picker state (committed via the reselect modal)
+ *   - selected candidate (clipKey)
+ *   - render-jobs map for candidate→render-job lifecycle
  *
- * Never imports from other feature directories. The only integration
- * points are:
- *  - query param `videoId`
- *  - redirect to `/export/shorts/editor?videoId=...&sceneIds=...` (string URL)
- *  - redirect to `/export/shorts` on successful auto-render (string URL)
+ * Delegates everything else to feature components. No API calls live
+ * here — all go through the hooks (``useAutoSelect``,
+ * ``useCandidateRenderJobs``, ``useVideoMeta``). Loose-coupling rule:
+ * does not import from any other ``features/*`` directory.
  */
 export function AutoShortsPage() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const { getAccessToken } = useAuth();
 
   const videoId = searchParams.get("videoId") ?? "";
 
   const [mode, setMode] = useState<ScoringModeRequest>("both");
   const [personClusterId, setPersonClusterId] = useState<string | null>(null);
+  const [selectedClipKey, setSelectedClipKey] = useState<string | null>(null);
+  const [isModeModalOpen, setIsModeModalOpen] = useState(false);
+  // Open the modal automatically on first land so the user actively
+  // picks a mode rather than getting a default-혼합 list. This matches
+  // the reference flow where the user always confirms before seeing
+  // results. Skipped when there's no videoId (the page short-circuits
+  // to a "select a video" message anyway).
+  const [hasOpenedModeOnce, setHasOpenedModeOnce] = useState(false);
 
   const videoMeta = useVideoMeta(videoId, getAccessToken);
   const autoSelect = useAutoSelect(getAccessToken);
-  const autoRender = useAutoRender(getAccessToken);
+  const renderJobs = useCandidateRenderJobs(getAccessToken);
 
   const videoTitle = videoMeta.meta?.video_title ?? videoId;
-  const canSubmit = Boolean(videoId) && (mode !== "human" || Boolean(personClusterId));
+  const scenes = videoMeta.meta?.scenes ?? [];
 
-  const handleModeChange = useCallback((next: ScoringModeRequest) => {
-    setMode(next);
-    if (next !== "human") {
-      setPersonClusterId(null);
+  // First-land: pop the modal once we have a videoId. Don't re-pop if
+  // the user dismisses (they go to the empty list, can re-open via the
+  // 재선택 button).
+  useEffect(() => {
+    if (videoId && !hasOpenedModeOnce) {
+      setIsModeModalOpen(true);
+      setHasOpenedModeOnce(true);
     }
-    autoSelect.reset();
-    autoRender.reset();
-  }, [autoSelect, autoRender]);
+  }, [videoId, hasOpenedModeOnce]);
 
-  const handleGenerate = useCallback(async () => {
-    if (!canSubmit || autoSelect.isLoading) return;
-    await autoSelect.mutate({
-      video_id: videoId,
-      mode,
-      person_cluster_id: mode === "human" ? personClusterId : null,
-    });
-  }, [canSubmit, autoSelect, videoId, mode, personClusterId]);
-
-  const handleRenderClip = useCallback(async (clipSceneIds: string[]) => {
-    if (!canSubmit || autoRender.isLoading) return;
-    const job = await autoRender.mutate({
-      video_id: videoId,
-      mode,
-      person_cluster_id: mode === "human" ? personClusterId : null,
-      scene_ids: clipSceneIds,
-    });
-    if (job) {
-      router.push("/export/shorts");
+  // Default the selected clip to the first one whenever a fresh
+  // selection comes back with non-empty clips. Resets to null on
+  // re-generate so the user sees a clean state.
+  useEffect(() => {
+    if (autoSelect.data && autoSelect.data.clips.length > 0) {
+      setSelectedClipKey(clipKeyOf(autoSelect.data.clips[0]));
+    } else {
+      setSelectedClipKey(null);
     }
-  }, [canSubmit, autoRender, videoId, mode, personClusterId, router]);
+  }, [autoSelect.data]);
+
+  const selectedClip = useMemo(() => {
+    if (!autoSelect.data || !selectedClipKey) return null;
+    return autoSelect.data.clips.find((c) => clipKeyOf(c) === selectedClipKey) ?? null;
+  }, [autoSelect.data, selectedClipKey]);
 
   const buildEditorHref = useCallback(
-    (clipSceneIds: string[]): string =>
-      `/export/shorts/editor?videoId=${encodeURIComponent(videoId)}&sceneIds=${encodeURIComponent(clipSceneIds.join(","))}`,
+    (sceneIds: string[]): string =>
+      `/export/shorts/editor?videoId=${encodeURIComponent(videoId)}&sceneIds=${encodeURIComponent(sceneIds.join(","))}`,
     [videoId],
   );
 
-  const selectErrorMessage = describeError(autoSelect.error, "자동 생성에 실패했습니다.");
-  const renderErrorMessage = describeError(autoRender.error, "쇼츠 렌더링 요청에 실패했습니다.");
+  const runSelect = useCallback(
+    async (nextMode: ScoringModeRequest, nextPerson: string | null) => {
+      await autoSelect.mutate({
+        video_id: videoId,
+        mode: nextMode,
+        person_cluster_id: nextMode === "human" ? nextPerson : null,
+      });
+    },
+    [autoSelect, videoId],
+  );
+
+  const handleModeSubmit = useCallback(
+    async (nextMode: ScoringModeRequest, nextPerson: string | null) => {
+      setMode(nextMode);
+      setPersonClusterId(nextPerson);
+      setIsModeModalOpen(false);
+      // Reset render-jobs map on re-generate — old scene_ids may not
+      // exist in the new selection, and we don't want stale cards
+      // sneaking back when the user picks the same scene again.
+      // (The map is keyed on scene_ids.join("-"), so this is moot
+      // unless the same exact scene set comes back; resetting is
+      // still the safer default for v1.)
+      // Intentionally not clearing renderJobs.states; stale entries
+      // for scene-id sets no longer in the list are simply orphaned.
+      await runSelect(nextMode, nextPerson);
+    },
+    [runSelect],
+  );
+
+  // Candidate card actions
+  const handleDownloadCandidate = useCallback(
+    async (clipKey: string) => {
+      if (!autoSelect.data) return;
+      const clip = autoSelect.data.clips.find((c) => clipKeyOf(c) === clipKey);
+      if (!clip) return;
+
+      const state = renderJobs.getState(clipKey);
+      if (state.kind === "candidate" || state.kind === "failed") {
+        await renderJobs.startRender(clipKey, {
+          videoId,
+          mode,
+          personClusterId,
+          title: null,
+          clip,
+        });
+        return;
+      }
+      if (state.kind === "completed") {
+        const filename = `auto-shorts-${clipKey.slice(0, 24)}.mp4`;
+        await renderJobs.download(clipKey, filename);
+      }
+      // queued/rendering/submitting: button is disabled in the card.
+    },
+    [autoSelect.data, renderJobs, videoId, mode, personClusterId],
+  );
+
+  const handleDeleteCandidate = useCallback(
+    async (clipKey: string) => {
+      await renderJobs.remove(clipKey);
+      // If the deleted card was selected, fall back to the first
+      // remaining card. Render-job removal doesn't actually drop the
+      // candidate from the autoSelect.data list, so just clear the
+      // selection if the user wants the row gone visually we'd need a
+      // separate hidden-keys set. v1 keeps the card visible (still in
+      // selection.clips) but with default-candidate state restored —
+      // this matches "삭제 = 렌더링 취소" rather than "삭제 = 카드 제거".
+      if (selectedClipKey === clipKey) {
+        // No-op — render-job-only delete; keep the same card selected.
+      }
+    },
+    [renderJobs, selectedClipKey],
+  );
+
+  const inspectorIsDownloading = useMemo(() => {
+    if (!selectedClipKey) return false;
+    const state = renderJobs.getState(selectedClipKey);
+    return (
+      state.kind === "submitting" ||
+      state.kind === "queued" ||
+      state.kind === "rendering"
+    );
+  }, [renderJobs, selectedClipKey]);
+
+  const selectErrorMessage = describeError(
+    autoSelect.error,
+    "자동 생성에 실패했습니다.",
+  );
 
   if (!videoId) {
     return (
       <div className="mx-auto max-w-4xl pt-4">
         <p className="text-sm text-gray-500">영상을 선택해 주세요.</p>
-        <Link href="/" className="mt-4 inline-flex items-center gap-2 text-sm text-indigo-500 hover:text-indigo-600">
+        <Link
+          href="/"
+          className="mt-4 inline-flex items-center gap-2 text-sm text-indigo-500 hover:text-indigo-600"
+        >
           <BackArrowIcon className="h-4 w-4" /> 영상 목록으로
         </Link>
       </div>
@@ -106,102 +197,103 @@ export function AutoShortsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl pt-4">
-      <nav className="mb-6 flex items-center gap-3 text-sm text-gray-500" aria-label="breadcrumb">
-        <Link href="/" className="rounded-full p-1 hover:bg-gray-200" aria-label="뒤로 가기">
-          <BackArrowIcon />
-        </Link>
-        <Link href="/" className="hover:text-gray-700">동영상 검색</Link>
-        <span aria-hidden="true">&gt;</span>
-        <Link href={`/videos/${videoId}`} className="hover:text-gray-700">
-          {videoTitle}
-        </Link>
-        <span aria-hidden="true">&gt;</span>
-        <span className="font-medium text-gray-700">자동 쇼츠</span>
-      </nav>
-
-      <header className="mb-6 flex items-center gap-3">
-        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600">
-          <MagicWandIcon />
-        </span>
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">자동으로 쇼츠 만들기</h1>
-          <p className="text-sm text-gray-500">
-            AI가 영상에서 5개의 하이라이트 클립을 선별하여 쇼츠를 만들어 드립니다.
-          </p>
-        </div>
-      </header>
-
-      <section className="space-y-6 rounded-xl border border-gray-200 bg-white p-6">
-        <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-gray-900">1. 모드 선택</h2>
-          <ModePicker value={mode} onChange={handleModeChange} disabled={autoSelect.isLoading} />
-        </div>
-
-        {mode === "human" && (
-          <div className="space-y-2">
-            <h2 className="text-sm font-semibold text-gray-900">2. 인물 선택</h2>
-            <PersonSelect
-              value={personClusterId}
-              onChange={(id) => setPersonClusterId(id)}
-              disabled={autoSelect.isLoading}
-            />
-            <p className="text-xs text-gray-400">
-              선택한 인물이 등장하는 장면만 쇼츠에 포함됩니다.
-            </p>
+    <>
+      <AutoShortsLayout
+        header={
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <nav
+                className="mb-1 flex items-center gap-2 text-xs text-gray-500"
+                aria-label="breadcrumb"
+              >
+                <Link
+                  href="/"
+                  className="rounded-full p-1 hover:bg-gray-200"
+                  aria-label="뒤로 가기"
+                >
+                  <BackArrowIcon className="h-4 w-4" />
+                </Link>
+                <Link href="/" className="hover:text-gray-700">
+                  동영상 검색
+                </Link>
+                <span aria-hidden="true">&gt;</span>
+                <Link
+                  href={`/videos/${videoId}`}
+                  className="truncate hover:text-gray-700"
+                >
+                  {videoTitle}
+                </Link>
+                <span aria-hidden="true">&gt;</span>
+                <span className="font-medium text-gray-700">자동 쇼츠</span>
+              </nav>
+              <div className="flex items-center gap-2">
+                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-indigo-100 text-indigo-600">
+                  <MagicWandIcon className="h-4 w-4" />
+                </span>
+                <h1 className="truncate text-base font-bold text-gray-900">
+                  자동으로 쇼츠 만들기
+                </h1>
+              </div>
+            </div>
+            {selectErrorMessage && (
+              <p
+                role="alert"
+                className="rounded-md bg-red-50 px-3 py-1.5 text-xs text-red-600"
+              >
+                {selectErrorMessage}
+              </p>
+            )}
           </div>
-        )}
+        }
+        candidateList={
+          <CandidateList
+            videoId={videoId}
+            selection={autoSelect.data}
+            mode={mode}
+            isLoading={autoSelect.isLoading}
+            onReselectMode={() => setIsModeModalOpen(true)}
+            selectedClipKey={selectedClipKey}
+            onSelectClip={setSelectedClipKey}
+            onDownloadClip={handleDownloadCandidate}
+            onDeleteClip={handleDeleteCandidate}
+            getState={renderJobs.getState}
+            buildEditorHref={buildEditorHref}
+          />
+        }
+        player={
+          <CenterPlayer
+            clip={selectedClip}
+            videoId={videoId}
+            isLoadingSelection={autoSelect.isLoading}
+          />
+        }
+        inspector={
+          <InspectorPanel
+            clip={selectedClip}
+            scenes={scenes}
+            editorHref={
+              selectedClip ? buildEditorHref(selectedClip.scene_ids) : null
+            }
+            onDownload={
+              selectedClipKey
+                ? () => handleDownloadCandidate(selectedClipKey)
+                : undefined
+            }
+            isDownloading={inspectorIsDownloading}
+          />
+        }
+      />
 
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={!canSubmit || autoSelect.isLoading}
-            className={cn(
-              "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
-              canSubmit && !autoSelect.isLoading
-                ? "bg-indigo-500 text-white hover:bg-indigo-600"
-                : "cursor-not-allowed bg-gray-200 text-gray-400",
-            )}
-          >
-            {autoSelect.isLoading ? (
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-            ) : (
-              <MagicWandIcon className="h-4 w-4" />
-            )}
-            {autoSelect.isLoading ? "분석 중..." : "미리보기 생성"}
-          </button>
-          {mode === "human" && !personClusterId && (
-            <span className="text-xs text-gray-500">인물을 선택한 뒤 생성할 수 있어요.</span>
-          )}
-        </div>
-
-        {selectErrorMessage && (
-          <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
-            {selectErrorMessage}
-          </p>
-        )}
-      </section>
-
-      <div className="mt-6">
-        <AutoSelectPreview
-          videoId={videoId}
-          selection={autoSelect.data}
-          mode={mode}
-          isLoading={autoSelect.isLoading}
-          onRenderClip={(clipSceneIds) => {
-            void handleRenderClip(clipSceneIds);
-          }}
-          buildEditorHref={buildEditorHref}
-          isRendering={autoRender.isLoading}
-        />
-        {renderErrorMessage && (
-          <p role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
-            {renderErrorMessage}
-          </p>
-        )}
-      </div>
-    </div>
+      <ModeReselectModal
+        open={isModeModalOpen}
+        videoId={videoId}
+        initialMode={mode}
+        initialPersonClusterId={personClusterId}
+        isLoading={autoSelect.isLoading}
+        onClose={() => setIsModeModalOpen(false)}
+        onSubmit={handleModeSubmit}
+      />
+    </>
   );
 }
 

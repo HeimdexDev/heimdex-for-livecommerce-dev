@@ -10,6 +10,7 @@ state directly beyond ``client`` and ``alias_name``.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 # Scene fields the scorer + concatenator read. Keep in sync with
 # ``heimdex_media_contracts.shorts.scorer.score_scene_for_mode``.
+#
+# ``speaker_transcript`` is NOT a typed field on contracts SceneDocument
+# (would need a contracts version bump + cross-repo work). Pydantic
+# drops it silently during SceneDocument(**src) parsing. We pull it out
+# of the raw _source separately and surface it via CandidateScenesResult
+# so downstream consumers (notably the auto-shorts script panel) can
+# render it without re-querying.
 _SOURCE_FIELDS: list[str] = [
     "scene_id",
     "video_id",
@@ -38,7 +46,24 @@ _SOURCE_FIELDS: list[str] = [
     "scene_caption",
     "ocr_text_raw",
     "ocr_char_count",
+    "speaker_transcript",
 ]
+
+
+@dataclass(frozen=True)
+class CandidateScenesResult:
+    """Selector result — typed scenes plus app-side enrichments.
+
+    ``scenes`` is the contracts-typed list passed to the scorer. The
+    scorer signature is unchanged.
+
+    ``speaker_transcripts`` maps ``scene_id`` to the raw
+    ``speaker_transcript`` text from OpenSearch, when present. Empty
+    strings are dropped from the map so callers can do truthiness checks.
+    """
+
+    scenes: list[SceneDocument]
+    speaker_transcripts: dict[str, str] = field(default_factory=dict)
 
 # Realistic upper bound for one video's scenes. The largest videos in
 # staging today produce ~400 scenes; 1000 is a 2.5x headroom.
@@ -57,13 +82,18 @@ class AutoShortsSelector:
         video_id: str,
         mode: ScoringMode,
         person_cluster_id: str | None = None,
-    ) -> list[SceneDocument]:
+    ) -> CandidateScenesResult:
         """Return scenes that pass the cheap pre-filter for ``mode``.
 
         The scorer applies the authoritative hard filter again — the OS
         pre-filter is just a query optimization to avoid pulling scenes
         that obviously don't qualify. If the OS filter and the scorer
         ever diverge, the scorer wins (more conservative).
+
+        Returns a :class:`CandidateScenesResult` carrying both the typed
+        ``scenes`` list and a ``speaker_transcripts`` map. The latter is
+        an app-side enrichment surfaced separately because contracts
+        ``SceneDocument`` deliberately omits ``speaker_transcript``.
         """
         query_filter: list[dict[str, Any]] = [
             {"term": {"org_id": str(org_id)}},
@@ -144,6 +174,7 @@ class AutoShortsSelector:
         hits = response.get("hits", {}).get("hits", [])
 
         out: list[SceneDocument] = []
+        speaker_transcripts: dict[str, str] = {}
         for hit in hits:
             src = hit.get("_source") or {}
             # OpenSearch mapping doesn't store ``index`` separately — the
@@ -166,7 +197,7 @@ class AutoShortsSelector:
                     continue
                 src = {**src, "index": derived}
             try:
-                out.append(SceneDocument(**src))
+                doc = SceneDocument(**src)
             except Exception:
                 # Malformed scenes get logged and skipped — never fail the
                 # whole request because one document drifted from schema.
@@ -176,7 +207,17 @@ class AutoShortsSelector:
                     exc_info=True,
                 )
                 continue
-        return out
+            out.append(doc)
+            # Pluck the app-side enrichment that contracts doesn't carry.
+            # Empty strings are skipped so callers can use ``in`` / truthy
+            # checks without thinking about " " vs missing.
+            speaker_text = src.get("speaker_transcript")
+            if isinstance(speaker_text, str) and speaker_text.strip():
+                speaker_transcripts[doc.scene_id] = speaker_text
+        return CandidateScenesResult(
+            scenes=out,
+            speaker_transcripts=speaker_transcripts,
+        )
 
 
 def _derive_index_from_scene_id(scene_id: Any) -> int | None:

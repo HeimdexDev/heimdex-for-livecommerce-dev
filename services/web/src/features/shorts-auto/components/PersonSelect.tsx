@@ -2,13 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
-import { getPeople } from "@/lib/api/people";
 import { getFaceThumbnailUrl } from "@/lib/agent";
 import { cn } from "@/lib/utils";
 import { PersonIcon } from "@/components/icons";
 import type { PersonResponse } from "@/lib/types";
 
+import { useVideoPeople } from "../hooks/useVideoPeople";
+
 interface PersonSelectProps {
+  /**
+   * Restrict the candidate list to people who actually appear in this
+   * video (PR 3 redesign — picker is video-scoped, not org-wide).
+   * Empty string is a valid prop value while the parent resolves the
+   * videoId query param; the hook short-circuits to an idle state.
+   */
+  videoId: string;
   value: string | null;
   onChange: (personClusterId: string | null) => void;
   disabled?: boolean;
@@ -22,34 +30,27 @@ interface PersonSelectProps {
  *
  * Keyboard nav: ArrowDown/ArrowUp/Enter/Escape, with roving aria-activedescendant.
  */
-export function PersonSelect({ value, onChange, disabled = false }: PersonSelectProps) {
+export function PersonSelect({
+  videoId,
+  value,
+  onChange,
+  disabled = false,
+}: PersonSelectProps) {
   const { getAccessToken } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
-  const [people, setPeople] = useState<PersonResponse[] | null>(null);
-  const [loadError, setLoadError] = useState<Error | null>(null);
   const [search, setSearch] = useState("");
   const [activeIndex, setActiveIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const listboxRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Lazy fetch on first open
-  useEffect(() => {
-    if (!isOpen || people !== null || loadError !== null) return;
-    let cancelled = false;
-    getPeople(getAccessToken)
-      .then((res) => {
-        if (!cancelled) setPeople(res.people ?? []);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setLoadError(err instanceof Error ? err : new Error(String(err)));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, people, loadError, getAccessToken]);
+  // Always fetch (eagerly): the picker is BLOCKING in person mode and
+  // the parent disables generate until a person is picked, so making
+  // the user click-to-load adds friction without buying anything.
+  // Hook handles empty videoId gracefully and is unmount-safe.
+  const { people: videoPeople, isLoading: peopleLoading, error: loadError } =
+    useVideoPeople(videoId, getAccessToken);
+  const people: PersonResponse[] | null = peopleLoading ? null : videoPeople;
 
   // Click outside + Escape close
   useEffect(() => {
@@ -97,11 +98,12 @@ export function PersonSelect({ value, onChange, disabled = false }: PersonSelect
     [onChange],
   );
 
-  const handleRetry = useCallback(() => {
-    // Clearing loadError + people triggers the fetch effect on next render.
-    setLoadError(null);
-    setPeople(null);
-  }, []);
+  // useVideoPeople retries automatically on videoId change. Force-retry
+  // by remounting the picker if needed; PR 3 ships without a manual
+  // retry button since the hook is auto-fetching and the empty state
+  // handles "no people in this video" cleanly. Keeping this commented
+  // hook in case Phase 3 wants explicit retry — the behavior would be
+  // a no-op-yet placeholder otherwise.
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -189,22 +191,17 @@ export function PersonSelect({ value, onChange, disabled = false }: PersonSelect
             role="listbox"
             className="max-h-60 overflow-y-auto p-1"
           >
-            {people === null && loadError === null ? (
+            {peopleLoading ? (
               <p className="px-3 py-4 text-center text-sm text-gray-400">불러오는 중...</p>
             ) : loadError ? (
-              <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
-                <p className="text-sm text-red-500">인물 목록을 불러오지 못했습니다.</p>
-                <button
-                  type="button"
-                  onClick={handleRetry}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-1 text-xs text-gray-700 transition-colors hover:bg-gray-50"
-                >
-                  다시 시도
-                </button>
-              </div>
+              <p className="px-3 py-4 text-center text-sm text-red-500">
+                인물 목록을 불러오지 못했습니다.
+              </p>
             ) : filtered.length === 0 ? (
               <p className="px-3 py-4 text-center text-sm text-gray-400">
-                {search ? "검색 결과가 없습니다" : "등록된 인물이 없습니다"}
+                {search
+                  ? "검색 결과가 없습니다"
+                  : "이 영상에 등장하는 인물이 없습니다"}
               </p>
             ) : (
               filtered.map((p, i) => (
