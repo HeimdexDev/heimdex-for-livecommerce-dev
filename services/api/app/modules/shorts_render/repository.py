@@ -160,6 +160,32 @@ class ShortsRenderJobRepository:
 
         return await self._get_by_id_internal(job_id)
 
+    async def update_title(
+        self,
+        org_id: UUID,
+        user_id: UUID,
+        job_id: UUID,
+        title: str | None,
+    ) -> ShortsRenderJob | None:
+        """Update the user-visible title on a render job.
+
+        Scoped to org + user so a guess at someone else's job UUID
+        can't rename their work. ``None`` clears the title back to
+        the default fallback the FE will compute. Returns the
+        refreshed job, or ``None`` when the job doesn't exist or
+        isn't owned by ``(org_id, user_id)``.
+        """
+        job = await self.get_by_id(org_id, user_id, job_id)
+        if job is None:
+            return None
+        await self.session.execute(
+            update(ShortsRenderJob)
+            .where(ShortsRenderJob.id == job_id)
+            .values(title=title, updated_at=datetime.now(timezone.utc))
+        )
+        await self.session.flush()
+        return await self._get_by_id_internal(job_id)
+
     async def delete(self, org_id: UUID, user_id: UUID, job_id: UUID) -> bool:
         """Delete a render job by ID, scoped to org + user.
 

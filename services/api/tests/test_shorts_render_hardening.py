@@ -313,3 +313,141 @@ async def test_delete_render_job_passes_user_id_to_repository():
 
     svc.repository.get_by_id.assert_awaited_once_with(org_id, user_id, job_id)
     svc.repository.delete.assert_awaited_once_with(org_id, user_id, job_id)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: title editing
+# ---------------------------------------------------------------------------
+
+
+def _make_completed_job(title: str = "Original", *, with_output: bool = False):
+    """Job stub for title-update tests. ``with_output`` toggles the S3
+    key so the service-layer download_url branch can be exercised.
+
+    ``input_spec`` MUST be a real dict (not a MagicMock attribute) so
+    ``_to_response`` can ``.get("scene_clips")`` on it without
+    Pydantic balking on the resulting MagicMock-typed thumbnail
+    fields.
+    """
+    job = MagicMock()
+    job.id = uuid4()
+    job.video_id = "vid_123"
+    job.title = title
+    job.status = "completed" if with_output else "queued"
+    job.created_at = datetime.now(timezone.utc)
+    job.completed_at = datetime.now(timezone.utc) if with_output else None
+    job.render_time_ms = 1500 if with_output else None
+    job.output_duration_ms = 30_000 if with_output else None
+    job.output_size_bytes = 1024 * 1024 if with_output else None
+    job.error = None
+    job.output_s3_key = "output.mp4" if with_output else None
+    job.input_spec = {
+        "scene_clips": [{"video_id": "vid_123", "scene_id": "vid_123_scene_000"}],
+    }
+    return job
+
+
+@pytest.mark.asyncio
+async def test_update_render_job_title_passes_org_user_to_repository():
+    """Owner-scoped: org_id + user_id must reach the repo update_title call.
+
+    Guards against accidental cross-tenant rename if the route ever
+    drops the user_id arg the way the GET path used to.
+    """
+    svc = _make_service_with_mocks()
+    updated = _make_completed_job("New title")
+    svc.repository.update_title = AsyncMock(return_value=updated)
+
+    org_id = uuid4()
+    user_id = uuid4()
+    job_id = uuid4()
+
+    result = await svc.update_render_job_title(org_id, user_id, job_id, "New title")
+
+    svc.repository.update_title.assert_awaited_once_with(
+        org_id, user_id, job_id, "New title",
+    )
+    assert result.title == "New title"
+
+
+@pytest.mark.asyncio
+async def test_update_render_job_title_404_when_repo_returns_none():
+    """update_title returns None on missing-or-not-owned. Service must
+    surface that as 404 (matching get_render_job semantics so the FE
+    doesn't have to special-case "not yours" vs "doesn't exist").
+    """
+    svc = _make_service_with_mocks()
+    svc.repository.update_title = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.update_render_job_title(uuid4(), uuid4(), uuid4(), "x")
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_render_job_title_clears_when_set_to_none():
+    """``None`` is a valid title (clears it). Service forwards as-is."""
+    svc = _make_service_with_mocks()
+    cleared = _make_completed_job(title=None)
+    svc.repository.update_title = AsyncMock(return_value=cleared)
+
+    org_id = uuid4()
+    user_id = uuid4()
+    job_id = uuid4()
+
+    result = await svc.update_render_job_title(org_id, user_id, job_id, None)
+
+    svc.repository.update_title.assert_awaited_once_with(
+        org_id, user_id, job_id, None,
+    )
+    assert result.title is None
+
+
+@pytest.mark.asyncio
+async def test_update_render_job_title_completed_job_includes_download_url():
+    """Response shape parity with get_render_job: completed jobs get a
+    download_url so the FE can immediately offer download after rename.
+    """
+    svc = _make_service_with_mocks()
+    job = _make_completed_job("renamed", with_output=True)
+    svc.repository.update_title = AsyncMock(return_value=job)
+
+    result = await svc.update_render_job_title(uuid4(), uuid4(), job.id, "renamed")
+
+    assert result.download_url == f"/api/shorts/render/{job.id}/download"
+
+
+@pytest.mark.asyncio
+async def test_update_render_job_title_in_flight_job_no_download_url():
+    """In-flight (queued/rendering) jobs have no S3 output yet.
+    download_url stays None so the FE doesn't try to fetch a 404.
+    """
+    svc = _make_service_with_mocks()
+    job = _make_completed_job("renamed", with_output=False)  # status=queued
+    svc.repository.update_title = AsyncMock(return_value=job)
+
+    result = await svc.update_render_job_title(uuid4(), uuid4(), job.id, "renamed")
+
+    assert result.download_url is None
+
+
+def test_render_job_title_update_schema_rejects_oversized_title():
+    """``max_length=255`` matches the DB column. Pydantic raises on
+    overflow; FastAPI surfaces it as 422.
+    """
+    from app.modules.shorts_render.schemas import RenderJobTitleUpdate
+    from pydantic import ValidationError
+
+    too_long = "a" * 256
+    with pytest.raises(ValidationError):
+        RenderJobTitleUpdate(title=too_long)
+
+
+def test_render_job_title_update_schema_accepts_empty_and_none():
+    """Both empty string and None are valid title-clear payloads."""
+    from app.modules.shorts_render.schemas import RenderJobTitleUpdate
+
+    assert RenderJobTitleUpdate(title=None).title is None
+    assert RenderJobTitleUpdate(title="").title == ""
+    assert RenderJobTitleUpdate().title is None  # default

@@ -13,6 +13,7 @@ from app.modules.shorts_render.schemas import (
     RenderJobCreate,
     RenderJobListResponse,
     RenderJobResponse,
+    RenderJobTitleUpdate,
     SubtitleSuggestion,
     SubtitleSuggestions,
 )
@@ -61,6 +62,21 @@ async def get_render_job(
 ):
     user_id = cast(UUID, user.id)
     return await service.get_render_job(org_ctx.org_id, user_id, job_id)
+
+
+@router.patch("/{job_id}", response_model=RenderJobResponse)
+async def update_render_job_title(
+    job_id: UUID,
+    body: RenderJobTitleUpdate,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[ShortsRenderService, Depends(get_shorts_render_service)],
+):
+    """Rename a render job. Owner-scoped — 404 when the caller doesn't own the job."""
+    user_id = cast(UUID, user.id)
+    return await service.update_render_job_title(
+        org_ctx.org_id, user_id, job_id, body.title,
+    )
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
