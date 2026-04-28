@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { dotColorForLabel } from "../components/SceneListPanel";
+import { dotColorForLabel } from "../speaker-transcript-display";
 
 describe("dotColorForLabel", () => {
   it("maps Speaker A to red and B to green per Figma", () => {
