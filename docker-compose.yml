@@ -732,6 +732,73 @@ services:
              python -m src.worker"
 
 
+  product-enumerate-worker:
+    # Phase 2: shorts-auto product mode v2 enumerate worker.
+    # Off by default — enable with
+    #   docker compose --profile product-enum up product-enumerate-worker
+    # Runs on Aircloud GPU in staging/prod (Phase 2 deliverable).
+    # Locally requires NVIDIA GPU or ENUMERATE_ALLOW_CPU=true.
+    profiles: ["product-enum"]
+    build:
+      context: ..
+      dockerfile: dev-heimdex-for-livecommerce/services/product-enumerate-worker/Dockerfile.gpu
+    container_name: heimdex-product-enumerate-worker
+    mem_limit: 8g
+    cpus: "4.0"
+    environment:
+      - PYTHONPATH=/app
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SQS
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_PRODUCT_ENUMERATE_QUEUE_URL=${SQS_PRODUCT_ENUMERATE_QUEUE_URL:-}
+      # Worker identity
+      - WORKER_ID=${WORKER_ID:-product-enumerate-worker-local}
+      - WORKER_LEASE_SECONDS=${WORKER_LEASE_SECONDS:-600}
+      - DRIVE_PRODUCT_ENUMERATE_CONCURRENCY=${DRIVE_PRODUCT_ENUMERATE_CONCURRENCY:-1}
+      # Feature flag mirror (worker hard-refuses to start when false).
+      - PRODUCT_V2_ENABLED=${AUTO_SHORTS_PRODUCT_V2_ENABLED:-false}
+      # OpenAI gpt-4o-mini for vision enumeration.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${AUTO_SHORTS_PRODUCT_V2_OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_TIMEOUT_SEC=${AUTO_SHORTS_PRODUCT_V2_OPENAI_TIMEOUT_SEC:-30}
+      - OPENAI_MAX_RETRIES=${AUTO_SHORTS_PRODUCT_V2_OPENAI_MAX_RETRIES:-3}
+      - OPENAI_BATCH_SIZE=${AUTO_SHORTS_PRODUCT_V2_OPENAI_BATCH_SIZE:-10}
+      # Pipeline versions — must match the API's
+      # AUTO_SHORTS_PRODUCT_V2_*_VERSION envs.
+      - ENUMERATION_VERSION=${AUTO_SHORTS_PRODUCT_V2_ENUMERATION_VERSION:-v1.0}
+      - ENUMERATION_PROMPT_VERSION=${AUTO_SHORTS_PRODUCT_V2_ENUMERATION_PROMPT_VERSION:-v1.0}
+      - MAX_KEYFRAMES_PER_VIDEO=${AUTO_SHORTS_PRODUCT_V2_MAX_KEYFRAMES_PER_VIDEO:-60}
+      # Thresholds — calibrate on staging goldens before prod rollout.
+      - ENUM_PROMINENCE_FLOOR_PCT=${AUTO_SHORTS_PRODUCT_V2_ENUM_PROMINENCE_FLOOR_PCT:-0.03}
+      - ENUM_CLUSTER_COSINE_THRESHOLD=${AUTO_SHORTS_PRODUCT_V2_ENUM_CLUSTER_COSINE_THRESHOLD:-0.85}
+      - ENUM_MIN_SUPPORTING_KEYFRAMES=${AUTO_SHORTS_PRODUCT_V2_ENUM_MIN_SUPPORTING_KEYFRAMES:-2}
+      - ENUM_MIN_CONFIDENCE=${AUTO_SHORTS_PRODUCT_V2_ENUM_MIN_CONFIDENCE:-0.6}
+      # Vision model — must match drive-visual-embed-worker exactly.
+      - SIGLIP2_MODEL_ID=${AUTO_SHORTS_PRODUCT_V2_SIGLIP2_MODEL_ID:-google/siglip2-base-patch16-256}
+      - ENUMERATE_ALLOW_CPU=${ENUMERATE_ALLOW_CPU:-false}
+      - HF_HOME=/models/hf
+    volumes:
+      - ./services/product-enumerate-worker:/app
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+      - huggingface_cache:/models/hf
+    depends_on:
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+
   bgutil-provider:
     profiles: ["youtube"]
     image: brainicism/bgutil-ytdlp-pot-provider:latest
