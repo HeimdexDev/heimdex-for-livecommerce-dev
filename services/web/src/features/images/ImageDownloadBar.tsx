@@ -44,9 +44,11 @@ export function ImageDownloadBar() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
+      const fallbackName =
+        selection.count === 1 ? "heimdex_image.jpg" : "heimdex_images.zip";
       a.download =
         res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ||
-        "heimdex_images.zip";
+        fallbackName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
