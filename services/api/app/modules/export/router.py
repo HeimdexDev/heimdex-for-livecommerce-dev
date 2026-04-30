@@ -865,7 +865,8 @@ async def export_images(
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
 ):
-    """Download multiple keyframe images as a ZIP archive."""
+    """Download keyframe images. Returns a raw JPG when exactly one is requested,
+    otherwise a ZIP archive."""
     settings = get_settings()
     s3 = S3Client(bucket=settings.drive_s3_bucket)
     org_id = str(org_ctx.org_id)
@@ -877,6 +878,37 @@ async def export_images(
         if img.scene_id not in seen:
             seen.add(img.scene_id)
             unique_images.append(img)
+
+    # Single image: return raw JPG, skip the zip step.
+    if len(unique_images) == 1:
+        img = unique_images[0]
+        s3_key = f"{org_id}/drive/keyframes/{img.video_id}/{img.scene_id}.jpg"
+        image_bytes = await s3.get_object_bytes_async(s3_key)
+        if image_bytes is None:
+            logger.warning(
+                "image_export_missing_keyframe",
+                extra={"scene_id": img.scene_id, "s3_key": s3_key},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No keyframe images found for the requested scenes",
+            )
+        title_part = _sanitize_filename(img.video_title or img.video_id, max_len=80)
+        filename = f"{title_part}_{img.scene_id}.jpg"
+        logger.info(
+            "images_exported",
+            extra={
+                "org_id": org_id,
+                "image_count": 1,
+                "format": "jpg",
+                "file_size_bytes": len(image_bytes),
+            },
+        )
+        return Response(
+            content=image_bytes,
+            media_type="image/jpeg",
+            headers={"Content-Disposition": _content_disposition(filename)},
+        )
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="heimdex_images_"))
     try:
@@ -917,6 +949,7 @@ async def export_images(
             extra={
                 "org_id": org_id,
                 "image_count": collected,
+                "format": "zip",
                 "zip_size_bytes": zip_path.stat().st_size,
             },
         )
