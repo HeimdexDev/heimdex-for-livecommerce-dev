@@ -146,6 +146,75 @@ def test_visual_similarity_passes_video_id_org_id_size_to_client():
     assert len(captured["visual_embedding"]) == 768
 
 
+def _vec_with_string_at(idx: int) -> str:
+    """Build a JSON string body where one element of query_vec is a
+    string. Python's httpx (used by TestClient) serializes JSON
+    client-side and rejects NaN / inf literals — so for these
+    adversarial cases we craft the raw JSON body and bypass the
+    serializer via TestClient's ``content=`` parameter. NaN / inf
+    are non-standard JSON but Python's ``json.loads`` accepts them
+    by default, which matches what Starlette / FastAPI receive."""
+    elems = [str(0.01)] * 768
+    elems[idx] = '"x"'
+    return (
+        '{"query_vec": [' + ", ".join(elems) + '], '
+        '"top_k": 10, "min_similarity": 0.0}'
+    )
+
+
+def _vec_with_token_at(idx: int, token: str) -> str:
+    """Build a raw JSON body with a non-standard JSON token (NaN,
+    Infinity, -Infinity, true, null) at ``idx``."""
+    elems = [str(0.01)] * 768
+    elems[idx] = token
+    return (
+        '{"query_vec": [' + ", ".join(elems) + '], '
+        '"top_k": 10, "min_similarity": 0.0}'
+    )
+
+
+@pytest.mark.parametrize(
+    "body_factory,expected_index",
+    [
+        # String element at index 0
+        (lambda: _vec_with_string_at(0), 0),
+        # Boolean element at index 5 (bool is subclass of int in Python — must be excluded explicitly)
+        (lambda: _vec_with_token_at(5, "true"), 5),
+        # NaN at index 100
+        (lambda: _vec_with_token_at(100, "NaN"), 100),
+        # +Infinity at index 200
+        (lambda: _vec_with_token_at(200, "Infinity"), 200),
+        # -Infinity at index 300
+        (lambda: _vec_with_token_at(300, "-Infinity"), 300),
+        # null
+        (lambda: _vec_with_token_at(0, "null"), 0),
+    ],
+)
+def test_visual_similarity_400_on_non_finite_query_vec_element(
+    body_factory, expected_index
+):
+    """Codex F3: per-element validation. Length-only validation lets
+    strings / bools / NaN / inf reach OpenSearch unchanged — best case
+    500 on serialization, worst case 200 with undefined ranking. The
+    endpoint must reject these explicitly with a 400 that names the
+    bad index."""
+    file_id = uuid4()
+    drive_file = _drive_file(file_id=file_id)
+    app = _build_app(drive_file_obj=drive_file)
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/internal/videos/{file_id}/scenes-by-visual-similarity",
+            content=body_factory(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer test-internal-token",
+                "X-Heimdex-Org-Id": str(uuid4()),
+            },
+        )
+    assert resp.status_code == 400
+    assert f"query_vec[{expected_index}]" in resp.json()["detail"]
+
+
 @pytest.mark.parametrize(
     "vec,expected_msg",
     [
@@ -213,6 +282,28 @@ def test_visual_similarity_400_on_invalid_min_similarity(min_sim):
 def test_visual_similarity_404_when_drive_file_missing():
     file_id = uuid4()
     app = _build_app(drive_file_obj=None)
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/internal/videos/{file_id}/scenes-by-visual-similarity",
+            json={"query_vec": _vec(), "top_k": 10, "min_similarity": 0.0},
+            headers={
+                "Authorization": "Bearer test-internal-token",
+                "X-Heimdex-Org-Id": str(uuid4()),
+            },
+        )
+    assert resp.status_code == 404
+
+
+def test_visual_similarity_404_when_drive_file_soft_deleted():
+    """Codex F2: soft-deleted DriveFiles must NOT be resolvable via
+    these endpoints — racing a delete with an in-flight worker job
+    would otherwise let the worker continue processing retired
+    content. ``DriveFileRepository.get_by_id`` was extended to
+    filter ``is_deleted=False``; the test simulates that contract by
+    having the repo return None (same shape as a true 'not found').
+    """
+    file_id = uuid4()
+    app = _build_app(drive_file_obj=None)  # repo returns None for soft-deleted
     with TestClient(app) as client:
         resp = client.post(
             f"/internal/videos/{file_id}/scenes-by-visual-similarity",
@@ -547,6 +638,25 @@ def test_scenes_content_400_on_non_string_scene_id():
 
 
 def test_scenes_content_404_when_drive_file_missing():
+    file_id = uuid4()
+    app = _build_app(drive_file_obj=None)
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/internal/videos/{file_id}/scenes-content",
+            json={"scene_ids": ["gd_v_scene_001"]},
+            headers={
+                "Authorization": "Bearer test-internal-token",
+                "X-Heimdex-Org-Id": str(uuid4()),
+            },
+        )
+    assert resp.status_code == 404
+
+
+def test_scenes_content_404_when_drive_file_soft_deleted():
+    """Codex F2: same as the visual-similarity counterpart — workers
+    must not be able to read transcripts / OCR for a video the user
+    has retired. The repo fix routes both paths through the same
+    is_deleted=False filter so this case maps to 404."""
     file_id = uuid4()
     app = _build_app(drive_file_obj=None)
     with TestClient(app) as client:

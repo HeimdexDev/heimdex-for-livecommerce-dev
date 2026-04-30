@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 from typing import Any
 from uuid import UUID
 
@@ -348,6 +349,24 @@ async def scenes_by_visual_similarity(
                 f"would silently produce nonsense rankings)"
             ),
         )
+    # Per-element validation. Length-only validation lets payloads
+    # with strings, booleans, or non-finite floats (NaN/inf) reach
+    # OpenSearch unchanged — best case 500s on serialization, worst
+    # case 200 with undefined ranking. ``bool`` is a subclass of
+    # ``int`` in Python so we exclude it explicitly.
+    for i, val in enumerate(query_vec):
+        if (
+            isinstance(val, bool)
+            or not isinstance(val, (int, float))
+            or not math.isfinite(val)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"query_vec[{i}] must be a finite number "
+                    f"(got {type(val).__name__}={val!r})"
+                ),
+            )
 
     try:
         top_k = int(body.get("top_k", 60))
