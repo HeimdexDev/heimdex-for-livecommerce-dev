@@ -42,7 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.2"
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.3"
 
 COPY heimdex-media-contracts/ /tmp/heimdex-media-contracts/
 RUN pip install --no-cache-dir /tmp/heimdex-media-contracts \
