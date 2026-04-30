@@ -607,6 +607,61 @@ class SceneQueryMixin:
         response = await self.client.search(index=self.alias_name, body=body)
         return response["hits"]["hits"]
 
+    async def search_visual_vector_in_video(
+        self,
+        *,
+        visual_embedding: list[float],
+        org_id: str,
+        video_id: str,
+        size: int,
+    ) -> list[dict[str, Any]]:
+        """kNN visual search scoped to a single ``video_id``.
+
+        Used by the shorts-auto product mode v2 track worker for the
+        coarse pre-filter pass: given a SigLIP2 embedding of the
+        canonical product crop, return the top-K most-similar scenes
+        within the same video. The downstream worker then re-embeds
+        each candidate's keyframe locally for a precise pass.
+
+        Bypasses ``_build_filter_clauses`` because the only filter
+        we need is ``org_id`` + ``video_id`` (no date / source / tag
+        filters apply when scanning a single video). Keeping this
+        endpoint small and explicit avoids the temptation to grow
+        the general filter system for what is effectively a
+        single-video ad-hoc query.
+
+        ``size`` is the kNN ``k`` AND the result page size — they
+        intentionally match so the OS coordinator returns the top-k
+        hits without an extra rescore pass.
+        """
+        knn_filter: dict[str, Any] = {
+            "bool": {
+                "must": [
+                    {"term": {"org_id": org_id}},
+                    {"term": {"video_id": video_id}},
+                ]
+            }
+        }
+        body: dict[str, Any] = {
+            "query": {
+                "knn": {
+                    "visual_embedding": {
+                        "vector": visual_embedding,
+                        "k": size,
+                        "filter": knn_filter,
+                    }
+                }
+            },
+            "size": size,
+            # Track worker only needs scene_id + similarity; pull a
+            # narrow source projection so OS doesn't materialize the
+            # full embedding vector / transcript blobs on every hit.
+            "_source": ["scene_id", "video_id"],
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        return response["hits"]["hits"]
+
     async def search_color_vector(
         self,
         color_embedding: list[float],
