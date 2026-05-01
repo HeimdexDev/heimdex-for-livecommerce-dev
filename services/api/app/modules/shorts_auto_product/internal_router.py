@@ -486,3 +486,118 @@ async def get_catalog_entry(
         ),
         llm_label=entry.llm_label,
     )
+
+
+# ---------- render enqueue (Phase 3c-B) ----------
+
+class _RenderEnqueuePayloadProxy(BaseModel):
+    """Mirror of :class:`shorts_render.schemas.RenderJobCreate`.
+
+    Defined inline rather than imported from shorts_render to avoid
+    cross-module circular imports during router load + to keep the
+    extra='forbid' boundary explicit at the wire. Drift between
+    this and ``RenderJobCreate`` would 422 here OR in the
+    forwarded service call — pinned by the integration tests.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    video_id: str = Field(..., min_length=1)
+    title: str | None = None
+    composition: dict  # Validated downstream by CompositionSpec.model_validate
+
+
+class _RenderEnqueueRequest(BaseModel):
+    """Worker → api request to enqueue a render for a tracking
+    scan job. The body forwards the user-facing
+    :class:`RenderJobCreate` payload verbatim; this endpoint adds
+    the lease check + ``user_id`` derivation from the scan job row
+    (workers don't carry user-facing JWTs).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    claimed_by: str = Field(..., min_length=1, max_length=200)
+    payload: _RenderEnqueuePayloadProxy
+
+
+class _RenderEnqueueResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    render_job_id: UUID
+
+
+@router.post(
+    "/{job_id}/render",
+    response_model=_RenderEnqueueResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def enqueue_render_for_scan_job(
+    job_id: UUID,
+    body: _RenderEnqueueRequest,
+    _token: Annotated[str, Depends(verify_internal_token)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> _RenderEnqueueResponse:
+    """Worker calls this immediately after building a stitch plan
+    so the api owns idempotency + per-user rate limiting + budget
+    accounting for the resulting render. Auth flow:
+
+    * Bearer token → ``verify_internal_token`` (legacy global key
+      OR per-service token via F1 Phase 3).
+    * Lease check → ``claimed_by`` must match the scan job row.
+      Stale workers whose lease already expired and was reclaimed
+      cannot enqueue renders for the new owner.
+    * ``org_id`` + ``requested_by_user_id`` derive from the scan
+      job row; the worker never sends them. Server-of-record
+      attribution stays correct even if the worker is buggy.
+
+    Returns the new ``RenderJob.id`` so the caller can pass it to
+    ``/internal/products/{job_id}/complete`` as ``render_job_id``.
+    """
+    from app.dependencies import get_shorts_render_service
+    from app.modules.shorts_render.schemas import RenderJobCreate
+    from heimdex_media_contracts.composition import CompositionSpec
+
+    job_repo = ProductScanJobRepository(db)
+    job = await job_repo.get_internal(job_id=job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="scan job not found",
+        )
+    if job.claimed_by != body.claimed_by:
+        # 409 mirrors claim/heartbeat/complete/fail — workers know
+        # to ack-delete the SQS message rather than redeliver.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="lease lost or claimed_by mismatch",
+        )
+    if job.catalog_entry_id is None:
+        # Enumerate jobs don't render. Render enqueue from an enum
+        # job is a worker bug.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="render enqueue requires a tracking job (catalog_entry_id is null)",
+        )
+
+    # Validate the composition shape before service entry — keeps
+    # the 422 on the api boundary rather than letting it surface as
+    # a 500 from the service-layer scene-clip validator.
+    try:
+        composition = CompositionSpec.model_validate(body.payload.composition)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"invalid composition: {exc}",
+        ) from exc
+
+    payload = RenderJobCreate(
+        video_id=body.payload.video_id,
+        title=body.payload.title,
+        composition=composition,
+    )
+    service = get_shorts_render_service(db=db)
+    response = await service.create_render_job(
+        org_id=job.org_id,
+        user_id=job.requested_by_user_id,
+        payload=payload,
+    )
+    await db.commit()
+    return _RenderEnqueueResponse(render_job_id=response.id)

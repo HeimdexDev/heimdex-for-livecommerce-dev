@@ -224,6 +224,42 @@ class ApiClient:
         resp.raise_for_status()
         return resp.json().get("scenes", [])
 
+    def enqueue_render(
+        self,
+        *,
+        scan_job_id: UUID,
+        claimed_by: str,
+        video_id: str,
+        title: str | None,
+        composition: dict[str, Any],
+    ) -> UUID:
+        """Phase 3c-B — internal render enqueue. POSTs the
+        worker-built ``CompositionSpec`` to the api's internal
+        render endpoint, which forwards to
+        ``ShortsRenderService.create_render_job(org_id, user_id,
+        payload)`` (org + user resolved from the scan job row).
+        Returns the new ``RenderJob.id`` for the caller to pass to
+        ``/internal/products/{job_id}/complete``.
+
+        ``composition`` is the JSON-serialised
+        ``CompositionSpec.model_dump(mode='json')`` shape — the
+        worker constructs it locally and we treat it as an opaque
+        dict on the wire (api re-validates via
+        ``CompositionSpec.model_validate``)."""
+        resp = self._client.post(
+            f"{self.base_url}/internal/products/{scan_job_id}/render",
+            json={
+                "claimed_by": claimed_by,
+                "payload": {
+                    "video_id": video_id,
+                    "title": title,
+                    "composition": composition,
+                },
+            },
+        )
+        resp.raise_for_status()
+        return UUID(resp.json()["render_job_id"])
+
     def fetch_catalog_entry(
         self, *, catalog_entry_id: UUID, org_id: UUID,
     ) -> dict[str, Any]:

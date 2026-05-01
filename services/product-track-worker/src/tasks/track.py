@@ -61,6 +61,7 @@ from heimdex_media_pipelines.product_track.siglip2_retrieval import (
     retrieve_candidate_scenes,
 )
 from heimdex_media_pipelines.product_track.stitching import (
+    StitchPlan,
     build_stitch_plan,
 )
 from heimdex_media_pipelines.product_track.subset_selector import (
@@ -531,27 +532,57 @@ def handle_track_job(
             return
 
         # ─── 13. build stitch plan ─────────────────────────────────
-        # The plan is computed for completeness (and so the lib's
-        # build_stitch_plan invariants are exercised) but NOT shipped
-        # to the api — ``_CompleteRequest`` (extra='forbid') has no
-        # ``stitching_plan`` field. Phase 3c-B turns this plan into a
-        # ``CompositionSpec`` and POSTs to ``/api/shorts/render``;
-        # the resulting ``render_job_id`` is the only thing the api
-        # needs to persist on the tracking row.
-        _ = build_stitch_plan(
+        plan = build_stitch_plan(
             selected,
             duration_target_sec=decoded.duration_preset_sec,
             config=cfg,
         )
 
         # ─── 14. enqueue render + complete ─────────────────────────
-        # TODO Phase 3c-B: enqueue the render via the api's
-        # /api/shorts/render endpoint and pass the resulting job id.
-        # For scaffold the render enqueue is a placeholder; the api
-        # callback (/complete) accepts ``render_job_id=None`` so the
-        # worker can mark the job complete with appearances populated
-        # — UI surfaces "tracked, render pending".
-        render_job_id: UUID | None = None
+        # Build a ``CompositionSpec`` from the stitch plan windows
+        # (chronological hard cuts; per-clip ``source_start_ms`` /
+        # ``source_end_ms`` ranges) and POST to the api's internal
+        # render endpoint. The api forwards to
+        # ``ShortsRenderService.create_render_job`` with
+        # ``user_id=job.requested_by_user_id`` derived server-side
+        # (workers don't carry user JWTs). Returns the new
+        # ``RenderJob.id`` which we ship on /complete.
+        composition_spec = _build_composition_spec(
+            plan=plan, os_video_id=os_video_id,
+        )
+        try:
+            render_job_id: UUID | None = api.enqueue_render(
+                scan_job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                video_id=os_video_id,
+                title=llm_label or None,
+                composition=composition_spec,
+            )
+        except httpx.HTTPStatusError as exc:
+            # Render enqueue failure is recoverable from the user's
+            # POV: the tracker successfully produced appearances,
+            # the api just couldn't kick off ffmpeg. /fail with the
+            # api enum literal for this exact case (rather than
+            # internal_error) so the user-facing UI can render the
+            # right message + retry affordance.
+            logger.exception(
+                "track_render_enqueue_failed",
+                extra={
+                    "job_id": str(decoded.job_id),
+                    "status_code": exc.response.status_code,
+                },
+            )
+            api.fail(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                cost_delta_usd=cost_accumulator,
+                error_code="render_enqueue_failed",
+                error_message=(
+                    f"render enqueue failed status={exc.response.status_code}: "
+                    f"{str(exc)[:1500]}"
+                ),
+            )
+            return
 
         api.complete_track(
             job_id=decoded.job_id,
@@ -614,6 +645,55 @@ def _build_picker(settings: WorkerSettings) -> SubsetPicker:
         model=settings.openai_model,
         timeout_sec=settings.openai_timeout_sec,
     )
+
+
+def _build_composition_spec(
+    *,
+    plan: "StitchPlan",
+    os_video_id: str,
+) -> dict[str, Any]:
+    """Convert a Phase 3a ``StitchPlan`` to the
+    ``CompositionSpec.model_dump(mode='json')`` shape that
+    ``/api/shorts/render`` accepts.
+
+    Each ``StitchPlan.windows[i]`` (a ``StitchedClip`` with an
+    inner ``window`` carrying ``scene_id`` + ``window_start_ms`` +
+    ``window_end_ms``) becomes one ``SceneClipSpec``. Clips are
+    placed back-to-back chronologically on the composition timeline
+    (hard cuts; no transitions in v1 per plan §6.2 step 8).
+
+    ``video_id`` is the OpenSearch string id (``gd_abc``) — same
+    shape ``RenderJobCreate.video_id`` already accepts. Source type
+    is hard-coded ``gdrive``; future Drive variants (removable
+    disk, local) will need a worker-side switch but that's
+    deferred until Drive picks up multi-source ingestion.
+    """
+    timeline_cursor_ms = 0
+    scene_clips: list[dict[str, Any]] = []
+    for scored in plan.windows:
+        # ``StitchPlan.windows`` is ``list[ScoredWindow]``;
+        # ``ScoredWindow.window`` is the underlying
+        # ``AnnotatedWindow`` with the actual time range.
+        window = scored.window
+        clip_duration_ms = window.window_end_ms - window.window_start_ms
+        scene_clips.append({
+            "scene_id": window.scene_id,
+            "video_id": os_video_id,
+            "source_type": "gdrive",
+            "start_ms": window.window_start_ms,
+            "end_ms": window.window_end_ms,
+            "timeline_start_ms": timeline_cursor_ms,
+            "volume": 1.0,
+        })
+        timeline_cursor_ms += clip_duration_ms
+
+    return {
+        "scene_clips": scene_clips,
+        # Output / subtitles / overlays / transitions intentionally
+        # omitted — server-side ``CompositionSpec`` defaults give
+        # 9:16 vertical 720p mp4 hard-cut, which matches the v1
+        # product mode shorts UX.
+    }
 
 
 def _fetch_canonical_crop(
