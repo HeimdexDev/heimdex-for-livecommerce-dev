@@ -1,0 +1,109 @@
+# shorts-auto product track worker — CUDA 12.4 + torch 2.4.1 +
+# transformers + (Phase 3c-B) SAM2.
+#
+# Mirrors product-enumerate-worker/Dockerfile.gpu so devops operates a
+# single pattern across GPU workers. Phase 3c-A scaffold differences:
+#   * No SAM2 install yet — sam2_loader / sam2_tracker are scaffold
+#     stubs that raise NotImplementedError. Phase 3c-B adds the real
+#     SAM2 package + checkpoint pre-warm here.
+#   * SigLIP2 pre-warm is identical (same variant pin —
+#     google/siglip2-base-patch16-256).
+#
+# Build context layout (from workspace root):
+#   .
+#   ├── dev-heimdex-for-livecommerce/  (this repo)
+#   ├── heimdex-media-contracts/
+#   └── heimdex-media-pipelines/
+#
+# Local build:
+#   docker build \
+#     -f dev-heimdex-for-livecommerce/services/product-track-worker/Dockerfile.gpu \
+#     -t heimdex-product-track-worker:gpu \
+#     <workspace-root>
+#
+# CI build: see .github/workflows/build-gpu-images.yml.
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    HF_HOME=/models/hf \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates curl gnupg \
+        build-essential python3-dev git \
+        ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-dev python3.11-distutils python3.11-venv \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3.11 /tmp/get-pip.py \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip \
+    && rm -f /tmp/get-pip.py \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Worker SDK — pip-installed from PyPI, pinned at the version that
+# adds the worker-event recorder + product workers' GPU job types
+# (registered in 0.3.3).
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.3.3"
+
+# Contracts — install from sibling source (matches enumerate-worker).
+COPY heimdex-media-contracts/ /tmp/heimdex-media-contracts/
+RUN pip install --no-cache-dir /tmp/heimdex-media-contracts \
+    && rm -rf /tmp/heimdex-media-contracts
+
+# Heavy ML deps. requirements.txt MUST NOT include heimdex-media-* —
+# those are installed from sibling sources.
+COPY dev-heimdex-for-livecommerce/services/product-track-worker/requirements.txt /tmp/requirements.txt
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install \
+        --extra-index-url https://download.pytorch.org/whl/cu124 \
+        -r /tmp/requirements.txt \
+    && rm -f /tmp/requirements.txt
+
+# Pipeline library. ``heimdex_media_pipelines.product_track`` ships
+# alongside ``siglip2``; the worker imports through this package.
+COPY heimdex-media-pipelines/ /tmp/heimdex-media-pipelines/
+RUN pip install --no-cache-dir /tmp/heimdex-media-pipelines \
+    && rm -rf /tmp/heimdex-media-pipelines
+
+# Runtime user — created before pre-warm so HF cache dirs are owned
+# correctly on cold start.
+RUN useradd -m -u 1000 appuser
+
+# Pre-warm SigLIP2 weights — same variant as drive-visual-embed-worker
+# and product-enumerate-worker. Cold-start cost on Aircloud is dominated
+# by HuggingFace downloads; baking weights in keeps boots fast.
+RUN mkdir -p /models/hf \
+    && python -c "\
+from transformers import AutoImageProcessor, SiglipVisionModel; \
+SiglipVisionModel.from_pretrained('google/siglip2-base-patch16-256'); \
+AutoImageProcessor.from_pretrained('google/siglip2-base-patch16-256'); \
+print('siglip2 cached')"
+
+# TODO Phase 3c-B: pre-warm SAM2 weights here once the python package
+# + checkpoint variant are picked. Likely shape:
+#   RUN python -c "\
+#   from sam2.build_sam import build_sam2_video_predictor; \
+#   build_sam2_video_predictor('facebook/sam2-hiera-base-plus'); \
+#   print('sam2 cached')"
+
+COPY dev-heimdex-for-livecommerce/services/product-track-worker/src/ src/
+
+RUN chown -R appuser:appuser /app /models /home/appuser
+USER appuser
+
+CMD ["python", "-m", "src.worker"]
