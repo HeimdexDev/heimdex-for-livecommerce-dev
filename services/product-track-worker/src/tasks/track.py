@@ -515,6 +515,16 @@ def handle_track_job(
             duration_preset_sec=decoded.duration_preset_sec,
             config=cfg,
         )
+
+        # Roll the LLM picker's accumulated USD spend into the job's
+        # cost ledger. Pre-fix the api's per-org daily-budget gate
+        # undercounted every track job that used the OpenAIPicker
+        # because ``cost_delta_usd`` was always 0 — the picker
+        # reports cost via a public ``total_cost_usd`` attribute that
+        # we read here. ``getattr`` with default keeps GreedyPicker
+        # / test-injected mocks compatible.
+        cost_accumulator += getattr(picker_impl, "total_cost_usd", Decimal("0"))
+
         if not selected:
             _terminate_no_render(
                 api, decoded, settings, cost_accumulator, annotated=annotated,

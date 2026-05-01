@@ -117,6 +117,51 @@ def test_picker_returns_llm_pick_when_within_budget():
     assert [s.window.scene_id for s in result] == ["s1", "s2"]
 
 
+def test_picker_accumulates_cost_from_response_usage():
+    """Pre-fix the picker dropped ``resp.usage`` and ``total_cost_usd``
+    stayed at 0, so every track job using the LLM picker reported $0
+    to the api's daily-budget gate. Post-fix the call cost is
+    computed from input/output tokens at gpt-4o-mini pricing and
+    accumulated across pick() calls."""
+    candidates = [
+        _make_window(scene_id="s1", start_ms=0, end_ms=10_000, score=0.9),
+        _make_window(scene_id="s2", start_ms=20_000, end_ms=30_000, score=0.8),
+    ]
+
+    fake_response = MagicMock()
+    fake_response.choices = [MagicMock()]
+    fake_response.choices[0].message.content = '{"selected_indices": [0, 1]}'
+    fake_response.usage = MagicMock(
+        prompt_tokens=1000,
+        completion_tokens=500,
+    )
+    fake_client = MagicMock()
+    fake_client.chat.completions.create.return_value = fake_response
+
+    picker = OpenAIPicker(client=fake_client, model="gpt-4o-mini")
+    assert picker.total_cost_usd == 0
+
+    picker.pick(
+        candidates,
+        duration_preset_sec=30,
+        config=TrackingConfig(),
+    )
+
+    # 1000 input * $0.15 / 1M + 500 output * $0.60 / 1M
+    #   = 0.00015 + 0.00030 = 0.00045
+    from decimal import Decimal
+    expected = Decimal("0.00015") + Decimal("0.00030")
+    assert picker.total_cost_usd == expected
+
+    # Second call accumulates instead of overwriting.
+    picker.pick(
+        candidates,
+        duration_preset_sec=30,
+        config=TrackingConfig(),
+    )
+    assert picker.total_cost_usd == expected * 2
+
+
 def test_picker_falls_back_on_call_failure():
     """Existing fallback path — pinned here so future refactors
     don't accidentally regress it."""

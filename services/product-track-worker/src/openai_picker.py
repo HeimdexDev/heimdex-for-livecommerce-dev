@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from heimdex_media_pipelines.product_track.config import TrackingConfig
@@ -36,6 +37,15 @@ if TYPE_CHECKING:  # pragma: no cover
     from openai import OpenAI
 
 logger = logging.getLogger(__name__)
+
+
+# gpt-4o-mini pricing per OpenAI (USD per 1M tokens). When the
+# configured model differs from this default, ``total_cost_usd``
+# undercounts — cost reporting is best-effort scaffold accuracy and
+# Phase 3c-B can swap to the api side computing cost from token
+# counts (which are reported precisely).
+_GPT_4O_MINI_INPUT_USD_PER_1M = Decimal("0.150")
+_GPT_4O_MINI_OUTPUT_USD_PER_1M = Decimal("0.600")
 
 
 _RESPONSE_SCHEMA = {
@@ -86,6 +96,12 @@ class OpenAIPicker:
         self._model = model
         self._timeout_sec = timeout_sec
         self._fallback = GreedyPicker()
+        # Accumulated USD spend across all ``pick()`` calls on this
+        # instance. The worker reads this AFTER ``select_subset()``
+        # to roll the LLM cost into the job's heartbeat / complete
+        # ``cost_delta_usd`` so the api's daily-budget gate doesn't
+        # undercount tracking jobs that used the LLM picker.
+        self.total_cost_usd: Decimal = Decimal("0")
 
     def pick(
         self,
@@ -202,6 +218,29 @@ class OpenAIPicker:
             },
             timeout=self._timeout_sec,
         )
+
+        # Accumulate cost from the response usage block. The
+        # heartbeat / complete callbacks attribute LLM spend to the
+        # tracking job's daily budget bucket; pre-fix every track
+        # job using the LLM picker reported $0 to the api ledger.
+        usage = getattr(resp, "usage", None)
+        if usage is not None:
+            input_tokens = Decimal(getattr(usage, "prompt_tokens", 0) or 0)
+            output_tokens = Decimal(getattr(usage, "completion_tokens", 0) or 0)
+            call_cost = (
+                input_tokens * _GPT_4O_MINI_INPUT_USD_PER_1M / Decimal(1_000_000)
+                + output_tokens * _GPT_4O_MINI_OUTPUT_USD_PER_1M / Decimal(1_000_000)
+            )
+            self.total_cost_usd += call_cost
+            logger.debug(
+                "openai_picker_call_cost",
+                extra={
+                    "input_tokens": int(input_tokens),
+                    "output_tokens": int(output_tokens),
+                    "call_cost_usd": str(call_cost),
+                    "total_cost_usd": str(self.total_cost_usd),
+                },
+            )
 
         content = resp.choices[0].message.content or "{}"
         parsed = json.loads(content)

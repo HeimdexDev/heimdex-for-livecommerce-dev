@@ -74,25 +74,58 @@ def dispatch(
                 raise
         return
 
-    # F2: unknown type — log + raise ``InvalidMessageError`` so the
-    # SDK ack-deletes via poison-pill semantics
-    # (``sqs_invalid_message_deleted`` structured log).
+    # F2: unknown type. Two sub-cases:
     #
-    # We do NOT try to /fail the job here. The api's /fail requires
-    # ``claimed_by`` to own the lease, but a misrouted message landed
-    # here without this worker ever claiming — /fail would 409. The
-    # row's actual owner (or the api's lease-expiry sweeper) is the
-    # right authority. SQS-level retry won't help either: redelivery
-    # to the same wrong queue produces the same outcome.
-    job_id_present = body.get("job_id") is not None
+    # * Body carries a parseable ``job_id`` (real api-enqueued row
+    #   that landed on the wrong queue): re-raise a generic
+    #   ``DispatchUnknownTypeError`` so the SDK leaves the message
+    #   visible. SQS redelivery → eventual DLQ → operator alert.
+    #   Ack-deleting via ``InvalidMessageError`` would orphan the
+    #   ``ProductScanJob`` row at ``queued/in_progress`` forever
+    #   (this worker can't /fail it without owning the lease, and
+    #   no api-side cleanup path exists for queued rows).
+    # * Body lacks a parseable ``job_id`` (truly malformed —
+    #   manual injection, schema drift, garbage in the queue):
+    #   ``InvalidMessageError`` poison-pill is correct, no api row
+    #   to orphan.
+    job_id_raw = body.get("job_id")
+    try:
+        UUID(str(job_id_raw))
+        has_real_job_id = True
+    except Exception:
+        has_real_job_id = False
+
     logger.warning(
         "dispatch_unknown_type",
-        extra={"type": msg_type, "job_id": body.get("job_id"), "has_job_id": job_id_present},
+        extra={
+            "type": msg_type,
+            "job_id": job_id_raw,
+            "has_real_job_id": has_real_job_id,
+        },
     )
-    raise InvalidMessageError(
-        f"unknown message type {msg_type!r} on track queue "
-        f"(job_id={'present' if job_id_present else 'absent'})"
+
+    if not has_real_job_id:
+        raise InvalidMessageError(
+            f"unknown message type {msg_type!r} on track queue, no parseable job_id"
+        )
+
+    # Real job that we can't process here. Surface to DLQ so an
+    # operator fixes the routing and re-enqueues to the right
+    # worker's queue.
+    raise DispatchUnknownTypeError(
+        f"refusing to process {msg_type!r} on track queue — "
+        f"job_id={job_id_raw}; expected on enumerate queue. "
+        f"Will redeliver until DLQ for operator triage."
     )
+
+
+class DispatchUnknownTypeError(RuntimeError):
+    """Raised when a real (job_id-bearing) message lands on the
+    wrong worker's queue. NOT a poison pill — the SDK's normal
+    exception path lets SQS redeliver, eventually DLQ for operator
+    triage. Distinct from ``InvalidMessageError`` (which ack-deletes
+    immediately).
+    """
 
 
 def _normalize_body(

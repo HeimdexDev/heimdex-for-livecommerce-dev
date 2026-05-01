@@ -62,15 +62,32 @@ def test_dispatch_handles_queue_message():
     assert h.call_args.kwargs["message"] == body
 
 
-def test_dispatch_unknown_type_with_job_id_raises_invalid_message():
+def test_dispatch_unknown_type_with_real_job_id_raises_for_dlq():
     """A misrouted message (``product.enumerate_job`` on the track
-    queue) should NOT trigger /fail — the worker doesn't own the
-    lease so /fail would 409. Pass-5 fix: raise ``InvalidMessageError``
-    so the SDK ack-deletes via poison-pill semantics
-    (``sqs_invalid_message_deleted`` structured log) without trying
-    to /fail. The row's actual owner (or api-side lease sweeper) is
-    the right authority to close the row."""
+    queue) with a real ``job_id`` MUST NOT poison-pill ack-delete
+    (which would orphan the api row at ``queued`` forever) and MUST
+    NOT call /fail (worker doesn't own the lease). Instead, raise a
+    generic exception so the SDK leaves the message visible — SQS
+    redelivers, eventually DLQ, operator notices."""
+    from src.dispatcher import DispatchUnknownTypeError
+
     body = {"type": "product.enumerate_job", "job_id": str(uuid4())}
+    fake_api = MagicMock()
+    with patch("src.dispatcher.handle_track_job") as h, patch(
+        "src.dispatcher.ApiClient", return_value=fake_api
+    ):
+        with pytest.raises(DispatchUnknownTypeError):
+            dispatch(body, settings=_settings())
+    h.assert_not_called()
+    fake_api.fail.assert_not_called()
+
+
+def test_dispatch_unknown_type_no_job_id_raises_invalid_message():
+    """A truly malformed message (no parseable ``job_id``) IS the
+    poison-pill case — there's no api row to orphan. Raise
+    ``InvalidMessageError`` so the SDK ack-deletes with structured
+    ``sqs_invalid_message_deleted`` log."""
+    body = {"type": "product.unknown.event"}  # no job_id at all
     fake_api = MagicMock()
     with patch("src.dispatcher.handle_track_job") as h, patch(
         "src.dispatcher.ApiClient", return_value=fake_api
