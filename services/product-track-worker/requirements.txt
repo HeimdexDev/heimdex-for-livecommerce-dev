@@ -32,12 +32,13 @@ torch==2.4.1+cu124
 torchvision==0.19.1+cu124
 transformers==5.5.4
 
-# SAM2 (Phase 3c-B): pin TBD. Likely candidates:
-#   sam-2 (Meta's official pre-release)
-#   ultralytics
-# Picked + pinned alongside the calibration spike on staging
-# goldens. Phase 3c-A scaffold's ``Sam2TrackerImpl`` raises
-# NotImplementedError so the dependency isn't required to install.
+# SAM2 (Phase 3c-B): HF transformers' Sam2 family is the
+# calibration-default choice — matches the existing transformers
+# ecosystem (SigLIP2 already comes from transformers) so we
+# operate one image-model pattern across GPU workers. Real package
+# is the same ``transformers`` already pinned above; no extra dep.
+# OpenCV is needed to decode the proxy video at sample_fps.
+opencv-python-headless==4.10.0.84
 
 # Heimdex shared libs:
 # * worker-sdk: pinned to PyPI version, installed by Dockerfile BEFORE
