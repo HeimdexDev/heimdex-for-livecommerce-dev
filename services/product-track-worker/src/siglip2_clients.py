@@ -128,5 +128,16 @@ class KeyframeFetcherImpl:
             # in map".
             raise KeyError(f"keyframe S3 key not found for scene_id={scene_id}")
 
-        body = self._s3.get_object_bytes(bucket=self._bucket, key=s3_key)
+        # SDK contract: ``S3Client.get_object_bytes(s3_key)`` — bucket
+        # is bound at construction; pass key positionally. Returns
+        # ``None`` on NoSuchKey or transient errors (the SDK already
+        # logged) — the lib's per-scene try/except would convert that
+        # into a silent skip with no signal back to the worker, so we
+        # raise here to surface the failure (and let the F4 counter
+        # see it).
+        body = self._s3.get_object_bytes(s3_key)
+        if body is None:
+            raise FileNotFoundError(
+                f"S3 object missing for scene_id={scene_id} key={s3_key}"
+            )
         return Image.open(io.BytesIO(body)).convert("RGB")

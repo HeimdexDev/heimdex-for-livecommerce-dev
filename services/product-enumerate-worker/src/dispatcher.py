@@ -84,11 +84,15 @@ def dispatch(
         "dispatch_unknown_type",
         extra={"type": msg_type, "job_id": str(job_id)},
     )
+    # The API's ``_FailRequest.error_code`` enum doesn't carry a
+    # dedicated ``unknown_message_type`` literal — using
+    # ``internal_error`` is the only valid path. The structured
+    # ``dispatch_unknown_type`` log + error_message preserve the
+    # routing detail for operators.
     _try_fail_callback(
         body=body,
         settings=settings,
         error_message=f"unknown message type {msg_type!r}",
-        error_code="unknown_message_type",
     )
 
 

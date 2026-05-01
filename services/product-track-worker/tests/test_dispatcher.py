@@ -65,8 +65,11 @@ def test_dispatch_handles_queue_message():
 def test_dispatch_unknown_type_with_job_id_calls_fail():
     """F2: pre-fix, an unknown ``type`` was silently logged and the
     SDK then ack-deleted the message — no retry, no DLQ, no /fail.
-    Post-fix, we /fail the job with ``unknown_message_type`` so the
-    api closes the row and the user sees the misrouting."""
+    Post-fix, we /fail the job so the api closes the row and the
+    user sees the misrouting. Error code is ``internal_error`` (the
+    only api-accepted enum value); the misrouting detail is carried
+    in ``error_message`` and the structured ``dispatch_unknown_type``
+    log."""
     body = {"type": "product.enumerate_job", "job_id": str(uuid4())}
     fake_api = MagicMock()
     with patch("src.dispatcher.handle_track_job") as h, patch(
@@ -75,9 +78,10 @@ def test_dispatch_unknown_type_with_job_id_calls_fail():
         dispatch(body, settings=_settings())
     h.assert_not_called()
     fake_api.fail.assert_called_once()
-    assert (
-        fake_api.fail.call_args.kwargs["error_code"] == "unknown_message_type"
-    )
+    fail_kwargs = fake_api.fail.call_args.kwargs
+    assert fail_kwargs["error_code"] == "internal_error"
+    assert "unknown message type" in fail_kwargs["error_message"]
+    assert "product.enumerate_job" in fail_kwargs["error_message"]
 
 
 def test_dispatch_unknown_type_without_job_id_raises_invalid_message():

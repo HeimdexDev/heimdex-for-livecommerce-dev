@@ -61,7 +61,6 @@ from heimdex_media_pipelines.product_track.siglip2_retrieval import (
     retrieve_candidate_scenes,
 )
 from heimdex_media_pipelines.product_track.stitching import (
-    StitchPlan,
     build_stitch_plan,
 )
 from heimdex_media_pipelines.product_track.subset_selector import (
@@ -312,7 +311,7 @@ def handle_track_job(
             return
 
         if not candidate_scenes:
-            _complete_no_qualifying(api, decoded, settings, cost_accumulator)
+            _fail_no_qualifying(api, decoded, settings, cost_accumulator)
             return
 
         # ─── 6. heartbeat + 7. SAM2 propagation ────────────────────
@@ -400,8 +399,7 @@ def handle_track_job(
             config=cfg,
         )
         if not scored:
-            _complete_no_qualifying(api, decoded, settings, cost_accumulator,
-                                    annotated=annotated)
+            _fail_no_qualifying(api, decoded, settings, cost_accumulator)
             return
 
         picker_impl = picker or _build_picker(settings)
@@ -412,33 +410,37 @@ def handle_track_job(
             config=cfg,
         )
         if not selected:
-            _complete_no_qualifying(api, decoded, settings, cost_accumulator,
-                                    annotated=annotated)
+            _fail_no_qualifying(api, decoded, settings, cost_accumulator)
             return
 
         # ─── 13. build stitch plan ─────────────────────────────────
-        plan = build_stitch_plan(
+        # The plan is computed for completeness (and so the lib's
+        # build_stitch_plan invariants are exercised) but NOT shipped
+        # to the api — ``_CompleteRequest`` (extra='forbid') has no
+        # ``stitching_plan`` field. Phase 3c-B turns this plan into a
+        # ``CompositionSpec`` and POSTs to ``/api/shorts/render``;
+        # the resulting ``render_job_id`` is the only thing the api
+        # needs to persist on the tracking row.
+        _ = build_stitch_plan(
             selected,
             duration_target_sec=decoded.duration_preset_sec,
             config=cfg,
         )
 
         # ─── 14. enqueue render + complete ─────────────────────────
-        # TODO Phase 3c follow-up: enqueue the render via the api's
-        # /api/shorts/render endpoint with the stitch plan converted
-        # to a CompositionSpec. For Phase 3c-A scaffold the render
-        # enqueue is a placeholder; the api callback (/complete)
-        # accepts ``render_job_id=None`` so the worker can mark the
-        # job complete with a populated stitch_plan but no render
-        # yet — UI surfaces "tracked, render pending".
+        # TODO Phase 3c-B: enqueue the render via the api's
+        # /api/shorts/render endpoint and pass the resulting job id.
+        # For scaffold the render enqueue is a placeholder; the api
+        # callback (/complete) accepts ``render_job_id=None`` so the
+        # worker can mark the job complete with appearances populated
+        # — UI surfaces "tracked, render pending".
         render_job_id: UUID | None = None
 
         api.complete_track(
             job_id=decoded.job_id,
             claimed_by=settings.worker_id,
             cost_delta_usd=cost_accumulator,
-            appearances=_serialize_appearances(annotated, decoded, plan),
-            stitching_plan=_serialize_stitching_plan(plan, decoded),
+            appearances=_serialize_appearances(annotated, decoded),
             render_job_id=render_job_id,
         )
     finally:
@@ -471,12 +473,12 @@ def _make_config(settings: WorkerSettings) -> TrackingConfig:
 
 
 def _build_s3_client(settings: WorkerSettings) -> S3Client:
-    return S3Client(
-        region=settings.s3_region,
-        endpoint_url=settings.s3_endpoint_url or None,
-        access_key_id=settings.aws_access_key_id or None,
-        secret_access_key=settings.aws_secret_access_key or None,
-    )
+    # SDK contract: ``S3Client(bucket: str, client=None)`` — credentials
+    # come from boto3's standard chain (env / IAM role / metadata
+    # service). Passing region/endpoint/credential kwargs would
+    # TypeError; the prior scaffold guessed at a non-existent
+    # signature.
+    return S3Client(bucket=settings.drive_s3_bucket)
 
 
 def _build_picker(settings: WorkerSettings) -> SubsetPicker:
@@ -571,14 +573,20 @@ def _fail_all_scenes(
     stage: str,
     attempted: int,
 ) -> None:
-    """F4: terminal failure for stage-wide outages. Distinguished from
-    ``_complete_no_qualifying`` (which is the success path for "every
-    candidate was evaluated and rejected by thresholds")."""
+    """F4: terminal failure for stage-wide outages — distinguished
+    from ``_fail_no_qualifying`` (every candidate was evaluated and
+    no window cleared the precision threshold).
+
+    The API's ``_FailRequest.error_code`` enum doesn't carry an
+    ``all_scenes_failed`` literal, so we use ``internal_error`` and
+    embed the stage + attempt count in ``error_message``. Worker logs
+    capture the structured detail.
+    """
     api.fail(
         job_id=decoded.job_id,
         claimed_by=settings.worker_id,
         cost_delta_usd=cost,
-        error_code="all_scenes_failed",
+        error_code="internal_error",
         error_message=(
             f"all {attempted} candidate scene operations failed at stage "
             f"{stage!r} — likely a stage-wide regression, not absent product"
@@ -586,43 +594,48 @@ def _fail_all_scenes(
     )
 
 
-def _complete_no_qualifying(
+def _fail_no_qualifying(
     api: ApiClient,
     decoded: TrackJobMessage,
     settings: WorkerSettings,
     cost: Decimal,
-    *,
-    annotated: list | None = None,
 ) -> None:
-    """Terminal complete with no stitch plan / no render. The api
-    contract: empty ``stitching_plan`` + ``render_job_id=None`` ⇒
-    UI shows "no qualifying appearances found" and the job lifecycle
-    closes cleanly. We still persist the assembled appearances (if
-    any) so threshold tuning has visibility."""
-    appearances = (
-        _serialize_appearances(annotated, decoded, None) if annotated else []
-    )
-    api.complete_track(
+    """Terminal failure for "tracker found nothing matching the
+    precision threshold". Distinct from ``_fail_all_scenes`` (where
+    every per-scene op raised) and from ``/complete`` (which the api
+    400s when ``appearances=[]``).
+
+    Maps to ``error_code="tracker_low_confidence_global"`` — the api
+    enum literal that fits "we ran the pipeline but produced no
+    qualifying windows".
+    """
+    api.fail(
         job_id=decoded.job_id,
         claimed_by=settings.worker_id,
         cost_delta_usd=cost,
-        appearances=appearances,
-        stitching_plan=None,
-        render_job_id=None,
+        error_code="tracker_low_confidence_global",
+        error_message=(
+            "no candidate scenes cleared the precision/IoU/duration "
+            "thresholds for this product"
+        ),
     )
 
 
 def _serialize_appearances(
     annotated: list,
     decoded: TrackJobMessage,
-    plan: StitchPlan | None,
 ) -> list[dict[str, Any]]:
-    """Convert lib-level ``AnnotatedWindow`` to the api callback's
-    ``AppearanceWindow`` shape (matches the contracts schema)."""
+    """Convert lib-level ``AnnotatedWindow`` to the api's
+    ``_AppearancePayload`` shape (extra='forbid' — must match exactly).
+
+    The api derives ``catalog_entry_id`` from the claimed job row, so
+    we MUST NOT send it on each appearance. Scaffold's earlier
+    ``_AppearancePayload``-incompatible shape would 422 on every
+    successful tracking completion.
+    """
     out = []
     for w in annotated:
         out.append({
-            "catalog_entry_id": str(decoded.catalog_entry_id),
             "scene_id": w.scene_id,
             "window_start_ms": w.window_start_ms,
             "window_end_ms": w.window_end_ms,
@@ -636,26 +649,3 @@ def _serialize_appearances(
             "rejected_reason": w.rejected_reason,
         })
     return out
-
-
-def _serialize_stitching_plan(
-    plan: StitchPlan, decoded: TrackJobMessage,
-) -> dict[str, Any]:
-    return {
-        "catalog_entry_id": str(decoded.catalog_entry_id),
-        "video_id": str(decoded.video_id),
-        "duration_target_sec": plan.duration_target_sec,
-        "duration_actual_ms": plan.duration_actual_ms,
-        "windows": [
-            {
-                "scene_id": s.window.scene_id,
-                "source_start_ms": s.window.window_start_ms,
-                "source_end_ms": s.window.window_end_ms,
-                "composite_score": s.composite_score,
-                "score_components": s.score_components,
-            }
-            for s in plan.windows
-        ],
-        "scorer_version": plan.scorer_version,
-        "subset_picker_version": plan.subset_picker_version,
-    }

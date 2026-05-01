@@ -112,7 +112,12 @@ def test_heartbeat_serializes_decimal_cost():
 # ---------- complete_track ----------
 
 
-def test_complete_track_with_stitch_plan():
+def test_complete_track_posts_appearances_and_render_id():
+    """Body shape pinned: ``catalog_entries`` is always empty for
+    track jobs; ``appearances`` is the lib-derived list;
+    ``render_job_id`` is None until Phase 3c-B wires real render
+    enqueue. The API ``_CompleteRequest`` has ``extra='forbid'``,
+    so any extra field would 422."""
     api, http = _build_client()
     job_id = uuid4()
     render_id = uuid4()
@@ -123,19 +128,20 @@ def test_complete_track_with_stitch_plan():
         claimed_by="w",
         cost_delta_usd=Decimal("0.50"),
         appearances=[{"scene_id": "s1"}],
-        stitching_plan={"video_id": "v"},
         render_job_id=render_id,
     )
     body = http.post.call_args.kwargs["json"]
     assert body["catalog_entries"] == []  # always empty for track
     assert body["appearances"] == [{"scene_id": "s1"}]
-    assert body["stitching_plan"] == {"video_id": "v"}
     assert body["render_job_id"] == str(render_id)
+    # Codex P1 (PR #112 review): the API schema does NOT have a
+    # ``stitching_plan`` field. We must not send it.
+    assert "stitching_plan" not in body
 
 
-def test_complete_track_no_qualifying_windows_passes_none():
-    """Empty stitch plan path: stitching_plan + render_job_id are
-    None; api routes this to the no-render UI state."""
+def test_complete_track_render_job_id_none_when_render_pending():
+    """Scaffold path: ``render_job_id`` may be None until Phase 3c-B
+    wires the real render enqueue."""
     api, http = _build_client()
     http.post.return_value = _ok_response({})
 
@@ -143,13 +149,12 @@ def test_complete_track_no_qualifying_windows_passes_none():
         job_id=uuid4(),
         claimed_by="w",
         cost_delta_usd=Decimal("0"),
-        appearances=[],
-        stitching_plan=None,
+        appearances=[{"scene_id": "s1"}],
         render_job_id=None,
     )
     body = http.post.call_args.kwargs["json"]
-    assert body["stitching_plan"] is None
     assert body["render_job_id"] is None
+    assert "stitching_plan" not in body
 
 
 # ---------- fail ----------

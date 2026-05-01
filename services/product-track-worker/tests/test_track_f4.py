@@ -9,7 +9,12 @@ appearances" via ``/complete`` — hiding a real fault from the user.
 
 Post-fix, the worker counts attempts vs. failures via wrappers around
 the injected protocols. When ``attempted > 0 and failed == attempted``,
-``/fail`` is called with ``error_code="all_scenes_failed"``.
+``/fail`` is called with ``error_code="internal_error"`` and the
+stage detail in ``error_message`` (the API ``_FailRequest`` enum has
+no dedicated ``all_scenes_failed`` literal). The "no qualifying
+windows" path also uses ``/fail``, with
+``error_code="tracker_low_confidence_global"`` — the API's
+``_CompleteRequest`` 400s on empty ``appearances``.
 
 These tests stub the canonical-crop scaffold (still raises
 ``NotImplementedError`` in main code per Phase 3c-A) so the F4 logic
@@ -158,10 +163,13 @@ class TestHandleTrackJobAllScenesFailed:
         ]
         return api
 
-    def test_all_keyframe_fetches_fail_calls_fail_with_all_scenes_failed(self):
+    def test_all_keyframe_fetches_fail_calls_fail_with_internal_error(self):
         """3 candidate scenes from coarse retrieval, every keyframe
         fetch raises (S3 outage simulation). Worker MUST call /fail
-        with ``all_scenes_failed``, NOT /complete."""
+        with ``internal_error`` + a stage label in the message, NOT
+        /complete. ``error_code`` is ``internal_error`` because the
+        API's ``_FailRequest`` enum doesn't have a dedicated
+        ``all_scenes_failed`` literal."""
         api = self._make_api()
 
         # Embedder produces a stable canonical vec; per-scene re-embed
@@ -187,17 +195,19 @@ class TestHandleTrackJobAllScenesFailed:
                 s3_client=s3,
             )
 
-        # /fail called with all_scenes_failed; /complete_track NOT called.
+        # /fail called; /complete_track NOT called.
         api.fail.assert_called_once()
         kwargs = api.fail.call_args.kwargs
-        assert kwargs["error_code"] == "all_scenes_failed"
+        assert kwargs["error_code"] == "internal_error"
         assert "keyframe_fetch" in kwargs["error_message"]
         api.complete_track.assert_not_called()
 
-    def test_empty_coarse_candidates_calls_complete_no_qualifying(self):
+    def test_empty_coarse_candidates_calls_fail_no_qualifying(self):
         """0 coarse candidates → keyframe fetcher never called →
-        ``attempted=0`` → must NOT trip the F4 path. /complete with
-        empty stitch plan is the correct success outcome."""
+        ``attempted=0`` → must NOT trip the F4 stage-failure path.
+        Routes to /fail with ``tracker_low_confidence_global`` instead
+        of /complete with empty appearances (the API rejects empty
+        appearances on tracking /complete with a 400)."""
         api = self._make_api()
         api.find_similar_scenes.return_value = []
 
@@ -217,17 +227,18 @@ class TestHandleTrackJobAllScenesFailed:
                 s3_client=s3,
             )
 
-        api.fail.assert_not_called()
-        api.complete_track.assert_called_once()
-        body = api.complete_track.call_args.kwargs
-        assert body["stitching_plan"] is None
-        assert body["render_job_id"] is None
+        api.complete_track.assert_not_called()
+        api.fail.assert_called_once()
+        kwargs = api.fail.call_args.kwargs
+        assert kwargs["error_code"] == "tracker_low_confidence_global"
 
     def test_partial_keyframe_failure_does_not_trip_f4(self):
         """3 candidates, 2 keyframes fail to fetch, 1 succeeds but
         precise-similarity filter rejects it. ``failed=2``,
         ``attempted=3`` — F4 condition (``failed == attempted``) is
-        NOT met, so this routes to /complete (no qualifying), not /fail."""
+        NOT met. With no candidates surviving the precise threshold,
+        this routes to /fail with ``tracker_low_confidence_global``
+        (API rejects empty appearances on /complete)."""
         api = self._make_api()
 
         canonical_vec = [0.1] * 768
@@ -260,14 +271,18 @@ class TestHandleTrackJobAllScenesFailed:
                 s3_client=s3,
             )
 
-        # Partial failure → not F4. /complete with no qualifying.
-        api.fail.assert_not_called()
-        api.complete_track.assert_called_once()
+        # Partial failure → not the F4 stage-wide path → no
+        # ``internal_error``. Falls into the no-qualifying branch.
+        api.complete_track.assert_not_called()
+        api.fail.assert_called_once()
+        kwargs = api.fail.call_args.kwargs
+        assert kwargs["error_code"] == "tracker_low_confidence_global"
 
-    def test_all_sam2_tracks_fail_calls_fail_with_all_scenes_failed(self):
+    def test_all_sam2_tracks_fail_calls_fail_with_internal_error(self):
         """Coarse + precise pass produce candidate scenes; SAM2
         tracker raises on every scene. Worker MUST call /fail with
-        ``all_scenes_failed``, NOT /complete with empty plan."""
+        ``internal_error`` + ``sam2_track`` stage detail, NOT
+        /complete."""
         api = self._make_api()
 
         # Canonical and per-scene embeddings all match (>= precise threshold)
@@ -303,6 +318,6 @@ class TestHandleTrackJobAllScenesFailed:
 
         api.fail.assert_called_once()
         kwargs = api.fail.call_args.kwargs
-        assert kwargs["error_code"] == "all_scenes_failed"
+        assert kwargs["error_code"] == "internal_error"
         assert "sam2_track" in kwargs["error_message"]
         api.complete_track.assert_not_called()

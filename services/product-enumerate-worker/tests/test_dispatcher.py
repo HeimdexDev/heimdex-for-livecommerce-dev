@@ -81,8 +81,10 @@ def test_dispatch_handles_queue_message():
 
 
 def test_dispatch_unknown_type_with_job_id_calls_fail():
-    """F2: unknown ``type`` with a parseable job_id calls /fail with
-    ``unknown_message_type`` instead of silently ack'ing."""
+    """F2: unknown ``type`` with a parseable job_id calls /fail
+    instead of silently ack'ing. Error code is ``internal_error``
+    (the only api-accepted enum value); detail goes in
+    ``error_message`` + structured logs."""
     body = {"type": "product.track_job", "job_id": str(uuid4())}
     fake_api = MagicMock()
     with patch("src.dispatcher.handle_enumerate_job") as h, patch(
@@ -91,9 +93,10 @@ def test_dispatch_unknown_type_with_job_id_calls_fail():
         dispatch(body, settings=_settings(), vlm_client=_vlm())
     h.assert_not_called()
     fake_api.fail.assert_called_once()
-    assert (
-        fake_api.fail.call_args.kwargs["error_code"] == "unknown_message_type"
-    )
+    fail_kwargs = fake_api.fail.call_args.kwargs
+    assert fail_kwargs["error_code"] == "internal_error"
+    assert "unknown message type" in fail_kwargs["error_message"]
+    assert "product.track_job" in fail_kwargs["error_message"]
 
 
 def test_dispatch_unknown_type_without_job_id_raises_invalid_message():

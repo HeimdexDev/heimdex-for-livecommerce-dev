@@ -123,24 +123,29 @@ class ApiClient:
         claimed_by: str,
         cost_delta_usd: Decimal,
         appearances: list[dict[str, Any]],
-        stitching_plan: dict[str, Any] | None,
         render_job_id: UUID | None,
     ) -> dict[str, Any]:
-        """Terminal success for tracking jobs. ``stitching_plan`` and
-        ``render_job_id`` may be None if no qualifying windows were
-        found — in that case the api should NOT enqueue a render and
-        the worker reports the job as no-op-complete (UI surfaces "no
-        appearances found")."""
+        """Terminal success for tracking jobs.
+
+        The API's ``_CompleteRequest`` schema (extra='forbid') accepts
+        only ``claimed_by / cost_delta_usd / catalog_entries /
+        appearances / render_job_id``. Tracking-specific fields like
+        the stitching plan and per-appearance ``catalog_entry_id`` are
+        derived server-side from the job row + the appearances list,
+        so we do NOT include them in the request body.
+        ``appearances`` MUST be non-empty for tracking completions
+        (the API 400s on empty); the no-qualifying path uses
+        ``/fail`` with ``tracker_low_confidence_global`` instead.
+        """
         resp = self._client.post(
             f"{self.base_url}/internal/products/{job_id}/complete",
             json={
                 "claimed_by": claimed_by,
                 "cost_delta_usd": str(cost_delta_usd),
-                # Track jobs return appearances + stitch plan, NOT
-                # catalog_entries (those came from the enumerate pass).
+                # Track jobs return appearances ONLY. catalog_entries
+                # came from the enumerate pass and lives on the job row.
                 "catalog_entries": [],
                 "appearances": appearances,
-                "stitching_plan": stitching_plan,
                 "render_job_id": str(render_job_id) if render_job_id else None,
             },
         )
