@@ -34,6 +34,7 @@ from heimdex_media_pipelines.product_track.sam2_pass import BBoxXYWH
 
 from src.settings import WorkerSettings
 from src.tasks.track import (
+    _CountingEmbedder,
     _CountingKeyframeFetcher,
     _CountingSam2Tracker,
     handle_track_job,
@@ -83,6 +84,51 @@ def _scenes_response(n: int = 3) -> dict:
             for i in range(n)
         ],
     }
+
+
+# ─── _CountingEmbedder ──────────────────────────────────────────────
+
+
+class TestCountingEmbedder:
+    def test_canonical_succeeds_then_all_per_scene_fail(self):
+        """Canonical embed (first call) returns; every subsequent
+        per-scene call raises. ``per_scene_all_failed`` is True."""
+        attempts = {"n": 0}
+
+        def _side_effect(image):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                return [0.1] * 768
+            raise RuntimeError("siglip down")
+
+        inner = MagicMock()
+        inner.embed.side_effect = _side_effect
+        wrapped = _CountingEmbedder(inner)
+
+        # Canonical (success).
+        wrapped.embed(Image.new("RGB", (1, 1)))
+        assert wrapped.attempted == 1
+        assert wrapped.failed == 0
+        assert wrapped.per_scene_all_failed() is False
+
+        # 3 per-scene attempts, all raise.
+        for _ in range(3):
+            with pytest.raises(RuntimeError):
+                wrapped.embed(Image.new("RGB", (1, 1)))
+        assert wrapped.attempted == 4
+        assert wrapped.failed == 3
+        assert wrapped.per_scene_attempted == 3
+        assert wrapped.per_scene_all_failed() is True
+
+    def test_canonical_only_no_per_scene_is_not_all_failed(self):
+        """Just the canonical embed — no per-scene calls — must not
+        trip the ``per_scene_all_failed`` check (would be a false
+        positive on the empty-coarse path)."""
+        inner = MagicMock()
+        inner.embed.return_value = [0.1] * 768
+        wrapped = _CountingEmbedder(inner)
+        wrapped.embed(Image.new("RGB", (1, 1)))
+        assert wrapped.per_scene_all_failed() is False
 
 
 # ─── _CountingKeyframeFetcher ───────────────────────────────────────
@@ -277,6 +323,131 @@ class TestHandleTrackJobAllScenesFailed:
         api.fail.assert_called_once()
         kwargs = api.fail.call_args.kwargs
         assert kwargs["error_code"] == "tracker_low_confidence_global"
+
+    def test_all_per_scene_embeds_fail_calls_fail_with_internal_error(self):
+        """3 candidate scenes, every keyframe downloads OK, but every
+        per-scene SigLIP2 embed call raises (e.g. corrupted HF cache,
+        bad weights deploy). Pre-fix this fell to
+        ``tracker_low_confidence_global`` because the lib swallows
+        per-scene embed exceptions; post-fix the embedder counter
+        catches it as a stage-wide outage and routes to /fail with
+        ``internal_error``."""
+        api = self._make_api()
+
+        # First call (canonical) succeeds; every subsequent per-scene
+        # call raises.
+        canonical_vec = [0.1] * 768
+
+        def _embed_side_effect(image):
+            # MagicMock side_effect doesn't track call count for us
+            # the way we need — emulate manually.
+            _embed_side_effect.calls += 1
+            if _embed_side_effect.calls == 1:
+                return canonical_vec
+            raise RuntimeError("SigLIP2 weights corrupted")
+
+        _embed_side_effect.calls = 0
+        embedder = MagicMock()
+        embedder.embed.side_effect = _embed_side_effect
+
+        # S3 returns valid jpeg bytes for every keyframe.
+        import io as _io
+        good_buf = _io.BytesIO()
+        Image.new("RGB", (4, 4), 0).save(good_buf, format="JPEG")
+        good_bytes = good_buf.getvalue()
+        s3 = MagicMock()
+        s3.get_object_bytes.return_value = good_bytes
+
+        with patch(
+            "src.tasks.track._fetch_canonical_crop",
+            return_value=_fake_canonical(),
+        ):
+            handle_track_job(
+                message=_job_body(),
+                settings=_settings(),
+                api_client=api,
+                embedder=embedder,
+                s3_client=s3,
+            )
+
+        api.fail.assert_called_once()
+        kwargs = api.fail.call_args.kwargs
+        assert kwargs["error_code"] == "internal_error"
+        assert "siglip2_embed" in kwargs["error_message"]
+        api.complete_track.assert_not_called()
+
+    def test_scenes_lookup_404_calls_fail_with_video_not_found(self):
+        """``GET /internal/videos/{file_id}/scenes-with-keyframes``
+        returning 404 means the DriveFile was deleted or failed an
+        org check between enqueue and processing. The worker MUST
+        surface that as ``video_not_found`` (matches enumerate-worker)
+        instead of letting the dispatcher report a generic
+        ``internal_error``."""
+        import httpx
+
+        api = self._make_api()
+        # Build a real httpx.HTTPStatusError so the worker can read
+        # ``exc.response.status_code``.
+        request = httpx.Request("GET", "http://api/internal/videos/x/scenes-with-keyframes")
+        response = httpx.Response(404, request=request)
+        api.fetch_scenes_with_keyframes.side_effect = httpx.HTTPStatusError(
+            "404 Not Found", request=request, response=response,
+        )
+
+        embedder = MagicMock()
+        embedder.embed.return_value = [0.1] * 768
+        s3 = MagicMock()
+
+        with patch(
+            "src.tasks.track._fetch_canonical_crop",
+            return_value=_fake_canonical(),
+        ):
+            handle_track_job(
+                message=_job_body(),
+                settings=_settings(),
+                api_client=api,
+                embedder=embedder,
+                s3_client=s3,
+            )
+
+        api.fail.assert_called_once()
+        kwargs = api.fail.call_args.kwargs
+        assert kwargs["error_code"] == "video_not_found"
+        api.complete_track.assert_not_called()
+
+    def test_scenes_lookup_5xx_propagates_to_dispatcher(self):
+        """Non-404 HTTP errors should propagate so the dispatcher
+        catches and reports ``internal_error``. The 404 special-case
+        is the only carve-out."""
+        import httpx
+
+        api = self._make_api()
+        request = httpx.Request("GET", "http://api/internal/videos/x/scenes-with-keyframes")
+        response = httpx.Response(503, request=request)
+        api.fetch_scenes_with_keyframes.side_effect = httpx.HTTPStatusError(
+            "503 Service Unavailable", request=request, response=response,
+        )
+
+        embedder = MagicMock()
+        embedder.embed.return_value = [0.1] * 768
+        s3 = MagicMock()
+
+        with patch(
+            "src.tasks.track._fetch_canonical_crop",
+            return_value=_fake_canonical(),
+        ):
+            with pytest.raises(httpx.HTTPStatusError):
+                handle_track_job(
+                    message=_job_body(),
+                    settings=_settings(),
+                    api_client=api,
+                    embedder=embedder,
+                    s3_client=s3,
+                )
+
+        # Worker did NOT call /fail itself — the dispatcher's
+        # exception catch is responsible for that path.
+        api.fail.assert_not_called()
 
     def test_all_sam2_tracks_fail_calls_fail_with_internal_error(self):
         """Coarse + precise pass produce candidate scenes; SAM2

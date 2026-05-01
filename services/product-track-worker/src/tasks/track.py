@@ -107,6 +107,42 @@ logger = logging.getLogger(__name__)
 # attempt failed.
 
 
+class _CountingEmbedder:
+    """Wraps a :class:`SiglipEmbedder`; counts attempts + failures.
+
+    Used to detect a stage-wide SigLIP2 outage that the lib's
+    per-scene try/except would otherwise mask as "no qualifying
+    appearances". The first call (canonical crop) is expected to
+    succeed — if it fails, we never reach the per-scene loop and the
+    canonical-side exception propagates up. So at the F4 check site,
+    ``attempted - 1`` == per-scene attempts and ``failed`` == per-scene
+    failures (canonical successes contribute 0 to ``failed``).
+    """
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self.attempted = 0
+        self.failed = 0
+
+    def embed(self, image: "Image.Image") -> list[float]:
+        self.attempted += 1
+        try:
+            return self._inner.embed(image)
+        except Exception:
+            self.failed += 1
+            raise
+
+    def per_scene_all_failed(self) -> bool:
+        # Subtract 1 for the canonical embed (which must have
+        # succeeded — otherwise we wouldn't reach the F4 check).
+        per_scene_attempted = max(self.attempted - 1, 0)
+        return per_scene_attempted > 0 and self.failed == per_scene_attempted
+
+    @property
+    def per_scene_attempted(self) -> int:
+        return max(self.attempted - 1, 0)
+
+
 class _CountingKeyframeFetcher:
     """Wraps a :class:`KeyframeFetcher`; counts attempts + failures."""
 
@@ -267,16 +303,36 @@ def handle_track_job(
         )
 
         # Phase 2.5a scenes-with-keyframes: keyframe S3 keys per scene.
-        scenes_resp = api.fetch_scenes_with_keyframes(
-            file_id=decoded.video_id, org_id=decoded.org_id,
-        )
+        # P2 fix: a 404 here means the DriveFile was deleted / failed
+        # an org check between enqueue and processing — surface that
+        # as ``video_not_found`` (matches enumerate-worker's behavior
+        # in ``_fetch_keyframes``) instead of letting the dispatcher
+        # report a generic ``internal_error``.
+        try:
+            scenes_resp = api.fetch_scenes_with_keyframes(
+                file_id=decoded.video_id, org_id=decoded.org_id,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                api.fail(
+                    job_id=decoded.job_id,
+                    claimed_by=settings.worker_id,
+                    cost_delta_usd=cost_accumulator,
+                    error_code="video_not_found",
+                    error_message=(
+                        f"DriveFile {decoded.video_id} not found or "
+                        f"not accessible to org {decoded.org_id}"
+                    ),
+                )
+                return
+            raise
         scene_id_to_kf = {
             s["scene_id"]: s["keyframe_s3_key"]
             for s in scenes_resp.get("scenes", [])
         }
         os_video_id = scenes_resp.get("video_id", "")
 
-        embedder_impl = embedder or SiglipEmbedderImpl()
+        embedder_impl = _CountingEmbedder(embedder or SiglipEmbedderImpl())
         coarse_client = CoarseRetrievalClientImpl(
             api=api, file_id=decoded.video_id, org_id=decoded.org_id,
         )
@@ -307,6 +363,21 @@ def handle_track_job(
                 api, decoded, settings, cost_accumulator,
                 stage="keyframe_fetch",
                 attempted=keyframe_fetcher.attempted,
+            )
+            return
+
+        # F4: same logic for per-scene SigLIP2 embedding. The lib's
+        # ``retrieve_candidate_scenes`` swallows per-scene embed
+        # exceptions, so a bad SigLIP2 deploy / corrupted HF cache
+        # would silently land at the user as "no appearances" too.
+        # The canonical embed must have succeeded (else the lib would
+        # have raised before the loop), so all counted failures are
+        # per-scene.
+        if embedder_impl.per_scene_all_failed():
+            _fail_all_scenes(
+                api, decoded, settings, cost_accumulator,
+                stage="siglip2_embed",
+                attempted=embedder_impl.per_scene_attempted,
             )
             return
 
@@ -360,15 +431,19 @@ def handle_track_job(
         # ─── 8. assemble windows ───────────────────────────────────
         assembled = assemble_windows(detections, config=cfg)
 
-        # ─── 9. fetch transcripts + OCR (only for accepted scenes) ─
-        accepted_scene_ids = sorted(
-            {w.scene_id for w in assembled if w.is_accepted}
-        )
+        # ─── 9. fetch transcripts + OCR (for ALL assembled scenes) ─
+        # P3 fix: rejected windows are persisted via /complete for
+        # threshold tuning, so they MUST carry real OCR/narration
+        # signals too. Limiting the fetch to accepted scenes would
+        # serialize rejected rows with ``has_ocr_overlap=False``
+        # regardless of actual scene text — skewing the very dataset
+        # this worker is trying to preserve.
+        all_assembled_scene_ids = sorted({w.scene_id for w in assembled})
         transcripts, ocr = _fetch_transcripts_ocr(
             api=api,
             file_id=decoded.video_id,
             org_id=decoded.org_id,
-            scene_ids=accepted_scene_ids,
+            scene_ids=all_assembled_scene_ids,
         )
 
         # ─── 10. annotate alignment ────────────────────────────────
