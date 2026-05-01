@@ -305,13 +305,11 @@ def handle_track_job(
         )
 
         # ─── 3. fetch canonical product crop ───────────────────────
-        # TODO Phase 3c follow-up: add an internal endpoint to fetch
-        # a single ProductCatalogEntry by id (org-scoped). The job
-        # message currently carries only catalog_entry_id; the worker
-        # needs canonical_crop_s3_key + bbox to seed retrieval +
-        # SAM2. Until that endpoint lands, this raises and the
-        # dispatcher reports /fail with internal_error.
-        canonical_crop, canonical_bbox = _fetch_canonical_crop(
+        # Resolves the catalog entry's seed (canonical crop image,
+        # anchor bbox, llm label) via the Phase 3c-B endpoint
+        # ``GET /internal/products/catalog/{catalog_entry_id}`` plus
+        # an S3 download for the crop bytes.
+        canonical_crop, canonical_bbox, llm_label = _fetch_canonical_crop(
             api=api, s3=s3, decoded=decoded, settings=settings,
         )
 
@@ -471,12 +469,13 @@ def handle_track_job(
         )
 
         # ─── 10. annotate alignment ────────────────────────────────
+        # ``llm_label`` is the product's name (e.g. "핑크 세럼 병"),
+        # used by the alignment lib to mark
+        # ``has_narration_mention`` / ``has_ocr_overlap`` per window
+        # via tokenised substring matching.
         annotated = annotate_alignment(
             assembled,
-            # TODO: the catalog entry's llm_label. Plumbed when
-            # ``_fetch_canonical_crop`` returns the full entry rather
-            # than just (image, bbox).
-            label="",
+            label=llm_label,
             transcripts=transcripts,
             ocr=ocr,
         )
@@ -623,20 +622,78 @@ def _fetch_canonical_crop(
     s3: S3Client,
     decoded: TrackJobMessage,
     settings: WorkerSettings,
-) -> tuple["Image.Image", BBoxXYWH]:
-    """TODO Phase 3c follow-up: add ``GET /internal/products/catalog/{catalog_entry_id}``
-    on the api side, returning ``{canonical_crop_s3_key, bbox_xywh,
-    llm_label, ...}``. The worker would download the crop from S3
-    and return it + the bbox here.
+) -> tuple["Image.Image", BBoxXYWH, str]:
+    """Phase 3c-B: resolve the catalog entry's seed metadata
+    (canonical crop image, anchor bbox, llm label) for the track
+    pipeline.
 
-    Until that endpoint lands, this stub raises so the dispatcher
-    fails the job with a clear error rather than silently producing
-    no appearances."""
-    raise NotImplementedError(
-        f"Phase 3c-A scaffold: GET /internal/products/catalog/{decoded.catalog_entry_id} "
-        f"endpoint pending. Worker can't fetch canonical crop without it. "
-        f"Phase 3c-B follow-up adds the endpoint."
+    Steps:
+      1. GET ``/internal/products/catalog/{catalog_entry_id}`` —
+         returns ``canonical_crop_s3_key + bbox + llm_label``.
+      2. Verify the entry's ``org_id`` matches the job's. The api
+         already enforces Pattern B tenant scoping, but a
+         defence-in-depth check is cheap and catches misconfigured
+         multi-tenant setups loudly.
+      3. Download the crop bytes from S3 via the existing client.
+         The crop S3 key was written by product-enumerate-worker at
+         ``products/{org_id}/{video_id}/{uuid}.jpg`` (see
+         ``_upload_crops_and_build_payload``); same bucket as
+         everything else, so the SDK's S3Client just works.
+      4. Decode to a PIL Image. The lib expects RGB so we convert
+         eagerly (SigLIP2 requires 3-channel input — JPEGs are
+         already RGB but normalising here keeps the contract
+         explicit).
+
+    Returns ``(canonical_crop, canonical_bbox, llm_label)``. The
+    caller passes ``llm_label`` to ``annotate_alignment`` so
+    ``has_narration_mention`` / ``has_ocr_overlap`` can match
+    against the product's name in transcripts + OCR.
+
+    Failure modes:
+      * api 404 → ``RuntimeError`` (catalog entry not found / cross
+        tenant). Bubbles to dispatcher → /fail with internal_error.
+        We do NOT special-case to ``video_not_found``: the catalog
+        row predates the track job (enumerated earlier) and missing
+        it indicates row deletion / corruption, not a missing video.
+      * S3 missing the crop bytes → ``FileNotFoundError`` (same
+        bubbling path). Operators see the s3_key in the error
+        message so they can locate the gap in the enum-side upload.
+      * org mismatch → ``RuntimeError`` (would only happen if the
+        api side is misconfigured to omit Pattern B; defence in
+        depth).
+    """
+    payload = api.fetch_catalog_entry(
+        catalog_entry_id=decoded.catalog_entry_id,
+        org_id=decoded.org_id,
     )
+
+    payload_org_id = UUID(str(payload["org_id"]))
+    if payload_org_id != decoded.org_id:
+        raise RuntimeError(
+            f"catalog entry {decoded.catalog_entry_id} org "
+            f"{payload_org_id} != job org {decoded.org_id}"
+        )
+
+    s3_key = str(payload["canonical_crop_s3_key"])
+    body = s3.get_object_bytes(s3_key)
+    if body is None:
+        raise FileNotFoundError(
+            f"canonical crop S3 object missing for catalog_entry_id="
+            f"{decoded.catalog_entry_id} s3_key={s3_key}"
+        )
+
+    from PIL import Image as _PILImage
+    canonical_crop = _PILImage.open(io.BytesIO(body)).convert("RGB")
+
+    bbox_payload = payload["canonical_bbox"]
+    canonical_bbox = BBoxXYWH(
+        x=int(bbox_payload["x"]),
+        y=int(bbox_payload["y"]),
+        width=int(bbox_payload["w"]),
+        height=int(bbox_payload["h"]),
+    )
+
+    return canonical_crop, canonical_bbox, str(payload["llm_label"])
 
 
 def _fetch_transcripts_ocr(

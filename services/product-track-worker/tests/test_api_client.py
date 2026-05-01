@@ -230,3 +230,33 @@ def test_fetch_scenes_content_extracts_scenes_from_response():
     )
     assert len(out) == 1
     assert out[0]["transcript_raw"] == "hello"
+
+
+# ---------- fetch_catalog_entry (Phase 3c-B) ----------
+
+
+def test_fetch_catalog_entry_gets_correct_url_and_org_header():
+    api, http = _build_client()
+    catalog_entry_id = uuid4()
+    org_id = uuid4()
+    http.get.return_value = _ok_response({
+        "catalog_entry_id": str(catalog_entry_id),
+        "org_id": str(org_id),
+        "video_id": str(uuid4()),
+        "canonical_crop_s3_key": "products/X/Y/abc.jpg",
+        "canonical_bbox": {"x": 10, "y": 20, "w": 100, "h": 150},
+        "llm_label": "핑크 세럼 병",
+    })
+
+    out = api.fetch_catalog_entry(
+        catalog_entry_id=catalog_entry_id, org_id=org_id,
+    )
+    args, kwargs = http.get.call_args
+    assert args[0] == (
+        f"https://api.test/internal/products/catalog/{catalog_entry_id}"
+    )
+    assert kwargs["headers"]["X-Heimdex-Org-Id"] == str(org_id)
+    # Pin the response shape since the worker depends on every key.
+    assert out["canonical_crop_s3_key"] == "products/X/Y/abc.jpg"
+    assert out["canonical_bbox"] == {"x": 10, "y": 20, "w": 100, "h": 150}
+    assert out["llm_label"] == "핑크 세럼 병"

@@ -61,6 +61,21 @@ class ProductCatalogRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_by_id_resource_scoped(
+        self, entry_id: UUID,
+    ) -> ProductCatalogEntry | None:
+        """Pattern B fetch: ``id``-only lookup that returns the row
+        with its ``.org_id`` so ``resolve_resource_with_org`` can
+        derive tenant context. NOT a default — Pattern A callers
+        (``list_active_by_video``, ``get``) keep their org filter as
+        the security boundary. Worker-facing endpoints with a path
+        resource use this method via the shared helper.
+        """
+        stmt = select(ProductCatalogEntry).where(
+            ProductCatalogEntry.id == entry_id,
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     # ---------- write ----------
 
     async def bulk_insert(

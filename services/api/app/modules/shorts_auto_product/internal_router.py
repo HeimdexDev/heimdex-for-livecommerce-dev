@@ -29,7 +29,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -413,4 +413,76 @@ async def fail(
         job_id=str(job_id),
         error_code=body.error_code,
         error_message=body.error_message[:120],
+    )
+
+
+# ---------- catalog entry resource (Phase 3c-B) ----------
+
+class _CatalogEntryResource(BaseModel):
+    """Read-only projection of a ``ProductCatalogEntry`` for the
+    track worker. Strict subset of the columns the worker needs to
+    seed retrieval + SAM2 anchoring; deliberately omits embeddings,
+    confidence/prominence scores, and version metadata.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    catalog_entry_id: UUID
+    org_id: UUID
+    video_id: UUID
+    canonical_crop_s3_key: str = Field(..., min_length=1)
+    canonical_bbox: _BBoxXYWH
+    llm_label: str = Field(..., min_length=1, max_length=200)
+
+
+@router.get(
+    "/catalog/{catalog_entry_id}",
+    response_model=_CatalogEntryResource,
+)
+async def get_catalog_entry(
+    catalog_entry_id: UUID,
+    _token: Annotated[str, Depends(verify_internal_token)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    x_heimdex_org_id: Annotated[
+        str | None, Header(alias="X-Heimdex-Org-Id"),
+    ] = None,
+) -> _CatalogEntryResource:
+    """Pattern B fetch for the track worker's canonical-crop seed.
+
+    Worker calls this immediately after claiming a track job to
+    resolve ``(canonical_crop_s3_key, canonical_bbox, llm_label)`` —
+    everything needed to download the reference crop from S3 and
+    seed SigLIP2 retrieval + SAM2 anchor. Embeddings + scores are
+    intentionally omitted; the worker has no use for them and
+    over-projecting would expose internal scoring detail to
+    every cross-service caller.
+
+    Auth: Bearer + Pattern B path-resource scoping. Cross-tenant
+    access returns 404 (NOT 403) — same response shape as a real
+    not-found, no info leak about the entry's true tenant.
+    Rejected entries are NOT filtered out: the track-worker has
+    legitimate reasons to fetch a soft-rejected entry's seed
+    metadata for diagnostic purposes; the rejection check belongs
+    on the user-facing path, not the internal worker callback.
+    """
+    from app.lib.internal_auth import resolve_resource_with_org
+
+    catalog_repo = ProductCatalogRepository(db)
+    entry, org_id = await resolve_resource_with_org(
+        resource_id=catalog_entry_id,
+        x_heimdex_org_id=x_heimdex_org_id,
+        lookup_fn=catalog_repo.get_by_id_resource_scoped,
+        not_found_detail="catalog entry not found",
+    )
+    return _CatalogEntryResource(
+        catalog_entry_id=entry.id,
+        org_id=org_id,
+        video_id=entry.video_id,
+        canonical_crop_s3_key=entry.canonical_crop_s3_key,
+        canonical_bbox=_BBoxXYWH(
+            x=entry.canonical_bbox_x,
+            y=entry.canonical_bbox_y,
+            w=entry.canonical_bbox_w,
+            h=entry.canonical_bbox_h,
+        ),
+        llm_label=entry.llm_label,
     )

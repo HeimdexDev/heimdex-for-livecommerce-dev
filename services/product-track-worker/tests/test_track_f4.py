@@ -70,10 +70,13 @@ def _job_body() -> dict:
 
 
 def _fake_canonical():
-    """Stand-in for the Phase 3c-B catalog-entry fetch."""
+    """Stand-in for the Phase 3c-B catalog-entry fetch.
+
+    Matches ``_fetch_canonical_crop``'s real return shape:
+    ``(canonical_crop, canonical_bbox, llm_label)``."""
     img = Image.new("RGB", (256, 256), (200, 100, 50))
     bbox = BBoxXYWH(x=10, y=10, width=50, height=50)
-    return img, bbox
+    return img, bbox, "테스트 제품"
 
 
 def _scenes_response(n: int = 3) -> dict:

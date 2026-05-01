@@ -223,3 +223,21 @@ class ApiClient:
         )
         resp.raise_for_status()
         return resp.json().get("scenes", [])
+
+    def fetch_catalog_entry(
+        self, *, catalog_entry_id: UUID, org_id: UUID,
+    ) -> dict[str, Any]:
+        """Phase 3c-B — Pattern B fetch of a catalog entry's seed
+        metadata. Returns ``{catalog_entry_id, org_id, video_id,
+        canonical_crop_s3_key, canonical_bbox: {x,y,w,h}, llm_label}``.
+        404 on missing or cross-tenant; HTTPStatusError otherwise.
+
+        ``X-Heimdex-Org-Id`` is sent as cross-validation (Pattern B
+        accepts it; the api 404s on mismatch instead of leaking the
+        entry's true tenant)."""
+        resp = self._client.get(
+            f"{self.base_url}/internal/products/catalog/{catalog_entry_id}",
+            headers={"X-Heimdex-Org-Id": str(org_id)},
+        )
+        resp.raise_for_status()
+        return resp.json()
