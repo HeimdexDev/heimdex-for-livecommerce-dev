@@ -73,12 +73,177 @@ Constraints
 
 from __future__ import annotations
 
+import hmac
+import logging
+from functools import lru_cache
 from typing import Any, Awaitable, Callable, TypeVar
 from uuid import UUID
 
-from fastapi import HTTPException, status
+from fastapi import Header, HTTPException, status
 
 ResourceIdT = TypeVar("ResourceIdT")
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# F1 Phase 3 — per-service tokens
+# ---------------------------------------------------------------------------
+#
+# The internal endpoints WITHOUT a path resource (worker_events POST,
+# ingest/scenes POST, ingest/enrich POST) can't use Pattern B because
+# there's no resource to derive the org from. The risk: a leaked
+# global bearer or compromised worker has the full surface of these
+# endpoints, including the ability to fake events / write scenes
+# into ANY tenant's index.
+#
+# Phase 3 mitigates this with **per-service tokens**: each worker
+# gets its own token + a service identity. The api validates the
+# bearer matches the claimed service. Cross-service blast radius
+# from a leaked token is bounded to that service's surface.
+#
+# Backward-compat is the linchpin: this PR ships the api side only.
+# Workers still send the legacy ``drive_internal_api_key`` bearer
+# (no worker code change). The new auth dependency falls back to
+# the legacy bearer when ``X-Heimdex-Service-Id`` isn't sent. Once
+# workers adopt the new header in a follow-up rollout, the legacy
+# fallback can be removed.
+
+
+def _parse_service_tokens(raw: str) -> dict[str, str]:
+    """Parse the ``INTERNAL_SERVICE_TOKENS`` env value into a
+    ``service_id → token`` map.
+
+    Format: ``service_id:token,service_id:token,...``. Whitespace is
+    trimmed. Empty entries are skipped silently. Malformed entries
+    (no colon, empty service_id, empty token) are dropped with a
+    warning — preferred over a 500 at boot time so a single typo
+    doesn't take the api offline.
+    """
+    if not raw:
+        return {}
+    out: dict[str, str] = {}
+    for piece in raw.split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        if ":" not in piece:
+            logger.warning(
+                "internal_service_tokens_malformed_entry",
+                extra={"entry_preview": piece[:20]},
+            )
+            continue
+        sid, _, token = piece.partition(":")
+        sid = sid.strip()
+        token = token.strip()
+        if not sid or not token:
+            logger.warning(
+                "internal_service_tokens_empty_field",
+                extra={"sid_set": bool(sid), "token_set": bool(token)},
+            )
+            continue
+        out[sid] = token
+    return out
+
+
+@lru_cache(maxsize=1)
+def _get_service_tokens() -> dict[str, str]:
+    """Cached parsed map. Reads ``settings.internal_service_tokens``
+    once per process — workers don't change tokens at runtime.
+    Tests can clear via ``_get_service_tokens.cache_clear()``.
+    """
+    from app.config import get_settings
+    return _parse_service_tokens(get_settings().internal_service_tokens)
+
+
+def _check_token_constant_time(provided: str, expected: str) -> bool:
+    """Constant-time string compare. Prevents timing-side-channel
+    leaks on bearer comparisons."""
+    return hmac.compare_digest(provided, expected)
+
+
+async def verify_service_identity(
+    authorization: str = Header(..., alias="Authorization"),
+    x_heimdex_service_id: str | None = Header(default=None, alias="X-Heimdex-Service-Id"),
+) -> str:
+    """Auth dependency for internal endpoints WITHOUT a path resource.
+
+    Returns the verified ``service_id`` string. Endpoints log this
+    on every call for audit. Endpoint code never trusts a body- or
+    header-asserted service identity for authorization decisions —
+    only the value returned here.
+
+    Behavior:
+
+      * **New path** — ``X-Heimdex-Service-Id`` header IS present:
+        * Service id MUST be a configured key in
+          ``settings.internal_service_tokens``.
+        * Bearer MUST match the corresponding token (constant-time).
+        * Returns the verified ``service_id``.
+
+      * **Legacy fallback** — ``X-Heimdex-Service-Id`` is absent:
+        * Bearer MUST match the legacy ``drive_internal_api_key``.
+        * Returns ``"legacy"`` so endpoint code can log the path.
+
+    Either way, a mismatch is **401**. The endpoint never sees an
+    unauthenticated request.
+
+    The legacy fallback is intentional: workers ship per-service
+    tokens in a follow-up rollout. Until then, the api accepts both
+    paths so the same release doesn't require simultaneous worker +
+    api updates. Once worker adoption is 100%, remove the fallback
+    by setting ``settings.drive_internal_api_key = ""``.
+    """
+    from app.config import get_settings
+    settings = get_settings()
+
+    parts = authorization.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization header",
+        )
+    provided = parts[1]
+
+    if x_heimdex_service_id is not None:
+        # New service-id path. The service must be registered.
+        tokens = _get_service_tokens()
+        expected = tokens.get(x_heimdex_service_id)
+        if expected is None:
+            logger.warning(
+                "internal_service_unknown",
+                extra={"service_id": x_heimdex_service_id},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unknown service",
+            )
+        if not _check_token_constant_time(provided, expected):
+            logger.warning(
+                "internal_service_token_mismatch",
+                extra={"service_id": x_heimdex_service_id},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token for service",
+            )
+        return x_heimdex_service_id
+
+    # Legacy fallback. Same behavior as the existing
+    # ``verify_internal_token``.
+    if not settings.drive_internal_api_key:
+        logger.error("drive_internal_api_key_not_configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Internal API not configured",
+        )
+    if not _check_token_constant_time(provided, settings.drive_internal_api_key):
+        logger.warning("internal_auth_invalid_token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal API key",
+        )
+    return "legacy"
 
 
 async def resolve_resource_with_org(

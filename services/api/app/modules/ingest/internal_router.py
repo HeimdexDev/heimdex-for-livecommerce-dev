@@ -37,18 +37,28 @@ router = APIRouter(prefix="/internal/ingest", tags=["internal-ingest"])
 
 
 from app.dependencies import verify_internal_token as _verify_internal_token
+from app.lib.internal_auth import verify_service_identity
 
 
 @router.post("/scenes", response_model=IngestScenesResponse)
 async def internal_ingest_scenes(
     request: IngestScenesRequest,
     x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
-    _token: str = Depends(_verify_internal_token),
+    verified_service_id: str = Depends(verify_service_identity),
     db: AsyncSession = Depends(get_db_session),
     org_repo: OrgRepository = Depends(get_org_repository),
     ingest_service: SceneIngestService = Depends(get_scene_ingest_service),
 ):
-    """Ingest scenes from drive-worker. Auth: internal API key. Tenancy: X-Heimdex-Org-Id header."""
+    """Ingest scenes from drive-worker.
+
+    Auth (F1 Phase 3): per-service token via ``verify_service_identity``.
+    Workers send ``X-Heimdex-Service-Id`` header + their per-service
+    token; legacy global bearer continues to work as a backward-compat
+    fallback (returns ``service_id="legacy"``). The verified
+    ``service_id`` is logged on every call for audit; the body's
+    asserted ``X-Heimdex-Org-Id`` is still trusted (Phase 3 doesn't
+    bind service to allowed orgs — that's a separate hardening pass).
+    """
     try:
         org_id = UUID(x_heimdex_org_id)
     except (ValueError, AttributeError):
@@ -83,6 +93,7 @@ async def internal_ingest_scenes(
         video_id=request.video_id,
         library_id=str(request.library_id),
         scene_count=len(request.scenes),
+        verified_service_id=verified_service_id,  # F1 Phase 3 audit
     )
 
     try:
@@ -139,11 +150,17 @@ async def internal_ingest_scenes(
 async def internal_enrich_scenes(
     request: EnrichScenesRequest,
     x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
-    _token: str = Depends(_verify_internal_token),
+    verified_service_id: str = Depends(verify_service_identity),
     db: AsyncSession = Depends(get_db_session),
     org_repo: OrgRepository = Depends(get_org_repository),
     ingest_service: SceneIngestService = Depends(get_scene_ingest_service),
 ):
+    """Enrichment merge from GPU workers.
+
+    Auth (F1 Phase 3): per-service token via ``verify_service_identity``;
+    legacy global bearer continues to work as a backward-compat
+    fallback. ``verified_service_id`` is logged on every call.
+    """
     try:
         org_id = UUID(x_heimdex_org_id)
     except (ValueError, AttributeError):
@@ -175,6 +192,7 @@ async def internal_enrich_scenes(
         org_id=str(org_id),
         video_id=request.video_id,
         scene_count=len(request.scenes),
+        verified_service_id=verified_service_id,  # F1 Phase 3 audit
     )
 
     result = await ingest_service.enrich_scenes(

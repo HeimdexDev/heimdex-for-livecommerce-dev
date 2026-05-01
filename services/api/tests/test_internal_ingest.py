@@ -59,7 +59,7 @@ class TestInternalIngestOrgValidation:
                 await internal_ingest_scenes(
                     request=MagicMock(scenes=[]),
                     x_heimdex_org_id=str(org_id),
-                    _token="valid",
+                    verified_service_id="legacy",  # F1 Phase 3: was _token; "legacy" simulates the backward-compat path
                     db=mock_db,
                     org_repo=org_repo,
                     ingest_service=mock_ingest_service,
@@ -100,7 +100,7 @@ class TestInternalIngestOrgValidation:
             result = await internal_ingest_scenes(
                 request=request,
                 x_heimdex_org_id=str(org_id),
-                _token="valid",
+                verified_service_id="legacy",  # F1 Phase 3: was _token; "legacy" simulates the backward-compat path
                 db=mock_db,
                 org_repo=org_repo,
                 ingest_service=mock_ingest_service,
@@ -118,7 +118,7 @@ class TestInternalIngestOrgValidation:
             await internal_ingest_scenes(
                 request=MagicMock(scenes=[]),
                 x_heimdex_org_id="not-a-uuid",
-                _token="valid",
+                verified_service_id="legacy",  # F1 Phase 3: was _token; "legacy" simulates the backward-compat path
                 db=mock_db,
                 ingest_service=mock_ingest_service,
             )

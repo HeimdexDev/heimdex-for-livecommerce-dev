@@ -157,6 +157,19 @@ class Settings(BaseSettings):
     drive_download_max_retries: int = 3
     drive_s3_bucket: str = "heimdex-drive"
     drive_internal_api_key: str = ""  # Pre-shared key for drive-worker → API internal ingest
+
+    # Codex F1 Phase 3 — per-service tokens for internal endpoints
+    # without a path resource (worker_events, ingest/scenes, etc.).
+    # Format: comma-separated ``service_id:token`` pairs, e.g.,
+    #   "drive-worker:abc123,blur-worker:def456,worker-events:ghi789"
+    # Workers send ``X-Heimdex-Service-Id`` header + their per-service
+    # token as the bearer; api validates the bearer matches the
+    # expected token for that service. Backward-compat: requests
+    # without ``X-Heimdex-Service-Id`` fall back to the legacy
+    # ``drive_internal_api_key`` shared bearer (so workers don't
+    # need to update before the api change ships).
+    # Empty value = service-id auth disabled (legacy bearer only).
+    internal_service_tokens: str = ""
     drive_api_base_url: str = "http://api:8000"  # API base URL for drive-worker HTTP calls
     drive_enrichment_enabled: bool = False
 
