@@ -802,6 +802,84 @@ services:
              pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
              python -m src.worker"
 
+  product-track-worker:
+    # Phase 3c: shorts-auto product mode v2 track + assembly worker.
+    # Off by default — enable with
+    #   docker compose --profile product-track up product-track-worker
+    # Runs on Aircloud GPU in staging/prod (Phase 3c-A scaffold;
+    # Phase 3c-B adds the real SAM2 integration).
+    # Locally requires NVIDIA GPU or TRACK_ALLOW_CPU=true.
+    profiles: ["product-track"]
+    build:
+      context: ..
+      dockerfile: dev-heimdex-for-livecommerce/services/product-track-worker/Dockerfile.gpu
+    container_name: heimdex-product-track-worker
+    mem_limit: 8g
+    cpus: "4.0"
+    environment:
+      - PYTHONPATH=/app
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      # F1 Phase 3 — opt into per-service identity (when set, the
+      # worker sends X-Heimdex-Service-Id and the api validates the
+      # bearer against INTERNAL_SERVICE_TOKENS[<this>]). Empty falls
+      # back to the legacy global bearer.
+      - INTERNAL_SERVICE_ID=${PRODUCT_TRACK_SERVICE_ID:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SQS
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_PRODUCT_TRACK_QUEUE_URL=${SQS_PRODUCT_TRACK_QUEUE_URL:-}
+      # Worker identity
+      - WORKER_ID=${WORKER_ID:-product-track-worker-local}
+      # Track jobs are heavier than enumerate (SAM2 + per-scene video
+      # decode). 1800s lease matches the queue's visibility timeout.
+      - WORKER_LEASE_SECONDS=${PRODUCT_TRACK_WORKER_LEASE_SECONDS:-1800}
+      - DRIVE_PRODUCT_TRACK_CONCURRENCY=${DRIVE_PRODUCT_TRACK_CONCURRENCY:-1}
+      # Feature flag mirror (worker hard-refuses to start when false).
+      - PRODUCT_V2_ENABLED=${AUTO_SHORTS_PRODUCT_V2_ENABLED:-false}
+      # Vision model — must match drive-visual-embed-worker /
+      # product-enumerate-worker exactly. Drift breaks the OS coarse
+      # pre-filter at /scenes-by-visual-similarity.
+      - SIGLIP2_MODEL_ID=${AUTO_SHORTS_PRODUCT_V2_SIGLIP2_MODEL_ID:-google/siglip2-base-patch16-256}
+      # SAM2 checkpoint — calibrated in Phase 3c-B on staging goldens.
+      - SAM2_MODEL_ID=${AUTO_SHORTS_PRODUCT_V2_SAM2_MODEL_ID:-facebook/sam2-hiera-base-plus}
+      # OpenAI gpt-4o-mini for the LLM subset picker. Falls back to
+      # GreedyPicker (deterministic) when OPENAI_API_KEY is empty.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${AUTO_SHORTS_PRODUCT_V2_OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_TIMEOUT_SEC=${AUTO_SHORTS_PRODUCT_V2_OPENAI_TIMEOUT_SEC:-30}
+      # Tracking thresholds — every config knob in TrackingConfig is
+      # exposed as an env override so on-call can tune any single
+      # one without a code change.
+      - COARSE_PREFILTER_THRESHOLD=${AUTO_SHORTS_PRODUCT_V2_COARSE_PREFILTER_THRESHOLD:-0.45}
+      - PRECISE_PASS_THRESHOLD=${AUTO_SHORTS_PRODUCT_V2_PRECISE_PASS_THRESHOLD:-0.72}
+      - COARSE_TOP_K=${AUTO_SHORTS_PRODUCT_V2_COARSE_TOP_K:-60}
+      - SAM2_SAMPLE_FPS=${AUTO_SHORTS_PRODUCT_V2_SAM2_SAMPLE_FPS:-5}
+      - MIN_WINDOW_DURATION_MS=${AUTO_SHORTS_PRODUCT_V2_MIN_WINDOW_DURATION_MS:-1500}
+      - MIN_AVG_BBOX_AREA_PCT=${AUTO_SHORTS_PRODUCT_V2_MIN_AVG_BBOX_AREA_PCT:-0.02}
+      - MIN_AVG_CONFIDENCE=${AUTO_SHORTS_PRODUCT_V2_MIN_AVG_CONFIDENCE:-0.7}
+      - MAX_WINDOWS_PER_PRODUCT=${AUTO_SHORTS_PRODUCT_V2_MAX_WINDOWS_PER_PRODUCT:-30}
+      - TRACK_ALLOW_CPU=${TRACK_ALLOW_CPU:-false}
+      - HF_HOME=/models/hf
+    volumes:
+      - ./services/product-track-worker:/app
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+      - huggingface_cache:/models/hf
+    depends_on:
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
 
   bgutil-provider:
     profiles: ["youtube"]
