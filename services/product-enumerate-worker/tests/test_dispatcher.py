@@ -80,23 +80,20 @@ def test_dispatch_handles_queue_message():
     assert h.call_args.kwargs["message"] == body
 
 
-def test_dispatch_unknown_type_with_job_id_calls_fail():
-    """F2: unknown ``type`` with a parseable job_id calls /fail
-    instead of silently ack'ing. Error code is ``internal_error``
-    (the only api-accepted enum value); detail goes in
-    ``error_message`` + structured logs."""
+def test_dispatch_unknown_type_with_job_id_raises_invalid_message():
+    """A misrouted message (``product.track_job`` on the enumerate
+    queue) should NOT trigger /fail — the worker doesn't own the
+    lease so /fail would 409. Raise ``InvalidMessageError`` so the
+    SDK ack-deletes via poison-pill semantics."""
     body = {"type": "product.track_job", "job_id": str(uuid4())}
     fake_api = MagicMock()
     with patch("src.dispatcher.handle_enumerate_job") as h, patch(
         "src.dispatcher.ApiClient", return_value=fake_api
     ):
-        dispatch(body, settings=_settings(), vlm_client=_vlm())
+        with pytest.raises(InvalidMessageError):
+            dispatch(body, settings=_settings(), vlm_client=_vlm())
     h.assert_not_called()
-    fake_api.fail.assert_called_once()
-    fail_kwargs = fake_api.fail.call_args.kwargs
-    assert fail_kwargs["error_code"] == "internal_error"
-    assert "unknown message type" in fail_kwargs["error_message"]
-    assert "product.track_job" in fail_kwargs["error_message"]
+    fake_api.fail.assert_not_called()
 
 
 def test_dispatch_unknown_type_without_job_id_raises_invalid_message():

@@ -755,6 +755,15 @@ services:
       - DRIVE_API_BASE_URL=http://api:8000
       - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
       - S3_REGION=${S3_REGION:-ap-northeast-2}
+      # MinIO / S3 — the SDK's S3Client reads these from env. Without
+      # MINIO_ENDPOINT the SDK falls back to ``localhost:9000`` (i.e.
+      # the container's own loopback) so all keyframe reads 404.
+      # Inter-container default is ``minio:9000`` matching the other
+      # worker profiles.
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # SQS
       - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
@@ -827,6 +836,15 @@ services:
       - DRIVE_API_BASE_URL=http://api:8000
       - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
       - S3_REGION=${S3_REGION:-ap-northeast-2}
+      # MinIO / S3 — the SDK's S3Client reads these from env. Without
+      # MINIO_ENDPOINT the SDK falls back to ``localhost:9000`` (i.e.
+      # the container's own loopback) so all keyframe / proxy reads
+      # 404. Inter-container default is ``minio:9000`` matching the
+      # other worker profiles.
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # SQS
       - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}

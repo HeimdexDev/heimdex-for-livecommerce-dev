@@ -105,12 +105,34 @@ def handle_enumerate_job(
     )
     try:
         # 1. Claim
-        api.claim(
-            job_id=decoded.job_id,
-            claimed_by=settings.worker_id,
-            next_stage="enumerating",
-            lease_seconds=settings.worker_lease_seconds,
-        )
+        # The api returns 409 for "already claimed / completed /
+        # cancelled" — duplicate or stale SQS deliveries. Per api
+        # contract: ack the message, do not retry. Pre-fix the 409
+        # propagated to the dispatcher's generic exception path →
+        # /fail attempt (also 409 — we don't own the lease) →
+        # re-raise → eventual DLQ for what is a no-op.
+        try:
+            api.claim(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                next_stage="enumerating",
+                lease_seconds=settings.worker_lease_seconds,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 409:
+                logger.info(
+                    "enumerate_claim_conflict_acking_message",
+                    extra={
+                        "job_id": str(decoded.job_id),
+                        "claimed_by": settings.worker_id,
+                        "note": (
+                            "job already claimed/completed/cancelled — "
+                            "ack-delete the SQS message; do not retry"
+                        ),
+                    },
+                )
+                return
+            raise
 
         # 2-3. Resolve scenes + download keyframes.
         api.heartbeat(

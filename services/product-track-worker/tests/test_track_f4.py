@@ -416,6 +416,77 @@ class TestHandleTrackJobAllScenesFailed:
         assert kwargs["error_code"] == "video_not_found"
         api.complete_track.assert_not_called()
 
+    def test_claim_409_acks_message_without_fail_or_retry(self):
+        """The api returns 409 on claim when the job is already
+        claimed/completed/cancelled (duplicate or stale SQS
+        deliveries). Per api contract: ack the message, do not
+        retry. Pre-fix the 409 propagated to the dispatcher's
+        generic exception path → /fail attempt (also 409) →
+        re-raise → eventual DLQ for what is a no-op. Post-fix the
+        worker logs + returns normally so the SDK ack-deletes."""
+        import httpx
+
+        api = self._make_api()
+        request = httpx.Request("POST", "http://api/internal/products/x/claim")
+        response = httpx.Response(409, request=request)
+        api.claim.side_effect = httpx.HTTPStatusError(
+            "409 Conflict", request=request, response=response,
+        )
+
+        embedder = MagicMock()
+        embedder.embed.return_value = [0.1] * 768
+        s3 = MagicMock()
+
+        with patch(
+            "src.tasks.track._fetch_canonical_crop",
+            return_value=_fake_canonical(),
+        ):
+            # MUST NOT raise — worker handles 409 internally so the
+            # SDK ack-deletes the message normally.
+            handle_track_job(
+                message=_job_body(),
+                settings=_settings(),
+                api_client=api,
+                embedder=embedder,
+                s3_client=s3,
+            )
+
+        # No /fail (we don't own the lease). No /complete either.
+        api.fail.assert_not_called()
+        api.complete_track.assert_not_called()
+        # Heartbeats also skipped — we returned before reaching them.
+        api.heartbeat.assert_not_called()
+
+    def test_claim_5xx_propagates_to_dispatcher(self):
+        """Non-409 HTTP errors on claim still propagate so the
+        dispatcher's generic catch reports ``internal_error``. The
+        409 carve-out is the only no-op path."""
+        import httpx
+
+        api = self._make_api()
+        request = httpx.Request("POST", "http://api/internal/products/x/claim")
+        response = httpx.Response(503, request=request)
+        api.claim.side_effect = httpx.HTTPStatusError(
+            "503 Service Unavailable", request=request, response=response,
+        )
+
+        embedder = MagicMock()
+        embedder.embed.return_value = [0.1] * 768
+        s3 = MagicMock()
+
+        with patch(
+            "src.tasks.track._fetch_canonical_crop",
+            return_value=_fake_canonical(),
+        ):
+            with pytest.raises(httpx.HTTPStatusError):
+                handle_track_job(
+                    message=_job_body(),
+                    settings=_settings(),
+                    api_client=api,
+                    embedder=embedder,
+                    s3_client=s3,
+                )
+
     def test_scenes_lookup_5xx_propagates_to_dispatcher(self):
         """Non-404 HTTP errors should propagate so the dispatcher
         catches and reports ``internal_error``. The 404 special-case

@@ -73,33 +73,24 @@ def dispatch(
                 raise
         return
 
-    # F2: unknown type — surface to the api as a real failure if we
-    # can identify the job, otherwise log + ack-delete via SDK poison
-    # pill semantics.
-    try:
-        job_id = UUID(str(body.get("job_id")))
-    except Exception:
-        logger.warning(
-            "dispatch_unknown_type_no_job_id",
-            extra={"type": msg_type},
-        )
-        raise InvalidMessageError(
-            f"unknown message type {msg_type!r}, no parseable job_id"
-        )
-
+    # F2: unknown type — log + raise ``InvalidMessageError`` so the
+    # SDK ack-deletes via poison-pill semantics
+    # (``sqs_invalid_message_deleted`` structured log).
+    #
+    # We do NOT try to /fail the job here. The api's /fail requires
+    # ``claimed_by`` to own the lease, but a misrouted message landed
+    # here without this worker ever claiming — /fail would 409. The
+    # row's actual owner (or the api's lease-expiry sweeper) is the
+    # right authority. SQS-level retry won't help either: redelivery
+    # to the same wrong queue produces the same outcome.
+    job_id_present = body.get("job_id") is not None
     logger.warning(
         "dispatch_unknown_type",
-        extra={"type": msg_type, "job_id": str(job_id)},
+        extra={"type": msg_type, "job_id": body.get("job_id"), "has_job_id": job_id_present},
     )
-    # The API's ``_FailRequest.error_code`` enum doesn't carry a
-    # dedicated ``unknown_message_type`` literal — using
-    # ``internal_error`` is the only valid path. The structured
-    # ``dispatch_unknown_type`` log + error_message preserve the
-    # routing detail for operators.
-    _try_fail_callback(
-        body=body,
-        settings=settings,
-        error_message=f"unknown message type {msg_type!r}",
+    raise InvalidMessageError(
+        f"unknown message type {msg_type!r} on track queue "
+        f"(job_id={'present' if job_id_present else 'absent'})"
     )
 
 

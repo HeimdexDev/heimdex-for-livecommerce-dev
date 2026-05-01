@@ -62,26 +62,23 @@ def test_dispatch_handles_queue_message():
     assert h.call_args.kwargs["message"] == body
 
 
-def test_dispatch_unknown_type_with_job_id_calls_fail():
-    """F2: pre-fix, an unknown ``type`` was silently logged and the
-    SDK then ack-deleted the message — no retry, no DLQ, no /fail.
-    Post-fix, we /fail the job so the api closes the row and the
-    user sees the misrouting. Error code is ``internal_error`` (the
-    only api-accepted enum value); the misrouting detail is carried
-    in ``error_message`` and the structured ``dispatch_unknown_type``
-    log."""
+def test_dispatch_unknown_type_with_job_id_raises_invalid_message():
+    """A misrouted message (``product.enumerate_job`` on the track
+    queue) should NOT trigger /fail — the worker doesn't own the
+    lease so /fail would 409. Pass-5 fix: raise ``InvalidMessageError``
+    so the SDK ack-deletes via poison-pill semantics
+    (``sqs_invalid_message_deleted`` structured log) without trying
+    to /fail. The row's actual owner (or api-side lease sweeper) is
+    the right authority to close the row."""
     body = {"type": "product.enumerate_job", "job_id": str(uuid4())}
     fake_api = MagicMock()
     with patch("src.dispatcher.handle_track_job") as h, patch(
         "src.dispatcher.ApiClient", return_value=fake_api
     ):
-        dispatch(body, settings=_settings())
+        with pytest.raises(InvalidMessageError):
+            dispatch(body, settings=_settings())
     h.assert_not_called()
-    fake_api.fail.assert_called_once()
-    fail_kwargs = fake_api.fail.call_args.kwargs
-    assert fail_kwargs["error_code"] == "internal_error"
-    assert "unknown message type" in fail_kwargs["error_message"]
-    assert "product.enumerate_job" in fail_kwargs["error_message"]
+    fake_api.fail.assert_not_called()
 
 
 def test_dispatch_unknown_type_without_job_id_raises_invalid_message():

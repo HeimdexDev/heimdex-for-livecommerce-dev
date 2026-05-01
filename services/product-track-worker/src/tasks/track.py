@@ -262,12 +262,36 @@ def handle_track_job(
 
     try:
         # ─── 1. claim ──────────────────────────────────────────────
-        api.claim(
-            job_id=decoded.job_id,
-            claimed_by=settings.worker_id,
-            next_stage="tracking",
-            lease_seconds=settings.worker_lease_seconds,
-        )
+        # The api returns 409 for "already claimed / completed /
+        # cancelled" — duplicate or stale SQS deliveries (visibility
+        # expired, message redelivered, another worker already took
+        # it). The api docs say: ack the message, do not retry.
+        # Pre-fix the 409 propagated to the dispatcher's generic
+        # exception path → /fail attempt (also 409s — we don't own
+        # the lease) → re-raise → SQS redelivery → eventual DLQ for
+        # what is fundamentally a no-op.
+        try:
+            api.claim(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                next_stage="tracking",
+                lease_seconds=settings.worker_lease_seconds,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 409:
+                logger.info(
+                    "track_claim_conflict_acking_message",
+                    extra={
+                        "job_id": str(decoded.job_id),
+                        "claimed_by": settings.worker_id,
+                        "note": (
+                            "job already claimed/completed/cancelled — "
+                            "ack-delete the SQS message; do not retry"
+                        ),
+                    },
+                )
+                return
+            raise
 
         # ─── 2. heartbeat: resolving ───────────────────────────────
         api.heartbeat(
