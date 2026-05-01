@@ -46,6 +46,17 @@ async def ingest_worker_event(
     future investigation can spot a "service-A bearer claiming to be
     service-B in the body" attack pattern.
     """
+    # F1 Phase 3 audit: log the verified service identity on every
+    # call. ``record_worker_event`` runs async / fire-and-forget so
+    # we emit a sync structured log here for the synchronous audit
+    # trail (separate from the persisted worker_event row).
+    logger.info(
+        "internal_worker_event_received",
+        verified_service_id=verified_service_id,
+        body_service=request.service,
+        event_name=request.event_name,
+    )
+
     if (
         verified_service_id != "legacy"
         and verified_service_id != request.service

@@ -382,11 +382,16 @@ async def get_file_metadata(
     async def _lookup(rid: UUID):
         return await repo.get_by_id_resource_scoped(file_id=rid)
 
+    # Constant detail string (no UUID interpolation): the helper uses
+    # the same detail for genuine not-found AND cross-validation
+    # mismatch, so interpolating ``file_id`` would let a cross-tenant
+    # probe confirm the resource exists by comparing the echoed UUID
+    # against what they sent. Pattern B's no-info-leak invariant.
     drive_file, _org_id = await resolve_resource_with_org(
         resource_id=file_id,
         x_heimdex_org_id=x_heimdex_org_id,
         lookup_fn=_lookup,
-        not_found_detail=f"Drive file not found: {file_id}",
+        not_found_detail="Drive file not found",
     )
 
     latency_ms = int((time.monotonic() - t0) * 1000)
