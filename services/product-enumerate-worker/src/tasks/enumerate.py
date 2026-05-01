@@ -78,7 +78,9 @@ class EnumerateJobMessage:
             enumeration_version=str(body["enumeration_version"]),
             enumeration_prompt_version=str(body["enumeration_prompt_version"]),
             max_keyframes=int(body.get("max_keyframes", 60)),
-            callback_base_url=str(body["callback_base_url"]),
+            # SECURITY (F3): tolerated-but-ignored. Future contract
+            # bump should drop this field entirely.
+            callback_base_url=str(body.get("callback_base_url", "")),
         )
 
 
@@ -93,8 +95,12 @@ def handle_enumerate_job(
     ``error_code`` on the ``/fail`` callback.
     """
     decoded = EnumerateJobMessage.from_dict(message)
+    # SECURITY (F3): the API base must come from worker settings only,
+    # never from the queue body. ``decoded.callback_base_url`` is held
+    # on the dataclass to mirror the contract but is deliberately
+    # ignored here.
     api = ApiClient(
-        base_url=decoded.callback_base_url or settings.drive_api_base_url,
+        base_url=settings.drive_api_base_url,
         internal_api_key=settings.drive_internal_api_key,
     )
     try:
@@ -119,7 +125,6 @@ def handle_enumerate_job(
             org_id=decoded.org_id,
             video_id=decoded.video_id,
             max_keyframes=decoded.max_keyframes,
-            api_base_url=decoded.callback_base_url or settings.drive_api_base_url,
         )
         if not keyframes:
             api.fail(
@@ -232,7 +237,6 @@ def _fetch_keyframes(
     org_id: UUID,
     video_id: UUID,
     max_keyframes: int,
-    api_base_url: str,
     s3_client: S3Client | None = None,
 ) -> list[SceneKeyframe]:
     """Resolve the scene list via the Phase 2.5a internal endpoint and
@@ -256,7 +260,10 @@ def _fetch_keyframes(
         bucket=settings.drive_s3_bucket,
     )
 
-    base = api_base_url.rstrip("/")
+    # SECURITY (F3): URL base must come from worker settings only —
+    # never from the queue body. Bearer header travels with this
+    # request, so a body-controlled URL would be a credential exfil.
+    base = settings.drive_api_base_url.rstrip("/")
     url = f"{base}/internal/videos/{video_id}/scenes-with-keyframes"
     headers = {
         "Authorization": f"Bearer {settings.drive_internal_api_key}",

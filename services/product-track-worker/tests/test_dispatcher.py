@@ -8,14 +8,28 @@ from uuid import uuid4
 
 import pytest
 
+from heimdex_worker_sdk.queue_client import QueueMessage
+from heimdex_worker_sdk.sqs_consumer import InvalidMessageError
+
 from src.dispatcher import dispatch
 from src.settings import WorkerSettings
+
+
+def _qm(body: dict) -> QueueMessage:
+    """Wrap a body dict in the SDK's actual delivery shape."""
+    return QueueMessage(
+        message_id="m1",
+        ack_id="a1",
+        body=body,
+        receive_count=1,
+    )
 
 
 def _settings() -> WorkerSettings:
     return WorkerSettings(
         sqs_product_track_queue_url="https://sqs.test/q",
         drive_internal_api_key="t",
+        drive_api_base_url="http://api.internal:8000",
         worker_id="test-worker",
         product_v2_enabled=True,
     )
@@ -35,20 +49,67 @@ def test_dispatch_parses_string_body():
         h.assert_called_once()
 
 
-def test_dispatch_ignores_unknown_type():
+def test_dispatch_handles_queue_message():
+    """F1: SDK ConsumerLoop now passes ``QueueMessage`` to the
+    callback. Pre-fix, the dispatcher's ``isinstance(message, str)``
+    branch fell through and crashed on ``body.get("type")``. The
+    first real SQS message would have failed."""
+    body = {"type": "product.track_job", "job_id": str(uuid4())}
+    with patch("src.dispatcher.handle_track_job") as h:
+        dispatch(_qm(body), settings=_settings())
+    h.assert_called_once()
+    # The handler receives the inner dict, not the wrapper.
+    assert h.call_args.kwargs["message"] == body
+
+
+def test_dispatch_unknown_type_with_job_id_calls_fail():
+    """F2: pre-fix, an unknown ``type`` was silently logged and the
+    SDK then ack-deleted the message — no retry, no DLQ, no /fail.
+    Post-fix, we /fail the job with ``unknown_message_type`` so the
+    api closes the row and the user sees the misrouting."""
     body = {"type": "product.enumerate_job", "job_id": str(uuid4())}
-    with patch("src.dispatcher.handle_track_job") as h:
+    fake_api = MagicMock()
+    with patch("src.dispatcher.handle_track_job") as h, patch(
+        "src.dispatcher.ApiClient", return_value=fake_api
+    ):
         dispatch(body, settings=_settings())
-        h.assert_not_called()
+    h.assert_not_called()
+    fake_api.fail.assert_called_once()
+    assert (
+        fake_api.fail.call_args.kwargs["error_code"] == "unknown_message_type"
+    )
 
 
-def test_dispatch_swallows_invalid_json_string_body():
-    """A non-JSON string body should not crash the dispatcher — log
-    + ignore. The SQS consumer then DLQs the message after
-    maxReceiveCount=3."""
+def test_dispatch_unknown_type_without_job_id_raises_invalid_message():
+    """F2: when the body lacks a parseable ``job_id``, /fail isn't
+    possible. Raise ``InvalidMessageError`` so the SDK auto-deletes
+    the poison pill with a structured ``sqs_invalid_message_deleted``
+    log instead of silently succeeding."""
+    body = {"type": "product.unknown"}  # no job_id
     with patch("src.dispatcher.handle_track_job") as h:
-        dispatch("not-json-{", settings=_settings())
-        h.assert_not_called()
+        with pytest.raises(InvalidMessageError):
+            dispatch(body, settings=_settings())
+    h.assert_not_called()
+
+
+def test_dispatch_invalid_json_string_raises_invalid_message():
+    """F2: pre-fix, a non-JSON body was silently swallowed and the
+    SDK ack-deleted. Post-fix, raise ``InvalidMessageError`` so the
+    SDK logs ``sqs_invalid_message_deleted`` with the message id +
+    receive count before deleting."""
+    with patch("src.dispatcher.handle_track_job") as h:
+        with pytest.raises(InvalidMessageError):
+            dispatch("not-json-{", settings=_settings())
+    h.assert_not_called()
+
+
+def test_dispatch_non_object_json_raises_invalid_message():
+    """A JSON array (or scalar) body can't carry a job — same poison
+    pill semantics as malformed JSON."""
+    with patch("src.dispatcher.handle_track_job") as h:
+        with pytest.raises(InvalidMessageError):
+            dispatch("[1, 2, 3]", settings=_settings())
+    h.assert_not_called()
 
 
 def test_dispatch_calls_fail_callback_on_handler_exception():
@@ -59,16 +120,17 @@ def test_dispatch_calls_fail_callback_on_handler_exception():
     body = {
         "type": "product.track_job",
         "job_id": str(job_id),
-        "callback_base_url": "https://api.test",
     }
     fake_api = MagicMock()
     with patch("src.dispatcher.handle_track_job", side_effect=RuntimeError("boom")):
-        with patch("src.dispatcher.ApiClient", return_value=fake_api):
+        with patch("src.dispatcher.ApiClient", return_value=fake_api) as ApiClient:
             dispatch(body, settings=_settings())
     fake_api.fail.assert_called_once()
     fail_kwargs = fake_api.fail.call_args.kwargs
     assert fail_kwargs["error_code"] == "internal_error"
     assert "boom" in fail_kwargs["error_message"]
+    # F3: API base URL comes from settings, never the body.
+    assert ApiClient.call_args.kwargs["base_url"] == "http://api.internal:8000"
 
 
 def test_dispatch_fail_callback_swallows_its_own_exception():
@@ -77,7 +139,6 @@ def test_dispatch_fail_callback_swallows_its_own_exception():
     body = {
         "type": "product.track_job",
         "job_id": str(uuid4()),
-        "callback_base_url": "https://api.test",
     }
     fake_api = MagicMock()
     fake_api.fail.side_effect = RuntimeError("api also down")
@@ -85,3 +146,24 @@ def test_dispatch_fail_callback_swallows_its_own_exception():
         with patch("src.dispatcher.ApiClient", return_value=fake_api):
             # Should NOT raise.
             dispatch(body, settings=_settings())
+
+
+def test_dispatch_fail_callback_ignores_callback_base_url_from_body():
+    """SECURITY (F3): a producer setting ``callback_base_url`` in the
+    SQS body MUST NOT redirect bearer-authenticated /fail calls.
+    Pre-fix, the dispatcher built ApiClient with
+    ``body['callback_base_url'] or settings.drive_api_base_url`` — an
+    attacker who could enqueue could exfiltrate the bearer token."""
+    body = {
+        "type": "product.track_job",
+        "job_id": str(uuid4()),
+        # Attacker-controlled URL planted in the body.
+        "callback_base_url": "https://attacker.example.com",
+    }
+    fake_api = MagicMock()
+    with patch("src.dispatcher.handle_track_job", side_effect=RuntimeError("boom")):
+        with patch("src.dispatcher.ApiClient", return_value=fake_api) as ApiClient:
+            dispatch(body, settings=_settings())
+    # ApiClient must be constructed with the settings URL, not the body.
+    assert ApiClient.call_args.kwargs["base_url"] == "http://api.internal:8000"
+    assert "attacker" not in ApiClient.call_args.kwargs["base_url"]

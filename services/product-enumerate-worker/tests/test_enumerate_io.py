@@ -108,7 +108,6 @@ class TestFetchKeyframes:
                 org_id=uuid4(),
                 video_id=uuid4(),
                 max_keyframes=60,
-                api_base_url="http://api:8000",
                 s3_client=s3,
             )
 
@@ -135,7 +134,7 @@ class TestFetchKeyframes:
                 settings=_settings(),
                 org_id=uuid4(), video_id=uuid4(),
                 max_keyframes=60,
-                api_base_url="http://api:8000", s3_client=s3,
+                s3_client=s3,
             )
         assert result == []
         s3.get_object_bytes.assert_not_called()
@@ -152,7 +151,7 @@ class TestFetchKeyframes:
                 settings=_settings(),
                 org_id=uuid4(), video_id=uuid4(),
                 max_keyframes=60,
-                api_base_url="http://api:8000", s3_client=s3,
+                s3_client=s3,
             )
         assert result == []
 
@@ -194,7 +193,7 @@ class TestFetchKeyframes:
                 settings=_settings(),
                 org_id=uuid4(), video_id=uuid4(),
                 max_keyframes=60,
-                api_base_url="http://api:8000", s3_client=s3,
+                s3_client=s3,
             )
         assert [kf.scene_id for kf in result] == ["s1", "s3"]
 
@@ -223,7 +222,7 @@ class TestFetchKeyframes:
                 settings=_settings(),
                 org_id=uuid4(), video_id=uuid4(),
                 max_keyframes=5,
-                api_base_url="http://api:8000", s3_client=s3,
+                s3_client=s3,
             )
         assert len(result) == 5
         # Subsampling is even-stride; first scene + last scene must
@@ -243,7 +242,7 @@ class TestFetchKeyframes:
                 settings=_settings(),
                 org_id=uuid4(), video_id=uuid4(),
                 max_keyframes=60,
-                api_base_url="http://api:8000", s3_client=s3,
+                s3_client=s3,
             )
         assert result == []
         s3.get_object_bytes.assert_not_called()
@@ -280,9 +279,37 @@ class TestFetchKeyframes:
                 settings=_settings(),
                 org_id=uuid4(), video_id=uuid4(),
                 max_keyframes=60,
-                api_base_url="http://api:8000", s3_client=s3,
+                s3_client=s3,
             )
         assert [kf.scene_id for kf in result] == ["s_good"]
+
+    def test_url_built_from_settings_only(self):
+        """SECURITY (F3): the keyframes-fetch URL must be derived from
+        ``settings.drive_api_base_url`` exclusively. Pre-fix, the
+        caller passed ``decoded.callback_base_url`` (from the SQS body)
+        which would let an attacker who could enqueue redirect this
+        bearer-authed request to an attacker host."""
+        s3 = MagicMock()
+        with patch("src.tasks.enumerate.httpx.Client") as mock_client_cls:
+            mock_client = mock_client_cls.return_value.__enter__.return_value
+            mock_resp = MagicMock(status_code=200)
+            mock_resp.json.return_value = {"scenes": []}
+            mock_resp.raise_for_status = MagicMock()
+            mock_client.get.return_value = mock_resp
+
+            video_id = uuid4()
+            _fetch_keyframes(
+                settings=_settings(),
+                org_id=uuid4(), video_id=video_id,
+                max_keyframes=60,
+                s3_client=s3,
+            )
+
+        called_url = mock_client.get.call_args.args[0]
+        # Must come from _settings().drive_api_base_url ("http://api:8000").
+        assert called_url == (
+            f"http://api:8000/internal/videos/{video_id}/scenes-with-keyframes"
+        )
 
 
 # =========================================================================

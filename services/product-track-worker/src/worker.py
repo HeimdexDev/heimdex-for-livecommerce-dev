@@ -139,9 +139,15 @@ def main() -> None:
         sys.exit(1)
     log.info("track_worker_models_warmed")
 
-    _init_semaphore(settings.drive_product_track_concurrency)
+    semaphore = _init_semaphore(settings.drive_product_track_concurrency)
 
     # --- build the SQS consumer ---
+    # F1 fix: ConsumerLoop's signature requires sqs_client /
+    # process_callback / semaphore (no defaults — the missing
+    # ``semaphore`` arg made every prior boot fail with TypeError).
+    # Worker-name "product_track" matches the existing
+    # gpu_orchestrator._JOB_TYPE_TO_WORKER convention; the heartbeat
+    # interval mirrors product-enumerate-worker.
     from heimdex_worker_sdk import build_queue_client
     from heimdex_worker_sdk.sqs_consumer import ConsumerLoop
 
@@ -150,10 +156,12 @@ def main() -> None:
         settings=settings,  # type: ignore[arg-type]
     )
     consumer = ConsumerLoop(
-        queue_client=queue_client,
-        callback=_make_callback(settings),
-        worker_id=settings.worker_id,
-        lease_seconds=settings.worker_lease_seconds,
+        sqs_client=queue_client,
+        process_callback=_make_callback(settings),
+        semaphore=semaphore,
+        visibility_timeout=settings.worker_lease_seconds,
+        heartbeat_interval=300,
+        worker_name="product_track",
     )
 
     emit_event(

@@ -91,6 +91,79 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
+# ─── F4 stage-failure counters ──────────────────────────────────────
+#
+# The Phase 3a pipeline lib tolerates per-scene errors (keyframe fetch,
+# embed, SAM2 track) and silently continues. That's the right contract
+# for a pure functional library — but at the worker boundary we need to
+# tell apart "no qualifying appearances" (every candidate scene was
+# correctly evaluated and rejected by thresholds) from "stage-wide
+# failure" (every per-scene op raised and the lib skipped them all).
+# Without this distinction, a broken SigLIP2 / S3 outage / SAM2 OOM
+# would silently land at the user as "no appearances found".
+#
+# These wrappers count attempts vs. failures and re-raise — the lib's
+# internal try/except still catches the raise, but the counters survive
+# and let the worker call /fail with ``all_scenes_failed`` when every
+# attempt failed.
+
+
+class _CountingKeyframeFetcher:
+    """Wraps a :class:`KeyframeFetcher`; counts attempts + failures."""
+
+    def __init__(self, inner: KeyframeFetcherImpl) -> None:
+        self._inner = inner
+        self.attempted = 0
+        self.failed = 0
+
+    def fetch_scene_keyframe(self, scene_id: str) -> "Image.Image":
+        self.attempted += 1
+        try:
+            return self._inner.fetch_scene_keyframe(scene_id)
+        except Exception:
+            self.failed += 1
+            raise
+
+    @property
+    def all_attempts_failed(self) -> bool:
+        return self.attempted > 0 and self.failed == self.attempted
+
+
+class _CountingSam2Tracker:
+    """Wraps a :class:`Sam2Tracker`; counts attempts + failures."""
+
+    def __init__(self, inner: Sam2Tracker) -> None:
+        self._inner = inner
+        self.attempted = 0
+        self.failed = 0
+
+    def track(
+        self,
+        *,
+        scene_id: str,
+        anchor_bbox: BBoxXYWH,
+        anchor_keyframe: "Image.Image",
+        scene_video_url: str,
+        sample_fps: int,
+    ) -> list:
+        self.attempted += 1
+        try:
+            return self._inner.track(
+                scene_id=scene_id,
+                anchor_bbox=anchor_bbox,
+                anchor_keyframe=anchor_keyframe,
+                scene_video_url=scene_video_url,
+                sample_fps=sample_fps,
+            )
+        except Exception:
+            self.failed += 1
+            raise
+
+    @property
+    def all_attempts_failed(self) -> bool:
+        return self.attempted > 0 and self.failed == self.attempted
+
+
 @dataclass
 class TrackJobMessage:
     """Decoded SQS body — matches
@@ -117,7 +190,9 @@ class TrackJobMessage:
             duration_preset_sec=int(body["duration_preset_sec"]),
             tracker_version=str(body["tracker_version"]),
             enumeration_prompt_version=str(body["enumeration_prompt_version"]),
-            callback_base_url=str(body["callback_base_url"]),
+            # SECURITY (F3): tolerated-but-ignored. Future contract
+            # bump should drop this field entirely.
+            callback_base_url=str(body.get("callback_base_url", "")),
         )
 
 
@@ -138,8 +213,12 @@ def handle_track_job(
     on the ``/fail`` callback."""
     decoded = TrackJobMessage.from_dict(message)
 
+    # SECURITY (F3): the API base must come from worker settings only,
+    # never from the queue body. ``decoded.callback_base_url`` is held
+    # on the dataclass to mirror the contract but is deliberately
+    # ignored here.
     api = api_client or ApiClient(
-        base_url=decoded.callback_base_url or settings.drive_api_base_url,
+        base_url=settings.drive_api_base_url,
         internal_api_key=settings.drive_internal_api_key,
         service_id=settings.internal_service_id,
     )
@@ -202,10 +281,12 @@ def handle_track_job(
         coarse_client = CoarseRetrievalClientImpl(
             api=api, file_id=decoded.video_id, org_id=decoded.org_id,
         )
-        keyframe_fetcher = KeyframeFetcherImpl(
-            s3=s3,
-            bucket=settings.drive_s3_bucket,
-            scene_id_to_s3_key=scene_id_to_kf,
+        keyframe_fetcher = _CountingKeyframeFetcher(
+            KeyframeFetcherImpl(
+                s3=s3,
+                bucket=settings.drive_s3_bucket,
+                scene_id_to_s3_key=scene_id_to_kf,
+            )
         )
         cfg = _make_config(settings)
 
@@ -217,6 +298,18 @@ def handle_track_job(
             keyframe_fetcher=keyframe_fetcher,
             config=cfg,
         )
+
+        # F4: distinguish "stage-wide outage" from "no qualifying
+        # appearances". Every keyframe fetch raised → S3 outage / wrong
+        # bucket / IAM revoke. Reporting that as "no appearances" hides
+        # a real fault from the user.
+        if keyframe_fetcher.all_attempts_failed:
+            _fail_all_scenes(
+                api, decoded, settings, cost_accumulator,
+                stage="keyframe_fetch",
+                attempted=keyframe_fetcher.attempted,
+            )
+            return
 
         if not candidate_scenes:
             _complete_no_qualifying(api, decoded, settings, cost_accumulator)
@@ -243,7 +336,9 @@ def handle_track_job(
             for cs in candidate_scenes
         }
 
-        tracker_impl = tracker or Sam2TrackerImpl(model_id=settings.sam2_model_id)
+        tracker_impl = _CountingSam2Tracker(
+            tracker or Sam2TrackerImpl(model_id=settings.sam2_model_id)
+        )
         detections = propagate_within_candidate_scenes(
             candidates=candidate_scenes,
             canonical_bbox=canonical_bbox,
@@ -251,6 +346,17 @@ def handle_track_job(
             scene_video_urls=scene_video_urls,
             config=cfg,
         )
+
+        # F4: every SAM2 track raised → systemic regression (model
+        # OOM, every proxy URL 404, SAM2 weights wrong). Treat as a
+        # job failure, not "no appearances".
+        if tracker_impl.all_attempts_failed:
+            _fail_all_scenes(
+                api, decoded, settings, cost_accumulator,
+                stage="sam2_track",
+                attempted=tracker_impl.attempted,
+            )
+            return
 
         # ─── 8. assemble windows ───────────────────────────────────
         assembled = assemble_windows(detections, config=cfg)
@@ -454,6 +560,30 @@ def _fetch_transcripts_ocr(
         if ocr_text:
             ocr[sid] = [OcrSegment(scene_id=sid, text=ocr_text)]
     return transcripts, ocr
+
+
+def _fail_all_scenes(
+    api: ApiClient,
+    decoded: TrackJobMessage,
+    settings: WorkerSettings,
+    cost: Decimal,
+    *,
+    stage: str,
+    attempted: int,
+) -> None:
+    """F4: terminal failure for stage-wide outages. Distinguished from
+    ``_complete_no_qualifying`` (which is the success path for "every
+    candidate was evaluated and rejected by thresholds")."""
+    api.fail(
+        job_id=decoded.job_id,
+        claimed_by=settings.worker_id,
+        cost_delta_usd=cost,
+        error_code="all_scenes_failed",
+        error_message=(
+            f"all {attempted} candidate scene operations failed at stage "
+            f"{stage!r} — likely a stage-wide regression, not absent product"
+        ),
+    )
 
 
 def _complete_no_qualifying(

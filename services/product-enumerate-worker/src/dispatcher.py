@@ -18,6 +18,9 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from heimdex_worker_sdk.queue_client import QueueMessage
+from heimdex_worker_sdk.sqs_consumer import InvalidMessageError
+
 from src.api_client import ApiClient
 from src.openai_vlm import OpenAIVlmClient
 from src.settings import WorkerSettings
@@ -27,24 +30,24 @@ logger = logging.getLogger(__name__)
 
 
 def dispatch(
-    message: dict[str, Any] | str,
+    message: QueueMessage | dict[str, Any] | str,
     *,
     settings: WorkerSettings,
     vlm_client: OpenAIVlmClient,
 ) -> None:
-    """Entry point for the ConsumerLoop callback.
+    """Entry point for the SDK's ``ConsumerLoop`` callback.
 
-    ``message`` may arrive as a parsed dict (worker-sdk) or a JSON
-    string (legacy paths). Normalize both before routing.
+    Accepts ``QueueMessage`` (current SDK type), ``dict`` (test harness
+    shape), or ``str`` (raw JSON). F1 fix: previously assumed
+    ``dict|str`` only and crashed on the SDK's actual ``QueueMessage``.
+
+    F2 fix: malformed bodies + unknown ``type`` now route to either
+    ``InvalidMessageError`` (poison pill, SDK deletes with structured
+    log) or ``/fail`` on the api (so the user-facing UI surfaces the
+    misrouting), instead of silently ack'ing without retry, DLQ, or
+    error report.
     """
-    if isinstance(message, str):
-        try:
-            body = json.loads(message)
-        except json.JSONDecodeError:
-            logger.exception("dispatch_non_json_body", extra={"raw": message[:200]})
-            return
-    else:
-        body = message
+    body = _normalize_body(message)
 
     msg_type = body.get("type")
     if msg_type == "product.enumerate_job":
@@ -61,11 +64,63 @@ def dispatch(
             _try_fail_callback(
                 body=body, settings=settings, error_message=str(exc),
             )
-    else:
+        return
+
+    # F2: unknown type — surface to the api as a real failure if we
+    # can identify the job, otherwise log + ack-delete via SDK poison
+    # pill semantics.
+    try:
+        job_id = UUID(str(body.get("job_id")))
+    except Exception:
         logger.warning(
-            "dispatch_unknown_type",
-            extra={"type": msg_type, "job_id": body.get("job_id")},
+            "dispatch_unknown_type_no_job_id",
+            extra={"type": msg_type},
         )
+        raise InvalidMessageError(
+            f"unknown message type {msg_type!r}, no parseable job_id"
+        )
+
+    logger.warning(
+        "dispatch_unknown_type",
+        extra={"type": msg_type, "job_id": str(job_id)},
+    )
+    _try_fail_callback(
+        body=body,
+        settings=settings,
+        error_message=f"unknown message type {msg_type!r}",
+        error_code="unknown_message_type",
+    )
+
+
+def _normalize_body(
+    message: QueueMessage | dict[str, Any] | str,
+) -> dict[str, Any]:
+    """Coerce the SDK message shape (or test inputs) to a dict body.
+
+    Raises :class:`InvalidMessageError` for inputs that can't be
+    interpreted as a job — the SDK's ``_process_with_heartbeat`` treats
+    that as a poison pill and ack-deletes with a ``poison_pill_deleted``
+    structured log.
+    """
+    if isinstance(message, QueueMessage):
+        return message.body
+    if isinstance(message, dict):
+        return message
+    if isinstance(message, str):
+        try:
+            parsed = json.loads(message)
+        except json.JSONDecodeError as exc:
+            raise InvalidMessageError(
+                f"non-JSON SQS body: {exc}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise InvalidMessageError(
+                f"SQS body must be a JSON object, got {type(parsed).__name__}"
+            )
+        return parsed
+    raise InvalidMessageError(
+        f"unsupported message type {type(message).__name__}"
+    )
 
 
 def _try_fail_callback(
@@ -73,15 +128,19 @@ def _try_fail_callback(
     body: dict[str, Any],
     settings: WorkerSettings,
     error_message: str,
+    error_code: str = "internal_error",
 ) -> None:
-    """Best-effort fail report. Swallows any HTTP error — at this point
-    the SQS message will go to the DLQ after maxReceiveCount=3 anyway."""
+    """Best-effort fail report. Swallows any HTTP error."""
     try:
         job_id = UUID(str(body.get("job_id")))
     except Exception:
         return
+    # SECURITY (F3): never honor a callback URL from the queue body —
+    # the API base is always settings.drive_api_base_url. A compromised
+    # producer would otherwise redirect bearer-authed callbacks to an
+    # attacker host.
     api = ApiClient(
-        base_url=str(body.get("callback_base_url") or settings.drive_api_base_url),
+        base_url=settings.drive_api_base_url,
         internal_api_key=settings.drive_internal_api_key,
     )
     try:
@@ -89,7 +148,7 @@ def _try_fail_callback(
             job_id=job_id,
             claimed_by=settings.worker_id,
             cost_delta_usd=Decimal("0"),
-            error_code="internal_error",
+            error_code=error_code,
             error_message=error_message[:1900],
         )
     except Exception:
