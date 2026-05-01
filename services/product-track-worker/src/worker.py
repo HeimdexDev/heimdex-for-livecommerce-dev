@@ -111,10 +111,14 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if not settings.sqs_product_track_queue_url:
+    if not settings.sqs_consumer_enabled or not settings.sqs_product_track_queue_url:
         log.error(
             "track_worker_refusing_to_start",
-            reason="SQS_PRODUCT_TRACK_QUEUE_URL is empty",
+            reason=(
+                "SQS_CONSUMER_ENABLED=false or SQS_PRODUCT_TRACK_QUEUE_URL is empty"
+            ),
+            sqs_consumer_enabled=settings.sqs_consumer_enabled,
+            queue_url_set=bool(settings.sqs_product_track_queue_url),
         )
         sys.exit(1)
 
@@ -132,8 +136,26 @@ def main() -> None:
     except Exception:
         log.exception("siglip2_warm_failed")
         sys.exit(1)
+
+    # SAM2 is intentionally a NotImplementedError stub during Phase
+    # 3c-A scaffold (real integration ships in Phase 3c-B alongside
+    # staging-goldens calibration). Tolerate that specific case so
+    # the worker can boot, poll SQS, and surface "SAM2 not
+    # implemented" per-job via the dispatcher's /fail callback —
+    # which is the operator-facing signal we want during scaffold.
+    # Any other exception is a real boot fault and still hard-exits.
     try:
         _warm_sam2(settings)
+    except NotImplementedError:
+        log.warning(
+            "sam2_warm_skipped_phase_3c_a_stub",
+            note=(
+                "Phase 3c-A scaffold: SAM2 loader stub raises "
+                "NotImplementedError. Boot continues; per-job /fail "
+                "with internal_error is the expected signal until "
+                "Phase 3c-B lands the real integration."
+            ),
+        )
     except Exception:
         log.exception("sam2_warm_failed")
         sys.exit(1)

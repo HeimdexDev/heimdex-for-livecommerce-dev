@@ -37,6 +37,11 @@ class WorkerSettings(BaseSettings):
     queue_backend: str = "sqs"
     sqs_consumer_enabled: bool = True
     sqs_region: str = "ap-northeast-2"
+    # ``heimdex_worker_sdk.build_queue_client`` reads
+    # ``settings.sqs_endpoint_url`` unconditionally (passes ``None``
+    # when empty so boto picks the default endpoint). Omitting the
+    # field would AttributeError at queue construction.
+    sqs_endpoint_url: str = ""
 
     # ---------- S3 ----------
 
