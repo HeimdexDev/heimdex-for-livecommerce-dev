@@ -283,7 +283,8 @@ class TestHandleTrackJobAllScenesFailed:
         precise-similarity filter rejects it. ``failed=2``,
         ``attempted=3`` — F4 condition (``failed == attempted``) is
         NOT met. With no candidates surviving the precise threshold,
-        this routes to /fail with ``tracker_low_confidence_global``
+        ``annotated`` is empty so ``_terminate_no_render`` falls
+        through to /fail with ``tracker_low_confidence_global``
         (API rejects empty appearances on /complete)."""
         api = self._make_api()
 
@@ -448,6 +449,76 @@ class TestHandleTrackJobAllScenesFailed:
         # Worker did NOT call /fail itself — the dispatcher's
         # exception catch is responsible for that path.
         api.fail.assert_not_called()
+
+    def test_rejected_only_annotated_completes_with_rejected_appearances(self):
+        """SAM2 produces detections that are valid windows but every
+        one is rejected by thresholds (low avg_bbox_area_pct, low
+        confidence, etc.). ``annotated`` is non-empty (rejected
+        rows); ``scored=[]`` because score_windows drops rejected
+        windows. Pre-fix this called /fail and dropped the rejected
+        data; post-fix it /completes with the rejected appearances
+        + ``render_job_id=None`` so the api persists them for
+        threshold tuning."""
+        api = self._make_api()
+
+        canonical_vec = [1.0] + [0.0] * 767
+        embedder = MagicMock()
+        embedder.embed.return_value = canonical_vec
+
+        import io as _io
+        good_buf = _io.BytesIO()
+        Image.new("RGB", (4, 4), 0).save(good_buf, format="JPEG")
+        s3 = MagicMock()
+        s3.get_object_bytes.return_value = good_buf.getvalue()
+
+        # SAM2 returns one short low-confidence sample per scene.
+        # Configured thresholds (min_window_duration_ms=1500,
+        # min_avg_confidence=0.7) will reject these on assemble +
+        # score; ``annotated`` carries the rejected rows.
+        from heimdex_media_pipelines.product_track.sam2_pass import TrackedSample
+
+        def _make_track(*, scene_id, **_kwargs):
+            return [
+                TrackedSample(
+                    frame_timestamp_ms=0,
+                    bbox=BBoxXYWH(x=0, y=0, width=20, height=20),
+                    mask_confidence=0.5,  # below min_avg_confidence=0.7
+                    frame_width=1280,
+                    frame_height=720,
+                ),
+            ]
+
+        tracker = MagicMock()
+        tracker.track.side_effect = _make_track
+
+        # API mock returns content for transcripts/ocr fetch.
+        api.fetch_scenes_content.return_value = []
+
+        with patch(
+            "src.tasks.track._fetch_canonical_crop",
+            return_value=_fake_canonical(),
+        ):
+            handle_track_job(
+                message=_job_body(),
+                settings=_settings(),
+                api_client=api,
+                embedder=embedder,
+                tracker=tracker,
+                s3_client=s3,
+            )
+
+        # Should /complete (not /fail) so rejected data is persisted.
+        api.fail.assert_not_called()
+        api.complete_track.assert_called_once()
+        body = api.complete_track.call_args.kwargs
+        assert body["render_job_id"] is None
+        assert len(body["appearances"]) > 0
+        # Rejected rows carry ``rejected_reason`` set; pin that the
+        # serializer included it.
+        assert any(
+            a.get("rejected_reason") is not None
+            for a in body["appearances"]
+        )
 
     def test_all_sam2_tracks_fail_calls_fail_with_internal_error(self):
         """Coarse + precise pass produce candidate scenes; SAM2

@@ -61,9 +61,13 @@ def dispatch(
             # instead of the job hanging in ``enumerating`` until the
             # lease expires.
             logger.exception("dispatch_unhandled_error")
-            _try_fail_callback(
+            fail_recorded = _try_fail_callback(
                 body=body, settings=settings, error_message=str(exc),
             )
+            if not fail_recorded:
+                # api outage — let SQS redeliver instead of silently
+                # ack-deleting the message and orphaning the job.
+                raise
         return
 
     # F2: unknown type — surface to the api as a real failure if we
@@ -133,12 +137,15 @@ def _try_fail_callback(
     settings: WorkerSettings,
     error_message: str,
     error_code: str = "internal_error",
-) -> None:
-    """Best-effort fail report. Swallows any HTTP error."""
+) -> bool:
+    """Best-effort fail report. Returns True if the api accepted the
+    /fail call, False otherwise (so the caller can re-raise and let
+    SQS redeliver). When the body has no parseable job_id we return
+    True — there's nothing to record on the api side."""
     try:
         job_id = UUID(str(body.get("job_id")))
     except Exception:
-        return
+        return True
     # SECURITY (F3): never honor a callback URL from the queue body —
     # the API base is always settings.drive_api_base_url. A compromised
     # producer would otherwise redirect bearer-authed callbacks to an
@@ -155,7 +162,9 @@ def _try_fail_callback(
             error_code=error_code,
             error_message=error_message[:1900],
         )
+        return True
     except Exception:
         logger.exception("fail_callback_itself_failed", extra={"job_id": str(job_id)})
+        return False
     finally:
         api.close()

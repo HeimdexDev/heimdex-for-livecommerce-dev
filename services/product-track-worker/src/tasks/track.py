@@ -474,7 +474,14 @@ def handle_track_job(
             config=cfg,
         )
         if not scored:
-            _fail_no_qualifying(api, decoded, settings, cost_accumulator)
+            # Rejected windows still carry value (rejected_reason +
+            # OCR + narration data) for threshold tuning. Persist them
+            # via /complete with no render rather than dropping them
+            # via /fail. Only when ``annotated`` is also empty (no
+            # SAM2 detections at all) do we route to /fail.
+            _terminate_no_render(
+                api, decoded, settings, cost_accumulator, annotated=annotated,
+            )
             return
 
         picker_impl = picker or _build_picker(settings)
@@ -485,7 +492,9 @@ def handle_track_job(
             config=cfg,
         )
         if not selected:
-            _fail_no_qualifying(api, decoded, settings, cost_accumulator)
+            _terminate_no_render(
+                api, decoded, settings, cost_accumulator, annotated=annotated,
+            )
             return
 
         # ─── 13. build stitch plan ─────────────────────────────────
@@ -694,6 +703,38 @@ def _fail_no_qualifying(
             "thresholds for this product"
         ),
     )
+
+
+def _terminate_no_render(
+    api: ApiClient,
+    decoded: TrackJobMessage,
+    settings: WorkerSettings,
+    cost: Decimal,
+    *,
+    annotated: list,
+) -> None:
+    """Terminal handler for "tracker produced something, but no
+    window qualifies for rendering". Two sub-cases:
+
+    * ``annotated`` is non-empty (SAM2 detected scenes; thresholds /
+      subset selection rejected them): /complete with the rejected
+      appearances + ``render_job_id=None``. The api persists them
+      (with ``rejected_reason`` set) for threshold tuning + UI
+      surfacing of "tracked, no qualifying windows".
+    * ``annotated`` is empty (SAM2 produced no detections): /fail
+      with ``tracker_low_confidence_global``. The api ``/complete``
+      400s on empty appearances, so we can't /complete here.
+    """
+    if annotated:
+        api.complete_track(
+            job_id=decoded.job_id,
+            claimed_by=settings.worker_id,
+            cost_delta_usd=cost,
+            appearances=_serialize_appearances(annotated, decoded),
+            render_job_id=None,
+        )
+        return
+    _fail_no_qualifying(api, decoded, settings, cost)
 
 
 def _serialize_appearances(

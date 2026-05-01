@@ -137,9 +137,16 @@ def test_dispatch_calls_fail_callback_on_handler_exception():
     assert ApiClient.call_args.kwargs["base_url"] == "http://api.internal:8000"
 
 
-def test_dispatch_fail_callback_swallows_its_own_exception():
-    """If even the /fail call fails, dispatcher must not raise — the
-    SQS consumer is the last line of defense (DLQ after retries)."""
+def test_dispatch_reraises_when_fail_callback_also_fails():
+    """If the /fail call itself fails (api outage), the dispatcher
+    re-raises the original handler exception. SDK's
+    ``ConsumerLoop._process_with_heartbeat`` catches that and leaves
+    the SQS message visible — it'll be redelivered after the
+    visibility timeout, eventually DLQ'd if the api stays down.
+
+    Pre-fix this swallowed the second failure and ``dispatch()``
+    returned normally → SDK ack-deleted the message → tracking job
+    stuck in ``tracking`` with no retry path."""
     body = {
         "type": "product.track_job",
         "job_id": str(uuid4()),
@@ -148,8 +155,8 @@ def test_dispatch_fail_callback_swallows_its_own_exception():
     fake_api.fail.side_effect = RuntimeError("api also down")
     with patch("src.dispatcher.handle_track_job", side_effect=RuntimeError("boom")):
         with patch("src.dispatcher.ApiClient", return_value=fake_api):
-            # Should NOT raise.
-            dispatch(body, settings=_settings())
+            with pytest.raises(RuntimeError, match="boom"):
+                dispatch(body, settings=_settings())
 
 
 def test_dispatch_fail_callback_ignores_callback_base_url_from_body():

@@ -137,6 +137,34 @@ class OpenAIPicker:
                 seen.add(i)
                 unique.append(i)
 
+        # Honor the duration budget at the picker boundary. The
+        # lib's ``select_subset`` will trim oversize picks by dropping
+        # low-score windows — but if GPT picks one long window for a
+        # short preset, that trim can leave ``selected=[]`` and the
+        # whole job fails. Falling back to the greedy picker (which
+        # honors the budget structurally) is safer than letting an
+        # oversize pick reach the trimmer.
+        budget_ms = int(
+            duration_preset_sec * 1000
+            * config.subset_duration_overshoot_factor
+        )
+        total_ms = sum(candidates[i].window.duration_ms for i in unique)
+        if total_ms > budget_ms:
+            logger.warning(
+                "openai_picker_exceeds_duration_budget_falling_back_to_greedy",
+                extra={
+                    "selected_total_ms": total_ms,
+                    "budget_ms": budget_ms,
+                    "selected_count": len(unique),
+                    "duration_preset_sec": duration_preset_sec,
+                },
+            )
+            return self._fallback.pick(
+                candidates,
+                duration_preset_sec=duration_preset_sec,
+                config=config,
+            )
+
         return [candidates[i] for i in unique]
 
     def _call_llm(

@@ -137,6 +137,21 @@ def test_dispatch_calls_fail_callback_on_handler_exception():
     assert ApiClient.call_args.kwargs["base_url"] == "http://api.internal:8000"
 
 
+def test_dispatch_reraises_when_fail_callback_also_fails():
+    """If /fail itself fails (api outage), the dispatcher re-raises
+    the original exception so the SDK leaves the SQS message visible
+    for redelivery instead of silently ack-deleting it."""
+    body = {"type": "product.enumerate_job", "job_id": str(uuid4())}
+    fake_api = MagicMock()
+    fake_api.fail.side_effect = RuntimeError("api also down")
+    with patch(
+        "src.dispatcher.handle_enumerate_job", side_effect=RuntimeError("boom")
+    ):
+        with patch("src.dispatcher.ApiClient", return_value=fake_api):
+            with pytest.raises(RuntimeError, match="boom"):
+                dispatch(body, settings=_settings(), vlm_client=_vlm())
+
+
 def test_dispatch_fail_callback_ignores_callback_base_url_from_body():
     """SECURITY (F3): a producer setting ``callback_base_url`` in the
     SQS body MUST NOT redirect bearer-authenticated /fail calls.
