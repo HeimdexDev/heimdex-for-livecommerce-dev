@@ -134,6 +134,29 @@ def test_dispatch_calls_fail_callback_on_handler_exception():
     assert ApiClient.call_args.kwargs["base_url"] == "http://api.internal:8000"
 
 
+def test_dispatch_acks_when_fail_callback_returns_409_terminal():
+    """When /fail returns 409 (lease lost or job missing), the job
+    is already terminal on the api side — ack-delete instead of
+    redelivering."""
+    import httpx
+
+    body = {"type": "product.enumerate_job", "job_id": str(uuid4())}
+    request = httpx.Request("POST", "http://api/internal/products/x/fail")
+    response = httpx.Response(409, request=request)
+    fake_api = MagicMock()
+    fake_api.fail.side_effect = httpx.HTTPStatusError(
+        "409 Conflict",
+        request=request,
+        response=response,
+    )
+    with patch(
+        "src.dispatcher.handle_enumerate_job", side_effect=RuntimeError("boom")
+    ):
+        with patch("src.dispatcher.ApiClient", return_value=fake_api):
+            dispatch(body, settings=_settings(), vlm_client=_vlm())
+    fake_api.fail.assert_called_once()
+
+
 def test_dispatch_reraises_when_fail_callback_also_fails():
     """If /fail itself fails (api outage), the dispatcher re-raises
     the original exception so the SDK leaves the SQS message visible

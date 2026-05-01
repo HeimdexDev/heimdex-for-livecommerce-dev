@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+import httpx
 from heimdex_worker_sdk.queue_client import QueueMessage
 from heimdex_worker_sdk.sqs_consumer import InvalidMessageError
 
@@ -159,6 +160,26 @@ def _try_fail_callback(
             error_message=error_message[:1900],
         )
         return True
+    except httpx.HTTPStatusError as exc:
+        # 409 from /fail = "lease lost or job missing" (per
+        # internal_router._FailRequest handler). The job is already
+        # in a terminal state on the api side; redelivering the SQS
+        # message can't help. Treat as success so the caller
+        # ack-deletes instead of re-raising into DLQ retry.
+        if exc.response.status_code == 409:
+            logger.info(
+                "fail_callback_409_terminal_state",
+                extra={
+                    "job_id": str(job_id),
+                    "note": (
+                        "lease lost or job missing — message ack-deleted, "
+                        "no SQS redelivery needed"
+                    ),
+                },
+            )
+            return True
+        logger.exception("fail_callback_itself_failed", extra={"job_id": str(job_id)})
+        return False
     except Exception:
         logger.exception("fail_callback_itself_failed", extra={"job_id": str(job_id)})
         return False

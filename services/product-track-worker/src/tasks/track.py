@@ -548,7 +548,7 @@ def handle_track_job(
             job_id=decoded.job_id,
             claimed_by=settings.worker_id,
             cost_delta_usd=cost_accumulator,
-            appearances=_serialize_appearances(annotated, decoded),
+            appearances=_serialize_appearances(annotated, decoded, settings),
             render_job_id=render_job_id,
         )
     finally:
@@ -754,7 +754,7 @@ def _terminate_no_render(
             job_id=decoded.job_id,
             claimed_by=settings.worker_id,
             cost_delta_usd=cost,
-            appearances=_serialize_appearances(annotated, decoded),
+            appearances=_serialize_appearances(annotated, decoded, settings),
             render_job_id=None,
         )
         return
@@ -764,9 +764,18 @@ def _terminate_no_render(
 def _serialize_appearances(
     annotated: list,
     decoded: TrackJobMessage,
+    settings: WorkerSettings,
 ) -> list[dict[str, Any]]:
     """Convert lib-level ``AnnotatedWindow`` to the api's
     ``_AppearancePayload`` shape (extra='forbid' — must match exactly).
+
+    ``tracker_version`` is stamped from ``settings.tracker_version``
+    (the version of the worker that ACTUALLY ran), not from
+    ``decoded.tracker_version`` (the version that was current when
+    the message was enqueued — possibly stale by hours if the queue
+    backlog crossed a worker deploy). Mis-attributing rows breaks
+    version-keyed cleanup in
+    ``ProductAppearanceRepository.purge_for_catalog_and_tracker()``.
 
     The api derives ``catalog_entry_id`` from the claimed job row, so
     we MUST NOT send it on each appearance. Scaffold's earlier
@@ -785,7 +794,7 @@ def _serialize_appearances(
             "has_ocr_overlap": w.has_ocr_overlap,
             "co_appearing_catalog_entry_ids": [],
             "raw_bbox_track_s3_key": None,  # frame-level track upload TODO
-            "tracker_version": decoded.tracker_version,
+            "tracker_version": settings.tracker_version,
             "rejected_reason": w.rejected_reason,
         })
     return out
