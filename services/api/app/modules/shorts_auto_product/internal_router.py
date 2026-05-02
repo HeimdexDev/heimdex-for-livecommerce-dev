@@ -708,3 +708,90 @@ async def enqueue_render_for_scan_job(
     )
     await db.commit()
     return _RenderEnqueueResponse(render_job_id=response.id)
+
+
+# ---------- list catalog entries by video (Phase 4 PR #5b) ----------
+
+class _CatalogEntryListResponse(BaseModel):
+    """Response for ``GET /internal/products/by-video/{video_id}``.
+
+    Wraps the list of ``_CatalogEntryResource`` rows with the resolved
+    ``org_id`` so the worker doesn't have to thread it from the SQS
+    message body. Pattern A scoping (``X-Heimdex-Org-Id`` header
+    required) — the worker has the org_id from the track-job message
+    and passes it explicitly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    org_id: UUID
+    video_id: UUID
+    entries: list[_CatalogEntryResource]
+
+
+@router.get(
+    "/by-video/{video_id}",
+    response_model=_CatalogEntryListResponse,
+)
+async def list_catalog_entries_for_video(
+    video_id: UUID,
+    _token: Annotated[str, Depends(verify_internal_token)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    x_heimdex_org_id: Annotated[
+        str | None, Header(alias="X-Heimdex-Org-Id"),
+    ] = None,
+) -> _CatalogEntryListResponse:
+    """List active catalog entries for a video.
+
+    Phase 4 PR #5b — used by ``product-track-worker`` in the wizard
+    parent flow (``mode='scan_order'``) to enumerate which products
+    to track. The worker calls this once per parent job, then loops
+    over the returned entries running the existing per-product
+    track pipeline.
+
+    Auth: Bearer + ``X-Heimdex-Org-Id`` header (Pattern A — list
+    queries can't use Pattern B's resource-id resolution since the
+    lookup key is the video, not a single entry).
+
+    Returns the same ``_CatalogEntryResource`` shape per entry as
+    ``GET /catalog/{catalog_entry_id}`` so the worker's track
+    pipeline takes a uniform input. Embeddings + confidence /
+    prominence scores are deliberately omitted — the per-catalog
+    loop only needs canonical seed data + the llm_label for
+    alignment.
+    """
+    if x_heimdex_org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Heimdex-Org-Id header is required",
+        )
+    try:
+        org_id = UUID(x_heimdex_org_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"X-Heimdex-Org-Id is not a valid UUID: {exc}",
+        ) from exc
+
+    catalog_repo = ProductCatalogRepository(db)
+    entries = await catalog_repo.list_active_by_video(
+        org_id=org_id, video_id=video_id,
+    )
+    resources = [
+        _CatalogEntryResource(
+            catalog_entry_id=e.id,
+            org_id=e.org_id,
+            video_id=e.video_id,
+            canonical_crop_s3_key=e.canonical_crop_s3_key,
+            canonical_bbox=_BBoxXYWH(
+                x=e.canonical_bbox_x,
+                y=e.canonical_bbox_y,
+                w=e.canonical_bbox_w,
+                h=e.canonical_bbox_h,
+            ),
+            llm_label=e.llm_label,
+        )
+        for e in entries
+    ]
+    return _CatalogEntryListResponse(
+        org_id=org_id, video_id=video_id, entries=resources,
+    )

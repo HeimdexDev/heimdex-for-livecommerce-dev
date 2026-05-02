@@ -277,3 +277,24 @@ class ApiClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    def fetch_catalog_entries_for_video(
+        self, *, video_id: UUID, org_id: UUID,
+    ) -> list[dict[str, Any]]:
+        """Phase 4 PR #5b — list active catalog entries for a video.
+
+        Used by the wizard parent flow (``mode='scan_order'``) to
+        enumerate which products to track. Returns the ``entries``
+        array from the API response — each entry has the same shape
+        as ``fetch_catalog_entry`` so the per-product loop takes
+        uniform input.
+
+        ``X-Heimdex-Org-Id`` is required (Pattern A — list queries
+        can't use Pattern B's resource-id resolution).
+        """
+        resp = self._client.get(
+            f"{self.base_url}/internal/products/by-video/{video_id}",
+            headers={"X-Heimdex-Org-Id": str(org_id)},
+        )
+        resp.raise_for_status()
+        return resp.json().get("entries", [])
