@@ -106,20 +106,29 @@ class ProductScanJobRepository:
     async def find_recent_duplicate(
         self,
         *,
+        org_id: UUID,
         video_id: UUID,
         user_id: UUID,
         catalog_entry_id: UUID | None,
         within_seconds: int,
     ) -> ProductScanJob | None:
-        """Idempotency lookup for the scan + clip endpoints.
+        """Idempotency lookup for the legacy scan + clip endpoints.
 
-        Two requests with the same (video_id, user_id, catalog_entry_id)
-        within ``within_seconds`` return the existing job. Includes
-        terminal states — re-clicking a finished scan opens the cached
-        result rather than starting a new one.
+        Two requests with the same (org_id, video_id, user_id,
+        catalog_entry_id) within ``within_seconds`` return the existing
+        job. Includes terminal states — re-clicking a finished scan
+        opens the cached result rather than starting a new one.
+
+        ``org_id`` filter is mandatory (codex defensive fix). Without
+        it, two orgs that happen to reference the same ``video_id``
+        could collide on dedupe. Postgres FK on ``video_id`` already
+        scopes uniqueness per ``drive_files`` row, but this query is
+        defense in depth — and matches every other tenant-scoped
+        repository read in this module.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=within_seconds)
         conditions: list[Any] = [
+            ProductScanJob.org_id == org_id,
             ProductScanJob.video_id == video_id,
             ProductScanJob.requested_by_user_id == user_id,
             ProductScanJob.created_at >= cutoff,

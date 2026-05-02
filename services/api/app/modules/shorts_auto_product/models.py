@@ -57,6 +57,10 @@ SCAN_STAGE_ENUMERATION_DONE = "enumeration_done"
 SCAN_STAGE_TRACKING = "tracking"
 SCAN_STAGE_ASSEMBLING = "assembling"
 SCAN_STAGE_RENDERING = "rendering"
+# Phase 4 wizard stages — added in migration 052 via ALTER TYPE ADD VALUE.
+SCAN_STAGE_PREVIEW_READY = "preview_ready"   # parent waiting on user commit (Phase 6)
+SCAN_STAGE_FANNED_OUT = "fanned_out"         # parent waiting on N children to terminate
+SCAN_STAGE_COMMITTED = "committed"           # parent terminal once all children terminate
 SCAN_STAGE_DONE = "done"
 SCAN_STAGE_FAILED = "failed"
 SCAN_STAGE_CANCELLED = "cancelled"
@@ -68,26 +72,79 @@ ALL_SCAN_STAGES: tuple[str, ...] = (
     SCAN_STAGE_TRACKING,
     SCAN_STAGE_ASSEMBLING,
     SCAN_STAGE_RENDERING,
+    SCAN_STAGE_PREVIEW_READY,
+    SCAN_STAGE_FANNED_OUT,
+    SCAN_STAGE_COMMITTED,
     SCAN_STAGE_DONE,
     SCAN_STAGE_FAILED,
     SCAN_STAGE_CANCELLED,
 )
 
 # Stages where the job is still in-flight — drives the per-org
-# concurrency cap query (``ix_product_scan_jobs_active``).
+# concurrency cap query (``ix_product_scan_jobs_active``). Parents in
+# ``preview_ready`` and ``fanned_out`` still hold an active slot; children
+# (``mode='render_child'``) are excluded from the count via the index's
+# WHERE clause.
 ACTIVE_SCAN_STAGES: frozenset[str] = frozenset({
     SCAN_STAGE_QUEUED,
     SCAN_STAGE_ENUMERATING,
     SCAN_STAGE_TRACKING,
     SCAN_STAGE_ASSEMBLING,
     SCAN_STAGE_RENDERING,
+    SCAN_STAGE_PREVIEW_READY,
+    SCAN_STAGE_FANNED_OUT,
 })
 
 TERMINAL_SCAN_STAGES: frozenset[str] = frozenset({
     SCAN_STAGE_DONE,
+    SCAN_STAGE_COMMITTED,
     SCAN_STAGE_FAILED,
     SCAN_STAGE_CANCELLED,
 })
+
+
+# ---------- product_scan_jobs.mode discriminator (Phase 4) ----------
+#
+# Replaces the ``catalog_entry_id IS NULL`` heuristic that pre-dated the
+# 4-step wizard. The dispatch path branches:
+#
+#   mode='enumerate' AND catalog_entry_id IS NULL  → enumeration job
+#   mode='enumerate' AND catalog_entry_id NOT NULL → legacy single-product
+#                                                    tracking (deprecated;
+#                                                    +4wk sunset window)
+#   mode='scan_order'                              → wizard parent
+#   mode='render_child'                            → wizard child
+SCAN_MODE_ENUMERATE = "enumerate"
+SCAN_MODE_SCAN_ORDER = "scan_order"
+SCAN_MODE_RENDER_CHILD = "render_child"
+
+ALL_SCAN_MODES: tuple[str, ...] = (
+    SCAN_MODE_ENUMERATE,
+    SCAN_MODE_SCAN_ORDER,
+    SCAN_MODE_RENDER_CHILD,
+)
+
+# Wizard intent (parent only) — separates preview-flow dedupe from
+# commit-flow dedupe in the ``settings_hash`` keyspace.
+SCAN_INTENT_PREVIEW = "preview"
+SCAN_INTENT_COMMIT = "commit"
+
+ALL_SCAN_INTENTS: tuple[str, ...] = (SCAN_INTENT_PREVIEW, SCAN_INTENT_COMMIT)
+
+# Product distribution mode (parent only) — drives picker selection.
+PRODUCT_DISTRIBUTION_SINGLE = "single"
+PRODUCT_DISTRIBUTION_MULTI = "multi"
+
+ALL_PRODUCT_DISTRIBUTIONS: tuple[str, ...] = (
+    PRODUCT_DISTRIBUTION_SINGLE,
+    PRODUCT_DISTRIBUTION_MULTI,
+)
+
+# Wizard language (parent only).
+LANGUAGE_KO = "ko"
+LANGUAGE_EN = "en"
+
+ALL_LANGUAGES: tuple[str, ...] = (LANGUAGE_KO, LANGUAGE_EN)
 
 # SQLAlchemy enum type bound to the existing Postgres ENUM. All ORM
 # reads / writes go through this so type-safety is preserved.
@@ -261,11 +318,27 @@ class ProductAppearance(Base, UUIDMixin):
 
 @final
 class ProductScanJob(Base, UUIDMixin):
-    """Async job state machine for the cold-start UX.
+    """Async job state machine for shorts-auto product mode v2.
 
-    ``catalog_entry_id IS NULL`` ⇒ enumeration job (output:
-    ``catalog_entries``). ``catalog_entry_id`` non-null ⇒ tracking +
-    assembly job (output: ``render_job_id``).
+    Job kind is discriminated by ``mode`` (Phase 4) — NOT by
+    ``catalog_entry_id`` (the pre-Phase-4 heuristic). The dispatch path
+    must branch on ``mode``:
+
+    * ``mode='enumerate'`` AND ``catalog_entry_id IS NULL`` →
+      enumeration job (output: ``catalog_entries`` populated).
+    * ``mode='enumerate'`` AND ``catalog_entry_id IS NOT NULL`` →
+      legacy single-product tracking (deprecated; ``enqueue_clip``
+      sunsets after the +4wk window post-Phase-4 ship).
+    * ``mode='scan_order'`` (parent) → wizard submission. Holds wizard
+      criteria (``length_seconds``, ``time_range_*``, ``requested_count``,
+      ``product_distribution``, ``language``, ``intent``,
+      ``settings_hash``). GPU pipeline runs ONCE for the whole catalog;
+      ``render_job_id`` is **always NULL** (DB-enforced via
+      ``ck_psj_parent_no_render``) — children own renders.
+    * ``mode='render_child'`` → one of N child jobs of a parent. Holds
+      ``parent_job_id`` and ``shorts_index``. CPU-only — runs in the
+      API process via the child runner loop in ``app.main:lifespan``.
+      Each child enqueues exactly one ``ShortsRenderJob``.
 
     Worker lease pattern matches blur. Stale workers can never
     overwrite a re-claimed job because the ``/internal/products/*``
@@ -335,7 +408,15 @@ class ProductScanJob(Base, UUIDMixin):
         DateTime(timezone=True), nullable=True,
     )
 
-    # Output of tracking jobs.
+    # Render job FK — semantics are mode-aware:
+    #   mode='enumerate' AND catalog_entry_id NOT NULL (legacy tracking)
+    #     → set to the produced render_job_id
+    #   mode='scan_order' (parent)
+    #     → ALWAYS NULL (DB-enforced via ck_psj_parent_no_render); children
+    #       own their own render jobs. Querying parents → render via this
+    #       FK is incorrect post-Phase-4.
+    #   mode='render_child'
+    #     → set to the child's produced render_job_id
     render_job_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("shorts_render_jobs.id", ondelete="SET NULL"),
@@ -347,6 +428,36 @@ class ProductScanJob(Base, UUIDMixin):
     cost_usd_estimate: Mapped[Decimal] = mapped_column(
         Numeric(10, 4), nullable=False, server_default="0",
     )
+
+    # ---------- Phase 4 wizard fields (migration 052) ----------
+    #
+    # Parent → children relationship lives entirely in this table. The
+    # ck_psj_parent_child constraint enforces:
+    #   mode='render_child' → parent_job_id NOT NULL AND shorts_index NOT NULL
+    #   mode != 'render_child' → parent_job_id NULL AND shorts_index NULL
+    parent_job_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("product_scan_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    mode: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=SCAN_MODE_ENUMERATE,
+    )
+    requested_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    length_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    time_range_start_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    time_range_end_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    product_distribution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    language: Mapped[str | None] = mapped_column(Text, nullable=True)
+    shorts_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 'preview' | 'commit' — separates wizard intent in settings_hash keyspace.
+    # Required when mode='scan_order' (ck_psj_parent_required_fields), NULL
+    # everywhere else.
+    intent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # SHA256 of canonical-JSON wizard inputs (see service.compute_settings_hash).
+    # Drives idempotency lookups via ix_product_scan_jobs_settings_hash.
+    # Required when mode='scan_order', NULL everywhere else.
+    settings_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -361,16 +472,119 @@ class ProductScanJob(Base, UUIDMixin):
             "requested_by_user_id", "created_at",
         ),
         # Active-only — drives the per-org concurrency cap. Mirrors the
-        # ENUM list in ACTIVE_SCAN_STAGES; keep both in sync.
+        # ENUM list in ACTIVE_SCAN_STAGES; keep both in sync. Excludes
+        # ``mode='render_child'`` so children don't take a slot — only
+        # parents (and pre-Phase-4 enumerate / legacy tracking jobs)
+        # count toward the cap.
         Index(
             "ix_product_scan_jobs_active",
             "org_id", "stage",
-            postgresql_where=(stage.in_(list(ACTIVE_SCAN_STAGES))),
+            postgresql_where=(
+                stage.in_(list(ACTIVE_SCAN_STAGES))
+                & (mode != SCAN_MODE_RENDER_CHILD)
+            ),
         ),
-        # Idempotency lookup for the 60s scan-debounce window.
+        # Legacy idempotency lookup for the pre-Phase-4 60s scan-debounce
+        # window (kept for ``find_recent_duplicate``'s legacy callers).
         Index(
             "ix_product_scan_jobs_idempotency",
             "video_id", "requested_by_user_id", "catalog_entry_id", "created_at",
+        ),
+        # Parent → children lookup. Used by GET /scan-orders/{parent_id}
+        # and by cancel-cascade.
+        Index(
+            "ix_product_scan_jobs_parent",
+            "parent_job_id",
+            postgresql_where=(parent_job_id.is_not(None)),
+        ),
+        # Q3 (codex-revised): wizard idempotency lookup keyed on
+        # (org_id, user_id, settings_hash, created_at). The matching
+        # repository query (find_recent_scan_order_duplicate) MUST filter
+        # on org_id — codex caught the original find_recent_duplicate
+        # bug where org_id was missing.
+        Index(
+            "ix_product_scan_jobs_settings_hash",
+            "org_id", "requested_by_user_id", "settings_hash", "created_at",
+            postgresql_where=(
+                (mode == SCAN_MODE_SCAN_ORDER) & settings_hash.is_not(None)
+            ),
+        ),
+        # Q1 (codex-revised): the child-runner asyncio loop polls for
+        # queued render_child rows. This partial index keeps the poll
+        # O(1) at table scale while the typical row count of queued
+        # children stays small.
+        Index(
+            "ix_product_scan_jobs_child_queue",
+            "created_at",
+            postgresql_where=(
+                (mode == SCAN_MODE_RENDER_CHILD) & (stage == SCAN_STAGE_QUEUED)
+            ),
+        ),
+        # Mirrors of CHECK constraints in migration 052. Keep these in
+        # sync so ``alembic --autogenerate`` doesn't propose redundant
+        # DROP/CREATE pairs on a future revision.
+        CheckConstraint(
+            "mode IN ('enumerate','scan_order','render_child')",
+            name="ck_psj_mode",
+        ),
+        CheckConstraint(
+            "product_distribution IS NULL OR product_distribution IN ('single','multi')",
+            name="ck_psj_distribution",
+        ),
+        CheckConstraint(
+            "language IS NULL OR language IN ('ko','en')",
+            name="ck_psj_language",
+        ),
+        CheckConstraint(
+            "intent IS NULL OR intent IN ('preview','commit')",
+            name="ck_psj_intent",
+        ),
+        CheckConstraint(
+            "(mode = 'render_child' AND parent_job_id IS NOT NULL "
+            "AND shorts_index IS NOT NULL) "
+            "OR (mode <> 'render_child' AND parent_job_id IS NULL "
+            "AND shorts_index IS NULL)",
+            name="ck_psj_parent_child",
+        ),
+        # Q4 (codex pushback): scan_order parents must NEVER carry
+        # render_job_id; children own renders.
+        CheckConstraint(
+            "mode <> 'scan_order' OR render_job_id IS NULL",
+            name="ck_psj_parent_no_render",
+        ),
+        CheckConstraint(
+            "(mode = 'scan_order' AND settings_hash IS NOT NULL "
+            "AND intent IS NOT NULL) "
+            "OR (mode <> 'scan_order' AND settings_hash IS NULL "
+            "AND intent IS NULL)",
+            name="ck_psj_parent_required_fields",
+        ),
+        CheckConstraint(
+            "(time_range_start_ms IS NULL AND time_range_end_ms IS NULL) "
+            "OR (time_range_end_ms > time_range_start_ms)",
+            name="ck_psj_time_range",
+        ),
+        # Q5 (codex-revised): tightened from 5..600 to 10..120 seconds.
+        CheckConstraint(
+            "length_seconds IS NULL "
+            "OR (length_seconds >= 10 AND length_seconds <= 120)",
+            name="ck_psj_length",
+        ),
+        CheckConstraint(
+            "requested_count IS NULL "
+            "OR (requested_count >= 1 AND requested_count <= 50)",
+            name="ck_psj_count",
+        ),
+        # Q5 aggregate cap: count * length <= 1800s (30 min total
+        # output per scan order). Codex caught: my original budget
+        # rationale was wrong — the daily cost ledger tracks SCAN cost
+        # (heartbeat/complete/fail), not FFmpeg render cost. This
+        # aggregate cap is the right guard.
+        CheckConstraint(
+            "requested_count IS NULL "
+            "OR length_seconds IS NULL "
+            "OR (requested_count * length_seconds <= 1800)",
+            name="ck_psj_aggregate_output",
         ),
     )
 
@@ -408,18 +622,34 @@ class ProductScanDailyCost(Base):
 
 __all__ = [
     "ACTIVE_SCAN_STAGES",
+    "ALL_LANGUAGES",
+    "ALL_PRODUCT_DISTRIBUTIONS",
+    "ALL_SCAN_INTENTS",
+    "ALL_SCAN_MODES",
     "ALL_SCAN_STAGES",
+    "LANGUAGE_EN",
+    "LANGUAGE_KO",
+    "PRODUCT_DISTRIBUTION_MULTI",
+    "PRODUCT_DISTRIBUTION_SINGLE",
     "PRODUCT_SCAN_STAGE_ENUM",
     "ProductAppearance",
     "ProductCatalogEntry",
     "ProductScanDailyCost",
     "ProductScanJob",
+    "SCAN_INTENT_COMMIT",
+    "SCAN_INTENT_PREVIEW",
+    "SCAN_MODE_ENUMERATE",
+    "SCAN_MODE_RENDER_CHILD",
+    "SCAN_MODE_SCAN_ORDER",
     "SCAN_STAGE_ASSEMBLING",
     "SCAN_STAGE_CANCELLED",
+    "SCAN_STAGE_COMMITTED",
     "SCAN_STAGE_DONE",
     "SCAN_STAGE_ENUMERATING",
     "SCAN_STAGE_ENUMERATION_DONE",
     "SCAN_STAGE_FAILED",
+    "SCAN_STAGE_FANNED_OUT",
+    "SCAN_STAGE_PREVIEW_READY",
     "SCAN_STAGE_QUEUED",
     "SCAN_STAGE_RENDERING",
     "SCAN_STAGE_TRACKING",
