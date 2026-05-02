@@ -407,15 +407,47 @@ async def complete(
         # Q4 codex pushback: scan_order parents NEVER carry render_job_id;
         # the ck_psj_parent_no_render CHECK enforces this at the DB level
         # but force NULL here too — defense in depth.
-        effective_render_job_id = (
-            None if kind == "scan_order" else body.render_job_id
-        )
-        await job_repo.complete_tracking(
-            job_id=job_id,
-            claimed_by=body.claimed_by,
-            cost_delta_usd=body.cost_delta_usd,
-            render_job_id=effective_render_job_id,
-        )
+        if kind == "scan_order":
+            # Phase 4 fan-out hook: transition parent to FANNED_OUT
+            # (NOT DONE — parent isn't terminal until children
+            # terminate) and atomically insert N children. Both
+            # operations are in the same transaction as the
+            # appearances insert above so a partial fan-out is
+            # impossible: if the children insert fails, the entire
+            # /complete returns 500 and the worker retries (lease
+            # protected against double-fan-out via the claimed_by
+            # check + the parent's stage transition).
+            transitioned = await job_repo.transition_parent_to_fanned_out(
+                job_id=job_id,
+                claimed_by=body.claimed_by,
+                cost_delta_usd=body.cost_delta_usd,
+            )
+            if transitioned is None:
+                # Transition failed — parent must have been
+                # cancelled / re-claimed mid-/complete. Surface as
+                # 409 (lease lost) so the worker treats the message
+                # as terminal and ack-deletes.
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="parent transition failed; lease lost or cancelled",
+                )
+            children = await job_repo.create_render_children(
+                parent=transitioned,
+                count=transitioned.requested_count,
+            )
+            logger.info(
+                "product_v2_scan_order_fanned_out",
+                parent_job_id=str(job_id),
+                children_inserted=len(children),
+                requested_count=transitioned.requested_count,
+            )
+        else:
+            await job_repo.complete_tracking(
+                job_id=job_id,
+                claimed_by=body.claimed_by,
+                cost_delta_usd=body.cost_delta_usd,
+                render_job_id=body.render_job_id,
+            )
 
     if body.cost_delta_usd > Decimal("0"):
         await cost_repo.add_cost(

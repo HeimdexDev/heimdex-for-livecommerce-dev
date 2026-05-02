@@ -291,6 +291,59 @@ class ProductScanJobRepository:
             render_job_id=render_job_id,
         )
 
+    async def transition_parent_to_fanned_out(
+        self,
+        *,
+        job_id: UUID,
+        claimed_by: str,
+        cost_delta_usd: Decimal,
+    ) -> ProductScanJob | None:
+        """Transition a wizard scan_order parent from tracking →
+        fanned_out (Phase 4).
+
+        Differs from ``complete_tracking`` in two key ways:
+          * ``stage`` lands on ``SCAN_STAGE_FANNED_OUT`` (NOT DONE).
+            The parent isn't terminal yet — it stays at fanned_out
+            until all N children terminate.
+          * ``completed_at`` stays NULL — the parent's "complete" is
+            the workflow's pivot point to children, not the workflow's
+            end.
+
+        Releases the worker lease (claimed_by=None) since no further
+        worker callbacks are expected on the parent. The cost delta
+        from this final heartbeat rolls in atomically.
+
+        Guarded on ``mode = SCAN_MODE_SCAN_ORDER`` AND ``claimed_by``
+        match — defense in depth so a buggy worker can't transition
+        the wrong job kind via this method.
+        """
+        from app.modules.shorts_auto_product.models import (
+            SCAN_MODE_SCAN_ORDER,
+            SCAN_STAGE_FANNED_OUT,
+        )
+
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(ProductScanJob)
+            .where(
+                ProductScanJob.id == job_id,
+                ProductScanJob.claimed_by == claimed_by,
+                ProductScanJob.mode == SCAN_MODE_SCAN_ORDER,
+            )
+            .values(
+                stage=SCAN_STAGE_FANNED_OUT,
+                progress_pct=100,
+                last_heartbeat_at=now,
+                claimed_by=None,
+                lease_expires_at=None,
+                cost_usd_estimate=(
+                    ProductScanJob.cost_usd_estimate + cost_delta_usd
+                ),
+            )
+            .returning(ProductScanJob)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def _complete(
         self,
         *,
