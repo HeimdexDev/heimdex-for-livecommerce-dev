@@ -1,0 +1,216 @@
+# ============================================
+# Heimdex Staging — tenant-livenow
+# Non-secret config values only
+# Secrets + service URLs are in SSM Parameter Store
+# ============================================
+
+# ── Basic ────────────────────────────────────
+ENVIRONMENT: staging
+LOG_LEVEL: INFO
+ALLOWED_HOSTS: "*.app.heimdexdemo.dev,localhost"
+ENABLE_DEV_REFRESH: "true"
+
+# ── Domain / TLS ─────────────────────────────
+DOMAIN: app.heimdexdemo.dev
+WILDCARD_DOMAIN: "*.app.heimdexdemo.dev"
+CERTBOT_EMAIL: infra@heimdexdemo.dev
+
+# ── Docker Postgres ──────────────────────────
+POSTGRES_USER: heimdex
+POSTGRES_DB: heimdex
+
+# ── OpenSearch (Docker) ──────────────────────
+# OPENSEARCH_URL is in SSM
+OPENSEARCH_INDEX_PREFIX: heimdex
+OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+
+# ── Auth / JWT ───────────────────────────────
+AUTH_COOKIE_SECURE: "true"
+AUTH_COOKIE_SAMESITE: lax
+AUTH_COOKIE_DOMAIN: ".app.heimdexdemo.dev"
+JWT_ALGORITHM: HS256
+JWT_EXPIRATION_HOURS: "24"
+
+# ── Auth0 ────────────────────────────────────
+AUTH0_ENABLED: "true"
+AUTH0_DOMAIN: heimdex.jp.auth0.com
+AUTH0_AUDIENCE: "https://api.staging.heimdexdemo.dev"
+AUTH0_ALGORITHMS: RS256
+AUTH0_ORG_CLAIM: "https://heimdex.io/org_id"
+
+# ── CORS ─────────────────────────────────────
+CORS_ALLOW_ORIGIN_REGEX: "https?://.*\\.app\\.heimdexdemo\\.dev"
+CORS_EXTRA_ORIGINS: ""
+
+# ── Embedding ────────────────────────────────
+EMBEDDING_MODEL: "intfloat/multilingual-e5-large"
+EMBEDDING_DIMENSION: "1024"
+EMBEDDING_DEVICE: cpu
+EMBEDDING_USE_MOCK: "false"
+
+# ── Search Tuning ────────────────────────────
+SEARCH_LEXICAL_TOP_K: "100"
+SEARCH_VECTOR_TOP_K: "100"
+SEARCH_RRF_K: "60"
+SEARCH_MAX_SCENES_PER_VIDEO: "50"
+SEARCH_PAGE_SIZE: "20"
+SEARCH_DEFAULT_MODE: hybrid
+OCR_SEARCH_ENABLED: "true"
+OCR_BM25_BOOST: "1.5"
+
+# ── S3 / MinIO ───────────────────────────────
+MINIO_ENDPOINT: ""
+MINIO_SECURE: "false"
+DRIVE_S3_BUCKET: "heimdex-drive-staging"
+S3_REGION: ap-northeast-2
+
+# ── SQS ──────────────────────────────────────
+# Queue URLs are in SSM
+SQS_ENABLED: "true"
+SQS_ENDPOINT_URL: ""
+SQS_REGION: ap-northeast-2
+SQS_CONSUMER_ENABLED: "true"
+
+# ── Aircloud GPU ─────────────────────────────
+# Endpoint URLs are in SSM
+AIRCLOUD_ENABLED: "true"
+AIRCLOUD_WAKE_DEBOUNCE_SECONDS: "300"
+AIRCLOUD_COOLDOWN_CHECKS: "3"
+
+# ── Reranker ─────────────────────────────────
+# RERANKER_SERVICE_URL is in SSM
+RERANKER_ENABLED: "true"
+RERANKER_TIMEOUT_MS: "5000"
+RERANKER_USE_MOCK: "false"
+
+# ── Drive Worker ─────────────────────────────
+DRIVE_CONNECTOR_ENABLED: "true"
+DRIVE_ENRICHMENT_ENABLED: "true"
+DRIVE_OCR_ENABLED: "true"
+DRIVE_STT_ENABLED: "true"
+FOLDER_SYNC_V2_ENABLED: "true"
+DRIVE_WORKER_POLL_INTERVAL_SECONDS: "30"
+DRIVE_WORKER_GLOBAL_CONCURRENCY: "2"
+DRIVE_WORKER_PER_ORG_CONCURRENCY: "2"
+DRIVE_TEMP_DISK_BUDGET_GB: "90"
+DRIVE_TEMP_DIR: /data/drive-tmp
+DRIVE_PROXY_MAX_HEIGHT: "720"
+DRIVE_PROXY_CRF: "23"
+DRIVE_PROXY_PRESET: fast
+DRIVE_PROXY_AUDIO_BITRATE: 128k
+DRIVE_PROXY_MAX_BITRATE: 2500k
+DRIVE_PROXY_BUFSIZE: 5000k
+IMAGE_PROCESSING_ENABLED: "true"
+DRIVE_TRANSCODE_MODE: gpu
+DRIVE_API_BASE_URL: "http://api:8000"
+
+# ── Drive STT ────────────────────────────────
+DRIVE_STT_MODEL: small
+DRIVE_STT_LANGUAGE: ko
+DRIVE_STT_DIARIZATION_ENABLED: "true"
+DRIVE_STT_MIN_SPEAKERS: "1"
+DRIVE_STT_MAX_SPEAKERS: "4"
+DRIVE_SPEECH_SPLIT_ENABLED: "true"
+
+# ── Caption ──────────────────────────────────
+SCENE_CAPTION_ENABLED: "true"
+LLAMA_CAPTION_THREADS: "4"
+LLAMA_MLOCK: "false"
+
+# ── Feature Flags ────────────────────────────
+VISUAL_EMBEDDING_ENABLED: "true"
+VLM_TAGS_ENABLED: "true"
+AI_TAGS_ENABLED: "true"
+FACE_THUMBNAIL_S3_PRIMARY: "true"
+HIGHLIGHT_REEL_ENABLED: "true"
+VIDEO_SUMMARY_ENABLED: "true"
+YOUTUBE_ENABLED: "true"
+
+# ── Face Detection ───────────────────────────
+FACE_MATCH_THRESHOLD: "0.55"
+
+# ── Image Caption ────────────────────────────
+IMAGE_CAPTION_ENABLED: "true"
+IMAGE_CAPTION_MODEL: gpt-4o
+IMAGE_CAPTION_IMAGE_DETAIL: low
+IMAGE_CAPTION_MAX_CONCURRENCY: "4"
+IMAGE_CAPTION_TIMEOUT_S: "30.0"
+IMAGE_CAPTION_DAILY_BUDGET_USD: "50.0"
+IMAGE_CAPTION_ESTIMATED_COST_PER_CALL_USD: "0.012"
+IMAGE_CAPTION_PROMPT_VERSION: "2026-04-13-v1"
+
+# ── Auto Shorts ──────────────────────────────
+AUTO_SHORTS_ENABLED: "true"
+AUTO_SHORTS_RATE_LIMIT_PER_HOUR: "10"
+AUTO_SHORTS_MIN_VIDEO_DURATION_SEC: "300"
+AUTO_SHORTS_LLM_ENABLED: "true"
+AUTO_SHORTS_LLM_MODEL: gpt-4o-mini
+AUTO_SHORTS_LLM_MAX_SCENES: "50"
+AUTO_SHORTS_LLM_DAILY_BUDGET_USD: "25.0"
+AUTO_SHORTS_LLM_ESTIMATED_COST_PER_CALL_USD: "0.003"
+AUTO_SHORTS_LLM_TIMEOUT_SEC: "8.0"
+AUTO_SHORTS_LLM_ROLLOUT_PCT: "100"
+AUTO_SHORTS_LLM_PROMPT_VERSION: "2026-04-24-v1"
+
+# ── Blur ─────────────────────────────────────
+BLUR_ENABLED: "true"
+BLUR_EXPORT_ENABLED: "true"
+BLUR_MAX_ACTIVE_PER_ORG: "5"
+BLUR_LEASE_SECONDS: "1800"
+BLUR_DAILY_BUDGET_USD_PER_ORG: "50.0"
+
+# ── Agent ────────────────────────────────────
+AGENT_INGEST_ENABLED: "true"
+AGENT_API_KEY_MODE: single
+AGENT_INGEST_MAX_SCENES: "500"
+AGENT_INGEST_MAX_TRANSCRIPT_CHARS: "100000"
+PAIRING_CODE_TTL_MINUTES: "10"
+AGENT_INTENTS_ENABLED: "true"
+AGENT_INTENT_TTL_MINUTES: "30"
+AGENT_INTENT_MAX_PER_ORG: "10"
+AGENT_INTENT_EXCHANGE_MAX_ATTEMPTS: "3"
+
+# ── Ingest Safety ────────────────────────────
+INGEST_REQUIRE_TIMESTAMP: "true"
+INGEST_TIMESTAMP_SKEW_SECONDS: "300"
+INGEST_REQUIRE_IDEMPOTENCY: "true"
+INGEST_IDEMPOTENCY_TTL_SECONDS: "86400"
+
+# ── Export ───────────────────────────────────
+EXPORT_MAX_SIZE_BYTES: "2147483648"
+EXPORT_MAX_CLIPS: "100"
+EXPORT_MAX_PROXIES: "20"
+EXPORT_EXPIRY_DAYS: "3"
+
+# ── Analytics ────────────────────────────────
+ANALYTICS_ENABLED: "true"
+ANALYTICS_EXPORT_ENABLED: "true"
+ANALYTICS_S3_BUCKET: "heimdex-drive-staging"
+ANALYTICS_S3_PREFIX: analytics
+ANALYTICS_BQ_ENABLED: "false"
+ANALYTICS_BQ_PROJECT: ""
+ANALYTICS_BQ_DATASET: search_analytics
+
+# ── YouTube ──────────────────────────────────
+YOUTUBE_S3_BUCKET: "heimdex-drive-staging"
+YOUTUBE_SYNC_INTERVAL_SECONDS: "21600"
+YOUTUBE_DOWNLOAD_FORMAT: "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"
+YOUTUBE_RATE_LIMIT_SLEEP: "3"
+YOUTUBE_RATE_LIMIT_MAX_SLEEP: "8"
+YOUTUBE_MAX_CONCURRENT_DOWNLOADS: "2"
+YOUTUBE_AUTO_DELETE_ORIGINALS: "true"
+YOUTUBE_ORIGINAL_TTL_DAYS: "7"
+YOUTUBE_COOKIES_PATH: /data/youtube-tmp/cookies.txt
+YOUTUBE_COOKIES_HOST_DIR: /opt/heimdex/secrets/youtube
+
+# ── Web (build args) ────────────────────────
+NEXT_PUBLIC_API_URL: ""
+NEXT_PUBLIC_AUTH0_ENABLED: "true"
+NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED: "true"
+
+# ── Container Registry ──────────────────────
+REGISTRY: "ghcr.io/heimdex"
+IMAGE_TAG: latest
+
+# ── HuggingFace ──────────────────────────────
+HF_HOME: /root/.cache/huggingface
