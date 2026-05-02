@@ -151,6 +151,8 @@ artifacts/
 data/
 .insightface/
 .gstack/
+# Codex CLI session state (transient — session ids are not stable across runs)
+.context/
 
 # E2E Playwright test artifacts (local only)
 e2e/node_modules/

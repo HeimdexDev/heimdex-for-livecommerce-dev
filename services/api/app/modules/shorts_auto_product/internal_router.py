@@ -215,7 +215,22 @@ class _CatalogEntryPayload(BaseModel):
 
 
 class _AppearancePayload(BaseModel):
+    """Per-appearance shape for the ``/complete`` callback.
+
+    For legacy single-product tracking jobs (``mode='enumerate'`` AND
+    ``catalog_entry_id IS NOT NULL``), ``catalog_entry_id`` is derived
+    server-side from the job row and MUST be omitted (or null) here —
+    the worker doesn't carry it on the wire.
+
+    For wizard scan_order parents (``mode='scan_order'``), the parent
+    processed the whole catalog so each appearance row carries its own
+    ``catalog_entry_id``. Required in this case; the dispatch path
+    below 422s if missing.
+    """
+
     model_config = ConfigDict(extra="forbid")
+    # Optional on the wire; required-by-mode in the /complete dispatch.
+    catalog_entry_id: UUID | None = None
     scene_id: str = Field(..., min_length=1)
     window_start_ms: int = Field(..., ge=0)
     window_end_ms: int = Field(..., gt=0)
@@ -272,22 +287,67 @@ async def complete(
             detail="lease lost or job missing",
         )
 
-    is_enum = job.catalog_entry_id is None
-    if is_enum and not body.catalog_entries:
+    # Phase 4 task #1 (codex-flagged): dispatch on ``job.mode``, NOT on
+    # ``catalog_entry_id IS NULL``. The pre-Phase-4 heuristic would
+    # misclassify ``mode='scan_order'`` parents (which also carry
+    # ``catalog_entry_id=NULL``) as enumeration jobs and 400 every
+    # parent /complete.
+    from app.modules.shorts_auto_product.models import (
+        SCAN_MODE_ENUMERATE,
+        SCAN_MODE_SCAN_ORDER,
+    )
+
+    if job.mode == SCAN_MODE_ENUMERATE and job.catalog_entry_id is None:
+        kind = "enumeration"
+    elif job.mode == SCAN_MODE_ENUMERATE and job.catalog_entry_id is not None:
+        kind = "legacy_tracking"  # deprecated enqueue_clip flow
+    elif job.mode == SCAN_MODE_SCAN_ORDER:
+        kind = "scan_order"
+    else:
+        # ``mode='render_child'`` callers should hit /render then
+        # /complete via a different flow entirely; rejecting here lets
+        # us catch contract drift early.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"/complete does not accept mode={job.mode!r} via this path",
+        )
+
+    # Body-shape validation by kind.
+    if kind == "enumeration" and not body.catalog_entries:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="enumeration complete must include catalog_entries",
         )
-    if not is_enum and not body.appearances:
+    if kind == "legacy_tracking" and not body.appearances:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="tracking complete must include appearances",
         )
+    if kind == "scan_order" and not body.appearances:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="scan_order complete must include appearances",
+        )
+    if kind == "scan_order":
+        # Each appearance must carry its own catalog_entry_id (the
+        # parent processed the whole catalog).
+        missing = [
+            i for i, app in enumerate(body.appearances)
+            if app.catalog_entry_id is None
+        ]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"scan_order appearances must each carry catalog_entry_id "
+                    f"(missing on indices {missing[:5]}{'...' if len(missing) > 5 else ''})"
+                ),
+            )
 
     persisted_catalog = 0
     persisted_appearances = 0
 
-    if is_enum:
+    if kind == "enumeration":
         catalog_dicts: list[dict[str, object]] = []
         for entry in body.catalog_entries:
             catalog_dicts.append({
@@ -315,11 +375,20 @@ async def complete(
             cost_delta_usd=body.cost_delta_usd,
         )
     else:
-        catalog_entry_id = job.catalog_entry_id  # type: ignore[assignment]
+        # ``legacy_tracking`` derives catalog_entry_id from the job row;
+        # ``scan_order`` reads it from each appearance's payload.
+        legacy_catalog_entry_id = (
+            job.catalog_entry_id if kind == "legacy_tracking" else None
+        )
         appearance_dicts: list[dict[str, object]] = []
         for app in body.appearances:
+            row_catalog_entry_id = (
+                legacy_catalog_entry_id
+                if kind == "legacy_tracking"
+                else app.catalog_entry_id
+            )
             appearance_dicts.append({
-                "catalog_entry_id": catalog_entry_id,
+                "catalog_entry_id": row_catalog_entry_id,
                 "org_id": job.org_id,
                 "scene_id": app.scene_id,
                 "window_start_ms": app.window_start_ms,
@@ -335,11 +404,17 @@ async def complete(
             })
         rows = await appearance_repo.bulk_insert(appearances=appearance_dicts)
         persisted_appearances = len(rows)
+        # Q4 codex pushback: scan_order parents NEVER carry render_job_id;
+        # the ck_psj_parent_no_render CHECK enforces this at the DB level
+        # but force NULL here too — defense in depth.
+        effective_render_job_id = (
+            None if kind == "scan_order" else body.render_job_id
+        )
         await job_repo.complete_tracking(
             job_id=job_id,
             claimed_by=body.claimed_by,
             cost_delta_usd=body.cost_delta_usd,
-            render_job_id=body.render_job_id,
+            render_job_id=effective_render_job_id,
         )
 
     if body.cost_delta_usd > Decimal("0"):
@@ -351,7 +426,7 @@ async def complete(
     logger.info(
         "product_v2_job_completed",
         job_id=str(job_id),
-        kind="enumeration" if is_enum else "tracking",
+        kind=kind,
         persisted_catalog=persisted_catalog,
         persisted_appearances=persisted_appearances,
         cost_delta_usd=str(body.cost_delta_usd),

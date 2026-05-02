@@ -255,8 +255,10 @@ class ProductScanService:
         self._require_enabled_for_org(org_id)
         await self._require_budget(org_id)
 
-        # Idempotency: same (video, user) within window → return existing.
+        # Idempotency: same (org, video, user) within window → return existing.
+        # ``org_id`` is mandatory (codex defensive fix; see repositories/job.py).
         existing = await self.job_repo.find_recent_duplicate(
+            org_id=org_id,
             video_id=video_id,
             user_id=user_id,
             catalog_entry_id=None,
@@ -339,6 +341,7 @@ class ProductScanService:
             )
 
         existing = await self.job_repo.find_recent_duplicate(
+            org_id=org_id,
             video_id=video_id,
             user_id=user_id,
             catalog_entry_id=catalog_entry_id,
@@ -564,7 +567,47 @@ class ProductScanService:
 # ---------- helpers ----------
 
 def _job_to_status_response(job: ProductScanJob) -> JobStatusResponse:
-    kind: JobKind = "tracking" if job.catalog_entry_id is not None else "enumeration"
+    """Mode-aware projection of a ``ProductScanJob`` to the public
+    ``JobStatusResponse`` shape.
+
+    Discriminator switch (Phase 4 task #1, codex-flagged): branches on
+    ``job.mode`` rather than the pre-Phase-4 ``catalog_entry_id IS NULL``
+    heuristic, which would misclassify ``mode='scan_order'`` parents
+    (also NULL) as enumeration jobs.
+
+    Q4 codex pushback: ``render_job_id`` is forced to ``None`` for
+    ``mode='scan_order'`` parents in the response payload, even if the
+    row somehow carries one (the ``ck_psj_parent_no_render`` CHECK
+    should make that impossible at the DB level). Defense in depth:
+    every layer agrees parents do not carry render FKs.
+    """
+    from app.modules.shorts_auto_product.models import (
+        SCAN_MODE_ENUMERATE,
+        SCAN_MODE_RENDER_CHILD,
+        SCAN_MODE_SCAN_ORDER,
+    )
+
+    if job.mode == SCAN_MODE_SCAN_ORDER:
+        kind: JobKind = "scan_order"
+        # Defensive: parents must not echo a render_job_id even if the
+        # row carries one. CHECK constraint prevents writes; this is
+        # belt-and-suspenders for the read path.
+        render_job_id_response: UUID | None = None
+    elif job.mode == SCAN_MODE_RENDER_CHILD:
+        kind = "render_child"
+        render_job_id_response = job.render_job_id
+    elif job.mode == SCAN_MODE_ENUMERATE:
+        # Backward compat: the dispatch from ``mode='enumerate'`` to
+        # the user-facing kind still depends on ``catalog_entry_id``
+        # during the +4wk legacy ``enqueue_clip`` deprecation window.
+        if job.catalog_entry_id is not None:
+            kind = "tracking"  # legacy single-product flow
+        else:
+            kind = "enumeration"
+        render_job_id_response = job.render_job_id
+    else:  # pragma: no cover — CHECK constraint forbids other values
+        raise ValueError(f"unknown ProductScanJob.mode: {job.mode!r}")
+
     stage: ScanStage = job.stage  # type: ignore[assignment]
     error_code = job.error_code  # type: ignore[assignment]
     return JobStatusResponse(
@@ -578,6 +621,8 @@ def _job_to_status_response(job: ProductScanJob) -> JobStatusResponse:
         cancelled_at=job.cancelled_at,
         error_code=error_code,
         error_message=job.error_message,
-        render_job_id=job.render_job_id,
+        render_job_id=render_job_id_response,
+        parent_job_id=job.parent_job_id,
+        shorts_index=job.shorts_index,
         cost_usd_estimate=job.cost_usd_estimate,
     )

@@ -39,12 +39,24 @@ ScanStage = Literal[
     "tracking",
     "assembling",
     "rendering",
+    # Phase 4 wizard stages.
+    "preview_ready",   # parent waiting on user commit (Phase 6)
+    "fanned_out",      # parent waiting on N children to terminate
+    "committed",       # parent terminal once all children terminate
     "done",
     "failed",
     "cancelled",
 ]
 
-JobKind = Literal["enumeration", "tracking"]
+# Job kind discriminator (Phase 4). Mirrors the ``mode`` column on
+# ``ProductScanJob`` plus the legacy "tracking" value for the deprecated
+# single-product (``enqueue_clip``) flow.
+#   ``enumeration``    → mode='enumerate' AND catalog_entry_id IS NULL
+#   ``tracking``       → mode='enumerate' AND catalog_entry_id IS NOT NULL
+#                        (legacy single-product, sunset +4wk after Phase 4 ship)
+#   ``scan_order``     → mode='scan_order' (wizard parent)
+#   ``render_child``   → mode='render_child' (wizard child)
+JobKind = Literal["enumeration", "tracking", "scan_order", "render_child"]
 
 ScanErrorCode = Literal[
     "llm_timeout",
@@ -145,8 +157,12 @@ class ClipResponse(BaseModel):
 class JobStatusResponse(BaseModel):
     """Response for ``GET /api/shorts/auto/jobs/{job_id}``.
 
-    Single shape for both enumeration and tracking jobs — the UI
-    branches on ``kind`` to render the right progress UI.
+    Single shape for all four job kinds — the UI branches on ``kind``
+    to render the right progress UI. Phase 4 added ``parent_job_id`` +
+    ``shorts_index`` so children carry lineage in this flat shape too;
+    the wizard's primary subscription is to the parent's aggregate
+    endpoint (``GET /scan-orders/{parent_id}``) but legacy callers can
+    still hit ``/jobs/{id}`` and group by parent.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -164,8 +180,16 @@ class JobStatusResponse(BaseModel):
     error_code: ScanErrorCode | None = None
     error_message: str | None = None
 
-    # Set on tracking jobs once the render is enqueued.
+    # Set on legacy single-product tracking jobs and on render_child
+    # jobs once the render is enqueued. **Always None for scan_order
+    # parents** — children own renders (Q4 codex pushback).
     render_job_id: UUID | None = None
+
+    # Wizard lineage — set only on ``kind='render_child'``. Lets the
+    # UI group children under their parent in the flat /jobs/{id}
+    # response without an extra round-trip.
+    parent_job_id: UUID | None = None
+    shorts_index: int | None = None
 
     # Per-job running cost (running total — re-reads update across
     # heartbeats). Frontend doesn't display this in v1; it's surfaced
