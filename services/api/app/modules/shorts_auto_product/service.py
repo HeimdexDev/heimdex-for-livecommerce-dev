@@ -658,9 +658,66 @@ class ProductScanService:
         )
         await self.session.flush()
 
-        # TODO(PR#3): publish_product_scan_order_job — wired with the
-        # worker refactor that teaches product-track-worker to handle
-        # mode='scan_order'. Until then, parent rows sit in 'queued'.
+        # Phase 4 PR — publish the parent track job to SQS so the
+        # product-track-worker picks it up and runs the per-catalog
+        # tracking loop. Gated on
+        # ``auto_shorts_product_v2_publish_scan_order_enabled`` so we
+        # can deploy the API code BEFORE the worker is rebuilt with
+        # v0.14.0 contracts. Flipping the flag without the worker
+        # ready would fill the worker DLQ with unparseable messages
+        # (extra='forbid' rejects the new wizard fields on a v0.13.0
+        # contracts pin).
+        if self.settings.auto_shorts_product_v2_publish_scan_order_enabled:
+            try:
+                sqs_producer.publish_product_track_job(
+                    job_id=parent.id,
+                    org_id=org_id,
+                    video_id=video_id,
+                    requested_by_user_id=user_id,
+                    tracker_version=(
+                        self.settings.auto_shorts_product_v2_tracker_version
+                    ),
+                    enumeration_prompt_version=(
+                        self.settings
+                        .auto_shorts_product_v2_enumeration_prompt_version
+                    ),
+                    callback_base_url=(
+                        self.settings.auto_shorts_product_v2_callback_base_url
+                    ),
+                    mode="scan_order",
+                    length_seconds=body.length_seconds,
+                    requested_count=body.requested_count,
+                    time_range_start_ms=body.time_range_start_ms,
+                    time_range_end_ms=body.time_range_end_ms,
+                    product_distribution=body.product_distribution,
+                    language=body.language,
+                    intent=body.intent,
+                    # Legacy fields intentionally omitted — workers on
+                    # v0.14.0+ use ``length_seconds`` and dispatch on
+                    # ``mode='scan_order'`` (not ``catalog_entry_id``).
+                )
+            except Exception:
+                logger.exception(
+                    "product_v2_scan_order_publish_failed",
+                    parent_job_id=str(parent.id),
+                    org_id=str(org_id),
+                )
+                # Mark the parent failed so the wizard UI can render a
+                # retry affordance. The DB row already exists; failing
+                # here matches the legacy enqueue_scan / enqueue_clip
+                # error-handling shape.
+                await self.job_repo.fail(
+                    job_id=parent.id,
+                    claimed_by="api",
+                    error_code="internal_error",
+                    error_message="failed to enqueue scan order; please retry",
+                    cost_delta_usd=Decimal("0"),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="failed to enqueue scan order; please retry",
+                )
+
         logger.info(
             "product_v2_scan_order_created",
             parent_job_id=str(parent.id),
@@ -673,7 +730,9 @@ class ProductScanService:
             language=body.language,
             intent=body.intent,
             settings_hash=settings_hash,
-            note="SQS publish deferred to PR #3",
+            published=(
+                self.settings.auto_shorts_product_v2_publish_scan_order_enabled
+            ),
         )
         return ScanOrderResponse(parent_job_id=parent.id, deduped=False)
 

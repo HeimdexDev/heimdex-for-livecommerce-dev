@@ -439,6 +439,17 @@ class Settings(BaseSettings):
     # wizard inputs don't collide.
     auto_shorts_product_v2_scan_order_idempotency_seconds: int = 60
 
+    # Master flag for the wizard's SQS publish step. Default OFF: the
+    # service creates parent rows in DB but does NOT publish to
+    # ``heimdex-product-track-queue`` until this flips. Required so
+    # we can roll out the API code that knows about scan_order
+    # BEFORE the worker on Aircloud is rebuilt with v0.14.0
+    # contracts. Flipping early would fill the worker's DLQ with
+    # messages it can't parse. Once the worker image is bumped +
+    # redeployed, flip this to True (per-env via Aircloud config or
+    # docker-compose .env override).
+    auto_shorts_product_v2_publish_scan_order_enabled: bool = False
+
     # --- CORS ---
     cors_allow_origin_regex: str = (
         r"^https?://"

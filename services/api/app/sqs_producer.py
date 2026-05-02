@@ -877,37 +877,83 @@ def publish_product_track_job(
     job_id: UUID,
     org_id: UUID,
     video_id: UUID,
-    catalog_entry_id: UUID,
     requested_by_user_id: UUID,
-    duration_preset_sec: int,
     tracker_version: str,
     enumeration_prompt_version: str,
     callback_base_url: str,
+    # Legacy single-product flow (enqueue_clip) — both required.
+    catalog_entry_id: UUID | None = None,
+    duration_preset_sec: int | None = None,
+    # v0.14.0 wizard fields (mode='scan_order' parents) — all Optional;
+    # body dict omits None entries below so the message stays small for
+    # legacy senders.
+    mode: str = "enumerate",
+    length_seconds: int | None = None,
+    requested_count: int | None = None,
+    time_range_start_ms: int | None = None,
+    time_range_end_ms: int | None = None,
+    product_distribution: str | None = None,
+    language: str | None = None,
+    intent: str | None = None,
 ) -> None:
     """Publish a shorts-auto-product track + assembly job.
 
-    Called from ``ProductScanService.enqueue_clip`` after the tracking
-    job row is flushed. Body shape MUST match
-    ``heimdex_media_contracts.product.ProductTrackJob``.
+    Body shape MUST match
+    ``heimdex_media_contracts.product.ProductTrackJob`` v0.14.0+.
+
+    Two callers:
+
+    * ``ProductScanService.enqueue_clip`` (legacy single-product flow)
+      → passes ``catalog_entry_id`` + ``duration_preset_sec``, leaves
+      ``mode='enumerate'`` and the wizard fields unset.
+    * ``ProductScanService.enqueue_scan_order`` (Phase 4 wizard parent)
+      → passes ``mode='scan_order'`` + the full wizard field set,
+      leaves ``catalog_entry_id`` unset (parent processes the whole
+      catalog).
+
+    The body omits None-valued fields so a v0.14.0 worker reading a
+    legacy v0.13.0-shaped publish doesn't see noise. Workers parse via
+    the v0.14.0 ProductTrackJob model which accepts both shapes.
     """
     settings = get_settings()
     if settings.queue_backend != "rabbitmq" and not settings.sqs_enabled:
         return
 
     now = datetime.now(timezone.utc)
-    body = {
+    body: dict[str, object] = {
         "version": "1",
         "type": "product.track_job",
         "timestamp": now.isoformat(),
         "job_id": str(job_id),
         "org_id": str(org_id),
         "video_id": str(video_id),
-        "catalog_entry_id": str(catalog_entry_id),
         "requested_by_user_id": str(requested_by_user_id),
-        "duration_preset_sec": duration_preset_sec,
         "tracker_version": tracker_version,
         "enumeration_prompt_version": enumeration_prompt_version,
         "callback_base_url": callback_base_url,
+        "mode": mode,
     }
+    # Optional fields — included only when the caller set them. Keeps
+    # the wire format tight + makes the legacy vs scan_order
+    # distinction self-evident in CloudWatch logs.
+    if catalog_entry_id is not None:
+        body["catalog_entry_id"] = str(catalog_entry_id)
+    if duration_preset_sec is not None:
+        body["duration_preset_sec"] = duration_preset_sec
+    if length_seconds is not None:
+        body["length_seconds"] = length_seconds
+    if requested_count is not None:
+        body["requested_count"] = requested_count
+    if time_range_start_ms is not None:
+        body["time_range_start_ms"] = time_range_start_ms
+    if time_range_end_ms is not None:
+        body["time_range_end_ms"] = time_range_end_ms
+    if product_distribution is not None:
+        body["product_distribution"] = product_distribution
+    if language is not None:
+        body["language"] = language
+    if intent is not None:
+        body["intent"] = intent
+
     dedup_id = f"{job_id}:product-track:{now.strftime('%Y%m%dT%H%M')}"
     _publish("product_track", body, dedup_id)
