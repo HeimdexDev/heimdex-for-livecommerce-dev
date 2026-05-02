@@ -240,6 +240,11 @@ def _build_complete_app(monkeypatch, *, job, persisted_appearance_count=0,
     fake_job_repo.get_internal = AsyncMock(return_value=job)
     fake_job_repo.complete_enumeration = AsyncMock(return_value=job)
     fake_job_repo.complete_tracking = AsyncMock(return_value=job)
+    # Phase 4 fan-out hook (PR #3) — scan_order parents transition to
+    # FANNED_OUT and fan out into N children. Both calls must be
+    # mocked so tests don't fail on the await expression.
+    fake_job_repo.transition_parent_to_fanned_out = AsyncMock(return_value=job)
+    fake_job_repo.create_render_children = AsyncMock(return_value=[])
 
     fake_catalog_repo = MagicMock()
     catalog_rows = [MagicMock() for _ in range(persisted_catalog_count)]
@@ -377,10 +382,18 @@ def test_complete_scan_order_rejects_appearance_missing_catalog_entry_id(
     assert "catalog_entry_id" in resp.text
 
 
-def test_complete_scan_order_forces_render_job_id_to_none(monkeypatch):
-    """**Q4 codex defense in depth**: even if a buggy worker passes
-    ``render_job_id`` in the body for a scan_order parent, the
-    persistence layer must force it to NULL.
+def test_complete_scan_order_routes_through_fanout_not_complete_tracking(
+    monkeypatch,
+):
+    """**Q4 codex defense in depth (Phase 4 PR #3)**: scan_order parents
+    route through ``transition_parent_to_fanned_out`` + fan-out, NEVER
+    through ``complete_tracking``. ``complete_tracking`` is the path
+    that could plausibly carry ``render_job_id``; routing parents
+    away from it makes the Q4 invariant structural rather than
+    assertion-based.
+
+    A buggy worker passing ``render_job_id`` in the body for a
+    scan_order parent has the field silently ignored.
     """
     parent_id = uuid4()
     catalog_entry_id = uuid4()
@@ -391,12 +404,14 @@ def test_complete_scan_order_forces_render_job_id_to_none(monkeypatch):
     )
     job.claimed_by = "test-worker"
     job.org_id = uuid4()
+    job.requested_count = 5  # used by the fan-out hook
 
     app = _build_complete_app(
         monkeypatch, job=job, persisted_appearance_count=1,
     )
-    # Capture the call args to complete_tracking so we can assert
-    # render_job_id was forced to None.
+    # Pull the bound repo factory (a MagicMock that returns the
+    # same fake_job_repo each call) so we can assert against its
+    # tracked calls.
     import app.modules.shorts_auto_product.repositories as repos_pkg
     fake_factory = repos_pkg.ProductScanJobRepository
     fake_job_repo = fake_factory(MagicMock())
@@ -406,7 +421,7 @@ def test_complete_scan_order_forces_render_job_id_to_none(monkeypatch):
     body = {
         "claimed_by": "test-worker",
         "cost_delta_usd": "0",
-        "render_job_id": str(bogus_render_id),  # buggy worker; should be ignored
+        "render_job_id": str(bogus_render_id),  # buggy worker; ignored
         "appearances": [
             {
                 "catalog_entry_id": str(catalog_entry_id),
@@ -425,10 +440,18 @@ def test_complete_scan_order_forces_render_job_id_to_none(monkeypatch):
         headers={"Authorization": "Bearer test-token"},
     )
     assert resp.status_code == 200, resp.text
-    # complete_tracking must be called with render_job_id=None
-    assert fake_job_repo.complete_tracking.await_args.kwargs[
-        "render_job_id"
-    ] is None
+    # scan_order parents NEVER touch complete_tracking
+    fake_job_repo.complete_tracking.assert_not_awaited()
+    # ...they go through the fan-out path instead
+    fake_job_repo.transition_parent_to_fanned_out.assert_awaited_once()
+    # transition_parent_to_fanned_out doesn't accept render_job_id at
+    # all, so the buggy body field is structurally ignored.
+    transition_kwargs = (
+        fake_job_repo.transition_parent_to_fanned_out.await_args.kwargs
+    )
+    assert "render_job_id" not in transition_kwargs
+    # And the fan-out atomically inserts N children.
+    fake_job_repo.create_render_children.assert_awaited_once()
 
 
 def test_complete_legacy_tracking_path_unchanged(monkeypatch):
@@ -505,3 +528,152 @@ def test_complete_render_child_rejected_via_complete_path(monkeypatch):
     )
     assert resp.status_code == 400
     assert "render_child" in resp.text
+
+
+# ======================================================================
+# PR #3 — fan-out hook (transition_parent_to_fanned_out + create_render_children)
+# ======================================================================
+
+
+def test_complete_scan_order_fanout_inserts_children_atomically(monkeypatch):
+    """Fan-out hook: parent /complete must call create_render_children
+    with the parent row + parent.requested_count.
+
+    Atomicity verified by ordering: transition_parent_to_fanned_out
+    must run BEFORE create_render_children (children FK references
+    parent.id, so parent's row must be visible). Both happen inside
+    the /complete transaction, so a partial fan-out is impossible.
+    """
+    parent_id = uuid4()
+    catalog_entry_id = uuid4()
+    job = _job_row(
+        job_id=parent_id,
+        mode=SCAN_MODE_SCAN_ORDER,
+        catalog_entry_id=None,
+    )
+    job.claimed_by = "test-worker"
+    job.org_id = uuid4()
+    job.requested_count = 7
+
+    app = _build_complete_app(
+        monkeypatch, job=job, persisted_appearance_count=2,
+    )
+    import app.modules.shorts_auto_product.repositories as repos_pkg
+    fake_factory = repos_pkg.ProductScanJobRepository
+    fake_job_repo = fake_factory(MagicMock())
+
+    client = TestClient(app)
+    body = {
+        "claimed_by": "test-worker",
+        "cost_delta_usd": "0",
+        "appearances": [
+            {
+                "catalog_entry_id": str(catalog_entry_id),
+                "scene_id": "scene_001",
+                "window_start_ms": 1000,
+                "window_end_ms": 5000,
+                "avg_bbox_area_pct": 0.2,
+                "avg_confidence": 0.9,
+                "tracker_version": "v1",
+            },
+        ],
+    }
+    resp = client.post(
+        f"/internal/products/{parent_id}/complete",
+        json=body,
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 200, resp.text
+    # transition_parent_to_fanned_out must be called exactly once
+    fake_job_repo.transition_parent_to_fanned_out.assert_awaited_once()
+    # create_render_children must be called once with parent.requested_count
+    fake_job_repo.create_render_children.assert_awaited_once()
+    create_kwargs = fake_job_repo.create_render_children.await_args.kwargs
+    assert create_kwargs["count"] == 7
+    # Parent passed to create_render_children should be the row
+    # returned by transition_parent_to_fanned_out (defense in depth
+    # against passing a stale row reference).
+    assert create_kwargs["parent"] is job
+
+
+def test_complete_scan_order_fanout_409_when_transition_fails(monkeypatch):
+    """Transition returns None when parent was cancelled / re-claimed
+    mid-/complete. Surface as 409 so the worker treats the message
+    as terminal and ack-deletes (not redeliver).
+    """
+    parent_id = uuid4()
+    catalog_entry_id = uuid4()
+    job = _job_row(
+        job_id=parent_id,
+        mode=SCAN_MODE_SCAN_ORDER,
+        catalog_entry_id=None,
+    )
+    job.claimed_by = "test-worker"
+    job.org_id = uuid4()
+    job.requested_count = 5
+
+    # Build the app, then override the transition mock to return None.
+    from app.dependencies import get_db_session, verify_internal_token
+    from app.modules.shorts_auto_product.internal_router import (
+        router as internal_router,
+    )
+
+    fake_job_repo = MagicMock()
+    fake_job_repo.get_internal = AsyncMock(return_value=job)
+    fake_job_repo.transition_parent_to_fanned_out = AsyncMock(return_value=None)  # ← key
+    fake_job_repo.create_render_children = AsyncMock()  # should NEVER be called
+    fake_job_repo.complete_tracking = AsyncMock()
+    fake_job_repo.complete_enumeration = AsyncMock()
+
+    fake_appearance_repo = MagicMock()
+    fake_appearance_repo.bulk_insert = AsyncMock(return_value=[MagicMock()])
+    fake_catalog_repo = MagicMock()
+    fake_catalog_repo.bulk_insert = AsyncMock(return_value=[])
+    fake_cost_repo = MagicMock()
+    fake_cost_repo.add_cost = AsyncMock()
+
+    import app.modules.shorts_auto_product.repositories as repos_pkg
+    import app.modules.shorts_auto_product.internal_router as router_module
+
+    for name, fake_factory in [
+        ("ProductScanJobRepository", lambda _db: fake_job_repo),
+        ("ProductCatalogRepository", lambda _db: fake_catalog_repo),
+        ("ProductAppearanceRepository", lambda _db: fake_appearance_repo),
+        ("ProductScanDailyCostRepository", lambda _db: fake_cost_repo),
+    ]:
+        wrapped = MagicMock(side_effect=fake_factory)
+        monkeypatch.setattr(repos_pkg, name, wrapped)
+        monkeypatch.setattr(router_module, name, wrapped)
+
+    test_app = FastAPI()
+    test_app.include_router(internal_router)
+    fake_db = MagicMock()
+    fake_db.commit = AsyncMock()
+    test_app.dependency_overrides[get_db_session] = lambda: fake_db
+    test_app.dependency_overrides[verify_internal_token] = lambda: "test-token"
+
+    client = TestClient(test_app)
+    body = {
+        "claimed_by": "test-worker",
+        "cost_delta_usd": "0",
+        "appearances": [
+            {
+                "catalog_entry_id": str(catalog_entry_id),
+                "scene_id": "scene_001",
+                "window_start_ms": 1000,
+                "window_end_ms": 5000,
+                "avg_bbox_area_pct": 0.2,
+                "avg_confidence": 0.9,
+                "tracker_version": "v1",
+            },
+        ],
+    }
+    resp = client.post(
+        f"/internal/products/{parent_id}/complete",
+        json=body,
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 409
+    assert "lease lost" in resp.text or "cancelled" in resp.text
+    # Children must NOT be inserted when the transition fails.
+    fake_job_repo.create_render_children.assert_not_awaited()
