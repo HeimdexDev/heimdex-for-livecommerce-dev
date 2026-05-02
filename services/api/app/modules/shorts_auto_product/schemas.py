@@ -220,3 +220,83 @@ class ProductV2AvailabilityFragment(BaseModel):
     product_v2_in_rollout: bool
     product_v2_daily_budget_remaining_pct: int = Field(..., ge=0, le=100)
     product_v2_duration_presets_sec: list[int] = Field(default_factory=list)
+
+
+# ----------------------------------------------------------------------
+# Phase 4 wizard — scan-order endpoints
+# ----------------------------------------------------------------------
+
+ProductDistribution = Literal["single", "multi"]
+Language = Literal["ko", "en"]
+ScanIntent = Literal["preview", "commit"]
+
+
+class ScanOrderCreateRequest(BaseModel):
+    """Body for ``POST /api/shorts/auto/scan-orders``.
+
+    Captures every wizard input the parent job needs. Validation:
+      * ``length_seconds``: 10..120 (per-shorts duration; see Q5 codex
+        correction in the plan).
+      * ``requested_count * length_seconds <= 1800`` (aggregate output
+        cap; the daily cost ledger does NOT track render cost so this
+        is the operative guard against runaway output).
+      * ``time_range_*_ms``: optional; if both set, end > start AND
+        ``(end - start) / count >= length_seconds * 1000`` (each short
+        has at least its length in source range).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    length_seconds: int = Field(..., ge=10, le=120)
+    requested_count: int = Field(..., ge=1, le=50)
+    time_range_start_ms: int | None = Field(default=None, ge=0)
+    time_range_end_ms: int | None = Field(default=None, gt=0)
+    product_distribution: ProductDistribution
+    language: Language
+    intent: ScanIntent = "commit"
+
+
+class ScanOrderResponse(BaseModel):
+    """Response for ``POST /api/shorts/auto/scan-orders``.
+
+    Returns the parent job id; the wizard then subscribes to
+    ``GET /scan-orders/{parent_job_id}`` for aggregate status.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    parent_job_id: UUID
+    deduped: bool = False
+
+
+class ScanOrderStatusResponse(BaseModel):
+    """Response for ``GET /api/shorts/auto/scan-orders/{parent_job_id}``.
+
+    The wizard's primary subscription. One round-trip yields the
+    full picture (parent + all children + their progress) — frontend
+    does not poll N+1 endpoints.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    parent: JobStatusResponse
+    children: list[JobStatusResponse] = Field(default_factory=list)
+    # Wizard-level rollup so the UI doesn't have to compute it. None
+    # while the parent is still in non-fanned-out states.
+    children_complete: int = Field(..., ge=0)
+    children_failed: int = Field(..., ge=0)
+    children_total: int = Field(..., ge=0)
+
+
+class ScanOrderCommitRequest(BaseModel):
+    """Body for ``POST /api/shorts/auto/scan-orders/{parent_job_id}/commit``.
+
+    Phase 6 endpoint — currently returns 501. Body shape locked now
+    so the frontend wizard can be built against a stable contract.
+    Optional ``selected_window_ids`` lets the user drop preview
+    windows before SAM2 + render-enqueue runs in commit mode.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    selected_window_ids: list[UUID] | None = None

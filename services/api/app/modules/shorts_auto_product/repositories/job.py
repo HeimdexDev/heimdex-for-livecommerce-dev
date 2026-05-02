@@ -25,6 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.shorts_auto_product.models import (
     ACTIVE_SCAN_STAGES,
+    SCAN_MODE_ENUMERATE,
+    SCAN_MODE_RENDER_CHILD,
+    SCAN_MODE_SCAN_ORDER,
     SCAN_STAGE_ASSEMBLING,
     SCAN_STAGE_CANCELLED,
     SCAN_STAGE_DONE,
@@ -34,6 +37,7 @@ from app.modules.shorts_auto_product.models import (
     SCAN_STAGE_QUEUED,
     SCAN_STAGE_RENDERING,
     SCAN_STAGE_TRACKING,
+    TERMINAL_SCAN_STAGES,
     ProductScanJob,
 )
 
@@ -194,7 +198,11 @@ class ProductScanJobRepository:
         claimed / completed (idempotent — the worker can safely retry
         and another worker will not steal the lease).
         """
-        if next_stage not in {SCAN_STAGE_ENUMERATING, SCAN_STAGE_TRACKING}:
+        if next_stage not in {
+            SCAN_STAGE_ENUMERATING,
+            SCAN_STAGE_TRACKING,
+            SCAN_STAGE_ASSEMBLING,  # Phase 4: child runner claims queued → assembling
+        }:
             raise ValueError(f"invalid claim next_stage: {next_stage!r}")
         now = datetime.now(timezone.utc)
         lease_expires = now + timedelta(seconds=lease_seconds)
@@ -400,3 +408,234 @@ class ProductScanJobRepository:
             .returning(ProductScanJob)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    # ------------------------------------------------------------------
+    # Phase 4 wizard — scan-order parent + render-child helpers
+    # ------------------------------------------------------------------
+
+    async def create_scan_order_parent(
+        self,
+        *,
+        org_id: UUID,
+        video_id: UUID,
+        user_id: UUID,
+        length_seconds: int,
+        requested_count: int,
+        time_range_start_ms: int | None,
+        time_range_end_ms: int | None,
+        product_distribution: str,
+        language: str,
+        intent: str,
+        settings_hash: str,
+    ) -> ProductScanJob:
+        """Insert a wizard parent row.
+
+        ``mode='scan_order'`` + every wizard input from the body. The
+        DB-level CHECKs (``ck_psj_parent_required_fields``,
+        ``ck_psj_aggregate_output``, etc.) catch any service-side
+        validation gap. ``catalog_entry_id`` is NULL — parents process
+        the whole catalog.
+        """
+        job = ProductScanJob(
+            org_id=org_id,
+            video_id=video_id,
+            requested_by_user_id=user_id,
+            catalog_entry_id=None,
+            duration_preset_sec=length_seconds,  # legacy column carries the same number
+            mode=SCAN_MODE_SCAN_ORDER,
+            length_seconds=length_seconds,
+            requested_count=requested_count,
+            time_range_start_ms=time_range_start_ms,
+            time_range_end_ms=time_range_end_ms,
+            product_distribution=product_distribution,
+            language=language,
+            intent=intent,
+            settings_hash=settings_hash,
+        )
+        self.session.add(job)
+        await self.session.flush()
+        return job
+
+    async def create_render_children(
+        self,
+        *,
+        parent: ProductScanJob,
+        count: int,
+    ) -> list[ProductScanJob]:
+        """Bulk insert N child rows for a scan_order parent.
+
+        Children inherit ``org_id``, ``video_id``,
+        ``requested_by_user_id``, and ``length_seconds`` from the
+        parent. Each carries its own ``shorts_index`` (1..count) which
+        the picker uses to spread products across shorts.
+        """
+        if parent.mode != SCAN_MODE_SCAN_ORDER:
+            raise ValueError(
+                f"cannot fan out children from non-scan_order parent "
+                f"(parent.mode={parent.mode!r})"
+            )
+        if count < 1:
+            raise ValueError(f"count must be >= 1, got {count!r}")
+        children = [
+            ProductScanJob(
+                org_id=parent.org_id,
+                video_id=parent.video_id,
+                requested_by_user_id=parent.requested_by_user_id,
+                catalog_entry_id=None,
+                duration_preset_sec=parent.length_seconds,
+                mode=SCAN_MODE_RENDER_CHILD,
+                parent_job_id=parent.id,
+                shorts_index=i,
+                length_seconds=parent.length_seconds,
+            )
+            for i in range(1, count + 1)
+        ]
+        self.session.add_all(children)
+        await self.session.flush()
+        return children
+
+    async def find_recent_scan_order_duplicate(
+        self,
+        *,
+        org_id: UUID,
+        user_id: UUID,
+        settings_hash: str,
+        within_seconds: int,
+    ) -> ProductScanJob | None:
+        """Wizard idempotency lookup — returns the existing parent
+        row if (org, user, settings_hash) matches within window.
+
+        Settings hash is canonical-JSON of every wizard input
+        (computed in the service layer). ``intent`` is part of the
+        hash, so preview and commit cannot dedupe each other.
+        ``org_id`` is mandatory (mirrors the defensive fix on
+        ``find_recent_duplicate``).
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=within_seconds)
+        stmt = (
+            select(ProductScanJob)
+            .where(
+                ProductScanJob.org_id == org_id,
+                ProductScanJob.requested_by_user_id == user_id,
+                ProductScanJob.mode == SCAN_MODE_SCAN_ORDER,
+                ProductScanJob.settings_hash == settings_hash,
+                ProductScanJob.created_at >= cutoff,
+            )
+            .order_by(ProductScanJob.created_at.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def find_children_for_parent(
+        self,
+        *,
+        org_id: UUID,
+        parent_job_id: UUID,
+    ) -> list[ProductScanJob]:
+        """List a parent's children ordered by ``shorts_index``.
+        Org-scoped — defense in depth (``parent_job_id`` is unique
+        but the join keeps this query consistent with the rest of
+        the module's tenant-scoping convention).
+        """
+        stmt = (
+            select(ProductScanJob)
+            .where(
+                ProductScanJob.parent_job_id == parent_job_id,
+                ProductScanJob.org_id == org_id,
+                ProductScanJob.mode == SCAN_MODE_RENDER_CHILD,
+            )
+            .order_by(ProductScanJob.shorts_index.asc())
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def find_queued_render_children(
+        self,
+        *,
+        limit: int,
+    ) -> list[UUID]:
+        """Runner poll query — returns at most ``limit`` queued
+        ``mode='render_child'`` job ids ordered FIFO by created_at.
+
+        Returns id-only to keep the row footprint small; the runner
+        re-fetches via ``get_internal`` after a successful claim.
+        Multi-replica safe: claim is the actual race resolver, not
+        this poll.
+        """
+        stmt = (
+            select(ProductScanJob.id)
+            .where(
+                ProductScanJob.mode == SCAN_MODE_RENDER_CHILD,
+                ProductScanJob.stage == SCAN_STAGE_QUEUED,
+            )
+            .order_by(ProductScanJob.created_at.asc())
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def cancel_scan_order(
+        self,
+        *,
+        org_id: UUID,
+        parent_job_id: UUID,
+    ) -> int:
+        """Cascade-cancel a wizard order: parent + all non-terminal
+        children. Returns the count of rows transitioned (parent
+        included if it was active).
+
+        Idempotent — already-terminal rows are skipped silently.
+        """
+        now = datetime.now(timezone.utc)
+        # Parent: active stages only (so already-cancelled parents
+        # don't re-trigger the timestamps).
+        parent_stmt = (
+            update(ProductScanJob)
+            .where(
+                ProductScanJob.id == parent_job_id,
+                ProductScanJob.org_id == org_id,
+                ProductScanJob.mode == SCAN_MODE_SCAN_ORDER,
+                ProductScanJob.stage.in_(list(ACTIVE_SCAN_STAGES)),
+            )
+            .values(
+                stage=SCAN_STAGE_CANCELLED,
+                cancelled_at=now,
+                last_heartbeat_at=now,
+            )
+        )
+        parent_result = await self.session.execute(parent_stmt)
+        # Children: cancel any non-terminal child of this parent.
+        children_stmt = (
+            update(ProductScanJob)
+            .where(
+                ProductScanJob.parent_job_id == parent_job_id,
+                ProductScanJob.org_id == org_id,
+                ProductScanJob.mode == SCAN_MODE_RENDER_CHILD,
+                ProductScanJob.stage.notin_(list(TERMINAL_SCAN_STAGES)),
+            )
+            .values(
+                stage=SCAN_STAGE_CANCELLED,
+                cancelled_at=now,
+                last_heartbeat_at=now,
+            )
+        )
+        children_result = await self.session.execute(children_stmt)
+        return (parent_result.rowcount or 0) + (children_result.rowcount or 0)
+
+    async def get_scan_order_with_children(
+        self,
+        *,
+        org_id: UUID,
+        parent_job_id: UUID,
+    ) -> tuple[ProductScanJob, list[ProductScanJob]] | None:
+        """Aggregate read for ``GET /scan-orders/{parent_job_id}``.
+
+        Two queries (parent + children) — pgsql window functions
+        could pack this into one but the row count is bounded by
+        ``requested_count`` (≤50) so the simpler shape wins.
+        """
+        parent = await self.get(org_id=org_id, job_id=parent_job_id)
+        if parent is None or parent.mode != SCAN_MODE_SCAN_ORDER:
+            return None
+        children = await self.find_children_for_parent(
+            org_id=org_id, parent_job_id=parent_job_id,
+        )
+        return parent, children
