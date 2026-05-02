@@ -38,11 +38,21 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
+# deadsnakes PPA via direct GPG keyserver fetch — bypasses
+# ``add-apt-repository`` which calls ``api.launchpad.net`` for
+# anonymous OAuth and times out when Launchpad's API is degraded
+# (observed 2026-05-01 during product-track GPU build merge).
+# ``keyserver.ubuntu.com`` is a separate keyserver that stays
+# reachable when ``api.launchpad.net`` is down.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        software-properties-common ca-certificates curl gnupg \
+        ca-certificates curl gnupg \
         build-essential python3-dev git \
         ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF23C5A6CF475977595C89F51BA6932366A755776" \
+        | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] http://ppa.launchpad.net/deadsnakes/ppa/ubuntu jammy main" \
+        > /etc/apt/sources.list.d/deadsnakes.list \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3.11 python3.11-dev python3.11-distutils python3.11-venv \
     && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \

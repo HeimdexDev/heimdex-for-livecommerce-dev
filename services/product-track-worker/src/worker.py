@@ -137,25 +137,14 @@ def main() -> None:
         log.exception("siglip2_warm_failed")
         sys.exit(1)
 
-    # SAM2 is intentionally a NotImplementedError stub during Phase
-    # 3c-A scaffold (real integration ships in Phase 3c-B alongside
-    # staging-goldens calibration). Tolerate that specific case so
-    # the worker can boot, poll SQS, and surface "SAM2 not
-    # implemented" per-job via the dispatcher's /fail callback —
-    # which is the operator-facing signal we want during scaffold.
-    # Any other exception is a real boot fault and still hard-exits.
+    # SAM2 is real as of Phase 3c-B. Any failure during warmup
+    # (missing weights, CUDA OOM, transformers API drift, model
+    # download timeout) is a hard boot failure — operators see
+    # ``sam2_warm_failed`` immediately rather than discovering it
+    # per-job. The Phase 3c-A NotImplementedError tolerance is
+    # gone now that the loader actually loads.
     try:
         _warm_sam2(settings)
-    except NotImplementedError:
-        log.warning(
-            "sam2_warm_skipped_phase_3c_a_stub",
-            note=(
-                "Phase 3c-A scaffold: SAM2 loader stub raises "
-                "NotImplementedError. Boot continues; per-job /fail "
-                "with internal_error is the expected signal until "
-                "Phase 3c-B lands the real integration."
-            ),
-        )
     except Exception:
         log.exception("sam2_warm_failed")
         sys.exit(1)

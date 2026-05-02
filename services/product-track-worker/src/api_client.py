@@ -223,3 +223,57 @@ class ApiClient:
         )
         resp.raise_for_status()
         return resp.json().get("scenes", [])
+
+    def enqueue_render(
+        self,
+        *,
+        scan_job_id: UUID,
+        claimed_by: str,
+        video_id: str,
+        title: str | None,
+        composition: dict[str, Any],
+    ) -> UUID:
+        """Phase 3c-B — internal render enqueue. POSTs the
+        worker-built ``CompositionSpec`` to the api's internal
+        render endpoint, which forwards to
+        ``ShortsRenderService.create_render_job(org_id, user_id,
+        payload)`` (org + user resolved from the scan job row).
+        Returns the new ``RenderJob.id`` for the caller to pass to
+        ``/internal/products/{job_id}/complete``.
+
+        ``composition`` is the JSON-serialised
+        ``CompositionSpec.model_dump(mode='json')`` shape — the
+        worker constructs it locally and we treat it as an opaque
+        dict on the wire (api re-validates via
+        ``CompositionSpec.model_validate``)."""
+        resp = self._client.post(
+            f"{self.base_url}/internal/products/{scan_job_id}/render",
+            json={
+                "claimed_by": claimed_by,
+                "payload": {
+                    "video_id": video_id,
+                    "title": title,
+                    "composition": composition,
+                },
+            },
+        )
+        resp.raise_for_status()
+        return UUID(resp.json()["render_job_id"])
+
+    def fetch_catalog_entry(
+        self, *, catalog_entry_id: UUID, org_id: UUID,
+    ) -> dict[str, Any]:
+        """Phase 3c-B — Pattern B fetch of a catalog entry's seed
+        metadata. Returns ``{catalog_entry_id, org_id, video_id,
+        canonical_crop_s3_key, canonical_bbox: {x,y,w,h}, llm_label}``.
+        404 on missing or cross-tenant; HTTPStatusError otherwise.
+
+        ``X-Heimdex-Org-Id`` is sent as cross-validation (Pattern B
+        accepts it; the api 404s on mismatch instead of leaking the
+        entry's true tenant)."""
+        resp = self._client.get(
+            f"{self.base_url}/internal/products/catalog/{catalog_entry_id}",
+            headers={"X-Heimdex-Org-Id": str(org_id)},
+        )
+        resp.raise_for_status()
+        return resp.json()

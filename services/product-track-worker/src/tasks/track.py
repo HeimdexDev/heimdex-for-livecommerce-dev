@@ -61,6 +61,7 @@ from heimdex_media_pipelines.product_track.siglip2_retrieval import (
     retrieve_candidate_scenes,
 )
 from heimdex_media_pipelines.product_track.stitching import (
+    StitchPlan,
     build_stitch_plan,
 )
 from heimdex_media_pipelines.product_track.subset_selector import (
@@ -305,13 +306,11 @@ def handle_track_job(
         )
 
         # ─── 3. fetch canonical product crop ───────────────────────
-        # TODO Phase 3c follow-up: add an internal endpoint to fetch
-        # a single ProductCatalogEntry by id (org-scoped). The job
-        # message currently carries only catalog_entry_id; the worker
-        # needs canonical_crop_s3_key + bbox to seed retrieval +
-        # SAM2. Until that endpoint lands, this raises and the
-        # dispatcher reports /fail with internal_error.
-        canonical_crop, canonical_bbox = _fetch_canonical_crop(
+        # Resolves the catalog entry's seed (canonical crop image,
+        # anchor bbox, llm label) via the Phase 3c-B endpoint
+        # ``GET /internal/products/catalog/{catalog_entry_id}`` plus
+        # an S3 download for the crop bytes.
+        canonical_crop, canonical_bbox, llm_label = _fetch_canonical_crop(
             api=api, s3=s3, decoded=decoded, settings=settings,
         )
 
@@ -471,12 +470,13 @@ def handle_track_job(
         )
 
         # ─── 10. annotate alignment ────────────────────────────────
+        # ``llm_label`` is the product's name (e.g. "핑크 세럼 병"),
+        # used by the alignment lib to mark
+        # ``has_narration_mention`` / ``has_ocr_overlap`` per window
+        # via tokenised substring matching.
         annotated = annotate_alignment(
             assembled,
-            # TODO: the catalog entry's llm_label. Plumbed when
-            # ``_fetch_canonical_crop`` returns the full entry rather
-            # than just (image, bbox).
-            label="",
+            label=llm_label,
             transcripts=transcripts,
             ocr=ocr,
         )
@@ -532,27 +532,57 @@ def handle_track_job(
             return
 
         # ─── 13. build stitch plan ─────────────────────────────────
-        # The plan is computed for completeness (and so the lib's
-        # build_stitch_plan invariants are exercised) but NOT shipped
-        # to the api — ``_CompleteRequest`` (extra='forbid') has no
-        # ``stitching_plan`` field. Phase 3c-B turns this plan into a
-        # ``CompositionSpec`` and POSTs to ``/api/shorts/render``;
-        # the resulting ``render_job_id`` is the only thing the api
-        # needs to persist on the tracking row.
-        _ = build_stitch_plan(
+        plan = build_stitch_plan(
             selected,
             duration_target_sec=decoded.duration_preset_sec,
             config=cfg,
         )
 
         # ─── 14. enqueue render + complete ─────────────────────────
-        # TODO Phase 3c-B: enqueue the render via the api's
-        # /api/shorts/render endpoint and pass the resulting job id.
-        # For scaffold the render enqueue is a placeholder; the api
-        # callback (/complete) accepts ``render_job_id=None`` so the
-        # worker can mark the job complete with appearances populated
-        # — UI surfaces "tracked, render pending".
-        render_job_id: UUID | None = None
+        # Build a ``CompositionSpec`` from the stitch plan windows
+        # (chronological hard cuts; per-clip ``source_start_ms`` /
+        # ``source_end_ms`` ranges) and POST to the api's internal
+        # render endpoint. The api forwards to
+        # ``ShortsRenderService.create_render_job`` with
+        # ``user_id=job.requested_by_user_id`` derived server-side
+        # (workers don't carry user JWTs). Returns the new
+        # ``RenderJob.id`` which we ship on /complete.
+        composition_spec = _build_composition_spec(
+            plan=plan, os_video_id=os_video_id,
+        )
+        try:
+            render_job_id: UUID | None = api.enqueue_render(
+                scan_job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                video_id=os_video_id,
+                title=llm_label or None,
+                composition=composition_spec,
+            )
+        except httpx.HTTPStatusError as exc:
+            # Render enqueue failure is recoverable from the user's
+            # POV: the tracker successfully produced appearances,
+            # the api just couldn't kick off ffmpeg. /fail with the
+            # api enum literal for this exact case (rather than
+            # internal_error) so the user-facing UI can render the
+            # right message + retry affordance.
+            logger.exception(
+                "track_render_enqueue_failed",
+                extra={
+                    "job_id": str(decoded.job_id),
+                    "status_code": exc.response.status_code,
+                },
+            )
+            api.fail(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                cost_delta_usd=cost_accumulator,
+                error_code="render_enqueue_failed",
+                error_message=(
+                    f"render enqueue failed status={exc.response.status_code}: "
+                    f"{str(exc)[:1500]}"
+                ),
+            )
+            return
 
         api.complete_track(
             job_id=decoded.job_id,
@@ -617,26 +647,133 @@ def _build_picker(settings: WorkerSettings) -> SubsetPicker:
     )
 
 
+def _build_composition_spec(
+    *,
+    plan: "StitchPlan",
+    os_video_id: str,
+) -> dict[str, Any]:
+    """Convert a Phase 3a ``StitchPlan`` to the
+    ``CompositionSpec.model_dump(mode='json')`` shape that
+    ``/api/shorts/render`` accepts.
+
+    Each ``StitchPlan.windows[i]`` (a ``StitchedClip`` with an
+    inner ``window`` carrying ``scene_id`` + ``window_start_ms`` +
+    ``window_end_ms``) becomes one ``SceneClipSpec``. Clips are
+    placed back-to-back chronologically on the composition timeline
+    (hard cuts; no transitions in v1 per plan §6.2 step 8).
+
+    ``video_id`` is the OpenSearch string id (``gd_abc``) — same
+    shape ``RenderJobCreate.video_id`` already accepts. Source type
+    is hard-coded ``gdrive``; future Drive variants (removable
+    disk, local) will need a worker-side switch but that's
+    deferred until Drive picks up multi-source ingestion.
+    """
+    timeline_cursor_ms = 0
+    scene_clips: list[dict[str, Any]] = []
+    for scored in plan.windows:
+        # ``StitchPlan.windows`` is ``list[ScoredWindow]``;
+        # ``ScoredWindow.window`` is the underlying
+        # ``AnnotatedWindow`` with the actual time range.
+        window = scored.window
+        clip_duration_ms = window.window_end_ms - window.window_start_ms
+        scene_clips.append({
+            "scene_id": window.scene_id,
+            "video_id": os_video_id,
+            "source_type": "gdrive",
+            "start_ms": window.window_start_ms,
+            "end_ms": window.window_end_ms,
+            "timeline_start_ms": timeline_cursor_ms,
+            "volume": 1.0,
+        })
+        timeline_cursor_ms += clip_duration_ms
+
+    return {
+        "scene_clips": scene_clips,
+        # Output / subtitles / overlays / transitions intentionally
+        # omitted — server-side ``CompositionSpec`` defaults give
+        # 9:16 vertical 720p mp4 hard-cut, which matches the v1
+        # product mode shorts UX.
+    }
+
+
 def _fetch_canonical_crop(
     *,
     api: ApiClient,
     s3: S3Client,
     decoded: TrackJobMessage,
     settings: WorkerSettings,
-) -> tuple["Image.Image", BBoxXYWH]:
-    """TODO Phase 3c follow-up: add ``GET /internal/products/catalog/{catalog_entry_id}``
-    on the api side, returning ``{canonical_crop_s3_key, bbox_xywh,
-    llm_label, ...}``. The worker would download the crop from S3
-    and return it + the bbox here.
+) -> tuple["Image.Image", BBoxXYWH, str]:
+    """Phase 3c-B: resolve the catalog entry's seed metadata
+    (canonical crop image, anchor bbox, llm label) for the track
+    pipeline.
 
-    Until that endpoint lands, this stub raises so the dispatcher
-    fails the job with a clear error rather than silently producing
-    no appearances."""
-    raise NotImplementedError(
-        f"Phase 3c-A scaffold: GET /internal/products/catalog/{decoded.catalog_entry_id} "
-        f"endpoint pending. Worker can't fetch canonical crop without it. "
-        f"Phase 3c-B follow-up adds the endpoint."
+    Steps:
+      1. GET ``/internal/products/catalog/{catalog_entry_id}`` —
+         returns ``canonical_crop_s3_key + bbox + llm_label``.
+      2. Verify the entry's ``org_id`` matches the job's. The api
+         already enforces Pattern B tenant scoping, but a
+         defence-in-depth check is cheap and catches misconfigured
+         multi-tenant setups loudly.
+      3. Download the crop bytes from S3 via the existing client.
+         The crop S3 key was written by product-enumerate-worker at
+         ``products/{org_id}/{video_id}/{uuid}.jpg`` (see
+         ``_upload_crops_and_build_payload``); same bucket as
+         everything else, so the SDK's S3Client just works.
+      4. Decode to a PIL Image. The lib expects RGB so we convert
+         eagerly (SigLIP2 requires 3-channel input — JPEGs are
+         already RGB but normalising here keeps the contract
+         explicit).
+
+    Returns ``(canonical_crop, canonical_bbox, llm_label)``. The
+    caller passes ``llm_label`` to ``annotate_alignment`` so
+    ``has_narration_mention`` / ``has_ocr_overlap`` can match
+    against the product's name in transcripts + OCR.
+
+    Failure modes:
+      * api 404 → ``RuntimeError`` (catalog entry not found / cross
+        tenant). Bubbles to dispatcher → /fail with internal_error.
+        We do NOT special-case to ``video_not_found``: the catalog
+        row predates the track job (enumerated earlier) and missing
+        it indicates row deletion / corruption, not a missing video.
+      * S3 missing the crop bytes → ``FileNotFoundError`` (same
+        bubbling path). Operators see the s3_key in the error
+        message so they can locate the gap in the enum-side upload.
+      * org mismatch → ``RuntimeError`` (would only happen if the
+        api side is misconfigured to omit Pattern B; defence in
+        depth).
+    """
+    payload = api.fetch_catalog_entry(
+        catalog_entry_id=decoded.catalog_entry_id,
+        org_id=decoded.org_id,
     )
+
+    payload_org_id = UUID(str(payload["org_id"]))
+    if payload_org_id != decoded.org_id:
+        raise RuntimeError(
+            f"catalog entry {decoded.catalog_entry_id} org "
+            f"{payload_org_id} != job org {decoded.org_id}"
+        )
+
+    s3_key = str(payload["canonical_crop_s3_key"])
+    body = s3.get_object_bytes(s3_key)
+    if body is None:
+        raise FileNotFoundError(
+            f"canonical crop S3 object missing for catalog_entry_id="
+            f"{decoded.catalog_entry_id} s3_key={s3_key}"
+        )
+
+    from PIL import Image as _PILImage
+    canonical_crop = _PILImage.open(io.BytesIO(body)).convert("RGB")
+
+    bbox_payload = payload["canonical_bbox"]
+    canonical_bbox = BBoxXYWH(
+        x=int(bbox_payload["x"]),
+        y=int(bbox_payload["y"]),
+        width=int(bbox_payload["w"]),
+        height=int(bbox_payload["h"]),
+    )
+
+    return canonical_crop, canonical_bbox, str(payload["llm_label"])
 
 
 def _fetch_transcripts_ocr(

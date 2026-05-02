@@ -37,11 +37,23 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
+# deadsnakes PPA via direct GPG keyserver fetch — bypasses
+# ``add-apt-repository`` which calls ``api.launchpad.net`` for
+# anonymous OAuth and times out when Launchpad's API is degraded
+# (observed 2026-05-01 during Phase 3c-A merge — every retry hit
+# the same TimeoutError on Launchpad's side). ``keyserver.ubuntu.com``
+# is a separate Ubuntu-operated GPG keyserver that's still
+# reachable when ``api.launchpad.net`` is down. Key fingerprint
+# is the deadsnakes signing key, pinned for build reproducibility.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        software-properties-common ca-certificates curl gnupg \
+        ca-certificates curl gnupg \
         build-essential python3-dev git \
         ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 \
-    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF23C5A6CF475977595C89F51BA6932366A755776" \
+        | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] http://ppa.launchpad.net/deadsnakes/ppa/ubuntu jammy main" \
+        > /etc/apt/sources.list.d/deadsnakes.list \
     && apt-get update && apt-get install -y --no-install-recommends \
         python3.11 python3.11-dev python3.11-distutils python3.11-venv \
     && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
@@ -94,12 +106,15 @@ SiglipVisionModel.from_pretrained('google/siglip2-base-patch16-256'); \
 AutoImageProcessor.from_pretrained('google/siglip2-base-patch16-256'); \
 print('siglip2 cached')"
 
-# TODO Phase 3c-B: pre-warm SAM2 weights here once the python package
-# + checkpoint variant are picked. Likely shape:
-#   RUN python -c "\
-#   from sam2.build_sam import build_sam2_video_predictor; \
-#   build_sam2_video_predictor('facebook/sam2-hiera-base-plus'); \
-#   print('sam2 cached')"
+# Pre-warm SAM2 weights — same HF cache path. Calibration on
+# staging goldens may flip the variant to ``sam2-hiera-large`` if
+# mean window IoU < 0.6 per plan §6.2; that's a one-line config
+# bump in WorkerSettings + a re-bake of this layer.
+RUN python -c "\
+from transformers import Sam2VideoModel, Sam2VideoProcessor; \
+Sam2VideoModel.from_pretrained('facebook/sam2-hiera-base-plus'); \
+Sam2VideoProcessor.from_pretrained('facebook/sam2-hiera-base-plus'); \
+print('sam2 cached')"
 
 COPY dev-heimdex-for-livecommerce/services/product-track-worker/src/ src/
 

@@ -29,7 +29,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -414,3 +414,190 @@ async def fail(
         error_code=body.error_code,
         error_message=body.error_message[:120],
     )
+
+
+# ---------- catalog entry resource (Phase 3c-B) ----------
+
+class _CatalogEntryResource(BaseModel):
+    """Read-only projection of a ``ProductCatalogEntry`` for the
+    track worker. Strict subset of the columns the worker needs to
+    seed retrieval + SAM2 anchoring; deliberately omits embeddings,
+    confidence/prominence scores, and version metadata.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    catalog_entry_id: UUID
+    org_id: UUID
+    video_id: UUID
+    canonical_crop_s3_key: str = Field(..., min_length=1)
+    canonical_bbox: _BBoxXYWH
+    llm_label: str = Field(..., min_length=1, max_length=200)
+
+
+@router.get(
+    "/catalog/{catalog_entry_id}",
+    response_model=_CatalogEntryResource,
+)
+async def get_catalog_entry(
+    catalog_entry_id: UUID,
+    _token: Annotated[str, Depends(verify_internal_token)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    x_heimdex_org_id: Annotated[
+        str | None, Header(alias="X-Heimdex-Org-Id"),
+    ] = None,
+) -> _CatalogEntryResource:
+    """Pattern B fetch for the track worker's canonical-crop seed.
+
+    Worker calls this immediately after claiming a track job to
+    resolve ``(canonical_crop_s3_key, canonical_bbox, llm_label)`` —
+    everything needed to download the reference crop from S3 and
+    seed SigLIP2 retrieval + SAM2 anchor. Embeddings + scores are
+    intentionally omitted; the worker has no use for them and
+    over-projecting would expose internal scoring detail to
+    every cross-service caller.
+
+    Auth: Bearer + Pattern B path-resource scoping. Cross-tenant
+    access returns 404 (NOT 403) — same response shape as a real
+    not-found, no info leak about the entry's true tenant.
+    Rejected entries are NOT filtered out: the track-worker has
+    legitimate reasons to fetch a soft-rejected entry's seed
+    metadata for diagnostic purposes; the rejection check belongs
+    on the user-facing path, not the internal worker callback.
+    """
+    from app.lib.internal_auth import resolve_resource_with_org
+
+    catalog_repo = ProductCatalogRepository(db)
+    entry, org_id = await resolve_resource_with_org(
+        resource_id=catalog_entry_id,
+        x_heimdex_org_id=x_heimdex_org_id,
+        lookup_fn=catalog_repo.get_by_id_resource_scoped,
+        not_found_detail="catalog entry not found",
+    )
+    return _CatalogEntryResource(
+        catalog_entry_id=entry.id,
+        org_id=org_id,
+        video_id=entry.video_id,
+        canonical_crop_s3_key=entry.canonical_crop_s3_key,
+        canonical_bbox=_BBoxXYWH(
+            x=entry.canonical_bbox_x,
+            y=entry.canonical_bbox_y,
+            w=entry.canonical_bbox_w,
+            h=entry.canonical_bbox_h,
+        ),
+        llm_label=entry.llm_label,
+    )
+
+
+# ---------- render enqueue (Phase 3c-B) ----------
+
+class _RenderEnqueuePayloadProxy(BaseModel):
+    """Mirror of :class:`shorts_render.schemas.RenderJobCreate`.
+
+    Defined inline rather than imported from shorts_render to avoid
+    cross-module circular imports during router load + to keep the
+    extra='forbid' boundary explicit at the wire. Drift between
+    this and ``RenderJobCreate`` would 422 here OR in the
+    forwarded service call — pinned by the integration tests.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    video_id: str = Field(..., min_length=1)
+    title: str | None = None
+    composition: dict  # Validated downstream by CompositionSpec.model_validate
+
+
+class _RenderEnqueueRequest(BaseModel):
+    """Worker → api request to enqueue a render for a tracking
+    scan job. The body forwards the user-facing
+    :class:`RenderJobCreate` payload verbatim; this endpoint adds
+    the lease check + ``user_id`` derivation from the scan job row
+    (workers don't carry user-facing JWTs).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    claimed_by: str = Field(..., min_length=1, max_length=200)
+    payload: _RenderEnqueuePayloadProxy
+
+
+class _RenderEnqueueResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    render_job_id: UUID
+
+
+@router.post(
+    "/{job_id}/render",
+    response_model=_RenderEnqueueResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def enqueue_render_for_scan_job(
+    job_id: UUID,
+    body: _RenderEnqueueRequest,
+    _token: Annotated[str, Depends(verify_internal_token)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> _RenderEnqueueResponse:
+    """Worker calls this immediately after building a stitch plan
+    so the api owns idempotency + per-user rate limiting + budget
+    accounting for the resulting render. Auth flow:
+
+    * Bearer token → ``verify_internal_token`` (legacy global key
+      OR per-service token via F1 Phase 3).
+    * Lease check → ``claimed_by`` must match the scan job row.
+      Stale workers whose lease already expired and was reclaimed
+      cannot enqueue renders for the new owner.
+    * ``org_id`` + ``requested_by_user_id`` derive from the scan
+      job row; the worker never sends them. Server-of-record
+      attribution stays correct even if the worker is buggy.
+
+    Returns the new ``RenderJob.id`` so the caller can pass it to
+    ``/internal/products/{job_id}/complete`` as ``render_job_id``.
+    """
+    from app.dependencies import get_shorts_render_service
+    from app.modules.shorts_render.schemas import RenderJobCreate
+    from heimdex_media_contracts.composition import CompositionSpec
+
+    job_repo = ProductScanJobRepository(db)
+    job = await job_repo.get_internal(job_id=job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="scan job not found",
+        )
+    if job.claimed_by != body.claimed_by:
+        # 409 mirrors claim/heartbeat/complete/fail — workers know
+        # to ack-delete the SQS message rather than redeliver.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="lease lost or claimed_by mismatch",
+        )
+    if job.catalog_entry_id is None:
+        # Enumerate jobs don't render. Render enqueue from an enum
+        # job is a worker bug.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="render enqueue requires a tracking job (catalog_entry_id is null)",
+        )
+
+    # Validate the composition shape before service entry — keeps
+    # the 422 on the api boundary rather than letting it surface as
+    # a 500 from the service-layer scene-clip validator.
+    try:
+        composition = CompositionSpec.model_validate(body.payload.composition)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"invalid composition: {exc}",
+        ) from exc
+
+    payload = RenderJobCreate(
+        video_id=body.payload.video_id,
+        title=body.payload.title,
+        composition=composition,
+    )
+    service = get_shorts_render_service(db=db)
+    response = await service.create_render_job(
+        org_id=job.org_id,
+        user_id=job.requested_by_user_id,
+        payload=payload,
+    )
+    await db.commit()
+    return _RenderEnqueueResponse(render_job_id=response.id)
