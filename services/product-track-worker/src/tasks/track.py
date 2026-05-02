@@ -203,32 +203,85 @@ class _CountingSam2Tracker:
 @dataclass
 class TrackJobMessage:
     """Decoded SQS body — matches
-    ``heimdex_media_contracts.product.ProductTrackJob``."""
+    ``heimdex_media_contracts.product.ProductTrackJob`` (v0.14.0+).
+
+    Fields ``catalog_entry_id`` and ``duration_preset_sec`` are
+    Optional in v0.14.0 to support the wizard scan_order parent flow,
+    which has no single catalog entry to anchor on.
+
+    Mode dispatch (in ``handle_track_job`` below):
+      * ``mode='enumerate'`` (default) AND ``catalog_entry_id`` set
+        → legacy single-product flow (existing track pipeline).
+      * ``mode='scan_order'`` AND ``catalog_entry_id`` is None
+        → wizard parent — process the whole video catalog. Real
+        per-catalog loop lands in PR #5b; PR #5a stubs this with a
+        clear ``not_yet_implemented`` failure so the dispatcher
+        doesn't crash on unknown shapes.
+      * ``mode='render_child'`` → reserved; render_child rows are
+        processed in-API by the child runner, NOT via SQS. If we
+        ever see one here, it's a bug — fail loudly.
+    """
 
     job_id: UUID
     org_id: UUID
     video_id: UUID  # DriveFile UUID, NOT the OS string id
-    catalog_entry_id: UUID
+    catalog_entry_id: UUID | None
     requested_by_user_id: UUID
-    duration_preset_sec: int
+    duration_preset_sec: int | None
     tracker_version: str
     enumeration_prompt_version: str
     callback_base_url: str
 
+    # v0.14.0 wizard fields — None for legacy senders.
+    mode: str = "enumerate"
+    length_seconds: int | None = None
+    requested_count: int | None = None
+    time_range_start_ms: int | None = None
+    time_range_end_ms: int | None = None
+    product_distribution: str | None = None
+    language: str | None = None
+    intent: str | None = None
+
     @classmethod
     def from_dict(cls, body: dict[str, Any]) -> "TrackJobMessage":
+        catalog_entry_id_raw = body.get("catalog_entry_id")
+        duration_preset_raw = body.get("duration_preset_sec")
         return cls(
             job_id=UUID(body["job_id"]),
             org_id=UUID(body["org_id"]),
             video_id=UUID(body["video_id"]),
-            catalog_entry_id=UUID(body["catalog_entry_id"]),
+            catalog_entry_id=(
+                UUID(catalog_entry_id_raw) if catalog_entry_id_raw else None
+            ),
             requested_by_user_id=UUID(body["requested_by_user_id"]),
-            duration_preset_sec=int(body["duration_preset_sec"]),
+            duration_preset_sec=(
+                int(duration_preset_raw) if duration_preset_raw is not None else None
+            ),
             tracker_version=str(body["tracker_version"]),
             enumeration_prompt_version=str(body["enumeration_prompt_version"]),
             # SECURITY (F3): tolerated-but-ignored. Future contract
             # bump should drop this field entirely.
             callback_base_url=str(body.get("callback_base_url", "")),
+            mode=str(body.get("mode", "enumerate")),
+            length_seconds=(
+                int(body["length_seconds"]) if "length_seconds" in body else None
+            ),
+            requested_count=(
+                int(body["requested_count"]) if "requested_count" in body else None
+            ),
+            time_range_start_ms=(
+                int(body["time_range_start_ms"])
+                if "time_range_start_ms" in body
+                else None
+            ),
+            time_range_end_ms=(
+                int(body["time_range_end_ms"])
+                if "time_range_end_ms" in body
+                else None
+            ),
+            product_distribution=body.get("product_distribution"),
+            language=body.get("language"),
+            intent=body.get("intent"),
         )
 
 
@@ -293,6 +346,58 @@ def handle_track_job(
                 )
                 return
             raise
+
+        # ─── 1.5 mode dispatch (Phase 4 PR #5a stub) ───────────────
+        # The wizard scan_order parent flow runs the per-catalog loop
+        # implemented in PR #5b. PR #5a only ships the publish path
+        # (API → SQS → here) so dispatcher integration can be verified
+        # without the full handler. Until #5b lands, scan_order
+        # messages /fail cleanly with a recognizable error_code so
+        # operators can confirm the message reached the worker.
+        if decoded.mode != "enumerate":
+            logger.warning(
+                "track_worker_unimplemented_mode",
+                extra={
+                    "job_id": str(decoded.job_id),
+                    "mode": decoded.mode,
+                    "note": (
+                        "PR #5a stub: real handler for mode=%s lands in "
+                        "PR #5b" % decoded.mode
+                    ),
+                },
+            )
+            api.fail(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                cost_delta_usd=Decimal("0"),
+                error_code="internal_error",
+                error_message=(
+                    f"track-worker mode={decoded.mode!r} is recognized but "
+                    f"the per-catalog handler is not yet wired (Phase 4 "
+                    f"PR #5b). The API publishes scan_order messages only "
+                    f"when AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED "
+                    f"is set; flip it off until #5b is deployed."
+                ),
+            )
+            return
+
+        # Legacy single-product flow requires both fields. Defensive
+        # check: if the API somehow published a mode='enumerate'
+        # message without ``catalog_entry_id`` (shouldn't happen post
+        # #5a since publish_product_track_job branches on mode), fail
+        # clearly rather than crashing on the None-deref later.
+        if decoded.catalog_entry_id is None:
+            api.fail(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                cost_delta_usd=Decimal("0"),
+                error_code="internal_error",
+                error_message=(
+                    "legacy track flow requires catalog_entry_id but the "
+                    "message body had it unset"
+                ),
+            )
+            return
 
         # ─── 2. heartbeat: resolving ───────────────────────────────
         api.heartbeat(
