@@ -347,37 +347,43 @@ def handle_track_job(
                 return
             raise
 
-        # ─── 1.5 mode dispatch (Phase 4 PR #5a stub) ───────────────
-        # The wizard scan_order parent flow runs the per-catalog loop
-        # implemented in PR #5b. PR #5a only ships the publish path
-        # (API → SQS → here) so dispatcher integration can be verified
-        # without the full handler. Until #5b lands, scan_order
-        # messages /fail cleanly with a recognizable error_code so
-        # operators can confirm the message reached the worker.
-        if decoded.mode != "enumerate":
-            logger.warning(
-                "track_worker_unimplemented_mode",
-                extra={
-                    "job_id": str(decoded.job_id),
-                    "mode": decoded.mode,
-                    "note": (
-                        "PR #5a stub: real handler for mode=%s lands in "
-                        "PR #5b" % decoded.mode
-                    ),
-                },
+        # ─── 1.5 mode dispatch ─────────────────────────────────────
+        # Phase 4 PR #5b — wizard scan_order parent flow runs the
+        # per-catalog loop in ``_handle_scan_order_parent``. The
+        # legacy single-product flow (mode='enumerate' with
+        # catalog_entry_id set) continues below this branch.
+        if decoded.mode == "scan_order":
+            _handle_scan_order_parent(
+                decoded=decoded,
+                settings=settings,
+                api=api,
+                s3=s3,
+                embedder=embedder,
+                tracker=tracker,
+                picker=picker,  # NOT used by parent — children own picking
             )
+            return
+        if decoded.mode == "render_child":
+            # render_child rows are processed in-API by the child
+            # runner, never via SQS. Reaching here = bug. Fail loudly.
             api.fail(
                 job_id=decoded.job_id,
                 claimed_by=settings.worker_id,
                 cost_delta_usd=Decimal("0"),
                 error_code="internal_error",
                 error_message=(
-                    f"track-worker mode={decoded.mode!r} is recognized but "
-                    f"the per-catalog handler is not yet wired (Phase 4 "
-                    f"PR #5b). The API publishes scan_order messages only "
-                    f"when AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED "
-                    f"is set; flip it off until #5b is deployed."
+                    "render_child rows must be processed in-API by the "
+                    "child runner, not via the worker SQS path"
                 ),
+            )
+            return
+        if decoded.mode != "enumerate":
+            api.fail(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                cost_delta_usd=Decimal("0"),
+                error_code="internal_error",
+                error_message=f"unknown track-worker mode={decoded.mode!r}",
             )
             return
 
@@ -1050,3 +1056,505 @@ def _serialize_appearances(
             "rejected_reason": w.rejected_reason,
         })
     return out
+
+
+# ─── Phase 4 PR #5b — wizard scan_order parent flow ────────────────────
+#
+# The parent flow runs SAM2 + alignment over EVERY active catalog entry
+# for the video, aggregates appearances tagged by catalog_entry_id, and
+# /completes with render_job_id=None. Scoring + window-selection +
+# stitch-plan-building happen later, per-child, in the API runner — the
+# parent is GPU-only orchestration; the children are CPU-only render
+# fan-out.
+#
+# Loose-coupling note: this function reuses the same pipeline-lib
+# functions as the legacy flow (retrieve_candidate_scenes, propagate,
+# assemble, annotate). The difference is the OUTER loop over catalog
+# entries. We deliberately do NOT extract a shared "_process_one_product"
+# helper in this PR — it would touch the legacy flow which is already
+# in production. PR #6 can refactor once both paths are stable.
+
+
+# Per-length min_window_duration_ms band table — codex Q4 correction.
+# Threshold is a noise floor; it should scale with the signal floor.
+# Values mirror plan §1.1 / §7.3.
+_LENGTH_TO_MIN_WINDOW_MS: dict[int, int] = {
+    15: 500, 30: 1000, 60: 1500, 90: 1500, 120: 1500,
+}
+
+
+def _min_window_ms_for_length(length_seconds: int) -> int:
+    """Banded threshold per plan §7.3. Custom-input lengths clamp
+    into the nearest band."""
+    if length_seconds <= 15:
+        return 500
+    if length_seconds <= 30:
+        return 1000
+    return 1500
+
+
+def _filter_scenes_by_time_range(
+    scenes: list[dict[str, Any]],
+    *,
+    range_start_ms: int | None,
+    range_end_ms: int | None,
+    soft_padding_ms: int = 30_000,
+) -> dict[str, str]:
+    """Pre-filter scenes by time-range with soft padding (codex Q3).
+
+    Returns a ``scene_id_to_keyframe_s3_key`` map containing only
+    scenes whose ``[start_ms, end_ms]`` overlaps
+    ``[range_start - pad, range_end + pad]``. If both bounds are
+    None, returns the full map (no filtering).
+
+    The ±30s padding handles windows straddling the user's chosen
+    boundary; the API's ``ck_psj_aggregate_output`` CHECK guarantees
+    enough source range exists for at least one short per child even
+    with padding.
+    """
+    if range_start_ms is None or range_end_ms is None:
+        return {s["scene_id"]: s["keyframe_s3_key"] for s in scenes}
+    padded_start = max(0, range_start_ms - soft_padding_ms)
+    padded_end = range_end_ms + soft_padding_ms
+    return {
+        s["scene_id"]: s["keyframe_s3_key"]
+        for s in scenes
+        if int(s.get("end_ms", 0)) > padded_start
+        and int(s.get("start_ms", 0)) < padded_end
+    }
+
+
+def _handle_scan_order_parent(
+    *,
+    decoded: TrackJobMessage,
+    settings: WorkerSettings,
+    api: ApiClient,
+    s3: S3Client,
+    embedder: SiglipEmbedder | None,
+    tracker: Sam2Tracker | None,
+    picker: SubsetPicker | None,
+) -> None:
+    """Wizard parent (``mode='scan_order'``) flow.
+
+    Differs from the legacy single-product flow:
+
+    1. Fetches the active catalog list (instead of a single entry).
+    2. Loops over entries, running retrieve → propagate → assemble →
+       alignment per-product.
+    3. Aggregates appearances tagged by ``catalog_entry_id``.
+    4. /complete with ``appearances`` + ``render_job_id=None`` —
+       the API child runner picks up render_child rows (inserted
+       atomically by the parent /complete fan-out hook in PR #116)
+       and handles per-child scoring + stitching + render-enqueue.
+
+    Per-product F4 counters (one set per entry) gate "stage-wide
+    failure for THIS product" without killing the whole order. If
+    every product F4-fails, the whole order /fails as
+    ``tracker_low_confidence_global``.
+
+    Time-range pre-filter (codex Q3) and per-length min-window
+    threshold (plan §7.3) apply at the scenes/config layer before
+    the per-product loop kicks off.
+    """
+    cost_accumulator = Decimal("0")
+    length_seconds = decoded.length_seconds or 60
+
+    # ── 1. claim ──────────────────────────────────────────────
+    try:
+        api.claim(
+            job_id=decoded.job_id,
+            claimed_by=settings.worker_id,
+            next_stage="tracking",
+            lease_seconds=settings.worker_lease_seconds,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 409:
+            logger.info(
+                "scan_order_claim_conflict_acking_message",
+                extra={
+                    "job_id": str(decoded.job_id),
+                    "claimed_by": settings.worker_id,
+                },
+            )
+            return
+        raise
+
+    # ── 2. heartbeat: resolving ───────────────────────────────
+    api.heartbeat(
+        job_id=decoded.job_id,
+        claimed_by=settings.worker_id,
+        stage="tracking",
+        progress_pct=5,
+        progress_label="resolving catalog",
+        cost_delta_usd=Decimal("0"),
+        lease_seconds=settings.worker_lease_seconds,
+    )
+
+    # ── 3. fetch active catalog ───────────────────────────────
+    catalog_entries = api.fetch_catalog_entries_for_video(
+        video_id=decoded.video_id, org_id=decoded.org_id,
+    )
+    if not catalog_entries:
+        api.fail(
+            job_id=decoded.job_id,
+            claimed_by=settings.worker_id,
+            cost_delta_usd=cost_accumulator,
+            error_code="no_products_detected",
+            error_message=(
+                "catalog has no active entries for this video; "
+                "run enumeration first"
+            ),
+        )
+        return
+
+    # ── 4. fetch scenes-with-keyframes (ONCE for the video) ──
+    api.heartbeat(
+        job_id=decoded.job_id,
+        claimed_by=settings.worker_id,
+        stage="tracking",
+        progress_pct=10,
+        progress_label=f"fetching scenes for {len(catalog_entries)} products",
+        cost_delta_usd=Decimal("0"),
+        lease_seconds=settings.worker_lease_seconds,
+    )
+    try:
+        scenes_resp = api.fetch_scenes_with_keyframes(
+            file_id=decoded.video_id, org_id=decoded.org_id,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            api.fail(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                cost_delta_usd=cost_accumulator,
+                error_code="video_not_found",
+                error_message=(
+                    f"DriveFile {decoded.video_id} not found or not "
+                    f"accessible to org {decoded.org_id}"
+                ),
+            )
+            return
+        raise
+    scenes = scenes_resp.get("scenes", [])
+    os_video_id = scenes_resp.get("video_id", "")
+
+    # ── 4.5 time-range pre-filter (codex Q3) ──────────────────
+    scene_id_to_kf = _filter_scenes_by_time_range(
+        scenes,
+        range_start_ms=decoded.time_range_start_ms,
+        range_end_ms=decoded.time_range_end_ms,
+    )
+    if not scene_id_to_kf:
+        api.fail(
+            job_id=decoded.job_id,
+            claimed_by=settings.worker_id,
+            cost_delta_usd=cost_accumulator,
+            error_code="tracker_low_confidence_global",
+            error_message=(
+                f"no scenes overlap the time-range "
+                f"[{decoded.time_range_start_ms}, "
+                f"{decoded.time_range_end_ms}]ms after soft-padding"
+            ),
+        )
+        return
+
+    # ── 5. per-product loop ───────────────────────────────────
+    cfg = _make_config(settings)
+    # Per-length threshold override (plan §7.3 — codex Q4).
+    cfg.min_window_duration_ms = _min_window_ms_for_length(length_seconds)
+
+    progress_per_entry = 80.0 / max(len(catalog_entries), 1)
+    aggregated_appearances: list[dict[str, Any]] = []
+    products_succeeded = 0
+    products_f4_failed = 0
+    products_no_qualifying = 0
+
+    for i, entry in enumerate(catalog_entries):
+        entry_id = UUID(str(entry["catalog_entry_id"]))
+        entry_label = str(entry["llm_label"])
+        progress_pct = 10 + int((i + 1) * progress_per_entry)
+        try:
+            api.heartbeat(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                stage="tracking",
+                progress_pct=min(progress_pct, 89),
+                progress_label=(
+                    f"tracking {entry_label} ({i+1}/{len(catalog_entries)})"
+                ),
+                cost_delta_usd=Decimal("0"),
+                lease_seconds=settings.worker_lease_seconds,
+            )
+
+            entry_appearances = _process_one_product_for_parent(
+                entry=entry,
+                scene_id_to_kf=scene_id_to_kf,
+                os_video_id=os_video_id,
+                cfg=cfg,
+                api=api,
+                s3=s3,
+                decoded=decoded,
+                settings=settings,
+                embedder=embedder,
+                tracker=tracker,
+            )
+            if entry_appearances is None:
+                # F4 stage-wide outage for THIS product. Don't kill
+                # the whole order — log + skip.
+                products_f4_failed += 1
+                continue
+            if not entry_appearances:
+                products_no_qualifying += 1
+                continue
+            aggregated_appearances.extend(entry_appearances)
+            products_succeeded += 1
+        except Exception:
+            logger.exception(
+                "scan_order_per_product_failed",
+                extra={
+                    "job_id": str(decoded.job_id),
+                    "catalog_entry_id": str(entry_id),
+                    "entry_label": entry_label,
+                },
+            )
+            products_f4_failed += 1
+            continue
+
+    # ── 6. /complete or /fail ─────────────────────────────────
+    if not aggregated_appearances:
+        # Distinguish "all products F4-failed" (stage-wide regression)
+        # from "all products produced no qualifying windows" (correct
+        # behavior, just no good content).
+        if products_f4_failed == len(catalog_entries):
+            api.fail(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                cost_delta_usd=cost_accumulator,
+                error_code="internal_error",
+                error_message=(
+                    f"all {len(catalog_entries)} products F4-failed — "
+                    f"likely a stage-wide regression (SigLIP2 / S3 / SAM2). "
+                    f"Check worker logs for per-product failures."
+                ),
+            )
+        else:
+            api.fail(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                cost_delta_usd=cost_accumulator,
+                error_code="tracker_low_confidence_global",
+                error_message=(
+                    f"no products produced qualifying windows "
+                    f"(succeeded={products_succeeded}, "
+                    f"no_qualifying={products_no_qualifying}, "
+                    f"f4_failed={products_f4_failed})"
+                ),
+            )
+        return
+
+    logger.info(
+        "scan_order_parent_completed",
+        extra={
+            "job_id": str(decoded.job_id),
+            "products_total": len(catalog_entries),
+            "products_succeeded": products_succeeded,
+            "products_no_qualifying": products_no_qualifying,
+            "products_f4_failed": products_f4_failed,
+            "appearances_total": len(aggregated_appearances),
+        },
+    )
+    # /complete with appearances + render_job_id=None — the parent's
+    # /complete handler in the API routes through
+    # transition_parent_to_fanned_out + create_render_children
+    # (PR #116) atomically. Children are then picked up by the
+    # API child runner (PR #117 stub; PR #6 real picker).
+    api.complete_track(
+        job_id=decoded.job_id,
+        claimed_by=settings.worker_id,
+        cost_delta_usd=cost_accumulator,
+        appearances=aggregated_appearances,
+        render_job_id=None,
+    )
+
+
+def _process_one_product_for_parent(
+    *,
+    entry: dict[str, Any],
+    scene_id_to_kf: dict[str, str],
+    os_video_id: str,
+    cfg: TrackingConfig,
+    api: ApiClient,
+    s3: S3Client,
+    decoded: TrackJobMessage,
+    settings: WorkerSettings,
+    embedder: SiglipEmbedder | None,
+    tracker: Sam2Tracker | None,
+) -> list[dict[str, Any]] | None:
+    """Run retrieve → propagate → assemble → annotate for one
+    catalog entry. Returns the appearances list (possibly empty) or
+    ``None`` to signal stage-wide F4 failure for this product (the
+    parent caller treats None as "skip this product").
+
+    Per-entry F4 counters are scoped to this call — a stage-wide
+    failure on one product doesn't poison the next product's run.
+    """
+    entry_id = UUID(str(entry["catalog_entry_id"]))
+    entry_label = str(entry["llm_label"])
+
+    # Fetch canonical crop bytes via the existing helper. Constructs
+    # a synthetic TrackJobMessage shape so the helper signature stays
+    # unchanged from the legacy flow.
+    canonical_crop, canonical_bbox, llm_label = _fetch_canonical_crop(
+        api=api,
+        s3=s3,
+        decoded=_TrackJobMessageWithCatalogEntryId(
+            base=decoded, catalog_entry_id=entry_id,
+        ),
+        settings=settings,
+    )
+
+    # F4 wrappers — per-product so failures are isolated.
+    embedder_impl = _CountingEmbedder(embedder or SiglipEmbedderImpl())
+    coarse_client = CoarseRetrievalClientImpl(
+        api=api, file_id=decoded.video_id, org_id=decoded.org_id,
+    )
+    keyframe_fetcher = _CountingKeyframeFetcher(
+        KeyframeFetcherImpl(
+            s3=s3,
+            bucket=settings.drive_s3_bucket,
+            scene_id_to_s3_key=scene_id_to_kf,
+        )
+    )
+
+    candidate_scenes = retrieve_candidate_scenes(
+        canonical_crop,
+        video_id=os_video_id,
+        embedder=embedder_impl,
+        coarse_client=coarse_client,
+        keyframe_fetcher=keyframe_fetcher,
+        config=cfg,
+    )
+
+    if keyframe_fetcher.all_attempts_failed:
+        logger.warning(
+            "scan_order_product_keyframe_f4",
+            extra={"entry_id": str(entry_id), "attempted": keyframe_fetcher.attempted},
+        )
+        return None
+    if embedder_impl.per_scene_all_failed():
+        logger.warning(
+            "scan_order_product_siglip_f4",
+            extra={
+                "entry_id": str(entry_id),
+                "attempted": embedder_impl.per_scene_attempted,
+            },
+        )
+        return None
+
+    if not candidate_scenes:
+        # Not an F4 — the product just has no scenes that match.
+        return []
+
+    # SAM2 propagation per-product.
+    scene_video_urls = {
+        cs.scene_id: f"s3://{settings.drive_s3_bucket}/proxies/{os_video_id}/{cs.scene_id}.mp4"
+        for cs in candidate_scenes
+    }
+    tracker_impl = _CountingSam2Tracker(
+        tracker or Sam2TrackerImpl(model_id=settings.sam2_model_id)
+    )
+    detections = propagate_within_candidate_scenes(
+        candidates=candidate_scenes,
+        canonical_bbox=canonical_bbox,
+        tracker=tracker_impl,
+        scene_video_urls=scene_video_urls,
+        config=cfg,
+    )
+    if tracker_impl.all_attempts_failed:
+        logger.warning(
+            "scan_order_product_sam2_f4",
+            extra={"entry_id": str(entry_id), "attempted": tracker_impl.attempted},
+        )
+        return None
+
+    assembled = assemble_windows(detections, config=cfg)
+    if not assembled:
+        return []
+
+    # Fetch transcripts/OCR ONLY for assembled scenes — mirrors the
+    # legacy flow's optimization to skip the API call for products
+    # with no qualifying windows.
+    all_assembled_scene_ids = sorted({w.scene_id for w in assembled})
+    transcripts, ocr = _fetch_transcripts_ocr(
+        api=api,
+        file_id=decoded.video_id,
+        org_id=decoded.org_id,
+        scene_ids=all_assembled_scene_ids,
+    )
+
+    annotated = annotate_alignment(
+        assembled,
+        label=llm_label,
+        transcripts=transcripts,
+        ocr=ocr,
+    )
+
+    # Tag appearances with this product's catalog_entry_id for
+    # the parent's /complete callback (the API's _AppearancePayload
+    # extra='forbid' boundary requires explicit tagging when
+    # mode='scan_order' — see PR #114's dispatch fix).
+    return _serialize_parent_appearances(
+        annotated, decoded, settings, entry_id,
+    )
+
+
+def _serialize_parent_appearances(
+    annotated: list,
+    decoded: TrackJobMessage,
+    settings: WorkerSettings,
+    catalog_entry_id: UUID,
+) -> list[dict[str, Any]]:
+    """Same as ``_serialize_appearances`` but tags each row with
+    the parent-flow ``catalog_entry_id`` (legacy flow derives it
+    from the job row server-side; scan_order parents must set it
+    explicitly — see PR #114 §3.3 dispatch logic).
+    """
+    out = []
+    for w in annotated:
+        out.append({
+            "catalog_entry_id": str(catalog_entry_id),
+            "scene_id": w.scene_id,
+            "window_start_ms": w.window_start_ms,
+            "window_end_ms": w.window_end_ms,
+            "avg_bbox_area_pct": w.avg_bbox_area_pct,
+            "avg_confidence": w.avg_confidence,
+            "has_narration_mention": w.has_narration_mention,
+            "has_ocr_overlap": w.has_ocr_overlap,
+            "co_appearing_catalog_entry_ids": [],
+            "raw_bbox_track_s3_key": None,
+            "tracker_version": settings.tracker_version,
+            "rejected_reason": w.rejected_reason,
+        })
+    return out
+
+
+@dataclass
+class _TrackJobMessageWithCatalogEntryId:
+    """Adapter for ``_fetch_canonical_crop`` so the helper's
+    signature stays unchanged.
+
+    The legacy flow's ``_fetch_canonical_crop`` reads
+    ``decoded.catalog_entry_id`` directly. For the scan_order
+    parent loop, the catalog_entry_id varies per iteration — this
+    adapter wraps the parent's TrackJobMessage with a per-iteration
+    catalog_entry_id without mutating the original.
+    """
+    base: TrackJobMessage
+    catalog_entry_id: UUID
+
+    def __getattr__(self, name: str) -> Any:
+        # Delegate everything except ``catalog_entry_id`` to the base
+        # message. ``catalog_entry_id`` is overridden via instance
+        # attribute (set by dataclass), so __getattr__ only fires
+        # for missing attributes (which means it's on base).
+        return getattr(self.base, name)
