@@ -410,6 +410,35 @@ class Settings(BaseSettings):
     auto_shorts_product_v2_enumerate_lease_seconds: int = 600
     auto_shorts_product_v2_track_lease_seconds: int = 1800
 
+    # --- Phase 4 wizard / child runner ---
+    #
+    # Bounded concurrency for the in-API-process child render runner
+    # (services/api/app/modules/shorts_auto_product/children/runner.py).
+    # Children are CPU-light (subset_pick + stitch_plan + 1 HTTP call to
+    # /render) but should not starve request handlers under load. If
+    # render-enqueue latency rises, drop to 2.
+    auto_shorts_product_v2_child_runner_max_concurrency: int = 4
+    # Poll interval for the runner loop. 5s is fast enough for the
+    # wizard's 3s polling cadence to feel near-instant; lower values
+    # burn CPU on idle replicas.
+    auto_shorts_product_v2_child_runner_poll_seconds: float = 5.0
+    # Lease length for child claims. Children are fast (subset_pick is
+    # bounded by parent's appearances; stitch_plan is O(N); render
+    # enqueue is one HTTP call), so a short lease catches a wedged
+    # replica quickly without spuriously stealing work from a healthy
+    # one.
+    auto_shorts_product_v2_child_lease_seconds: int = 300
+    # Master switch for the child runner loop. Default ON in prod;
+    # disable to suspend wizard fan-out without redeploying (e.g. while
+    # debugging a render-side incident).
+    auto_shorts_product_v2_child_runner_enabled: bool = True
+
+    # Wizard idempotency window. Same shape as the legacy
+    # ``auto_shorts_product_v2_scan_idempotency_seconds`` but keyed on
+    # the canonical-JSON ``settings_hash`` so two different sets of
+    # wizard inputs don't collide.
+    auto_shorts_product_v2_scan_order_idempotency_seconds: int = 60
+
     # --- CORS ---
     cors_allow_origin_regex: str = (
         r"^https?://"

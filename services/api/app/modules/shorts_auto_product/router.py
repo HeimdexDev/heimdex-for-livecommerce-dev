@@ -29,6 +29,10 @@ from app.modules.shorts_auto_product.schemas import (
     ProductCatalogResponse,
     ProductV2AvailabilityFragment,
     RescanResponse,
+    ScanOrderCommitRequest,
+    ScanOrderCreateRequest,
+    ScanOrderResponse,
+    ScanOrderStatusResponse,
     ScanRequest,
     ScanResponse,
 )
@@ -280,3 +284,120 @@ async def get_product_v2_availability(
     """
     service = _build_service(db, settings)
     return await service.availability_fragment(org_id=org_ctx.org_id)
+
+
+# ----------------------------------------------------------------------
+# Phase 4 wizard — scan-order endpoints
+# ----------------------------------------------------------------------
+
+
+@router.post(
+    "/scan-orders/videos/{video_id}",
+    response_model=ScanOrderResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_scan_order(
+    video_id: UUID,
+    body: ScanOrderCreateRequest,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ScanOrderResponse:
+    """Submit the 4-step wizard.
+
+    Body captures every wizard input. Idempotent within
+    ``auto_shorts_product_v2_scan_order_idempotency_seconds``
+    (default 60s) keyed on canonical-JSON ``settings_hash``.
+
+    Validation chain (422 with descriptive messages):
+    * ``length_seconds``: 10..120 (Pydantic Field bounds)
+    * ``requested_count``: 1..50
+    * ``requested_count * length_seconds <= 1800`` (aggregate cap)
+    * If time-range provided: end > start AND
+      ``(end - start) / count >= length_seconds * 1000``
+
+    Mounted under ``/videos/{video_id}`` so the path naturally scopes
+    to the video the user picked in step 1 of the wizard. The
+    counterpart ``GET /scan-orders/{parent_job_id}`` does NOT carry
+    ``video_id`` in the path — once a parent exists, the wizard
+    polls by parent id directly.
+    """
+    service = _build_service(db, settings)
+    return await service.enqueue_scan_order(
+        org_id=org_ctx.org_id,
+        video_id=video_id,
+        user_id=user.id,
+        body=body,
+    )
+
+
+@router.get(
+    "/scan-orders/{parent_job_id}",
+    response_model=ScanOrderStatusResponse,
+)
+async def get_scan_order_status(
+    parent_job_id: UUID,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    _user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ScanOrderStatusResponse:
+    """Aggregate status for a wizard order — parent + all children +
+    rollup counts. The wizard polls THIS endpoint, not the legacy
+    ``/jobs/{job_id}`` flat shape.
+    """
+    service = _build_service(db, settings)
+    return await service.get_scan_order_status(
+        org_id=org_ctx.org_id, parent_job_id=parent_job_id,
+    )
+
+
+@router.post(
+    "/scan-orders/{parent_job_id}/cancel",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def cancel_scan_order(
+    parent_job_id: UUID,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    _user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    """Cascade-cancel a scan order: parent + non-terminal children.
+
+    Best-effort for in-flight children — the lease + claimed_by
+    discipline means a running render won't be ripped out from
+    under itself; the next heartbeat sees ``stage=cancelled`` and
+    exits cleanly.
+    """
+    service = _build_service(db, settings)
+    await service.cancel_scan_order(
+        org_id=org_ctx.org_id, parent_job_id=parent_job_id,
+    )
+
+
+@router.post(
+    "/scan-orders/{parent_job_id}/commit",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def commit_scan_order(
+    parent_job_id: UUID,
+    body: ScanOrderCommitRequest,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    _user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    """Phase 6 endpoint — preview → commit transition.
+
+    Currently returns 501. The body shape is locked now so the
+    frontend wizard can be built against a stable contract; Phase 6
+    will wire the SAM2 + render-enqueue commit path.
+    """
+    service = _build_service(db, settings)
+    await service.commit_scan_order(
+        org_id=org_ctx.org_id,
+        parent_job_id=parent_job_id,
+        selected_window_ids=body.selected_window_ids,
+    )

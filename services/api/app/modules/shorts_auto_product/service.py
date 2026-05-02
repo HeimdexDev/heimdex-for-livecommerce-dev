@@ -21,8 +21,10 @@ repositories.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -60,6 +62,9 @@ from app.modules.shorts_auto_product.schemas import (
     ProductCatalogResponse,
     ProductV2AvailabilityFragment,
     RescanResponse,
+    ScanOrderCreateRequest,
+    ScanOrderResponse,
+    ScanOrderStatusResponse,
     ScanResponse,
     ScanStage,
     ScanStatus,
@@ -563,8 +568,311 @@ class ProductScanService:
             product_v2_duration_presets_sec=presets,
         )
 
+    # ------------------------------------------------------------------
+    # Phase 4 wizard — scan-order endpoints
+    # ------------------------------------------------------------------
+
+    async def enqueue_scan_order(
+        self,
+        *,
+        org_id: UUID,
+        video_id: UUID,
+        user_id: UUID,
+        body: ScanOrderCreateRequest,
+    ) -> ScanOrderResponse:
+        """Create a wizard parent job from the 4-step wizard inputs.
+
+        Pre-flight order matches the rest of this service (flag,
+        budget, idempotency, concurrency). Aggregate-output cap is
+        enforced both as a 422 here and as a DB CHECK
+        (``ck_psj_aggregate_output``) — service-layer 422 gives a
+        meaningful error message before the row hits Postgres.
+
+        SQS publish for ``mode='scan_order'`` parents is wired in PR #3
+        alongside the worker refactor. Until then, parent rows persist
+        in stage='queued' but no worker consumes them — so the wizard
+        flow end-to-end requires PR #3 to land before the parent
+        actually progresses past 'queued'. This is intentional: it
+        keeps PR #2 testable in isolation without DLQ noise from the
+        existing track-worker rejecting the new mode.
+        """
+        self._require_enabled_for_org(org_id)
+        await self._require_budget(org_id)
+
+        # Service-layer validation that complements the DB CHECKs with
+        # better error messages for the frontend.
+        _validate_scan_order_inputs(body=body)
+
+        # Active catalog set drives idempotency invalidation: a rescan
+        # that produces new entries naturally invalidates the dedupe
+        # key without needing an explicit catalog version column.
+        active_entries = await self.catalog_repo.list_active_by_video(
+            org_id=org_id, video_id=video_id,
+        )
+        active_entry_ids = sorted(str(e.id) for e in active_entries)
+
+        settings_hash = compute_settings_hash(
+            video_id=video_id,
+            user_id=user_id,
+            length_seconds=body.length_seconds,
+            requested_count=body.requested_count,
+            time_range_start_ms=body.time_range_start_ms,
+            time_range_end_ms=body.time_range_end_ms,
+            product_distribution=body.product_distribution,
+            language=body.language,
+            intent=body.intent,
+            active_catalog_entry_ids=active_entry_ids,
+            tracker_version=self.settings.auto_shorts_product_v2_tracker_version,
+            enumeration_prompt_version=(
+                self.settings.auto_shorts_product_v2_enumeration_prompt_version
+            ),
+        )
+
+        existing = await self.job_repo.find_recent_scan_order_duplicate(
+            org_id=org_id,
+            user_id=user_id,
+            settings_hash=settings_hash,
+            within_seconds=(
+                self.settings.auto_shorts_product_v2_scan_order_idempotency_seconds
+            ),
+        )
+        if existing is not None:
+            return ScanOrderResponse(
+                parent_job_id=existing.id, deduped=True,
+            )
+
+        await self._require_concurrency_slot(org_id)
+
+        parent = await self.job_repo.create_scan_order_parent(
+            org_id=org_id,
+            video_id=video_id,
+            user_id=user_id,
+            length_seconds=body.length_seconds,
+            requested_count=body.requested_count,
+            time_range_start_ms=body.time_range_start_ms,
+            time_range_end_ms=body.time_range_end_ms,
+            product_distribution=body.product_distribution,
+            language=body.language,
+            intent=body.intent,
+            settings_hash=settings_hash,
+        )
+        await self.session.flush()
+
+        # TODO(PR#3): publish_product_scan_order_job — wired with the
+        # worker refactor that teaches product-track-worker to handle
+        # mode='scan_order'. Until then, parent rows sit in 'queued'.
+        logger.info(
+            "product_v2_scan_order_created",
+            parent_job_id=str(parent.id),
+            org_id=str(org_id),
+            video_id=str(video_id),
+            user_id=str(user_id),
+            length_seconds=body.length_seconds,
+            requested_count=body.requested_count,
+            distribution=body.product_distribution,
+            language=body.language,
+            intent=body.intent,
+            settings_hash=settings_hash,
+            note="SQS publish deferred to PR #3",
+        )
+        return ScanOrderResponse(parent_job_id=parent.id, deduped=False)
+
+    async def get_scan_order_status(
+        self,
+        *,
+        org_id: UUID,
+        parent_job_id: UUID,
+    ) -> ScanOrderStatusResponse:
+        """Aggregate read for the wizard's polling subscription."""
+        self._require_enabled_for_org(org_id)
+        result = await self.job_repo.get_scan_order_with_children(
+            org_id=org_id, parent_job_id=parent_job_id,
+        )
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="scan order not found",
+            )
+        parent, children = result
+        children_responses = [_job_to_status_response(c) for c in children]
+        complete_count = sum(
+            1 for c in children_responses if c.completed_at is not None
+        )
+        failed_count = sum(
+            1 for c in children_responses
+            if c.failed_at is not None or c.cancelled_at is not None
+        )
+        return ScanOrderStatusResponse(
+            parent=_job_to_status_response(parent),
+            children=children_responses,
+            children_complete=complete_count,
+            children_failed=failed_count,
+            children_total=len(children_responses),
+        )
+
+    async def cancel_scan_order(
+        self,
+        *,
+        org_id: UUID,
+        parent_job_id: UUID,
+    ) -> None:
+        """Cascade-cancel a parent + its non-terminal children.
+
+        404 if parent is missing OR not a scan_order OR no rows were
+        transitioned (already-terminal cases hit the latter — same
+        no-info-leak shape as the legacy ``cancel_job``).
+        """
+        self._require_enabled_for_org(org_id)
+        # Verify the parent exists and is a scan_order before
+        # attempting the cascade — keeps 404 semantics tight.
+        parent = await self.job_repo.get(
+            org_id=org_id, job_id=parent_job_id,
+        )
+        if parent is None or parent.mode != "scan_order":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="scan order not found",
+            )
+        rows_changed = await self.job_repo.cancel_scan_order(
+            org_id=org_id, parent_job_id=parent_job_id,
+        )
+        if rows_changed == 0:
+            # Parent + all children already terminal — idempotent
+            # 404 same as the legacy cancel.
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="scan order not found or already terminal",
+            )
+
+    async def commit_scan_order(
+        self,
+        *,
+        org_id: UUID,
+        parent_job_id: UUID,
+        selected_window_ids: list[UUID] | None,
+    ) -> None:
+        """Phase 6 endpoint — preview → commit transition. Stubbed
+        until the preview flow lands. Body shape locked now so the
+        frontend wizard can be built against a stable contract.
+        """
+        self._require_enabled_for_org(org_id)
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="scan order commit is a Phase 6 deliverable",
+        )
+
 
 # ---------- helpers ----------
+
+
+def compute_settings_hash(
+    *,
+    video_id: UUID,
+    user_id: UUID,
+    length_seconds: int,
+    requested_count: int,
+    time_range_start_ms: int | None,
+    time_range_end_ms: int | None,
+    product_distribution: str,
+    language: str,
+    intent: str,
+    active_catalog_entry_ids: list[str],
+    tracker_version: str,
+    enumeration_prompt_version: str,
+) -> str:
+    """Canonical-JSON SHA256 of every wizard input that should
+    discriminate "same intent" from "different intent" for the 60s
+    idempotency window.
+
+    Why these fields, codex-reviewed (plan §19 Q3):
+
+    * ``video_id`` + ``user_id``: tenant-scoping happens at the SQL
+      level via the ``find_recent_scan_order_duplicate`` filter, but
+      including them in the hash makes the hash cross-tenant unique
+      so cache poisoning via ID collision is impossible.
+    * ``intent``: separates preview-flow dedupe from commit-flow
+      dedupe — same wizard inputs in preview mode must not dedupe a
+      subsequent commit.
+    * ``active_catalog_entry_ids``: rescan that produces new entries
+      naturally changes the hash → new parent. No catalog-version
+      column needed.
+    * ``tracker_version`` + ``enumeration_prompt_version``: model
+      bumps invalidate dedupe correctly, so the user re-running with
+      the same wizard inputs after a model deploy gets fresh output
+      (otherwise the cached parent would be stuck on the old model).
+
+    Canonical-JSON via ``sort_keys=True`` + tightest separators so
+    the hash is stable across Python versions / dict ordering /
+    unicode differences. NEVER change the hash composition without
+    bumping this function's name; otherwise rolling deploys would
+    miss caches across replicas mid-deploy.
+    """
+    payload: dict[str, Any] = {
+        "video_id": str(video_id),
+        "user_id": str(user_id),
+        "intent": intent,
+        "length_seconds": length_seconds,
+        "requested_count": requested_count,
+        "time_range_start_ms": time_range_start_ms or 0,
+        "time_range_end_ms": time_range_end_ms or 0,
+        "product_distribution": product_distribution,
+        "language": language,
+        "catalog_entry_ids": list(active_catalog_entry_ids),
+        "tracker_version": tracker_version,
+        "enumeration_prompt_version": enumeration_prompt_version,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _validate_scan_order_inputs(*, body: ScanOrderCreateRequest) -> None:
+    """Service-layer validation that the DB CHECKs back-stop.
+
+    Pydantic already enforces 10..120 length and 1..50 count via Field
+    bounds. The DB enforces ``count * length <= 1800`` and
+    time-range monotonicity. This function adds the 422s the
+    frontend can render as inline errors:
+
+      * aggregate output cap (count * length <= 1800)
+      * time-range sanity: each short has at least its length in
+        source range
+    """
+    aggregate_output_seconds = body.requested_count * body.length_seconds
+    if aggregate_output_seconds > 1800:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"requested_count ({body.requested_count}) * length_seconds "
+                f"({body.length_seconds}) = {aggregate_output_seconds}s exceeds "
+                f"the 1800s (30 min) aggregate cap per scan order"
+            ),
+        )
+    if (body.time_range_start_ms is None) != (body.time_range_end_ms is None):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "time_range_start_ms and time_range_end_ms must both be "
+                "set or both be null"
+            ),
+        )
+    if body.time_range_start_ms is not None and body.time_range_end_ms is not None:
+        if body.time_range_end_ms <= body.time_range_start_ms:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="time_range_end_ms must be greater than time_range_start_ms",
+            )
+        span_ms = body.time_range_end_ms - body.time_range_start_ms
+        per_short_budget_ms = span_ms / body.requested_count
+        required_per_short_ms = body.length_seconds * 1000
+        if per_short_budget_ms < required_per_short_ms:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"time range ({span_ms}ms) split across {body.requested_count} "
+                    f"shorts gives only {int(per_short_budget_ms)}ms per short — "
+                    f"each short needs at least {required_per_short_ms}ms of source"
+                ),
+            )
 
 def _job_to_status_response(job: ProductScanJob) -> JobStatusResponse:
     """Mode-aware projection of a ``ProductScanJob`` to the public
