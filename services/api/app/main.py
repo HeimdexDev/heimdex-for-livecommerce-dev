@@ -93,6 +93,22 @@ async def lifespan(app: FastAPI):
     await _ensure_search_event_partitions(engine)
     await _ensure_worker_event_partitions(engine)
 
+    # Phase 4 wizard child runner — picks up queued ``mode='render_child'``
+    # rows produced by the parent fan-out hook in
+    # ``shorts_auto_product.internal_router.complete``. One runner per
+    # API replica; DB-atomic claim resolves the race across replicas.
+    # Stub processing in PR #4 (claim → /complete with render_job_id=None);
+    # real picker + render-service integration in PR #5.
+    from app.db.base import get_async_session_factory
+    from app.modules.shorts_auto_product.children import create_child_runner
+
+    child_runner = create_child_runner(
+        settings=settings,
+        session_factory=get_async_session_factory(),
+    )
+    child_runner.start()
+    app.state.product_v2_child_runner = child_runner
+
     if settings.embedding_use_mock:
         logger.warning(
             "embedding_mock_mode_active",
@@ -117,6 +133,15 @@ async def lifespan(app: FastAPI):
     await scene_opensearch_client.close()
     app.state.opensearch_client = None
     app.state.scene_opensearch_client = None
+
+    # Drain the wizard child runner before disposing the engine.
+    # In-flight children get up to 30s to /complete; tasks still
+    # running after the timeout are cancelled and the lease will
+    # expire so another replica re-claims on its next poll.
+    runner = getattr(app.state, "product_v2_child_runner", None)
+    if runner is not None:
+        await runner.stop(drain_timeout_seconds=30.0)
+        app.state.product_v2_child_runner = None
 
     await engine.dispose()
 
