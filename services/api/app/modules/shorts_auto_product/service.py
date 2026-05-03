@@ -603,6 +603,26 @@ class ProductScanService:
         # better error messages for the frontend.
         _validate_scan_order_inputs(body=body)
 
+        # If the wizard's product-select step picked a specific entry,
+        # validate it BEFORE allocating a concurrency slot — same shape
+        # as the legacy ``enqueue_clip`` 404 (no-info-leak: cross-org,
+        # missing, and rejected all return the same status). The check
+        # also doubles as a defense against stale catalog ids that
+        # survived a rescan invalidation.
+        if body.catalog_entry_id is not None:
+            entry = await self.catalog_repo.get(
+                org_id=org_id, entry_id=body.catalog_entry_id,
+            )
+            if (
+                entry is None
+                or entry.video_id != video_id
+                or entry.rejected_at is not None
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="catalog entry not found",
+                )
+
         # Active catalog set drives idempotency invalidation: a rescan
         # that produces new entries naturally invalidates the dedupe
         # key without needing an explicit catalog version column.
@@ -625,6 +645,11 @@ class ProductScanService:
             tracker_version=self.settings.auto_shorts_product_v2_tracker_version,
             enumeration_prompt_version=(
                 self.settings.auto_shorts_product_v2_enumeration_prompt_version
+            ),
+            selected_catalog_entry_id=(
+                str(body.catalog_entry_id)
+                if body.catalog_entry_id is not None
+                else None
             ),
         )
 
@@ -655,6 +680,7 @@ class ProductScanService:
             language=body.language,
             intent=body.intent,
             settings_hash=settings_hash,
+            catalog_entry_id=body.catalog_entry_id,
         )
         await self.session.flush()
 
@@ -692,9 +718,13 @@ class ProductScanService:
                     product_distribution=body.product_distribution,
                     language=body.language,
                     intent=body.intent,
-                    # Legacy fields intentionally omitted — workers on
-                    # v0.14.0+ use ``length_seconds`` and dispatch on
-                    # ``mode='scan_order'`` (not ``catalog_entry_id``).
+                    # Optional pre-tracking pick. None = whole-catalog
+                    # round-robin (legacy scan_order behavior). Set =
+                    # worker filters its catalog fetch to this single
+                    # entry. ``duration_preset_sec`` stays omitted —
+                    # scan_order uses ``length_seconds`` not the legacy
+                    # preset.
+                    catalog_entry_id=body.catalog_entry_id,
                 )
             except Exception:
                 logger.exception(
@@ -838,6 +868,7 @@ def compute_settings_hash(
     active_catalog_entry_ids: list[str],
     tracker_version: str,
     enumeration_prompt_version: str,
+    selected_catalog_entry_id: str | None = None,
 ) -> str:
     """Canonical-JSON SHA256 of every wizard input that should
     discriminate "same intent" from "different intent" for the 60s
@@ -880,6 +911,13 @@ def compute_settings_hash(
         "tracker_version": tracker_version,
         "enumeration_prompt_version": enumeration_prompt_version,
     }
+    # Only include the user's pick when set, so the no-pick path
+    # preserves the original hash composition. Different picks for the
+    # same video naturally get different hashes; flipping from no-pick
+    # to a specific pick also re-hashes (intentional — semantically
+    # different jobs).
+    if selected_catalog_entry_id is not None:
+        payload["selected_catalog_entry_id"] = selected_catalog_entry_id
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

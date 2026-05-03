@@ -254,6 +254,15 @@ class ScanOrderCreateRequest(BaseModel):
     product_distribution: ProductDistribution
     language: Language
     intent: ScanIntent = "commit"
+    # Optional pre-tracking product pick. When set, the scan_order is
+    # bound to a single catalog entry (the wizard's product-select
+    # step's output) and the worker filters its catalog fetch to just
+    # this id instead of looping over the whole active catalog. When
+    # NULL, legacy whole-catalog round-robin behavior is preserved.
+    # Service-level validation enforces the entry exists, belongs to
+    # (org, video), and isn't soft-rejected — same pattern as the
+    # legacy ``enqueue_clip`` 404 path.
+    catalog_entry_id: UUID | None = None
 
 
 class ScanOrderResponse(BaseModel):

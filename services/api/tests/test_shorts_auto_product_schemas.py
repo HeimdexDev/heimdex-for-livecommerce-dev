@@ -23,6 +23,7 @@ from app.modules.shorts_auto_product.schemas import (
     ProductCatalogResponse,
     ProductV2AvailabilityFragment,
     RescanResponse,
+    ScanOrderCreateRequest,
     ScanRequest,
     ScanResponse,
 )
@@ -216,3 +217,34 @@ class TestRescanResponse:
         # First-ever rescan on a video with no catalog → 0 invalidated.
         r = RescanResponse(job_id=uuid4(), invalidated_count=0)
         assert r.invalidated_count == 0
+
+
+class TestScanOrderCreateRequest:
+    """Wizard parent body — Phase 4 + product-select extension."""
+
+    _BASE = {
+        "length_seconds": 60,
+        "requested_count": 5,
+        "product_distribution": "single",
+        "language": "ko",
+    }
+
+    def test_catalog_entry_id_is_optional(self):
+        # Backward compat: existing wizard submissions don't carry the
+        # field; default to None (whole-catalog round-robin).
+        body = ScanOrderCreateRequest(**self._BASE)
+        assert body.catalog_entry_id is None
+
+    def test_catalog_entry_id_accepts_uuid(self):
+        # Product-select step output: a UUID narrows the worker's
+        # catalog fetch to that single entry.
+        eid = uuid4()
+        body = ScanOrderCreateRequest(catalog_entry_id=eid, **self._BASE)
+        assert body.catalog_entry_id == eid
+
+    def test_catalog_entry_id_rejects_non_uuid_string(self):
+        # Pydantic enforces UUID shape; a stringly-typed sentinel
+        # would otherwise silently slip through to the SQS body and
+        # fail at the worker.
+        with pytest.raises(ValidationError):
+            ScanOrderCreateRequest(catalog_entry_id="not-a-uuid", **self._BASE)

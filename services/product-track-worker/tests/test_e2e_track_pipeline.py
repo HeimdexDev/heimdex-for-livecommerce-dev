@@ -420,3 +420,94 @@ def test_scan_order_parent_calls_claim_exactly_once():
     # Sanity: the empty-catalog path's terminal /fail call landed.
     api.fail.assert_called_once()
     assert api.fail.call_args.kwargs["error_code"] == "no_products_detected"
+
+
+# =====================================================================
+# scan_order parent flow: catalog_entry_id narrows the catalog fetch
+# (wizard product-select step output)
+# =====================================================================
+
+
+def test_scan_order_with_catalog_entry_id_uses_single_entry_fetch():
+    """When the wizard's product-select step picked a catalog entry,
+    the worker MUST call fetch_catalog_entry(id) — NOT
+    fetch_catalog_entries_for_video — and proceed to track ONLY that
+    product. Pre-feature: the field was unused, the worker always
+    fanned across the whole active catalog (round-robin via picker).
+
+    Test uses an empty scenes-with-keyframes response to terminate the
+    per-product loop quickly via the no-qualifying-windows path —
+    avoids standing up the full SAM2 + picker mock pipeline. The
+    assertion is on which fetch path the worker took, not on output.
+    """
+    catalog_entry_id = uuid4()
+    api = MagicMock()
+    # The single-entry fetch returns the same shape as the per-video
+    # list endpoint (per fetch_catalog_entry's docstring contract).
+    api.fetch_catalog_entry.return_value = {
+        "catalog_entry_id": str(catalog_entry_id),
+        "org_id": str(uuid4()),
+        "video_id": "gd_test",
+        "canonical_crop_s3_key": "k.jpg",
+        "canonical_bbox": {"x": 0, "y": 0, "w": 10, "h": 10},
+        "llm_label": "테스트 제품",
+    }
+    # No scenes → per-product loop produces no qualifying windows →
+    # parent /fails as tracker_low_confidence_global. Skips SAM2.
+    api.fetch_scenes_with_keyframes.return_value = {"video_id": "gd_test", "scenes": []}
+    embedder, s3, tracker, picker = _make_pipeline_mocks()
+
+    body = _scan_order_body()
+    body["catalog_entry_id"] = str(catalog_entry_id)
+
+    handle_track_job(
+        message=body,
+        settings=_settings(),
+        api_client=api,
+        embedder=embedder,
+        tracker=tracker,
+        picker=picker,
+        s3_client=s3,
+    )
+
+    # The point of this test: single-entry fetch is the chosen path.
+    api.fetch_catalog_entry.assert_called_once()
+    fetch_kwargs = api.fetch_catalog_entry.call_args.kwargs
+    assert fetch_kwargs["catalog_entry_id"] == catalog_entry_id
+    # And the bulk fetch was NOT used.
+    api.fetch_catalog_entries_for_video.assert_not_called()
+
+
+def test_scan_order_catalog_entry_404_fails_cleanly():
+    """If the picked entry was rejected between submit and worker
+    pickup, fetch_catalog_entry 404s. Worker MUST translate that to
+    a no_products_detected /fail (not bubble the HTTPStatusError to
+    SDK as a redelivery candidate — the entry won't un-reject)."""
+    import httpx
+
+    catalog_entry_id = uuid4()
+    api = MagicMock()
+    # Build a real httpx 404 to mirror what the api_client raises.
+    fake_resp = MagicMock(spec=httpx.Response)
+    fake_resp.status_code = 404
+    api.fetch_catalog_entry.side_effect = httpx.HTTPStatusError(
+        "404", request=MagicMock(spec=httpx.Request), response=fake_resp,
+    )
+    embedder, s3, tracker, picker = _make_pipeline_mocks()
+
+    body = _scan_order_body()
+    body["catalog_entry_id"] = str(catalog_entry_id)
+
+    handle_track_job(
+        message=body,
+        settings=_settings(),
+        api_client=api,
+        embedder=embedder,
+        tracker=tracker,
+        picker=picker,
+        s3_client=s3,
+    )
+
+    api.fetch_catalog_entry.assert_called_once()
+    api.fail.assert_called_once()
+    assert api.fail.call_args.kwargs["error_code"] == "no_products_detected"
