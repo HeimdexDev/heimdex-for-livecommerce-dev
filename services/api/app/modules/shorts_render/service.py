@@ -277,21 +277,60 @@ class ShortsRenderService:
         org_id: UUID,
         user_id: UUID,
         payload: RenderJobCreate,
+        *,
+        dedupe_within_seconds: int | None = None,
     ) -> RenderJobResponse:
         """Create a render job after validating scene boundaries.
 
         Implements implicit idempotency: if the same user submits a job
-        with the same composition_hash within _DEDUPE_WINDOW_SECONDS,
-        returns the existing job instead of creating a new one. Kills
-        accidental double-clicks without blocking intentional re-renders.
+        with the same composition_hash within ``dedupe_within_seconds``
+        (default :data:`_DEDUPE_WINDOW_SECONDS` = 30s), returns the
+        existing job instead of creating a new one. Kills accidental
+        double-clicks without blocking intentional re-renders.
+
+        ``dedupe_within_seconds`` lets server-side retry paths widen the
+        window past their lease horizon. Two concrete consumers:
+
+        * The wizard child runner (``shorts_auto_product.children.runner``)
+          claims a child for ``lease_seconds`` (default 300s); a crashed
+          replica's lease takes that long to expire before another
+          replica re-claims and retries the render. With the default 30s
+          window the retry would fire AFTER the dedupe closed → duplicate
+          render row. The runner passes ``lease_seconds + 60``.
+        * The track-worker's ``/internal/products/{id}/render`` callback
+          has the same lease-expiry retry shape (separate PR).
+
+        HTTP-initiated callers (``POST /api/shorts/render`` from the web
+        client, the highlight-reel router, the v1 auto-shorts service)
+        leave ``dedupe_within_seconds=None`` to keep the user-visible
+        anti-double-click semantics — a longer window there would block
+        legitimate re-submissions when the user edits + resubmits.
+
+        Raises:
+            ValueError: ``dedupe_within_seconds`` is negative. Zero is
+                permitted and effectively disables dedupe (no row can
+                be created in the future of "now").
         """
+        if dedupe_within_seconds is not None and dedupe_within_seconds < 0:
+            raise ValueError(
+                f"dedupe_within_seconds must be >= 0; got "
+                f"{dedupe_within_seconds}"
+            )
+        effective_dedupe_seconds = (
+            dedupe_within_seconds
+            if dedupe_within_seconds is not None
+            else _DEDUPE_WINDOW_SECONDS
+        )
+
         # 1. Validate scene boundaries via OpenSearch mget
         await self._validate_scene_clips(org_id, payload)
 
         # 2. Dedupe check — if this user just submitted the same
         #    composition, return that job instead of spawning a duplicate.
         composition_hash = compute_composition_hash(payload.composition)
-        dedupe_since = datetime.now(timezone.utc) - timedelta(seconds=_DEDUPE_WINDOW_SECONDS)
+        dedupe_since = datetime.now(timezone.utc) - timedelta(
+            seconds=effective_dedupe_seconds,
+        )
         existing = await self.repository.find_recent_duplicate(
             org_id=org_id,
             user_id=user_id,
