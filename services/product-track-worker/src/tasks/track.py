@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import io
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -1276,9 +1276,15 @@ def _handle_scan_order_parent(
         return
 
     # ── 4. per-product loop ───────────────────────────────────
-    cfg = _make_config(settings)
     # Per-length threshold override (plan §7.3 — codex Q4).
-    cfg.min_window_duration_ms = _min_window_ms_for_length(length_seconds)
+    # ``TrackingConfig`` is a frozen dataclass — direct attribute
+    # assignment raises ``FrozenInstanceError`` ("cannot assign to
+    # field"). Use ``replace()`` to produce a new instance with the
+    # one field overridden.
+    cfg = replace(
+        _make_config(settings),
+        min_window_duration_ms=_min_window_ms_for_length(length_seconds),
+    )
 
     progress_per_entry = 80.0 / max(len(catalog_entries), 1)
     aggregated_appearances: list[dict[str, Any]] = []

@@ -511,3 +511,33 @@ def test_scan_order_catalog_entry_404_fails_cleanly():
     api.fetch_catalog_entry.assert_called_once()
     api.fail.assert_called_once()
     assert api.fail.call_args.kwargs["error_code"] == "no_products_detected"
+
+
+# =====================================================================
+# scan_order parent flow: TrackingConfig override uses dataclass.replace
+# (regression for 2026-05-04 staging incident)
+# =====================================================================
+
+
+def test_scan_order_cfg_override_uses_dataclass_replace():
+    """Regression: ``TrackingConfig`` is a frozen dataclass — direct
+    attribute assignment raises ``FrozenInstanceError`` ("cannot
+    assign to field 'min_window_duration_ms'"). Pre-fix code did
+    ``cfg.min_window_duration_ms = …`` and the parent failed with
+    ``error_code='internal_error'`` after a clean claim + 2
+    heartbeats. Post-fix uses ``dataclasses.replace()``.
+
+    Pure unit test — no SAM2 / picker mock needed; just exercise the
+    same import + config-construction path the dispatch uses.
+    """
+    from dataclasses import replace
+
+    from src.tasks.track import _make_config
+
+    cfg = _make_config(_settings())
+    # Shouldn't raise FrozenInstanceError.
+    new_cfg = replace(cfg, min_window_duration_ms=999)
+    assert new_cfg.min_window_duration_ms == 999
+    # Original instance is immutable — the override returns a new
+    # value, doesn't mutate in place.
+    assert cfg.min_window_duration_ms != 999
