@@ -66,6 +66,7 @@ jobs:
             tests/test_internal_router_deferred_caption.py \
             tests/test_export_images.py \
             tests/test_vendored_product_track.py \
+            tests/test_single_product_picker.py \
             --tb=short
 
           # NOTE: shorts_auto tests are deliberately NOT in the CI
