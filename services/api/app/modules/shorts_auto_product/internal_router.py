@@ -432,10 +432,12 @@ async def complete(
             if drive_file is None:
                 logger.info(
                     "product_v2_scan_order_video_no_longer_available",
-                    parent_job_id=str(job_id),
-                    video_id=str(job.video_id),
-                    org_id=str(job.org_id),
-                    persisted_appearances=persisted_appearances,
+                    extra={
+                        "parent_job_id": str(job_id),
+                        "video_id": str(job.video_id),
+                        "org_id": str(job.org_id),
+                        "persisted_appearances": persisted_appearances,
+                    },
                 )
                 # ``persisted_appearances`` upstream stays — the GPU
                 # work is preserved against the catalog, so a future
@@ -488,9 +490,11 @@ async def complete(
             )
             logger.info(
                 "product_v2_scan_order_fanned_out",
-                parent_job_id=str(job_id),
-                children_inserted=len(children),
-                requested_count=transitioned.requested_count,
+                extra={
+                    "parent_job_id": str(job_id),
+                    "children_inserted": len(children),
+                    "requested_count": transitioned.requested_count,
+                },
             )
         else:
             await job_repo.complete_tracking(
@@ -508,11 +512,13 @@ async def complete(
     await db.commit()
     logger.info(
         "product_v2_job_completed",
-        job_id=str(job_id),
-        kind=kind,
-        persisted_catalog=persisted_catalog,
-        persisted_appearances=persisted_appearances,
-        cost_delta_usd=str(body.cost_delta_usd),
+        extra={
+            "job_id": str(job_id),
+            "kind": kind,
+            "persisted_catalog": persisted_catalog,
+            "persisted_appearances": persisted_appearances,
+            "cost_delta_usd": str(body.cost_delta_usd),
+        },
     )
     return _CompleteResponse(
         persisted_catalog_entries=persisted_catalog,
@@ -568,9 +574,11 @@ async def fail(
     await db.commit()
     logger.warning(
         "product_v2_job_failed",
-        job_id=str(job_id),
-        error_code=body.error_code,
-        error_message=body.error_message[:120],
+        extra={
+            "job_id": str(job_id),
+            "error_code": body.error_code,
+            "error_message": body.error_message[:120],
+        },
     )
 
 
