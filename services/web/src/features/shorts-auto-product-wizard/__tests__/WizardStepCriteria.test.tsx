@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import { WizardStepCriteria } from "../pages/WizardStepCriteria";
 
@@ -9,25 +9,9 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
 }));
 
-vi.mock("@/lib/auth", () => ({
-  useAuth: () => ({ getAccessToken: vi.fn(async () => "test-token") }),
-}));
-
-const createScanOrderMock = vi.fn();
-vi.mock("@/lib/api/shorts-auto-product-wizard", async () => {
-  const actual = await vi.importActual<
-    typeof import("@/lib/api/shorts-auto-product-wizard")
-  >("@/lib/api/shorts-auto-product-wizard");
-  return {
-    ...actual,
-    createScanOrder: (...args: unknown[]) => createScanOrderMock(...args),
-  };
-});
-
 describe("WizardStepCriteria", () => {
   beforeEach(() => {
     pushMock.mockReset();
-    createScanOrderMock.mockReset();
   });
 
   it("renders all five inputs with sensible defaults", () => {
@@ -64,11 +48,10 @@ describe("WizardStepCriteria", () => {
     expect(next.disabled).toBe(true);
   });
 
-  it("submits the scan order with the chosen criteria + routes to step 4", async () => {
-    createScanOrderMock.mockResolvedValueOnce({
-      parent_job_id: "00000000-0000-0000-0000-000000000123",
-      deduped: false,
-    });
+  it("navigates to /select-product with criteria as URL params", () => {
+    // Phase B: criteria step no longer calls createScanOrder. It just
+    // forwards the form values to the product-select step (which then
+    // submits with catalog_entry_id baked in).
     render(<WizardStepCriteria videoId="gd_test" />);
     fireEvent.click(screen.getByTestId("length-preset-30"));
     fireEvent.click(screen.getByTestId("count-preset-10"));
@@ -79,35 +62,30 @@ describe("WizardStepCriteria", () => {
 
     fireEvent.click(screen.getByTestId("wizard-next"));
 
-    await waitFor(() => expect(createScanOrderMock).toHaveBeenCalledTimes(1));
-    expect(createScanOrderMock.mock.calls[0][0]).toBe("gd_test");
-    const body = createScanOrderMock.mock.calls[0][1];
-    expect(body).toMatchObject({
-      length_seconds: 30,
-      requested_count: 10,
-      language: "en",
-      product_distribution: "single",
-      intent: "commit",
-      time_range_start_ms: 90_000, // 1:30 = 90s = 90000ms
-    });
-    await waitFor(() =>
-      expect(pushMock).toHaveBeenCalledWith(
-        "/export/shorts/auto/wizard/gd_test/result/00000000-0000-0000-0000-000000000123",
-      ),
+    expect(pushMock).toHaveBeenCalledTimes(1);
+    const target = pushMock.mock.calls[0][0] as string;
+    // Path is the new step under the same videoId.
+    expect(target).toMatch(
+      /^\/export\/shorts\/auto\/wizard\/gd_test\/select-product\?/,
     );
+    // Query params carry every field the next step needs.
+    const url = new URL(`http://x${target}`);
+    expect(url.searchParams.get("length")).toBe("30");
+    expect(url.searchParams.get("count")).toBe("10");
+    expect(url.searchParams.get("language")).toBe("en");
+    expect(url.searchParams.get("distribution")).toBe("single");
+    expect(url.searchParams.get("intent")).toBe("commit");
+    expect(url.searchParams.get("start")).toBe("90000"); // 1:30 → 90 000ms
+    // Empty range-end stays absent (vs serialized as empty string).
+    expect(url.searchParams.has("end")).toBe(false);
   });
 
-  it("surfaces the API's 422 detail message", async () => {
-    const { WizardValidationError } = await import(
-      "@/lib/api/shorts-auto-product-wizard"
-    );
-    createScanOrderMock.mockRejectedValueOnce(
-      new WizardValidationError("requested_count must be >= 1"),
-    );
+  it("omits start/end params when range fields are blank", () => {
     render(<WizardStepCriteria videoId="gd_test" />);
     fireEvent.click(screen.getByTestId("wizard-next"));
-    const error = await screen.findByTestId("error-message");
-    expect(error.textContent).toContain("requested_count must be >= 1");
-    expect(pushMock).not.toHaveBeenCalled();
+    const target = pushMock.mock.calls[0][0] as string;
+    const url = new URL(`http://x${target}`);
+    expect(url.searchParams.has("start")).toBe(false);
+    expect(url.searchParams.has("end")).toBe(false);
   });
 });

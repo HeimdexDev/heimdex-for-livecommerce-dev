@@ -19,14 +19,6 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { useAuth } from "@/lib/auth";
-import {
-  WizardBudgetExceededError,
-  WizardFeatureDisabledError,
-  WizardRateLimitError,
-  WizardValidationError,
-  createScanOrder,
-} from "@/lib/api/shorts-auto-product-wizard";
 import type {
   Language,
   ProductDistribution,
@@ -59,7 +51,6 @@ function parseMmSsToMs(raw: string): number | null {
 
 export function WizardStepCriteria({ videoId }: Props) {
   const router = useRouter();
-  const { getAccessToken } = useAuth();
 
   // Form state — defaults match the most-common preset choices.
   const [lengthSeconds, setLengthSeconds] = useState<number>(60);
@@ -70,62 +61,42 @@ export function WizardStepCriteria({ videoId }: Props) {
     useState<ProductDistribution>("single");
   const [language, setLanguage] = useState<Language>("ko");
 
-  // Submission state
-  const [submitting, setSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
   // Inline aggregate-cap warning (server enforces; this is an early hint).
   const aggregateSeconds = lengthSeconds * requestedCount;
   const exceedsAggregateCap = aggregateSeconds > 1800;
 
-  const handleSubmit = async () => {
-    setErrorMessage(null);
-    setSubmitting(true);
-    try {
-      const response = await createScanOrder(
-        videoId,
-        {
-          length_seconds: lengthSeconds,
-          requested_count: requestedCount,
-          time_range_start_ms: parseMmSsToMs(rangeStartRaw),
-          time_range_end_ms: parseMmSsToMs(rangeEndRaw),
-          product_distribution: distribution,
-          language,
-          intent: "commit", // Phase 4: skip preview, go straight to commit
-        },
-        getAccessToken,
-      );
-      router.push(
-        `/export/shorts/auto/wizard/${encodeURIComponent(videoId)}/result/${encodeURIComponent(response.parent_job_id)}`,
-      );
-    } catch (err) {
-      if (err instanceof WizardValidationError) {
-        setErrorMessage(`입력 오류: ${err.message}`);
-      } else if (err instanceof WizardBudgetExceededError) {
-        setErrorMessage(`일일 비용 한도 초과: ${err.message}`);
-      } else if (err instanceof WizardRateLimitError) {
-        setErrorMessage(`동시 실행 한도 초과: ${err.message}`);
-      } else if (err instanceof WizardFeatureDisabledError) {
-        setErrorMessage("이 조직에는 마법사 기능이 활성화되지 않았습니다.");
-      } else {
-        setErrorMessage(
-          err instanceof Error ? err.message : "Unknown error",
-        );
-      }
-    } finally {
-      setSubmitting(false);
-    }
+  // Phase B: criteria step is no longer a submission point — it just
+  // collects inputs and forwards them to the product-select step via
+  // URL search params. The actual createScanOrder call happens AFTER
+  // the user picks a catalog entry on /select-product, so the body
+  // gets ``catalog_entry_id`` baked in. Validation errors (422 / 402 /
+  // 429 / 404) surface on the select-product step instead.
+  const handleNext = () => {
+    const startMs = parseMmSsToMs(rangeStartRaw);
+    const endMs = parseMmSsToMs(rangeEndRaw);
+    const params = new URLSearchParams({
+      length: String(lengthSeconds),
+      count: String(requestedCount),
+      distribution,
+      language,
+      intent: "commit",
+    });
+    if (startMs !== null) params.set("start", String(startMs));
+    if (endMs !== null) params.set("end", String(endMs));
+    router.push(
+      `/export/shorts/auto/wizard/${encodeURIComponent(videoId)}/select-product?${params.toString()}`,
+    );
   };
 
-  const canSubmit = !submitting && !exceedsAggregateCap;
+  const canSubmit = !exceedsAggregateCap;
 
   return (
     <WizardLayout
       currentStep={2}
       heading="생성 기준을 선택하고, '다음'버튼을 클릭하세요"
       next={{
-        label: submitting ? "생성 중..." : "다음 >",
-        onClick: handleSubmit,
+        label: "다음 >",
+        onClick: handleNext,
         disabled: !canSubmit,
       }}
       backHref="/export/shorts/auto/wizard"
@@ -181,15 +152,6 @@ export function WizardStepCriteria({ videoId }: Props) {
             총 출력 길이 한도(30분) 초과: {requestedCount}개 ×{" "}
             {lengthSeconds}초 = {aggregateSeconds}초. 개수 또는 길이를
             줄여주세요.
-          </p>
-        ) : null}
-
-        {errorMessage ? (
-          <p
-            className="rounded-md bg-red-50 p-3 text-sm text-red-700"
-            data-testid="error-message"
-          >
-            {errorMessage}
           </p>
         ) : null}
       </div>

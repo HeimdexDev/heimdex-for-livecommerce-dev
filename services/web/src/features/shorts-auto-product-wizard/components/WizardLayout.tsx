@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 const STEPS = [
   { idx: 1, label: "동영상 선택" },
   { idx: 2, label: "생성 기준 설정" },
-  { idx: 3, label: "쇼츠 가편집본" },
+  { idx: 3, label: "제품 선택" },
   { idx: 4, label: "쇼츠 자동 생성" },
 ] as const;
 
