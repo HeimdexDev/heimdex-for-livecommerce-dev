@@ -31,16 +31,21 @@ function CTAInner({
   if (availability === "disabled") return null;
   if (isLoading && !renderWhileProbing) return null;
 
+  // Routes to the 4-step wizard at step 2 (criteria) — videoId is
+  // already known from the video detail page so step 1's videoId
+  // input is bypassed entirely. The legacy v1 mode-tabs dashboard
+  // (/export/shorts/auto?videoId=…) stays accessible by direct URL
+  // for diagnostics, but isn't featured anywhere from this CTA.
   return (
     <Link
-      href={`/export/shorts/auto?videoId=${encodeURIComponent(videoId)}`}
+      href={`/export/shorts/auto/wizard/${encodeURIComponent(videoId)}/criteria`}
       className={cn(
         "inline-flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100",
         className,
       )}
     >
       <MagicWandIcon className="h-4 w-4" />
-      자동으로 쇼츠 만들기
+      AI 쇼츠 생성
     </Link>
   );
 }
