@@ -16,7 +16,7 @@ import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
@@ -297,7 +297,7 @@ async def get_product_v2_availability(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def create_scan_order(
-    video_id: UUID,
+    video_id: str,
     body: ScanOrderCreateRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
@@ -305,6 +305,14 @@ async def create_scan_order(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ScanOrderResponse:
     """Submit the 4-step wizard.
+
+    Path param accepts the OpenSearch-style ``video_id`` string
+    (``gd_{sha256(org_id:google_file_id)[:16]}`` per
+    ``DriveFile.video_id``). The frontend's ``/videos/{videoId}``
+    URL pattern uses this shape, and the wizard CTA threads it
+    through unchanged. The handler resolves the DriveFile to its
+    UUID before passing to the service layer (which persists
+    ``ProductScanJob.video_id`` as a UUID FK).
 
     Body captures every wizard input. Idempotent within
     ``auto_shorts_product_v2_scan_order_idempotency_seconds``
@@ -317,16 +325,30 @@ async def create_scan_order(
     * If time-range provided: end > start AND
       ``(end - start) / count >= length_seconds * 1000``
 
-    Mounted under ``/videos/{video_id}`` so the path naturally scopes
-    to the video the user picked in step 1 of the wizard. The
-    counterpart ``GET /scan-orders/{parent_job_id}`` does NOT carry
-    ``video_id`` in the path — once a parent exists, the wizard
-    polls by parent id directly.
+    Returns 404 when the video_id doesn't resolve to an active
+    DriveFile (missing or soft-deleted) — same shape as the
+    stale-video guard in ``internal_router.complete``.
     """
+    # Loose-coupling note (plan §15): drive-repo lookup carve-out,
+    # mirrors the existing stale-video guard at internal_router.py
+    # and the render-service call. Lazy import keeps the router
+    # module-level free of cross-module ``app.modules.drive`` coupling.
+    from app.modules.drive.repository import DriveFileRepository
+
+    drive_repo = DriveFileRepository(db)
+    drive_file = await drive_repo.get_by_video_id(
+        org_id=org_ctx.org_id, video_id=video_id,
+    )
+    if drive_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"video_id {video_id!r} not found",
+        )
+
     service = _build_service(db, settings)
     return await service.enqueue_scan_order(
         org_id=org_ctx.org_id,
-        video_id=video_id,
+        video_id=drive_file.id,
         user_id=user.id,
         body=body,
     )
