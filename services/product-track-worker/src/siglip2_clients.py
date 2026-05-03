@@ -52,7 +52,18 @@ class CoarseRetrievalClientImpl:
     endpoint. ``file_id`` and ``org_id`` are bound at construction time
     because the lib's Protocol signature only accepts ``video_id`` (the
     OS string id) at the call site — the http endpoint needs the
-    DriveFile UUID, which the worker resolves from the job message."""
+    DriveFile UUID, which the worker resolves from the job message.
+
+    ``scene_id_to_timing`` is the worker's ``scene_id → (start_ms,
+    end_ms)`` map built once per job from the
+    ``scenes-with-keyframes`` response. We use it here to populate
+    ``CoarseCandidate.start_ms`` / ``end_ms`` so the SAM2 pass can
+    window-slice a single full-video proxy without an extra fetch.
+    Scenes the OS coarse-similarity endpoint returns but the
+    timing map doesn't know about (race with re-split, deletion,
+    etc.) are dropped silently — the lib tolerates a sparse
+    candidate set per its per-scene-failure-isolation contract.
+    """
 
     def __init__(
         self,
@@ -60,10 +71,12 @@ class CoarseRetrievalClientImpl:
         api: "ApiClient",
         file_id: UUID,
         org_id: UUID,
+        scene_id_to_timing: dict[str, tuple[int, int]],
     ) -> None:
         self._api = api
         self._file_id = file_id
         self._org_id = org_id
+        self._scene_id_to_timing = scene_id_to_timing
 
     def find_similar_scenes(
         self,
@@ -90,13 +103,32 @@ class CoarseRetrievalClientImpl:
             top_k=top_k,
             min_similarity=min_similarity,
         )
-        return [
-            CoarseCandidate(
-                scene_id=str(s["scene_id"]),
-                coarse_similarity=float(s.get("similarity", 0.0)),
+        out: list[CoarseCandidate] = []
+        for s in scenes:
+            scene_id = str(s["scene_id"])
+            timing = self._scene_id_to_timing.get(scene_id)
+            if timing is None:
+                # Scene known to OS but missing from the worker's
+                # scenes-with-keyframes timing map. Drop with a debug
+                # log — the lib's per-scene-failure isolation handles
+                # the missing-candidate case downstream, and silently
+                # missing rows here is preferable to a hard crash on
+                # what's almost always a benign race.
+                logger.debug(
+                    "coarse_candidate_dropped_no_timing",
+                    extra={"scene_id": scene_id, "file_id": str(self._file_id)},
+                )
+                continue
+            start_ms, end_ms = timing
+            out.append(
+                CoarseCandidate(
+                    scene_id=scene_id,
+                    coarse_similarity=float(s.get("similarity", 0.0)),
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                )
             )
-            for s in scenes
-        ]
+        return out
 
 
 class KeyframeFetcherImpl:

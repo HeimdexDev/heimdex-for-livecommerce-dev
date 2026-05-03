@@ -65,8 +65,14 @@ def _fake_canonical():
 def _scenes_response(n: int = 3) -> dict:
     return {
         "video_id": "gd_test",
+        "proxy_s3_key": "tenant/drive/d/g/proxy.mp4",
         "scenes": [
-            {"scene_id": f"gd_test_scene_{i:03d}", "keyframe_s3_key": f"k{i}.jpg"}
+            {
+                "scene_id": f"gd_test_scene_{i:03d}",
+                "keyframe_s3_key": f"k{i}.jpg",
+                "start_ms": i * 5000,
+                "end_ms": (i + 1) * 5000,
+            }
             for i in range(n)
         ],
     }

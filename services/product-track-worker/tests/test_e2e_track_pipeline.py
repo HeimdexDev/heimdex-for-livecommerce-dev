@@ -70,8 +70,17 @@ def _job_body() -> dict:
 def _scenes_response(n: int = 3) -> dict:
     return {
         "video_id": "gd_test",
+        # PR B: proxy_s3_key is the canonical full-video proxy path
+        # the worker downloads ONCE per job (replaces the per-scene
+        # URL stub). Tests assert on this via download_file mock.
+        "proxy_s3_key": "tenant/drive/d/g/proxy.mp4",
         "scenes": [
-            {"scene_id": f"gd_test_scene_{i:03d}", "keyframe_s3_key": f"k{i}.jpg"}
+            {
+                "scene_id": f"gd_test_scene_{i:03d}",
+                "keyframe_s3_key": f"k{i}.jpg",
+                "start_ms": i * 5000,
+                "end_ms": (i + 1) * 5000,
+            }
             for i in range(n)
         ],
     }
@@ -454,7 +463,13 @@ def test_scan_order_with_catalog_entry_id_uses_single_entry_fetch():
     }
     # No scenes → per-product loop produces no qualifying windows →
     # parent /fails as tracker_low_confidence_global. Skips SAM2.
-    api.fetch_scenes_with_keyframes.return_value = {"video_id": "gd_test", "scenes": []}
+    # ``proxy_s3_key`` populated so we don't trip the upstream
+    # ``proxy_missing`` fast-fail (which is exercised by its own test).
+    api.fetch_scenes_with_keyframes.return_value = {
+        "video_id": "gd_test",
+        "proxy_s3_key": "tenant/drive/d/g/proxy.mp4",
+        "scenes": [],
+    }
     embedder, s3, tracker, picker = _make_pipeline_mocks()
 
     body = _scan_order_body()
@@ -541,3 +556,130 @@ def test_scan_order_cfg_override_uses_dataclass_replace():
     # Original instance is immutable — the override returns a new
     # value, doesn't mutate in place.
     assert cfg.min_window_duration_ms != 999
+
+
+# =====================================================================
+# Single-proxy contract (PR B, post-2026-05-04 sam2-proxy handoff)
+# =====================================================================
+
+
+def test_legacy_path_proxy_missing_returns_proxy_missing_error_code():
+    """Transcode-incomplete videos: ``DriveFile.proxy_s3_key`` is
+    NULL → API echoes ``proxy_s3_key=None`` → worker MUST fail with
+    ``error_code=proxy_missing`` (not the opaque ``internal_error``)
+    so the wizard can show "video isn't ready yet" cleanly. SAM2
+    must NEVER be invoked on a missing-proxy job — every call would
+    F4 anyway."""
+    api = _make_apis(render_job_id=uuid4())
+    # Override the fixture's proxy_s3_key to None.
+    api.fetch_scenes_with_keyframes.return_value = {
+        **_scenes_response(n=3),
+        "proxy_s3_key": None,
+    }
+    embedder, s3, tracker, picker = _make_pipeline_mocks()
+
+    with patch(
+        "src.tasks.track._fetch_canonical_crop",
+        return_value=_fake_canonical(),
+    ):
+        handle_track_job(
+            message=_job_body(),
+            settings=_settings(),
+            api_client=api,
+            embedder=embedder,
+            tracker=tracker,
+            picker=picker,
+            s3_client=s3,
+        )
+
+    # Distinct error code so the wizard maps it to a friendly message.
+    api.fail.assert_called_once()
+    assert api.fail.call_args.kwargs["error_code"] == "proxy_missing"
+    # SAM2 wrapper never invoked — saves a fruitless GPU call.
+    tracker.track.assert_not_called()
+    # And no S3 download attempt on the proxy.
+    s3.download_file.assert_not_called()
+
+
+def test_scan_order_parent_proxy_missing_returns_proxy_missing_error_code():
+    """Same fast-fail in the wizard scan_order parent. Locks the
+    contract that BOTH dispatch paths surface ``proxy_missing``
+    consistently — wizard error UI maps a single code, not two."""
+    api = MagicMock()
+    api.fetch_catalog_entries_for_video.return_value = [
+        {
+            "catalog_entry_id": str(uuid4()),
+            "org_id": str(uuid4()),
+            "video_id": "gd_test",
+            "canonical_crop_s3_key": "k.jpg",
+            "canonical_bbox": {"x": 0, "y": 0, "w": 10, "h": 10},
+            "llm_label": "테스트 제품",
+        }
+    ]
+    api.fetch_scenes_with_keyframes.return_value = {
+        **_scenes_response(n=3),
+        "proxy_s3_key": None,
+    }
+    embedder, s3, tracker, picker = _make_pipeline_mocks()
+
+    handle_track_job(
+        message=_scan_order_body(),
+        settings=_settings(),
+        api_client=api,
+        embedder=embedder,
+        tracker=tracker,
+        picker=picker,
+        s3_client=s3,
+    )
+
+    api.fail.assert_called_once()
+    assert api.fail.call_args.kwargs["error_code"] == "proxy_missing"
+    tracker.track.assert_not_called()
+    s3.download_file.assert_not_called()
+
+
+def test_scan_order_parent_downloads_proxy_once_for_multiple_products():
+    """Critical invariant: N products in one scan order → exactly
+    ONE S3 GET on the proxy. The download lives in
+    ``_handle_scan_order_parent`` (outside the per-product loop)
+    so each product reuses the same local file. A regression here
+    would multiply Aircloud's cold-start S3 cost N× without any
+    pipeline benefit."""
+    api = _make_apis(render_job_id=uuid4())
+    # Three catalog entries; each kicks off retrieve+SAM2.
+    api.fetch_catalog_entries_for_video.return_value = [
+        {
+            "catalog_entry_id": str(uuid4()),
+            "org_id": str(uuid4()),
+            "video_id": "gd_test",
+            "canonical_crop_s3_key": f"k{i}.jpg",
+            "canonical_bbox": {"x": 0, "y": 0, "w": 10, "h": 10},
+            "llm_label": f"제품{i}",
+        }
+        for i in range(3)
+    ]
+    embedder, s3, tracker, picker = _make_pipeline_mocks()
+
+    with patch(
+        "src.tasks.track._fetch_canonical_crop",
+        return_value=_fake_canonical(),
+    ):
+        handle_track_job(
+            message=_scan_order_body(),
+            settings=_settings(),
+            api_client=api,
+            embedder=embedder,
+            tracker=tracker,
+            picker=picker,
+            s3_client=s3,
+        )
+
+    # The contract — one download per scan_order, NOT per product.
+    assert s3.download_file.call_count == 1, (
+        f"expected exactly one proxy download per scan_order, got "
+        f"{s3.download_file.call_count} — per-product download regression"
+    )
+    # And the path used was the canonical proxy_s3_key from the
+    # scenes-with-keyframes response.
+    download_args = s3.download_file.call_args.args
+    assert download_args[0] == "tenant/drive/d/g/proxy.mp4"

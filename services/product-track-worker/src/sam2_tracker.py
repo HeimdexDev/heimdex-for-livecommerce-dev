@@ -1,41 +1,49 @@
 """Concrete :class:`heimdex_media_pipelines.product_track.Sam2Tracker`
 implementation.
 
-Phase 3c-B: real SAM2 video propagation against a single scene's
-proxy video. The lib's ``propagate_within_candidate_scenes`` calls
-``track(scene_id, anchor_bbox, anchor_keyframe, scene_video_url,
-sample_fps)`` per candidate; per-scene errors are caught + logged
-upstream so a single bad scene never aborts the whole job (the
-Phase 3c-A F4 ``_CountingSam2Tracker`` then catches the
-stage-wide-failure case if every scene errors).
+Phase 3c-B (post-2026-05-04): real SAM2 video propagation against
+a SINGLE full-video proxy with per-scene in-memory window slicing.
+The lib's ``propagate_within_candidate_scenes`` calls
+``track(scene_id, anchor_bbox, anchor_keyframe, full_video_path,
+scene_start_ms, scene_end_ms, sample_fps)`` per candidate; per-scene
+errors are caught + logged upstream so a single bad scene never
+aborts the whole job (the Phase 3c-A F4 ``_CountingSam2Tracker``
+then catches the stage-wide-failure case if every scene errors).
 
 Implementation flow:
 
-  1. Open the proxy video. ``scene_video_url`` may be presigned S3
-     HTTP, plain HTTP, or a local path; OpenCV's ``VideoCapture``
-     handles all three. (S3 ``s3://`` URLs require explicit
-     download first — tracker doesn't see those because the worker
-     resolves to presigned HTTP before passing.)
-  2. Sample frames at ``sample_fps``. The capture's reported FPS
-     drives the stride; sub-sampling is done on the input side so
-     SAM2 never sees frames it won't be asked about.
-  3. Anchor placement: Phase 3c-B v1 uses the first sampled frame
+  1. Open the full-video proxy that the worker downloaded once
+     per job message. ``full_video_path`` is a local filesystem
+     path the worker manages; we never reach for a per-scene mp4.
+  2. Seek to ``scene_start_ms`` via ``CAP_PROP_POS_MSEC``. The
+     seek is keyframe-aligned — cv2 may decode from the keyframe
+     BEFORE the requested ms — so the sampling loop drops any
+     pre-roll frames whose timestamp is < ``scene_start_ms``.
+  3. Sample frames at ``sample_fps`` cadence (timestamp-based, not
+     stride-based — the seek decouples us from "frames since file
+     start"). Stop the loop once the decoded timestamp exceeds
+     ``scene_end_ms`` so we don't pay decode cost outside the
+     candidate window.
+  4. Anchor placement: Phase 3c-B v1 uses the first sampled frame
      as the anchor — the lib already passes us the keyframe of an
      accepted candidate scene, so anchor placement is approximate
      but adequate for calibration. A future revision may switch to
      phash-nearest matching against ``anchor_keyframe`` if
      calibration motivates it.
-  4. Initialize SAM2's video predictor with ``anchor_bbox``.
-  5. Propagate forward + backward across the sampled frames; the
+  5. Initialize SAM2's video predictor with ``anchor_bbox``.
+  6. Propagate forward + backward across the sampled frames; the
      predictor returns a per-frame mask + confidence.
-  6. Convert each mask to an axis-aligned bbox. Empty masks (SAM2
+  7. Convert each mask to an axis-aligned bbox. Empty masks (SAM2
      lost the object) emit a low-confidence sample so window
      assembly's threshold filter drops them naturally.
 
 Failure modes (per ``Sam2Tracker`` contract — raise on any of
 these so the lib's per-scene try/except records the failure and
 continues):
-  * Scene proxy missing / S3 404 → ``RuntimeError``.
+  * Proxy missing / unreadable → ``RuntimeError``.
+  * No frames decoded inside the scene window → ``RuntimeError``
+    (corrupted proxy, seek fell off the end, or the scene window
+    is degenerate).
   * Anchor bbox falls outside frame bounds → ``ValueError``.
   * SAM2 OOM → ``RuntimeError`` (CUDA propagates as RuntimeError).
 """
@@ -75,7 +83,9 @@ class Sam2TrackerImpl:
         scene_id: str,
         anchor_bbox: BBoxXYWH,
         anchor_keyframe: "Image.Image",
-        scene_video_url: str,
+        full_video_path: str,
+        scene_start_ms: int,
+        scene_end_ms: int,
         sample_fps: int,
     ) -> list[TrackedSample]:
         # Lazy imports — keep module-import cheap for tests.
@@ -87,46 +97,77 @@ class Sam2TrackerImpl:
 
         loaded = load_sam2(model_id=self._model_id)
 
-        # ── 1. Open the proxy video.
-        cap = cv2.VideoCapture(scene_video_url)
+        # ── 1. Open the full-video proxy (worker downloaded it once
+        #      per job; we get a local filesystem path).
+        cap = cv2.VideoCapture(full_video_path)
         if not cap.isOpened():
             raise RuntimeError(
-                f"failed to open scene video for SAM2 tracking "
-                f"(scene_id={scene_id} url={scene_video_url})"
+                f"failed to open proxy video for SAM2 tracking "
+                f"(scene_id={scene_id} path={full_video_path})"
             )
 
         try:
             frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             source_fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
 
-            # ── 2. Sample frames at sample_fps.
-            stride = max(1, int(round(source_fps / max(sample_fps, 1))))
+            # ── 2. Seek to the scene window's start. CAP_PROP_POS_MSEC
+            #      is keyframe-aligned, so cv2 may land on the keyframe
+            #      BEFORE scene_start_ms. The sampling loop below
+            #      drops any pre-roll frames whose timestamp falls
+            #      below scene_start_ms; correctness, not just
+            #      efficiency.
+            cap.set(cv2.CAP_PROP_POS_MSEC, float(scene_start_ms))
+
+            # ── 3. Sample frames at sample_fps cadence within the
+            #      scene window. ``next_sample_ts_ms`` advances by
+            #      ``sample_interval_ms`` after each accepted sample;
+            #      a decoded frame whose timestamp falls between two
+            #      sample boundaries is skipped.
+            sample_interval_ms = max(1, int(round(1000.0 / max(sample_fps, 1))))
             sampled_frames: list[tuple[int, "np.ndarray"]] = []
-            frame_idx = 0
+            next_sample_ts_ms = scene_start_ms
+
             while True:
+                # Query position BEFORE reading. CAP_PROP_POS_MSEC
+                # returns the time of the NEXT frame to be decoded,
+                # so this is the timestamp of the frame ``cap.read``
+                # is about to return.
+                pos_ms = float(cap.get(cv2.CAP_PROP_POS_MSEC))
                 ok, bgr = cap.read()
                 if not ok:
                     break
-                if frame_idx % stride == 0:
-                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                    sampled_frames.append((frame_idx, rgb))
-                frame_idx += 1
-                if total_frames and frame_idx >= total_frames:
+                # Past the scene end → stop. Don't pay further
+                # decode cost outside the candidate window.
+                if pos_ms > scene_end_ms:
                     break
+                # Pre-roll from the keyframe-aligned seek → drop.
+                if pos_ms < scene_start_ms:
+                    continue
+                # Inside the window but ahead of the next sample
+                # boundary → skip (downsample to ``sample_fps``).
+                if pos_ms < next_sample_ts_ms:
+                    continue
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                sampled_frames.append((int(pos_ms), rgb))
+                next_sample_ts_ms = int(pos_ms) + sample_interval_ms
         finally:
             cap.release()
 
         if not sampled_frames:
-            # Empty scene (proxy decoded zero frames) — surface as a
-            # runtime error so the lib's per-scene try/except marks
-            # this scene as failed. Checked BEFORE the bbox bounds
-            # check so corrupted-proxy cases (where metadata is 0x0)
-            # surface as the correct error class.
+            # Zero frames decoded inside the requested window —
+            # corrupted proxy, seek fell off the end, or the scene
+            # window is degenerate. Surface as a runtime error so
+            # the lib's per-scene try/except marks this scene as
+            # failed. Checked BEFORE the bbox bounds check so
+            # corrupted-proxy cases (where metadata is 0x0) surface
+            # as the correct error class.
             raise RuntimeError(
-                f"no frames decoded from scene proxy "
-                f"(scene_id={scene_id} url={scene_video_url})"
+                f"no frames decoded in scene window "
+                f"(scene_id={scene_id} "
+                f"scene_start_ms={scene_start_ms} "
+                f"scene_end_ms={scene_end_ms} "
+                f"path={full_video_path})"
             )
 
         # If metadata reported 0x0 but we still got frames, fall
@@ -187,7 +228,11 @@ class Sam2TrackerImpl:
             ):
                 if prop_idx >= len(sampled_frames):
                     continue  # defensive — should never exceed
-                source_frame_idx, _ = sampled_frames[prop_idx]
+                # First tuple element is now an absolute millisecond
+                # timestamp on the FULL-video timeline (not a 0-based
+                # counter), set during the seek+sample loop above.
+                # No conversion needed.
+                frame_ts_ms, _ = sampled_frames[prop_idx]
                 # ``masks`` is shape (num_obj, H, W) — we added
                 # exactly one object so index 0 is the only mask.
                 mask_t = masks[0]
@@ -199,7 +244,6 @@ class Sam2TrackerImpl:
                 )
                 mask_np = mask_t.detach().cpu().numpy()
                 bbox = _mask_to_bbox(mask_np)
-                frame_ts_ms = int(source_frame_idx * 1000 / source_fps)
                 if bbox is None:
                     # Empty mask — SAM2 lost the object. Emit a
                     # low-confidence sample with the original

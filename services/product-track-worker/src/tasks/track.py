@@ -77,6 +77,7 @@ from heimdex_worker_sdk.s3 import S3Client
 
 from src.api_client import ApiClient
 from src.openai_picker import OpenAIPicker
+from src.proxy_download import downloaded_proxy
 from src.sam2_tracker import Sam2TrackerImpl
 from src.settings import WorkerSettings
 from src.siglip2_clients import (
@@ -179,7 +180,9 @@ class _CountingSam2Tracker:
         scene_id: str,
         anchor_bbox: BBoxXYWH,
         anchor_keyframe: "Image.Image",
-        scene_video_url: str,
+        full_video_path: str,
+        scene_start_ms: int,
+        scene_end_ms: int,
         sample_fps: int,
     ) -> list:
         self.attempted += 1
@@ -188,7 +191,9 @@ class _CountingSam2Tracker:
                 scene_id=scene_id,
                 anchor_bbox=anchor_bbox,
                 anchor_keyframe=anchor_keyframe,
-                scene_video_url=scene_video_url,
+                full_video_path=full_video_path,
+                scene_start_ms=scene_start_ms,
+                scene_end_ms=scene_end_ms,
                 sample_fps=sample_fps,
             )
         except Exception:
@@ -460,15 +465,42 @@ def handle_track_job(
                 )
                 return
             raise
+        raw_scenes = scenes_resp.get("scenes", [])
         scene_id_to_kf = {
-            s["scene_id"]: s["keyframe_s3_key"]
-            for s in scenes_resp.get("scenes", [])
+            s["scene_id"]: s["keyframe_s3_key"] for s in raw_scenes
+        }
+        scene_id_to_timing: dict[str, tuple[int, int]] = {
+            s["scene_id"]: (int(s["start_ms"]), int(s["end_ms"]))
+            for s in raw_scenes
         }
         os_video_id = scenes_resp.get("video_id", "")
 
+        # Single-proxy fast-fail: ``proxy_s3_key`` is None when
+        # transcode hasn't completed for this video. Surface as a
+        # distinct ``proxy_missing`` error code so the wizard can
+        # show "video isn't ready yet" rather than the generic
+        # ``internal_error``.
+        proxy_s3_key = scenes_resp.get("proxy_s3_key")
+        if not proxy_s3_key:
+            api.fail(
+                job_id=decoded.job_id,
+                claimed_by=settings.worker_id,
+                cost_delta_usd=cost_accumulator,
+                error_code="proxy_missing",
+                error_message=(
+                    f"DriveFile {decoded.video_id} has no proxy_s3_key — "
+                    f"transcode incomplete; retry once the video shows "
+                    f"as indexed."
+                ),
+            )
+            return
+
         embedder_impl = _CountingEmbedder(embedder or SiglipEmbedderImpl())
         coarse_client = CoarseRetrievalClientImpl(
-            api=api, file_id=decoded.video_id, org_id=decoded.org_id,
+            api=api,
+            file_id=decoded.video_id,
+            org_id=decoded.org_id,
+            scene_id_to_timing=scene_id_to_timing,
         )
         keyframe_fetcher = _CountingKeyframeFetcher(
             KeyframeFetcherImpl(
@@ -530,26 +562,26 @@ def handle_track_job(
             lease_seconds=settings.worker_lease_seconds,
         )
 
-        # TODO Phase 3c-B: real scene_video_urls. Drive proxies live
-        # at known S3 paths; needs a presigned URL helper or a
-        # dedicated /internal endpoint. Stubbed here as
-        # ``s3://{bucket}/proxies/{video_id}/{scene_id}.mp4`` which
-        # the SAM2 stub raises on anyway.
-        scene_video_urls = {
-            cs.scene_id: f"s3://{settings.drive_s3_bucket}/proxies/{os_video_id}/{cs.scene_id}.mp4"
-            for cs in candidate_scenes
-        }
-
+        # Download the full-video proxy ONCE per job message; the
+        # SAM2 wrapper seeks each scene's window in-memory. Tempdir
+        # is cleaned up on context exit (success OR exception via
+        # F4) so we never leak across retries on Aircloud's tight
+        # /tmp.
         tracker_impl = _CountingSam2Tracker(
             tracker or Sam2TrackerImpl(model_id=settings.sam2_model_id)
         )
-        detections = propagate_within_candidate_scenes(
-            candidates=candidate_scenes,
-            canonical_bbox=canonical_bbox,
-            tracker=tracker_impl,
-            scene_video_urls=scene_video_urls,
-            config=cfg,
-        )
+        with downloaded_proxy(
+            s3=s3,
+            proxy_s3_key=proxy_s3_key,
+            job_id_for_naming=str(decoded.job_id),
+        ) as full_video_path:
+            detections = propagate_within_candidate_scenes(
+                candidates=candidate_scenes,
+                canonical_bbox=canonical_bbox,
+                tracker=tracker_impl,
+                full_video_path=str(full_video_path),
+                config=cfg,
+            )
 
         # F4: every SAM2 track raised → systemic regression (model
         # OOM, every proxy URL 404, SAM2 weights wrong). Treat as a
@@ -1099,13 +1131,20 @@ def _filter_scenes_by_time_range(
     range_start_ms: int | None,
     range_end_ms: int | None,
     soft_padding_ms: int = 30_000,
-) -> dict[str, str]:
+) -> list[dict[str, Any]]:
     """Pre-filter scenes by time-range with soft padding (codex Q3).
 
-    Returns a ``scene_id_to_keyframe_s3_key`` map containing only
-    scenes whose ``[start_ms, end_ms]`` overlaps
-    ``[range_start - pad, range_end + pad]``. If both bounds are
-    None, returns the full map (no filtering).
+    Returns the filtered scene-dict list (same shape as input, with
+    only scenes whose ``[start_ms, end_ms]`` overlaps
+    ``[range_start - pad, range_end + pad]``). If both bounds are
+    None, returns the input list verbatim (no filtering).
+
+    Returning the dicts (not just one map) lets the caller derive
+    BOTH the keyframe map (``scene_id → keyframe_s3_key``) and the
+    timing map (``scene_id → (start_ms, end_ms)``) from the same
+    filtered set — important so coarse-retrieval candidates outside
+    the user's time-range don't sneak through one map but get
+    filtered by the other.
 
     The ±30s padding handles windows straddling the user's chosen
     boundary; the API's ``ck_psj_aggregate_output`` CHECK guarantees
@@ -1113,15 +1152,15 @@ def _filter_scenes_by_time_range(
     with padding.
     """
     if range_start_ms is None or range_end_ms is None:
-        return {s["scene_id"]: s["keyframe_s3_key"] for s in scenes}
+        return list(scenes)
     padded_start = max(0, range_start_ms - soft_padding_ms)
     padded_end = range_end_ms + soft_padding_ms
-    return {
-        s["scene_id"]: s["keyframe_s3_key"]
+    return [
+        s
         for s in scenes
         if int(s.get("end_ms", 0)) > padded_start
         and int(s.get("start_ms", 0)) < padded_end
-    }
+    ]
 
 
 def _handle_scan_order_parent(
@@ -1255,12 +1294,38 @@ def _handle_scan_order_parent(
     scenes = scenes_resp.get("scenes", [])
     os_video_id = scenes_resp.get("video_id", "")
 
+    # Single-proxy fast-fail: ``proxy_s3_key`` is None when transcode
+    # hasn't completed for this video. Surface a distinct
+    # ``proxy_missing`` error code so the wizard can show "video isn't
+    # ready yet" rather than the generic ``internal_error``.
+    proxy_s3_key = scenes_resp.get("proxy_s3_key")
+    if not proxy_s3_key:
+        api.fail(
+            job_id=decoded.job_id,
+            claimed_by=settings.worker_id,
+            cost_delta_usd=cost_accumulator,
+            error_code="proxy_missing",
+            error_message=(
+                f"DriveFile {decoded.video_id} has no proxy_s3_key — "
+                f"transcode incomplete; retry once the video shows "
+                f"as indexed."
+            ),
+        )
+        return
+
     # ── 3.5 time-range pre-filter (codex Q3) ──────────────────
-    scene_id_to_kf = _filter_scenes_by_time_range(
+    filtered_scenes = _filter_scenes_by_time_range(
         scenes,
         range_start_ms=decoded.time_range_start_ms,
         range_end_ms=decoded.time_range_end_ms,
     )
+    scene_id_to_kf = {
+        s["scene_id"]: s["keyframe_s3_key"] for s in filtered_scenes
+    }
+    scene_id_to_timing: dict[str, tuple[int, int]] = {
+        s["scene_id"]: (int(s["start_ms"]), int(s["end_ms"]))
+        for s in filtered_scenes
+    }
     if not scene_id_to_kf:
         api.fail(
             job_id=decoded.job_id,
@@ -1292,56 +1357,69 @@ def _handle_scan_order_parent(
     products_f4_failed = 0
     products_no_qualifying = 0
 
-    for i, entry in enumerate(catalog_entries):
-        entry_id = UUID(str(entry["catalog_entry_id"]))
-        entry_label = str(entry["llm_label"])
-        progress_pct = 10 + int((i + 1) * progress_per_entry)
-        try:
-            api.heartbeat(
-                job_id=decoded.job_id,
-                claimed_by=settings.worker_id,
-                stage="tracking",
-                progress_pct=min(progress_pct, 89),
-                progress_label=(
-                    f"tracking {entry_label} ({i+1}/{len(catalog_entries)})"
-                ),
-                cost_delta_usd=Decimal("0"),
-                lease_seconds=settings.worker_lease_seconds,
-            )
+    # Download the full-video proxy ONCE for the whole order. Every
+    # product's SAM2 pass reuses the same local file; the wrapper
+    # seeks to per-scene windows in-memory. Tempdir is cleaned up
+    # on context exit, including the F4-everywhere path where every
+    # product raises.
+    with downloaded_proxy(
+        s3=s3,
+        proxy_s3_key=proxy_s3_key,
+        job_id_for_naming=str(decoded.job_id),
+    ) as full_video_path_obj:
+        full_video_path = str(full_video_path_obj)
+        for i, entry in enumerate(catalog_entries):
+            entry_id = UUID(str(entry["catalog_entry_id"]))
+            entry_label = str(entry["llm_label"])
+            progress_pct = 10 + int((i + 1) * progress_per_entry)
+            try:
+                api.heartbeat(
+                    job_id=decoded.job_id,
+                    claimed_by=settings.worker_id,
+                    stage="tracking",
+                    progress_pct=min(progress_pct, 89),
+                    progress_label=(
+                        f"tracking {entry_label} ({i+1}/{len(catalog_entries)})"
+                    ),
+                    cost_delta_usd=Decimal("0"),
+                    lease_seconds=settings.worker_lease_seconds,
+                )
 
-            entry_appearances = _process_one_product_for_parent(
-                entry=entry,
-                scene_id_to_kf=scene_id_to_kf,
-                os_video_id=os_video_id,
-                cfg=cfg,
-                api=api,
-                s3=s3,
-                decoded=decoded,
-                settings=settings,
-                embedder=embedder,
-                tracker=tracker,
-            )
-            if entry_appearances is None:
-                # F4 stage-wide outage for THIS product. Don't kill
-                # the whole order — log + skip.
+                entry_appearances = _process_one_product_for_parent(
+                    entry=entry,
+                    scene_id_to_kf=scene_id_to_kf,
+                    scene_id_to_timing=scene_id_to_timing,
+                    full_video_path=full_video_path,
+                    os_video_id=os_video_id,
+                    cfg=cfg,
+                    api=api,
+                    s3=s3,
+                    decoded=decoded,
+                    settings=settings,
+                    embedder=embedder,
+                    tracker=tracker,
+                )
+                if entry_appearances is None:
+                    # F4 stage-wide outage for THIS product. Don't kill
+                    # the whole order — log + skip.
+                    products_f4_failed += 1
+                    continue
+                if not entry_appearances:
+                    products_no_qualifying += 1
+                    continue
+                aggregated_appearances.extend(entry_appearances)
+                products_succeeded += 1
+            except Exception:
+                logger.exception(
+                    "scan_order_per_product_failed",
+                    extra={
+                        "job_id": str(decoded.job_id),
+                        "catalog_entry_id": str(entry_id),
+                        "entry_label": entry_label,
+                    },
+                )
                 products_f4_failed += 1
                 continue
-            if not entry_appearances:
-                products_no_qualifying += 1
-                continue
-            aggregated_appearances.extend(entry_appearances)
-            products_succeeded += 1
-        except Exception:
-            logger.exception(
-                "scan_order_per_product_failed",
-                extra={
-                    "job_id": str(decoded.job_id),
-                    "catalog_entry_id": str(entry_id),
-                    "entry_label": entry_label,
-                },
-            )
-            products_f4_failed += 1
-            continue
 
     # ── 5. /complete or /fail ─────────────────────────────────
     if not aggregated_appearances:
@@ -1404,6 +1482,8 @@ def _process_one_product_for_parent(
     *,
     entry: dict[str, Any],
     scene_id_to_kf: dict[str, str],
+    scene_id_to_timing: dict[str, tuple[int, int]],
+    full_video_path: str,
     os_video_id: str,
     cfg: TrackingConfig,
     api: ApiClient,
@@ -1439,7 +1519,10 @@ def _process_one_product_for_parent(
     # F4 wrappers — per-product so failures are isolated.
     embedder_impl = _CountingEmbedder(embedder or SiglipEmbedderImpl())
     coarse_client = CoarseRetrievalClientImpl(
-        api=api, file_id=decoded.video_id, org_id=decoded.org_id,
+        api=api,
+        file_id=decoded.video_id,
+        org_id=decoded.org_id,
+        scene_id_to_timing=scene_id_to_timing,
     )
     keyframe_fetcher = _CountingKeyframeFetcher(
         KeyframeFetcherImpl(
@@ -1478,11 +1561,9 @@ def _process_one_product_for_parent(
         # Not an F4 — the product just has no scenes that match.
         return []
 
-    # SAM2 propagation per-product.
-    scene_video_urls = {
-        cs.scene_id: f"s3://{settings.drive_s3_bucket}/proxies/{os_video_id}/{cs.scene_id}.mp4"
-        for cs in candidate_scenes
-    }
+    # SAM2 propagation per-product. Reuses the single full-video
+    # proxy the parent already downloaded — the SAM2 wrapper seeks
+    # to each scene window in-memory.
     tracker_impl = _CountingSam2Tracker(
         tracker or Sam2TrackerImpl(model_id=settings.sam2_model_id)
     )
@@ -1490,7 +1571,7 @@ def _process_one_product_for_parent(
         candidates=candidate_scenes,
         canonical_bbox=canonical_bbox,
         tracker=tracker_impl,
-        scene_video_urls=scene_video_urls,
+        full_video_path=full_video_path,
         config=cfg,
     )
     if tracker_impl.all_attempts_failed:
