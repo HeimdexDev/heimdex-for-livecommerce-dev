@@ -124,6 +124,14 @@ services:
       - IMAGE_CAPTION_DAILY_BUDGET_USD=${IMAGE_CAPTION_DAILY_BUDGET_USD:-50.0}
       - IMAGE_CAPTION_ESTIMATED_COST_PER_CALL_USD=${IMAGE_CAPTION_ESTIMATED_COST_PER_CALL_USD:-0.012}
       - IMAGE_CAPTION_PROMPT_VERSION=${IMAGE_CAPTION_PROMPT_VERSION:-2026-04-13-v1}
+      # Auto-shorts product mode v2 (wizard) — pass-through to api so .env
+      # toggles propagate. Without this block the api silently uses
+      # config.py defaults (every flag false) regardless of host .env state.
+      # The same pattern of bug bit Phase 2 — the worker block had its own
+      # vars wired but the api block didn't, so the API never saw flag flips.
+      - AUTO_SHORTS_PRODUCT_V2_ENABLED=${AUTO_SHORTS_PRODUCT_V2_ENABLED:-false}
+      - AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT=${AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT:-0}
+      - AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED=${AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED:-false}
       # Auth0 configuration
       - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
       - AUTH0_DOMAIN=${AUTH0_DOMAIN:-}
