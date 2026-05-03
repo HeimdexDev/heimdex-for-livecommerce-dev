@@ -53,6 +53,53 @@ export interface ScanOrderCreateRequest {
   product_distribution: ProductDistribution;
   language: Language;
   intent: ScanIntent;
+  // Optional pre-tracking pick from the wizard's product-select step.
+  // When set, the worker filters its catalog fetch to this single
+  // entry instead of looping over the whole active catalog. NULL =
+  // legacy whole-catalog round-robin.
+  catalog_entry_id?: string | null;
+}
+
+// ----------------------------------------------------------------------
+// V1 product catalog endpoints — used by the wizard's product-select
+// step to trigger enumeration and poll for the resulting catalog.
+// ----------------------------------------------------------------------
+
+/**
+ * Body for ``POST /api/shorts/auto/products/{video_id}/scan``.
+ * One field — kept compact since the wizard always uses 60s presets;
+ * the wizard's wizard-level length_seconds is captured separately on
+ * the scan_order.
+ */
+export interface ProductScanRequest {
+  duration_preset_sec: 30 | 60 | 90;
+}
+
+/** Response for ``POST /api/shorts/auto/products/{video_id}/scan``. */
+export interface ProductScanResponse {
+  job_id: string;
+  /**
+   * True when an in-flight enumerate job already covers this video —
+   * the same parent gets returned, no duplicate work / no extra cost.
+   */
+  deduped: boolean;
+}
+
+/** A single enumerated product in the catalog (gallery shape). */
+export interface CatalogProductSummary {
+  catalog_entry_id: string;
+  label: string;
+  canonical_crop_url: string | null;
+  enumeration_confidence: number;
+  prominence_score: number;
+  /** Populated only AFTER tracking — null during enumeration polling. */
+  appearance_count: number | null;
+}
+
+/** Response for ``GET /api/shorts/auto/products/{video_id}``. */
+export interface ProductCatalogResponse {
+  video_id: string;
+  entries: CatalogProductSummary[];
 }
 
 export interface ScanOrderResponse {
