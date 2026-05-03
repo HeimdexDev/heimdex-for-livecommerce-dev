@@ -641,6 +641,15 @@ class ChildRunner:
                     composition=composition_spec,
                 ),
             )
+            # Commit BEFORE the with-block exits — ``ShortsRenderService``
+            # only ``flush()``es the new row, so closing the session
+            # without a commit rolls it back. The subsequent
+            # ``complete_tracking(render_job_id=…)`` would then reference
+            # a non-existent FK and IntegrityError-fail the child path.
+            # Mirrors the explicit commit in
+            # ``internal_router.enqueue_render_for_scan_job`` (line 709).
+            # Codex review caught this — see PR #6 review notes.
+            await session.commit()
         return response.id
 
     async def _mark_child_failed(
