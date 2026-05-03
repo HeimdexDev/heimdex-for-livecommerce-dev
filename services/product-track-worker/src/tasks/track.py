@@ -1155,31 +1155,18 @@ def _handle_scan_order_parent(
     Time-range pre-filter (codex Q3) and per-length min-window
     threshold (plan §7.3) apply at the scenes/config layer before
     the per-product loop kicks off.
+
+    Precondition: ``handle_track_job`` already issued the ``api.claim``
+    call at the entrypoint. Re-claiming here would 409 (parent already
+    in ``tracking``), then this function returned early, dispatch
+    returned normally, the SDK ack-deleted the message — and the job
+    never progressed past claim. Bug shipped 2026-05-03 with the
+    wizard scan_order flow.
     """
     cost_accumulator = Decimal("0")
     length_seconds = decoded.length_seconds or 60
 
-    # ── 1. claim ──────────────────────────────────────────────
-    try:
-        api.claim(
-            job_id=decoded.job_id,
-            claimed_by=settings.worker_id,
-            next_stage="tracking",
-            lease_seconds=settings.worker_lease_seconds,
-        )
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 409:
-            logger.info(
-                "scan_order_claim_conflict_acking_message",
-                extra={
-                    "job_id": str(decoded.job_id),
-                    "claimed_by": settings.worker_id,
-                },
-            )
-            return
-        raise
-
-    # ── 2. heartbeat: resolving ───────────────────────────────
+    # ── 1. heartbeat: resolving ───────────────────────────────
     api.heartbeat(
         job_id=decoded.job_id,
         claimed_by=settings.worker_id,
@@ -1190,7 +1177,7 @@ def _handle_scan_order_parent(
         lease_seconds=settings.worker_lease_seconds,
     )
 
-    # ── 3. fetch active catalog ───────────────────────────────
+    # ── 2. fetch active catalog ───────────────────────────────
     catalog_entries = api.fetch_catalog_entries_for_video(
         video_id=decoded.video_id, org_id=decoded.org_id,
     )
@@ -1207,7 +1194,7 @@ def _handle_scan_order_parent(
         )
         return
 
-    # ── 4. fetch scenes-with-keyframes (ONCE for the video) ──
+    # ── 3. fetch scenes-with-keyframes (ONCE for the video) ──
     api.heartbeat(
         job_id=decoded.job_id,
         claimed_by=settings.worker_id,
@@ -1238,7 +1225,7 @@ def _handle_scan_order_parent(
     scenes = scenes_resp.get("scenes", [])
     os_video_id = scenes_resp.get("video_id", "")
 
-    # ── 4.5 time-range pre-filter (codex Q3) ──────────────────
+    # ── 3.5 time-range pre-filter (codex Q3) ──────────────────
     scene_id_to_kf = _filter_scenes_by_time_range(
         scenes,
         range_start_ms=decoded.time_range_start_ms,
@@ -1258,7 +1245,7 @@ def _handle_scan_order_parent(
         )
         return
 
-    # ── 5. per-product loop ───────────────────────────────────
+    # ── 4. per-product loop ───────────────────────────────────
     cfg = _make_config(settings)
     # Per-length threshold override (plan §7.3 — codex Q4).
     cfg.min_window_duration_ms = _min_window_ms_for_length(length_seconds)
@@ -1320,7 +1307,7 @@ def _handle_scan_order_parent(
             products_f4_failed += 1
             continue
 
-    # ── 6. /complete or /fail ─────────────────────────────────
+    # ── 5. /complete or /fail ─────────────────────────────────
     if not aggregated_appearances:
         # Distinguish "all products F4-failed" (stage-wide regression)
         # from "all products produced no qualifying windows" (correct

@@ -347,3 +347,76 @@ def test_render_enqueue_passes_os_video_id_not_drivefile_uuid():
     # Composition's per-clip video_id must also be the OS string.
     composition = enqueue_kwargs["composition"]
     assert all(c["video_id"] == "gd_test" for c in composition["scene_clips"])
+
+
+# =====================================================================
+# scan_order parent flow: claim is owned by handle_track_job, NOT by
+# _handle_scan_order_parent (regression for 2026-05-03 prod incident)
+# =====================================================================
+
+
+def _scan_order_body() -> dict:
+    """Wizard parent message — mode='scan_order', no catalog_entry_id."""
+    return {
+        "type": "product.track_job",
+        "job_id": str(uuid4()),
+        "org_id": str(uuid4()),
+        "video_id": str(uuid4()),
+        "requested_by_user_id": str(uuid4()),
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+        "mode": "scan_order",
+        "length_seconds": 30,
+        "requested_count": 5,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+    }
+
+
+def test_scan_order_parent_calls_claim_exactly_once():
+    """Regression: ``_handle_scan_order_parent`` previously issued a
+    SECOND ``api.claim`` call after ``handle_track_job`` had already
+    claimed the job. The second call always 409'd (parent in
+    ``tracking``), the function returned early, dispatch returned
+    normally, the SDK ack-deleted the message — and the job stuck at
+    ``stage=tracking`` forever with no heartbeat/fail/complete.
+    Symptom on staging 2026-05-03: 3 successive scan orders all
+    silently stalled after the api transitioned to ``tracking``.
+
+    Pin: claim is called EXACTLY ONCE per dispatch, by
+    ``handle_track_job``. ``_handle_scan_order_parent`` MUST NOT
+    re-claim — its first call should be the resolving heartbeat.
+    """
+    api = MagicMock()
+    # Empty catalog → fast termination via the no_products_detected
+    # fail path. Lets the test prove "we got past the redundant claim
+    # block" without standing up the full SAM2/picker mock pipeline.
+    api.fetch_catalog_entries_for_video.return_value = []
+    embedder, s3, tracker, picker = _make_pipeline_mocks()
+
+    handle_track_job(
+        message=_scan_order_body(),
+        settings=_settings(),
+        api_client=api,
+        embedder=embedder,
+        tracker=tracker,
+        picker=picker,
+        s3_client=s3,
+    )
+
+    # The fix: claim called once, by handle_track_job. Pre-fix this
+    # was 2 (handle_track_job + _handle_scan_order_parent).
+    assert api.claim.call_count == 1, (
+        f"expected exactly one claim call, got {api.claim.call_count} "
+        f"(double-claim bug regression: 2026-05-03)"
+    )
+    # Heartbeat fires only AFTER the redundant claim block was removed —
+    # if the bug returns, this would be 0.
+    assert api.heartbeat.call_count >= 1, (
+        "heartbeat never fired — the dispatcher likely hit the early "
+        "return on a redundant claim 409"
+    )
+    # Sanity: the empty-catalog path's terminal /fail call landed.
+    api.fail.assert_called_once()
+    assert api.fail.call_args.kwargs["error_code"] == "no_products_detected"
