@@ -190,19 +190,19 @@ def upgrade() -> None:
     # hot-path queries.
     # ------------------------------------------------------------------
 
-    # The existing ix_product_scan_jobs_active was scoped to the original
-    # active stages and ignored ``mode``. Replace it with one that:
-    #   - includes the new active stages (preview_ready, fanned_out)
-    #   - excludes mode='render_child' so concurrency cap counts parents
-    op.execute("DROP INDEX IF EXISTS ix_product_scan_jobs_active")
-    op.execute("""
-        CREATE INDEX ix_product_scan_jobs_active
-            ON product_scan_jobs(org_id, stage)
-            WHERE stage IN (
-                'queued','enumerating','tracking','assembling','rendering',
-                'preview_ready','fanned_out'
-            ) AND mode <> 'render_child'
-    """)
+    # NOTE: ``ix_product_scan_jobs_active`` rebuild moved to migration
+    # ``053_recreate_active_index_with_wizard_stages`` because Postgres
+    # rejects using ``ALTER TYPE … ADD VALUE``-added enum members in
+    # the same transaction that added them — the partial index's
+    # ``WHERE stage IN ('preview_ready','fanned_out',…)`` predicate
+    # tripped that restriction during initial deploys
+    # (UnsafeNewEnumValueUsage). Splitting it lets the next migration
+    # see the new enum values as committed members of the type.
+    #
+    # The OLD ix_product_scan_jobs_active (scoped to original active
+    # stages, no mode filter) stays in place until 053 runs — fine
+    # because the wizard concurrency cap doesn't trip until parents
+    # actually start landing in the new stages.
 
     # Parent → children lookup. Used by GET /scan-orders/{parent_id} and
     # by cancel-cascade.
@@ -235,19 +235,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Indexes
+    # Indexes — only the ones this migration created. The
+    # ``ix_product_scan_jobs_active`` rebuild lives in migration 053
+    # and is reverted there (running ``alembic downgrade -1`` from 053
+    # restores the pre-053 active-index shape, then ``-1`` again from
+    # 052 leaves the schema as it was at 051).
     op.execute("DROP INDEX IF EXISTS ix_product_scan_jobs_child_queue")
     op.execute("DROP INDEX IF EXISTS ix_product_scan_jobs_settings_hash")
     op.execute("DROP INDEX IF EXISTS ix_product_scan_jobs_parent")
-    op.execute("DROP INDEX IF EXISTS ix_product_scan_jobs_active")
-    # Restore the original active-only index shape from migration 051.
-    op.execute("""
-        CREATE INDEX ix_product_scan_jobs_active
-            ON product_scan_jobs(org_id, stage)
-            WHERE stage IN (
-                'queued','enumerating','tracking','assembling','rendering'
-            )
-    """)
 
     # Constraints (drop in reverse-add order; IF EXISTS for idempotency)
     op.execute(
