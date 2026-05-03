@@ -90,6 +90,7 @@ def _build_runner(monkeypatch, *, settings=None, fake_repo=None,
     return ChildRunner(
         settings=settings,
         session_factory=_mock_session_factory(fake_repo),
+        scene_search_client=MagicMock(),  # PR #6: not exercised by these tests
         instance_id=instance_id,
         process_child_fn=process_child_fn,
     ), fake_repo
@@ -115,18 +116,37 @@ def test_default_instance_id_uses_hostname(monkeypatch):
 
 
 # ======================================================================
-# Stub processing (PR #4): claim → /complete with render_job_id=None
+# Processing flow (PR #6): claim → real flow OR no-render fallback
 # ======================================================================
+#
+# The PR #4 stub ("claim → /complete with render_job_id=None") was
+# replaced in PR #6 with a real picker + render-service flow. The
+# tests below cover the orchestration spine; the no-render fallback
+# path is the easiest one to drive end-to-end without standing up
+# real catalog / appearance / render fixtures.
 
 
 @pytest.mark.asyncio
-async def test_process_child_payload_claims_then_completes(monkeypatch):
-    """Happy path: claim returns the claimed row → /complete with
-    render_job_id=None (PR #4 stub) → both repo calls awaited."""
+async def test_process_child_payload_no_render_path_claims_then_completes(monkeypatch):
+    """No-render fallback path: when the runner can't produce a
+    render (no catalog, no appearances, picker returns nothing), it
+    still claims the child and completes it with ``render_job_id=None``
+    so the wizard UI shows "no render produced for this short"
+    rather than leaving the child in 'assembling' until lease
+    expiry. Forced here by patching ``_load_child_context`` to
+    return None (``no_catalog_or_parent`` branch)."""
     runner, fake_repo = _build_runner(monkeypatch)
     child_id = uuid4()
     fake_repo.claim = AsyncMock(return_value=MagicMock())  # claim wins
     fake_repo.complete_tracking = AsyncMock(return_value=MagicMock())
+
+    # Force the no-render branch — simulates "parent is gone" /
+    # "video has no active catalog entries". Either is a legitimate
+    # terminal state that the runner handles by completing the
+    # child with no render rather than failing it.
+    monkeypatch.setattr(
+        runner, "_load_child_context", AsyncMock(return_value=None),
+    )
 
     await runner._process_child_payload(child_id)
 
@@ -140,7 +160,6 @@ async def test_process_child_payload_claims_then_completes(monkeypatch):
     complete_kwargs = fake_repo.complete_tracking.await_args.kwargs
     assert complete_kwargs["job_id"] == child_id
     assert complete_kwargs["claimed_by"] == "api-child-test-replica"
-    # PR #4 stub: render_job_id is None until PR #5 wires real renders.
     assert complete_kwargs["render_job_id"] is None
 
 
@@ -158,13 +177,17 @@ async def test_process_child_payload_skips_when_already_claimed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_process_child_payload_lease_lost_during_complete(monkeypatch):
-    """Lease lost between claim and complete (e.g. cancel cascade ran
-    mid-process) → warn but don't crash. The row is already in its
-    terminal state from the cancel — nothing for us to do."""
+async def test_process_child_payload_no_render_path_handles_lease_loss(monkeypatch):
+    """Lease lost between claim and complete on the no-render path
+    (e.g. cancel cascade ran mid-process) → warn but don't crash.
+    The row is already in its terminal state from the cancel —
+    nothing for us to do."""
     runner, fake_repo = _build_runner(monkeypatch)
     fake_repo.claim = AsyncMock(return_value=MagicMock())
     fake_repo.complete_tracking = AsyncMock(return_value=None)  # lease lost
+    monkeypatch.setattr(
+        runner, "_load_child_context", AsyncMock(return_value=None),
+    )
 
     # Should not raise; quietly returns.
     await runner._process_child_payload(uuid4())
@@ -221,6 +244,14 @@ async def test_two_replicas_race_only_one_wins(monkeypatch):
     )
     repo_a.claim = AsyncMock(return_value=MagicMock())
     repo_a.complete_tracking = AsyncMock(return_value=MagicMock())
+    # PR #6: post-claim, the runner's real flow walks
+    # _load_child_context → catalog/appearances → render service.
+    # This test only cares about the claim race contract, so force
+    # the no-render branch so we exit at complete_tracking without
+    # needing to mock the entire real-flow chain.
+    monkeypatch.setattr(
+        runner_a, "_load_child_context", AsyncMock(return_value=None),
+    )
 
     # Replica B: claim loses
     repo_b = MagicMock()
@@ -231,6 +262,7 @@ async def test_two_replicas_race_only_one_wins(monkeypatch):
     runner_b = ChildRunner(
         settings=_settings_stub(),
         session_factory=_mock_session_factory(repo_b),
+        scene_search_client=MagicMock(),
         instance_id="replica-B",
     )
 

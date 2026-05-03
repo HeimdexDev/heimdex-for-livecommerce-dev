@@ -97,14 +97,20 @@ async def lifespan(app: FastAPI):
     # rows produced by the parent fan-out hook in
     # ``shorts_auto_product.internal_router.complete``. One runner per
     # API replica; DB-atomic claim resolves the race across replicas.
-    # Stub processing in PR #4 (claim → /complete with render_job_id=None);
-    # real picker + render-service integration in PR #5.
+    # Real picker + render-service integration shipped in PR #6
+    # (``children/runner.py::_process_child_payload``).
     from app.db.base import get_async_session_factory
     from app.modules.shorts_auto_product.children import create_child_runner
 
     child_runner = create_child_runner(
         settings=settings,
         session_factory=get_async_session_factory(),
+        # ``ShortsRenderService`` (constructed inside the runner per
+        # render call) needs the scene OS client to validate
+        # scene_clip boundaries before persisting the render job.
+        # Set on app.state above; reused here so the runner doesn't
+        # have to re-read settings or open its own OS connection.
+        scene_search_client=app.state.scene_opensearch_client,
     )
     child_runner.start()
     app.state.product_v2_child_runner = child_runner
