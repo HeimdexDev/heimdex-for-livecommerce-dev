@@ -73,6 +73,7 @@ from heimdex_media_pipelines.product_track.subset_selector import (
 from heimdex_media_pipelines.product_track.window_assembly import (
     assemble_windows,
 )
+from heimdex_worker_sdk import emit_event
 from heimdex_worker_sdk.s3 import S3Client
 
 from src.api_client import ApiClient
@@ -1409,13 +1410,33 @@ def _handle_scan_order_parent(
                     continue
                 aggregated_appearances.extend(entry_appearances)
                 products_succeeded += 1
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "scan_order_per_product_failed",
                     extra={
                         "job_id": str(decoded.job_id),
                         "catalog_entry_id": str(entry_id),
                         "entry_label": entry_label,
+                    },
+                )
+                # Surface the exception type + message via worker_events
+                # so failures are SQL-queryable without Aircloud logs.
+                # Truncated to 1000 chars to respect the 16KB metadata
+                # cap on the worker_events ingest endpoint.
+                emit_event(
+                    service="product-track-worker",
+                    event_name="scan_order_per_product_failed",
+                    category="job_failure",
+                    level="ERROR",
+                    org_id=str(decoded.org_id),
+                    job_id=str(decoded.job_id),
+                    video_id=decoded.video_id,
+                    message=f"{type(exc).__name__}: {exc}"[:1000],
+                    metadata={
+                        "catalog_entry_id": str(entry_id),
+                        "entry_label": entry_label,
+                        "exception_type": type(exc).__name__,
+                        "exception_message": str(exc)[:1000],
                     },
                 )
                 products_f4_failed += 1
@@ -1427,6 +1448,27 @@ def _handle_scan_order_parent(
         # from "all products produced no qualifying windows" (correct
         # behavior, just no good content).
         if products_f4_failed == len(catalog_entries):
+            emit_event(
+                service="product-track-worker",
+                event_name="scan_order_all_products_f4_failed",
+                category="job_failure",
+                level="ERROR",
+                org_id=str(decoded.org_id),
+                job_id=str(decoded.job_id),
+                video_id=decoded.video_id,
+                message=(
+                    f"all {len(catalog_entries)} products F4-failed; query "
+                    f"worker_events WHERE job_id={decoded.job_id} for the "
+                    f"per-product reasons (events scan_order_product_*_f4 "
+                    f"and scan_order_per_product_failed carry the cause)."
+                ),
+                metadata={
+                    "products_total": len(catalog_entries),
+                    "products_succeeded": products_succeeded,
+                    "products_no_qualifying": products_no_qualifying,
+                    "products_f4_failed": products_f4_failed,
+                },
+            )
             api.fail(
                 job_id=decoded.job_id,
                 claimed_by=settings.worker_id,
@@ -1435,7 +1477,8 @@ def _handle_scan_order_parent(
                 error_message=(
                     f"all {len(catalog_entries)} products F4-failed — "
                     f"likely a stage-wide regression (SigLIP2 / S3 / SAM2). "
-                    f"Check worker logs for per-product failures."
+                    f"Query worker_events WHERE job_id={decoded.job_id} "
+                    f"for the per-product reasons."
                 ),
             )
         else:
@@ -1546,6 +1589,27 @@ def _process_one_product_for_parent(
             "scan_order_product_keyframe_f4",
             extra={"entry_id": str(entry_id), "attempted": keyframe_fetcher.attempted},
         )
+        emit_event(
+            service="product-track-worker",
+            event_name="scan_order_product_keyframe_f4",
+            category="job_failure",
+            level="WARNING",
+            org_id=str(decoded.org_id),
+            job_id=str(decoded.job_id),
+            video_id=decoded.video_id,
+            message=(
+                f"every keyframe fetch raised for catalog_entry "
+                f"{entry_id} ({entry_label}); attempted="
+                f"{keyframe_fetcher.attempted}. Likely S3 outage, "
+                f"wrong bucket, or MINIO_ENDPOINT regression."
+            ),
+            metadata={
+                "entry_id": str(entry_id),
+                "entry_label": entry_label,
+                "attempted": keyframe_fetcher.attempted,
+                "stage": "keyframe_fetch",
+            },
+        )
         return None
     if embedder_impl.per_scene_all_failed():
         logger.warning(
@@ -1553,6 +1617,27 @@ def _process_one_product_for_parent(
             extra={
                 "entry_id": str(entry_id),
                 "attempted": embedder_impl.per_scene_attempted,
+            },
+        )
+        emit_event(
+            service="product-track-worker",
+            event_name="scan_order_product_siglip_f4",
+            category="job_failure",
+            level="WARNING",
+            org_id=str(decoded.org_id),
+            job_id=str(decoded.job_id),
+            video_id=decoded.video_id,
+            message=(
+                f"every per-scene SigLIP2 embed raised for catalog_entry "
+                f"{entry_id} ({entry_label}); attempted="
+                f"{embedder_impl.per_scene_attempted}. Likely a bad SigLIP2 "
+                f"deploy or corrupted HF cache."
+            ),
+            metadata={
+                "entry_id": str(entry_id),
+                "entry_label": entry_label,
+                "attempted": embedder_impl.per_scene_attempted,
+                "stage": "siglip2_embed",
             },
         )
         return None
@@ -1578,6 +1663,27 @@ def _process_one_product_for_parent(
         logger.warning(
             "scan_order_product_sam2_f4",
             extra={"entry_id": str(entry_id), "attempted": tracker_impl.attempted},
+        )
+        emit_event(
+            service="product-track-worker",
+            event_name="scan_order_product_sam2_f4",
+            category="job_failure",
+            level="WARNING",
+            org_id=str(decoded.org_id),
+            job_id=str(decoded.job_id),
+            video_id=decoded.video_id,
+            message=(
+                f"every SAM2 track raised for catalog_entry {entry_id} "
+                f"({entry_label}); attempted={tracker_impl.attempted}. "
+                f"Likely SAM2 OOM, wrong checkpoint, or proxy decode "
+                f"failure on every candidate scene."
+            ),
+            metadata={
+                "entry_id": str(entry_id),
+                "entry_label": entry_label,
+                "attempted": tracker_impl.attempted,
+                "stage": "sam2_track",
+            },
         )
         return None
 
