@@ -480,20 +480,27 @@ class ProductScanJobRepository:
         language: str,
         intent: str,
         settings_hash: str,
+        catalog_entry_id: UUID | None = None,
     ) -> ProductScanJob:
         """Insert a wizard parent row.
 
         ``mode='scan_order'`` + every wizard input from the body. The
         DB-level CHECKs (``ck_psj_parent_required_fields``,
         ``ck_psj_aggregate_output``, etc.) catch any service-side
-        validation gap. ``catalog_entry_id`` is NULL — parents process
-        the whole catalog.
+        validation gap.
+
+        ``catalog_entry_id`` is NULL by default — parent processes the
+        whole active catalog (legacy round-robin via the picker). When
+        the wizard's product-select step returns a chosen entry, the
+        service layer plumbs it through and the worker filters its
+        catalog fetch to that single entry. The ``ck_psj_parent_*``
+        constraints don't gate this column for scan_order parents.
         """
         job = ProductScanJob(
             org_id=org_id,
             video_id=video_id,
             requested_by_user_id=user_id,
-            catalog_entry_id=None,
+            catalog_entry_id=catalog_entry_id,
             duration_preset_sec=length_seconds,  # legacy column carries the same number
             mode=SCAN_MODE_SCAN_ORDER,
             length_seconds=length_seconds,

@@ -1178,9 +1178,39 @@ def _handle_scan_order_parent(
     )
 
     # ── 2. fetch active catalog ───────────────────────────────
-    catalog_entries = api.fetch_catalog_entries_for_video(
-        video_id=decoded.video_id, org_id=decoded.org_id,
-    )
+    # When the wizard's product-select step picked a single entry,
+    # narrow the fetch to that one (Pattern B endpoint
+    # /internal/products/catalog/{id}). The per-product loop below
+    # takes a uniform ``[entry, ...]`` shape, so wrapping in a
+    # one-element list lets the rest of the function ignore the
+    # distinction. service.enqueue_scan_order already validated, but
+    # treat 404 here as the entry was rejected between submit and
+    # worker pickup.
+    if decoded.catalog_entry_id is not None:
+        try:
+            single = api.fetch_catalog_entry(
+                catalog_entry_id=decoded.catalog_entry_id,
+                org_id=decoded.org_id,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                api.fail(
+                    job_id=decoded.job_id,
+                    claimed_by=settings.worker_id,
+                    cost_delta_usd=cost_accumulator,
+                    error_code="no_products_detected",
+                    error_message=(
+                        f"catalog entry {decoded.catalog_entry_id} "
+                        f"not found or rejected since submit"
+                    ),
+                )
+                return
+            raise
+        catalog_entries = [single]
+    else:
+        catalog_entries = api.fetch_catalog_entries_for_video(
+            video_id=decoded.video_id, org_id=decoded.org_id,
+        )
     if not catalog_entries:
         api.fail(
             job_id=decoded.job_id,

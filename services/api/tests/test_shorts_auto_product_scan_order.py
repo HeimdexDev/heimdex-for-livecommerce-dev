@@ -214,6 +214,54 @@ def test_settings_hash_canonical_json_is_key_order_insensitive():
     assert h1 == h2
 
 
+def test_settings_hash_omits_selected_entry_when_none():
+    """Backward compat: scan orders submitted before the product-select
+    step shipped (or with the field absent) must hash IDENTICALLY to
+    the same call without the parameter, so live idempotency keys
+    don't churn during deploy."""
+    base = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "active_catalog_entry_ids": ["aaa"],
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    h_no_kwarg = compute_settings_hash(**base)
+    h_explicit_none = compute_settings_hash(selected_catalog_entry_id=None, **base)
+    assert h_no_kwarg == h_explicit_none
+
+
+def test_settings_hash_changes_when_user_picks_a_product():
+    """Picking a product semantically narrows the job — must produce a
+    distinct dedupe key from the same wizard inputs without a pick."""
+    base = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "active_catalog_entry_ids": ["aaa", "bbb"],
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    h_unpicked = compute_settings_hash(**base)
+    h_picked_a = compute_settings_hash(selected_catalog_entry_id="aaa", **base)
+    h_picked_b = compute_settings_hash(selected_catalog_entry_id="bbb", **base)
+    # Three distinct intents → three distinct hashes.
+    assert len({h_unpicked, h_picked_a, h_picked_b}) == 3
+
+
 # ======================================================================
 # _validate_scan_order_inputs — codex Q5 aggregate cap + time range
 # ======================================================================
