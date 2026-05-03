@@ -60,6 +60,43 @@ def _build_service(
     return ProductScanService(session=db, settings=settings)
 
 
+async def _resolve_video_uuid(
+    *, db: AsyncSession, org_id: UUID, video_id: str,
+) -> UUID:
+    """Resolve the OS-style ``video_id`` (``gd_xxx``) to its DriveFile UUID.
+
+    Every wizard / product-v2 router endpoint takes ``video_id`` from
+    the path as a STRING (matching the frontend's ``/videos/{videoId}``
+    URL convention), but the service layer + DB columns are typed
+    ``UUID`` because that's the DriveFile primary key. This helper
+    bridges the two by querying ``DriveFileRepository.get_by_video_id``
+    (which already filters soft-deleted rows).
+
+    Returns:
+        The resolved ``DriveFile.id`` UUID.
+
+    Raises:
+        HTTPException 404: ``video_id`` does not resolve to an active
+            DriveFile in this org. Same shape as the stale-video guard
+            in ``internal_router.complete``.
+
+    Loose-coupling note (plan §15): drive-repo lookup is lazy-imported
+    here, mirroring the carve-out in ``internal_router.complete``. The
+    router stays free of module-level ``app.modules.drive`` coupling.
+    """
+    from app.modules.drive.repository import DriveFileRepository
+
+    drive_file = await DriveFileRepository(db).get_by_video_id(
+        org_id=org_id, video_id=video_id,
+    )
+    if drive_file is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"video_id {video_id!r} not found",
+        )
+    return drive_file.id
+
+
 # ----------------------------------------------------------------------
 # GET /api/shorts/auto/products/{video_id}
 # ----------------------------------------------------------------------
@@ -69,7 +106,7 @@ def _build_service(
     response_model=ProductCatalogResponse,
 )
 async def get_product_catalog(
-    video_id: UUID,
+    video_id: str,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     _user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
@@ -77,13 +114,20 @@ async def get_product_catalog(
 ) -> ProductCatalogResponse:
     """List enumerated products for a video.
 
+    Path param accepts the OS-style ``video_id`` string (``gd_xxx``);
+    the handler resolves it to the DriveFile UUID before passing to the
+    service layer. See :func:`_resolve_video_uuid` for the rationale.
+
     Empty ``products`` array + ``scan_status="never"`` means the user
     should see the "Scan for products" CTA. ``scan_status="in_progress"``
     means the toast subscription should be reattached to ``scan_job_id``.
     """
+    video_uuid = await _resolve_video_uuid(
+        db=db, org_id=org_ctx.org_id, video_id=video_id,
+    )
     service = _build_service(db, settings)
     return await service.list_products(
-        org_id=org_ctx.org_id, video_id=video_id,
+        org_id=org_ctx.org_id, video_id=video_uuid,
     )
 
 
@@ -97,7 +141,7 @@ async def get_product_catalog(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def enqueue_scan(
-    video_id: UUID,
+    video_id: str,
     body: ScanRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
@@ -106,14 +150,20 @@ async def enqueue_scan(
 ) -> ScanResponse:
     """Enqueue an enumeration scan.
 
+    Path accepts the OS-style ``video_id`` (``gd_xxx``); see
+    :func:`_resolve_video_uuid`.
+
     Idempotent within ``auto_shorts_product_v2_scan_idempotency_seconds``
     (default 60s) per ``(video_id, user_id)``: re-clicking returns the
     existing job. 402 on cost cap. 429 on per-org concurrency cap.
     """
+    video_uuid = await _resolve_video_uuid(
+        db=db, org_id=org_ctx.org_id, video_id=video_id,
+    )
     service = _build_service(db, settings)
     return await service.enqueue_scan(
         org_id=org_ctx.org_id,
-        video_id=video_id,
+        video_id=video_uuid,
         user_id=user.id,
         duration_preset_sec=body.duration_preset_sec,
     )
@@ -129,7 +179,7 @@ async def enqueue_scan(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def enqueue_clip(
-    video_id: UUID,
+    video_id: str,
     catalog_entry_id: UUID,
     body: ClipRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
@@ -139,13 +189,25 @@ async def enqueue_clip(
 ) -> ClipResponse:
     """Enqueue tracking + assembly + render for a chosen catalog entry.
 
+    Path's ``video_id`` is the OS-style string (``gd_xxx``); see
+    :func:`_resolve_video_uuid`. ``catalog_entry_id`` is a UUID
+    (it IS the catalog row's primary key, so no resolution needed).
+
     Same idempotency / cap semantics as ``/scan`` but keyed on
     ``(video_id, user_id, catalog_entry_id)``.
+
+    NOTE: Plan §4.2 marks this endpoint for deprecation (will return
+    410 Gone after Phase 4 fully ships). The type fix here is a
+    forward-compat hedge — keeps the endpoint working consistently
+    until the 410 conversion lands.
     """
+    video_uuid = await _resolve_video_uuid(
+        db=db, org_id=org_ctx.org_id, video_id=video_id,
+    )
     service = _build_service(db, settings)
     return await service.enqueue_clip(
         org_id=org_ctx.org_id,
-        video_id=video_id,
+        video_id=video_uuid,
         catalog_entry_id=catalog_entry_id,
         user_id=user.id,
         duration_preset_sec=body.duration_preset_sec,
@@ -162,7 +224,7 @@ async def enqueue_clip(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def force_rescan(
-    video_id: UUID,
+    video_id: str,
     body: ScanRequest,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     user: Annotated[User, Depends(get_current_user)],
@@ -171,14 +233,20 @@ async def force_rescan(
 ) -> RescanResponse:
     """Soft-reject the existing catalog and enqueue a fresh enumeration.
 
+    Path accepts the OS-style ``video_id`` (``gd_xxx``); see
+    :func:`_resolve_video_uuid`.
+
     Bypasses the 60s idempotency window — rescan is always intentional.
     Existing appearances cascade naturally (rejected catalog rows hide
     from the gallery; their appearances stay readable for forensics).
     """
+    video_uuid = await _resolve_video_uuid(
+        db=db, org_id=org_ctx.org_id, video_id=video_id,
+    )
     service = _build_service(db, settings)
     return await service.rescan(
         org_id=org_ctx.org_id,
-        video_id=video_id,
+        video_id=video_uuid,
         user_id=user.id,
         duration_preset_sec=body.duration_preset_sec,
     )
@@ -193,7 +261,7 @@ async def force_rescan(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 async def reject_catalog_entry(
-    video_id: UUID,
+    video_id: str,
     catalog_entry_id: UUID,
     org_ctx: Annotated[OrgContext, Depends(get_current_org)],
     _user: Annotated[User, Depends(get_current_user)],
@@ -202,14 +270,20 @@ async def reject_catalog_entry(
 ) -> None:
     """Soft-reject a catalog entry ("this isn't a product").
 
+    Path's ``video_id`` is the OS-style string (``gd_xxx``); see
+    :func:`_resolve_video_uuid`. ``catalog_entry_id`` is a UUID.
+
     v1: internal admin use. v2 will surface this in the picker UI for
     user-driven curation. Idempotent — already-rejected entries return
     204 silently.
     """
+    video_uuid = await _resolve_video_uuid(
+        db=db, org_id=org_ctx.org_id, video_id=video_id,
+    )
     service = _build_service(db, settings)
     await service.reject_catalog_entry(
         org_id=org_ctx.org_id,
-        video_id=video_id,
+        video_id=video_uuid,
         catalog_entry_id=catalog_entry_id,
     )
 
@@ -329,26 +403,13 @@ async def create_scan_order(
     DriveFile (missing or soft-deleted) — same shape as the
     stale-video guard in ``internal_router.complete``.
     """
-    # Loose-coupling note (plan §15): drive-repo lookup carve-out,
-    # mirrors the existing stale-video guard at internal_router.py
-    # and the render-service call. Lazy import keeps the router
-    # module-level free of cross-module ``app.modules.drive`` coupling.
-    from app.modules.drive.repository import DriveFileRepository
-
-    drive_repo = DriveFileRepository(db)
-    drive_file = await drive_repo.get_by_video_id(
-        org_id=org_ctx.org_id, video_id=video_id,
+    video_uuid = await _resolve_video_uuid(
+        db=db, org_id=org_ctx.org_id, video_id=video_id,
     )
-    if drive_file is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"video_id {video_id!r} not found",
-        )
-
     service = _build_service(db, settings)
     return await service.enqueue_scan_order(
         org_id=org_ctx.org_id,
-        video_id=drive_file.id,
+        video_id=video_uuid,
         user_id=user.id,
         body=body,
     )
