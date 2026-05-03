@@ -408,6 +408,57 @@ async def complete(
         # the ck_psj_parent_no_render CHECK enforces this at the DB level
         # but force NULL here too — defense in depth.
         if kind == "scan_order":
+            # ── stale-video guard ─────────────────────────────────
+            # Between scan-order submission and worker callback, the
+            # user may have deleted the source video. The worker's
+            # GPU work is already done (appearances are persisted
+            # above) but rendering N shorts against a deleted video
+            # would produce orphan S3 outputs and broken playback in
+            # the wizard's step 4 list view. Fail the parent BEFORE
+            # fan-out so zero children are created.
+            #
+            # Loose-coupling note (plan §15): this is a deliberate
+            # cross-module reach into ``app.modules.drive`` — the
+            # second such carve-out alongside the render-service
+            # call at line 704. Lazy-imported to keep the runner's
+            # module-level import graph small.
+            from app.modules.drive.repository import (
+                DriveFileRepository,
+            )
+            drive_repo = DriveFileRepository(db)
+            drive_file = await drive_repo.get_by_id(
+                file_id=job.video_id, org_id=job.org_id,
+            )
+            if drive_file is None:
+                logger.info(
+                    "product_v2_scan_order_video_no_longer_available",
+                    parent_job_id=str(job_id),
+                    video_id=str(job.video_id),
+                    org_id=str(job.org_id),
+                    persisted_appearances=persisted_appearances,
+                )
+                # ``persisted_appearances`` upstream stays — the GPU
+                # work is preserved against the catalog, so a future
+                # scan-order on a re-uploaded video could reuse it.
+                # Parent transitions to FAILED with a discrete code
+                # the wizard UI can render as
+                # "Your video was deleted before shorts could be
+                # generated".
+                await job_repo.fail(
+                    job_id=job_id,
+                    claimed_by=body.claimed_by,
+                    error_code="video_no_longer_available",
+                    error_message=(
+                        "DriveFile is missing or soft-deleted; "
+                        "skipping fan-out to avoid orphan renders"
+                    ),
+                    cost_delta_usd=body.cost_delta_usd,
+                )
+                return _CompleteResponse(
+                    persisted_catalog_entries=0,
+                    persisted_appearances=persisted_appearances,
+                )
+            # ──────────────────────────────────────────────────────
             # Phase 4 fan-out hook: transition parent to FANNED_OUT
             # (NOT DONE — parent isn't terminal until children
             # terminate) and atomically insert N children. Both

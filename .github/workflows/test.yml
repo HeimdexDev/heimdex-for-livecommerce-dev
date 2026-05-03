@@ -72,6 +72,7 @@ jobs:
             tests/test_runner_real_swap.py \
             tests/test_shorts_auto_product_child_runner.py \
             tests/test_shorts_render_dedupe_window.py \
+            tests/test_shorts_auto_product_phase4_foundation.py \
             --tb=short
 
           # NOTE: shorts_auto tests are deliberately NOT in the CI

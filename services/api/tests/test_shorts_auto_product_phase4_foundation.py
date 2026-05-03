@@ -226,10 +226,18 @@ async def test_find_recent_duplicate_filters_on_org_id():
 
 
 def _build_complete_app(monkeypatch, *, job, persisted_appearance_count=0,
-                       persisted_catalog_count=0):
+                       persisted_catalog_count=0, video_alive=True):
     """Build a minimal FastAPI app with the internal router mounted +
     repos mocked. Pattern B test patching: stub both the package
     re-export AND the internal_router-bound name.
+
+    ``video_alive`` controls the stale-video guard's behavior for
+    scan_order parents (PR follow-up C). True (default) → DriveFile
+    lookup returns a MagicMock so the guard sees the video as alive
+    and fan-out proceeds. False → lookup returns None, the guard
+    fires, parent is marked failed with ``video_no_longer_available``,
+    no fan-out happens. The default keeps every pre-existing test
+    passing without modification.
     """
     from app.dependencies import get_db_session, verify_internal_token
     from app.modules.shorts_auto_product.internal_router import (
@@ -245,6 +253,10 @@ def _build_complete_app(monkeypatch, *, job, persisted_appearance_count=0,
     # mocked so tests don't fail on the await expression.
     fake_job_repo.transition_parent_to_fanned_out = AsyncMock(return_value=job)
     fake_job_repo.create_render_children = AsyncMock(return_value=[])
+    # Stale-video guard (PR follow-up C) calls fail() when the
+    # DriveFile is gone. Mock so tests can assert it was/wasn't
+    # called.
+    fake_job_repo.fail = AsyncMock(return_value=job)
 
     fake_catalog_repo = MagicMock()
     catalog_rows = [MagicMock() for _ in range(persisted_catalog_count)]
@@ -256,6 +268,20 @@ def _build_complete_app(monkeypatch, *, job, persisted_appearance_count=0,
 
     fake_cost_repo = MagicMock()
     fake_cost_repo.add_cost = AsyncMock()
+
+    # Stale-video guard mock — DriveFileRepository is lazy-imported
+    # inside the scan_order branch of complete(). Patch the original
+    # module location so the lazy import resolves to our fake.
+    fake_drive_repo = MagicMock()
+    fake_drive_repo.get_by_id = AsyncMock(
+        return_value=MagicMock() if video_alive else None,
+    )
+    import app.modules.drive.repository as drive_repository_module
+    monkeypatch.setattr(
+        drive_repository_module,
+        "DriveFileRepository",
+        MagicMock(side_effect=lambda _db: fake_drive_repo),
+    )
 
     # Pattern B test patching (D53): patch BOTH the package re-export
     # AND the internal_router module's bound name. The router imports
@@ -280,6 +306,10 @@ def _build_complete_app(monkeypatch, *, job, persisted_appearance_count=0,
     fake_db.commit = AsyncMock()
     app.dependency_overrides[get_db_session] = lambda: fake_db
     app.dependency_overrides[verify_internal_token] = lambda: "test-token"
+    # Stash the fakes on the app so individual tests can assert
+    # interactions without reaching back into closure scope.
+    app.state.fake_job_repo = fake_job_repo
+    app.state.fake_drive_repo = fake_drive_repo
     return app
 
 
@@ -632,6 +662,19 @@ def test_complete_scan_order_fanout_409_when_transition_fails(monkeypatch):
     fake_cost_repo = MagicMock()
     fake_cost_repo.add_cost = AsyncMock()
 
+    # Stale-video guard mock — DriveFile is alive so the guard
+    # passes through to the transition (which is what THIS test is
+    # asserting). See _build_complete_app's video_alive kwarg for
+    # the inverse case.
+    fake_drive_repo = MagicMock()
+    fake_drive_repo.get_by_id = AsyncMock(return_value=MagicMock())
+    import app.modules.drive.repository as drive_repository_module
+    monkeypatch.setattr(
+        drive_repository_module,
+        "DriveFileRepository",
+        MagicMock(side_effect=lambda _db: fake_drive_repo),
+    )
+
     import app.modules.shorts_auto_product.repositories as repos_pkg
     import app.modules.shorts_auto_product.internal_router as router_module
 
@@ -677,3 +720,141 @@ def test_complete_scan_order_fanout_409_when_transition_fails(monkeypatch):
     assert "lease lost" in resp.text or "cancelled" in resp.text
     # Children must NOT be inserted when the transition fails.
     fake_job_repo.create_render_children.assert_not_awaited()
+
+
+# ======================================================================
+# PR follow-up C — stale-video guard (DriveFile deleted between
+# wizard submission and worker callback)
+# ======================================================================
+
+
+def test_complete_scan_order_with_deleted_video_fails_parent_skips_fanout(
+    monkeypatch,
+):
+    """Stale-video guard: between scan-order submission and worker
+    callback, the user may have deleted the source video. The guard
+    runs BEFORE fan-out — appearances are persisted (worker's GPU
+    work is preserved against the catalog), parent transitions to
+    FAILED with ``error_code='video_no_longer_available'``, and zero
+    children are inserted. The worker treats 200 as terminal and
+    ack-deletes its SQS message — no retry."""
+    parent_id = uuid4()
+    catalog_entry_id = uuid4()
+    job = _job_row(
+        job_id=parent_id,
+        mode=SCAN_MODE_SCAN_ORDER,
+        catalog_entry_id=None,
+    )
+    job.claimed_by = "test-worker"
+    job.org_id = uuid4()
+    job.requested_count = 5
+
+    app = _build_complete_app(
+        monkeypatch, job=job, persisted_appearance_count=3,
+        video_alive=False,  # ← guard fires
+    )
+    fake_job_repo = app.state.fake_job_repo
+    fake_drive_repo = app.state.fake_drive_repo
+
+    client = TestClient(app)
+    body = {
+        "claimed_by": "test-worker",
+        "cost_delta_usd": "0.50",
+        "appearances": [
+            {
+                "catalog_entry_id": str(catalog_entry_id),
+                "scene_id": "gd_deleted_scene_001",
+                "window_start_ms": 1000,
+                "window_end_ms": 5000,
+                "avg_bbox_area_pct": 0.2,
+                "avg_confidence": 0.9,
+                "tracker_version": "v1",
+            },
+        ],
+    }
+    resp = client.post(
+        f"/internal/products/{parent_id}/complete",
+        json=body,
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    # Appearances are still persisted — the worker's GPU work isn't
+    # thrown away when the user deletes the video.
+    assert payload["persisted_appearances"] == 3
+    assert payload["persisted_catalog_entries"] == 0
+
+    # The DriveFile was looked up exactly once with the parent's video_id + org_id.
+    fake_drive_repo.get_by_id.assert_awaited_once()
+    lookup_kwargs = fake_drive_repo.get_by_id.await_args.kwargs
+    assert lookup_kwargs["file_id"] == job.video_id
+    assert lookup_kwargs["org_id"] == job.org_id
+
+    # Parent transitions to FAILED with the discrete error_code.
+    fake_job_repo.fail.assert_awaited_once()
+    fail_kwargs = fake_job_repo.fail.await_args.kwargs
+    assert fail_kwargs["job_id"] == parent_id
+    assert fail_kwargs["claimed_by"] == "test-worker"
+    assert fail_kwargs["error_code"] == "video_no_longer_available"
+    assert "soft-deleted" in fail_kwargs["error_message"] or \
+        "missing" in fail_kwargs["error_message"]
+
+    # Critical: the fan-out path MUST be skipped.
+    fake_job_repo.transition_parent_to_fanned_out.assert_not_awaited()
+    fake_job_repo.create_render_children.assert_not_awaited()
+
+
+def test_complete_scan_order_alive_video_does_not_call_fail(monkeypatch):
+    """Sanity check: when the DriveFile lookup returns a row, the
+    guard passes through, fail() is not called, and the normal
+    fan-out path runs.
+
+    This complements ``test_complete_scan_order_fanout_inserts_children_atomically``
+    by asserting the guard's NON-firing behavior explicitly — a future
+    refactor that accidentally inverts the None check would only
+    show up here.
+    """
+    parent_id = uuid4()
+    catalog_entry_id = uuid4()
+    job = _job_row(
+        job_id=parent_id,
+        mode=SCAN_MODE_SCAN_ORDER,
+        catalog_entry_id=None,
+    )
+    job.claimed_by = "test-worker"
+    job.org_id = uuid4()
+    job.requested_count = 3
+
+    app = _build_complete_app(
+        monkeypatch, job=job, persisted_appearance_count=1,
+        video_alive=True,  # ← guard sees a live video
+    )
+    fake_job_repo = app.state.fake_job_repo
+
+    client = TestClient(app)
+    body = {
+        "claimed_by": "test-worker",
+        "cost_delta_usd": "0",
+        "appearances": [
+            {
+                "catalog_entry_id": str(catalog_entry_id),
+                "scene_id": "gd_alive_scene_001",
+                "window_start_ms": 1000,
+                "window_end_ms": 5000,
+                "avg_bbox_area_pct": 0.2,
+                "avg_confidence": 0.9,
+                "tracker_version": "v1",
+            },
+        ],
+    }
+    resp = client.post(
+        f"/internal/products/{parent_id}/complete",
+        json=body,
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Guard didn't fire — fan-out ran instead.
+    fake_job_repo.fail.assert_not_awaited()
+    fake_job_repo.transition_parent_to_fanned_out.assert_awaited_once()
+    fake_job_repo.create_render_children.assert_awaited_once()
