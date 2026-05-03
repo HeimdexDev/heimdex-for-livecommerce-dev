@@ -78,8 +78,34 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
+from app.lib.product_track.config import TrackingConfig
+from app.lib.product_track.stitching import build_stitch_plan
+from app.lib.product_track.subset_selector import (
+    GreedyPicker,
+    ScoredWindow,
+    score_windows,
+    select_subset,
+)
+from app.modules.shorts_auto_product.children.composition import (
+    build_composition_spec_from_stitch_plan,
+)
+from app.modules.shorts_auto_product.children.picker import (
+    SingleProductSubsetPicker,
+)
+from app.modules.shorts_auto_product.children.scene_id_utils import (
+    os_video_id_from_scene_id,
+)
 from app.modules.shorts_auto_product.models import (
+    PRODUCT_DISTRIBUTION_SINGLE,
     SCAN_STAGE_ASSEMBLING,
+    ProductAppearance,
+    ProductScanJob,
+)
+from app.modules.shorts_auto_product.repositories.appearance import (
+    ProductAppearanceRepository,
+)
+from app.modules.shorts_auto_product.repositories.catalog import (
+    ProductCatalogRepository,
 )
 from app.modules.shorts_auto_product.repositories.job import (
     ProductScanJobRepository,
@@ -126,11 +152,23 @@ class ChildRunner:
         *,
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
+        scene_search_client: object,
         instance_id: str | None = None,
         process_child_fn: Callable[[UUID], Awaitable[None]] | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
+        # Production: ``app.state.scene_opensearch_client`` (set in
+        # ``app.main:lifespan`` before ``ChildRunner.start()``). Tests
+        # inject a no-op stub — only `_validate_scene_clips` (called
+        # inside ``ShortsRenderService.create_render_job``) touches
+        # this object, and tests typically inject the entire render
+        # service via ``process_child_fn`` so the real OS client
+        # isn't reached.
+        # Typed as ``object`` deliberately: the prod client is
+        # ``opensearchpy.AsyncOpenSearch`` but tests pass in
+        # MagicMock instances; loose typing keeps both paths happy.
+        self.scene_search_client = scene_search_client
         self.instance_id = instance_id or _default_instance_id()
         # Allow tests to inject a fake processor that doesn't actually
         # call repo / render service. Production callers leave this
@@ -286,24 +324,37 @@ class ChildRunner:
                 )
 
     async def _process_child_payload(self, child_id: UUID) -> None:
-        """The actual child-processing step.
+        """The actual child-processing step (Phase 4 PR #6).
 
-        **Phase 4 PR #4 stub**: claim → /complete with
-        ``render_job_id=None``. Real picker + render-service call
-        lands in PR #5.
+        Flow:
 
-        The split of repo work across two transactions (claim ↔
-        complete) is intentional:
+          1. Claim the child (queued → assembling).
+          2. Read parent + active appearances + catalog set.
+          3. Pick a catalog by round-robin on parent.shorts_index
+             (Phase 4 single-product mode).
+          4. Filter appearances to that catalog → score → select
+             subset → build stitch plan.
+          5. Build CompositionSpec via the typed adapter.
+          6. Call ``ShortsRenderService.create_render_job`` directly
+             (no self-HTTP — plan §15 carve-out).
+          7. ``complete_tracking(render_job_id=…)`` to terminal.
 
-          * The first transaction commits the claim so the row is
-            visible as ``claimed_by=api-child-…`` to other replicas.
-            Without this commit, two replicas could each see the
-            row as queued and both try to claim — though the second
-            UPDATE would still fail and return None, the wasted
-            poll cycle is avoidable.
-          * The second transaction holds the actual work + /complete.
-            PR #5 will widen this transaction to include the picker
-            cost rollup and render-service call.
+        Multiple "no qualifying" outcomes (no catalogs, no
+        appearances, picker returns []) all land at step 7 with
+        ``render_job_id=None`` so the user-facing UI shows
+        "no render produced" rather than "failed". Real failures
+        (DB error, render service error) raise out of this method
+        and are caught by ``_run_one_child``'s catch-all, which
+        invokes ``_mark_child_failed``.
+
+        Sessions are split across stages on purpose: claim commits
+        immediately so the lease is visible to other replicas;
+        render creation self-commits inside the service; completion
+        is its own transaction. A crash between render creation
+        and completion is partially mitigated by
+        ``ShortsRenderService``'s 30s composition_hash dedupe — a
+        retry with the same windows hits the dedupe and reuses the
+        render row.
         """
         # ── 1. Claim ──────────────────────────────────────────────
         async with self.session_factory() as session:
@@ -317,9 +368,6 @@ class ChildRunner:
                 next_stage=SCAN_STAGE_ASSEMBLING,
             )
             if claimed is None:
-                # Another replica already claimed this child OR the
-                # row is no longer in 'queued' (already processed,
-                # cancelled, etc.). No-op.
                 logger.debug(
                     "child_already_claimed_or_terminal",
                     extra={
@@ -330,47 +378,270 @@ class ChildRunner:
                 return
             await session.commit()
 
-        # ── 2. Stub work (PR #4) ──────────────────────────────────
-        # PR #5 replaces this section with:
-        #   - read parent + active appearances
-        #   - run select_subset / build_stitch_plan via heimdex_media_pipelines
-        #   - call shorts_render_service.create_render_job
-        #   - persist render_job_id in the /complete call below
-        logger.info(
-            "child_runner_processed_child_stub",
-            extra={
-                "child_id": str(child_id),
-                "instance_id": self.instance_id,
-                "note": "PR #4 stub; real render integration pending PR #5",
-            },
+        # ── 2. Read child + parent + catalog set ──────────────────
+        loaded = await self._load_child_context(child_id=child_id)
+        if loaded is None:
+            await self._complete_no_render(
+                child_id=child_id,
+                reason="no_catalog_or_parent",
+            )
+            return
+
+        child, parent, catalog_label_lookup = loaded
+
+        # ── 3. Pick a catalog for this child ──────────────────────
+        # Phase 4 single-mode is the only path live; Phase 5
+        # multi-mode lands a different orchestration that selects
+        # catalogs differently.
+        distribution = (
+            parent.product_distribution or PRODUCT_DISTRIBUTION_SINGLE
+        )
+        if distribution != PRODUCT_DISTRIBUTION_SINGLE:
+            # Defensive: the public router gates wizard submissions
+            # to PRODUCT_DISTRIBUTION_SINGLE for now. If a multi-mode
+            # row sneaks through, fail loudly so the operator sees
+            # it rather than silently producing a single-mode short.
+            raise NotImplementedError(
+                f"product_distribution={distribution!r} not yet "
+                f"implemented (Phase 5 deliverable)"
+            )
+
+        try:
+            catalog_pick = SingleProductSubsetPicker().pick_catalog(
+                catalog_ids=list(catalog_label_lookup.keys()),
+                shorts_index=child.shorts_index or 1,
+            )
+        except ValueError:
+            await self._complete_no_render(
+                child_id=child_id,
+                reason="picker_value_error",
+            )
+            return
+
+        chosen_catalog_id = catalog_pick.catalog_entry_id
+        catalog_label = catalog_label_lookup.get(chosen_catalog_id)
+
+        # ── 4. Score + select windows for the chosen catalog ──────
+        appearances = await self._load_appearances_for_catalog(
+            org_id=parent.org_id, catalog_entry_id=chosen_catalog_id,
+        )
+        if not appearances:
+            logger.info(
+                "child_no_appearances_for_chosen_catalog",
+                extra={
+                    "child_id": str(child_id),
+                    "catalog_entry_id": str(chosen_catalog_id),
+                },
+            )
+            await self._complete_no_render(
+                child_id=child_id,
+                reason="no_appearances_for_catalog",
+            )
+            return
+
+        annotated_windows = [
+            _appearance_to_annotated_window(a) for a in appearances
+        ]
+        cfg = TrackingConfig()
+        length_seconds = parent.length_seconds or parent.duration_preset_sec or 60
+        scored = score_windows(
+            annotated_windows,
+            duration_preset_sec=length_seconds,
+            config=cfg,
+        )
+        if not scored:
+            await self._complete_no_render(
+                child_id=child_id,
+                reason="no_scored_windows",
+            )
+            return
+
+        selected = select_subset(
+            scored,
+            picker=GreedyPicker(),
+            duration_preset_sec=length_seconds,
+            config=cfg,
+        )
+        if not selected:
+            await self._complete_no_render(
+                child_id=child_id,
+                reason="picker_returned_empty",
+            )
+            return
+
+        plan = build_stitch_plan(
+            selected,
+            duration_target_sec=length_seconds,
+            config=cfg,
+        )
+        os_video_id = os_video_id_from_scene_id(
+            plan.windows[0].window.scene_id,
+        )
+        composition_spec = build_composition_spec_from_stitch_plan(
+            plan=plan, os_video_id=os_video_id,
         )
 
-        # ── 3. Complete ───────────────────────────────────────────
+        # ── 5. Create render via the shorts-render service ────────
+        render_job_id = await self._create_render_job(
+            org_id=parent.org_id,
+            user_id=parent.requested_by_user_id,
+            os_video_id=os_video_id,
+            title=catalog_label,
+            composition_spec=composition_spec,
+        )
+
+        # ── 6. Complete with the new render_job_id ────────────────
         async with self.session_factory() as session:
             repo = ProductScanJobRepository(session)
             completed = await repo.complete_tracking(
                 job_id=child_id,
                 claimed_by=self.claimed_by,
                 cost_delta_usd=Decimal("0"),
-                # PR #5: replace with the actual ShortsRenderJob.id from
-                # the render service. None for now means the wizard UI
-                # shows "render not produced" — acceptable for the stub.
-                render_job_id=None,
+                render_job_id=render_job_id,
             )
             if completed is None:
-                # Lease lost between claim and complete (cancel cascade
-                # ran, or this replica's clock skewed past the lease).
-                # Nothing to do here; the row is in its terminal state
-                # already.
                 logger.warning(
                     "child_complete_lease_lost",
                     extra={
                         "child_id": str(child_id),
                         "instance_id": self.instance_id,
+                        "render_job_id": str(render_job_id),
                     },
                 )
                 return
             await session.commit()
+        logger.info(
+            "child_runner_processed_child",
+            extra={
+                "child_id": str(child_id),
+                "render_job_id": str(render_job_id),
+                "catalog_entry_id": str(chosen_catalog_id),
+                "shorts_index": child.shorts_index,
+                "windows": len(plan.windows),
+            },
+        )
+
+    # ── helpers (private; tests patch via process_child_fn) ──────────
+
+    async def _load_child_context(
+        self, *, child_id: UUID,
+    ) -> tuple[ProductScanJob, ProductScanJob, dict[UUID, str]] | None:
+        """Read child + parent + catalog (id → label) in one
+        read-only session.
+
+        Catalog selection (round-robin) happens in the caller —
+        this helper is pure data fetch so the picker call stays in
+        one place and the test seam is clean.
+
+        Returns:
+            (child, parent, catalog_id_to_label) or None when the
+            child / parent is missing or the catalog set is empty.
+            ``catalog_id_to_label`` prefers ``user_label`` over
+            ``llm_label`` (matches the gallery's display rule).
+        """
+        async with self.session_factory() as session:
+            job_repo = ProductScanJobRepository(session)
+            child = await job_repo.get_internal(job_id=child_id)
+            if child is None or child.parent_job_id is None:
+                return None
+            parent = await job_repo.get_internal(job_id=child.parent_job_id)
+            if parent is None:
+                return None
+            catalog_repo = ProductCatalogRepository(session)
+            catalog_entries = await catalog_repo.list_active_by_video(
+                org_id=parent.org_id, video_id=parent.video_id,
+            )
+            if not catalog_entries:
+                return None
+            catalog_label_lookup = {
+                c.id: (c.user_label or c.llm_label)
+                for c in catalog_entries
+            }
+            return (child, parent, catalog_label_lookup)
+
+    async def _load_appearances_for_catalog(
+        self, *, org_id: UUID, catalog_entry_id: UUID,
+    ) -> list[ProductAppearance]:
+        async with self.session_factory() as session:
+            appearance_repo = ProductAppearanceRepository(session)
+            return await appearance_repo.list_active_by_catalog(
+                org_id=org_id, catalog_entry_id=catalog_entry_id,
+            )
+
+    async def _complete_no_render(
+        self, *, child_id: UUID, reason: str,
+    ) -> None:
+        """Mark the child terminal with no render — analogous to the
+        worker's ``_terminate_no_render``. Reaches the same DB shape
+        as the happy path (stage=done, render_job_id NULL), so the
+        wizard UI surfaces "no render produced for this short"
+        without a special-case error path.
+        """
+        async with self.session_factory() as session:
+            repo = ProductScanJobRepository(session)
+            completed = await repo.complete_tracking(
+                job_id=child_id,
+                claimed_by=self.claimed_by,
+                cost_delta_usd=Decimal("0"),
+                render_job_id=None,
+            )
+            if completed is None:
+                logger.warning(
+                    "child_complete_lease_lost_no_render",
+                    extra={
+                        "child_id": str(child_id),
+                        "instance_id": self.instance_id,
+                        "reason": reason,
+                    },
+                )
+                return
+            await session.commit()
+        logger.info(
+            "child_runner_no_render",
+            extra={
+                "child_id": str(child_id),
+                "instance_id": self.instance_id,
+                "reason": reason,
+            },
+        )
+
+    async def _create_render_job(
+        self,
+        *,
+        org_id: UUID,
+        user_id: UUID,
+        os_video_id: str,
+        title: str | None,
+        composition_spec,
+    ) -> UUID:
+        """Construct ``ShortsRenderService`` against a fresh session
+        and call ``create_render_job``. Lazy import keeps the runner
+        module-level free of cross-module ``shorts_render`` coupling
+        (plan §15 carves out direct service use as the runner-side
+        equivalent of the internal-router endpoint).
+        """
+        from app.modules.shorts_render.repository import (
+            ShortsRenderJobRepository,
+        )
+        from app.modules.shorts_render.schemas import RenderJobCreate
+        from app.modules.shorts_render.service import ShortsRenderService
+
+        async with self.session_factory() as session:
+            render_repo = ShortsRenderJobRepository(session)
+            render_service = ShortsRenderService(
+                repository=render_repo,
+                scene_search=self.scene_search_client,
+            )
+            response = await render_service.create_render_job(
+                org_id=org_id,
+                user_id=user_id,
+                payload=RenderJobCreate(
+                    video_id=os_video_id,
+                    title=title,
+                    composition=composition_spec,
+                ),
+            )
+        return response.id
 
     async def _mark_child_failed(
         self,
@@ -397,18 +668,68 @@ class ChildRunner:
             )
 
 
+def _appearance_to_annotated_window(
+    appearance: ProductAppearance,
+) -> "AnnotatedWindow":
+    """Adapt a DB-side :class:`ProductAppearance` into the lib-side
+    :class:`AnnotatedWindow` the picker stack consumes.
+
+    Catalog id is dropped on purpose: the runner has already
+    narrowed appearances to one catalog before this conversion
+    runs, and the vendored lib's ``ScoredWindow`` is catalog-blind
+    by design (see ``children/picker.py`` rationale).
+
+    ``peak_confidence`` and ``frame_count`` aren't persisted on
+    ``ProductAppearance`` rows (the worker materializes them only
+    in-flight), so we approximate:
+      * ``peak_confidence`` ← ``avg_confidence`` (best estimate
+        without per-frame data; only used by the worker's
+        :func:`select_subset` overshoot-trim, not the scorer).
+      * ``frame_count`` ← duration_ms / 200ms (5fps SAM2 cadence).
+    These approximations don't affect the scorer's composite score
+    (which uses ``avg_bbox_area_pct`` + duration-fitness only) but
+    keep the dataclass constructor satisfied.
+    """
+    # Lazy import — keep the runner module-level reference graph
+    # small. AnnotatedWindow is only needed in this adapter and in
+    # the type annotation above (string-quoted forward ref).
+    from app.lib.product_track.alignment import AnnotatedWindow
+
+    duration_ms = appearance.window_end_ms - appearance.window_start_ms
+    frame_count_estimate = max(1, duration_ms // 200)
+    return AnnotatedWindow(
+        scene_id=appearance.scene_id,
+        window_start_ms=appearance.window_start_ms,
+        window_end_ms=appearance.window_end_ms,
+        avg_bbox_area_pct=float(appearance.avg_bbox_area_pct),
+        avg_confidence=float(appearance.avg_confidence),
+        peak_confidence=float(appearance.avg_confidence),
+        frame_count=frame_count_estimate,
+        rejected_reason=appearance.rejected_reason,
+        has_narration_mention=bool(appearance.has_narration_mention),
+        has_ocr_overlap=bool(appearance.has_ocr_overlap),
+    )
+
+
 def create_child_runner(
     *,
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
+    scene_search_client: object,
     instance_id: str | None = None,
 ) -> ChildRunner:
     """Factory used by ``app.main:lifespan``. Tests construct
     ``ChildRunner`` directly with their own session factory + injected
     ``process_child_fn``.
+
+    ``scene_search_client`` is typed as ``object`` to accept both the
+    production ``AsyncOpenSearch`` client and test fakes; the runner
+    only forwards it to ``ShortsRenderService`` which will type-check
+    against the actual client interface at use time.
     """
     return ChildRunner(
         settings=settings,
         session_factory=session_factory,
+        scene_search_client=scene_search_client,
         instance_id=instance_id,
     )
