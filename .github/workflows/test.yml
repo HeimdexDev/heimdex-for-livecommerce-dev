@@ -73,6 +73,7 @@ jobs:
             tests/test_shorts_auto_product_child_runner.py \
             tests/test_shorts_render_dedupe_window.py \
             tests/test_shorts_auto_product_phase4_foundation.py \
+            tests/test_create_scan_order_video_id_resolution.py \
             --tb=short
 
           # NOTE: shorts_auto tests are deliberately NOT in the CI
