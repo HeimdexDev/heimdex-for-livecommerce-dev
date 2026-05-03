@@ -626,6 +626,16 @@ class ChildRunner:
         from app.modules.shorts_render.schemas import RenderJobCreate
         from app.modules.shorts_render.service import ShortsRenderService
 
+        # Widen the render-service dedupe window past our lease horizon.
+        # If this replica crashes between create_render_job and
+        # complete_tracking, the lease (default 300s) takes that long to
+        # expire before another replica re-claims and retries. The
+        # service's default 30s window would have closed by then →
+        # duplicate render row + orphan S3 output. Adding a 60s buffer
+        # covers small clock skew and DB write latency.
+        retry_safe_dedupe_seconds = (
+            self.settings.auto_shorts_product_v2_child_lease_seconds + 60
+        )
         async with self.session_factory() as session:
             render_repo = ShortsRenderJobRepository(session)
             render_service = ShortsRenderService(
@@ -640,6 +650,7 @@ class ChildRunner:
                     title=title,
                     composition=composition_spec,
                 ),
+                dedupe_within_seconds=retry_safe_dedupe_seconds,
             )
             # Commit BEFORE the with-block exits — ``ShortsRenderService``
             # only ``flush()``es the new row, so closing the session
