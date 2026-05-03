@@ -111,11 +111,15 @@ export function WizardStepSelectProduct({ videoId }: Props) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Bumped by the "다시 시도" button to re-enter the effect — without
+  // this, retry would only reset local state and the polling closure
+  // would never re-fire (codex P2, Phase B follow-up).
+  const [retryCount, setRetryCount] = useState(0);
   // Ref + state separation: state for re-render, ref for the polling
   // closure to read latest selection without re-creating the interval.
   const startedAtRef = useRef<number>(Date.now());
 
-  // Single effect handles both: trigger enumeration once, then poll
+  // Single effect handles both: trigger enumeration, then poll
   // catalog. Combining them avoids a flicker where the catalog endpoint
   // 200s with empty entries before enumeration even fires.
   useEffect(() => {
@@ -154,6 +158,12 @@ export function WizardStepSelectProduct({ videoId }: Props) {
     };
 
     const start = async () => {
+      // Trigger is best-effort: if it transiently fails (network blip,
+      // service hiccup) but the video already has a catalog from a
+      // prior wizard run, the user can still pick from the cached
+      // entries. Don't terminate on trigger failure — let the catalog
+      // poll be the source of truth. The poll's own error / timeout
+      // paths handle the "no cached catalog AND trigger failed" case.
       try {
         await triggerEnumeration(
           videoId,
@@ -162,11 +172,11 @@ export function WizardStepSelectProduct({ videoId }: Props) {
         );
       } catch (err) {
         if (cancelled) return;
-        setErrorMessage(
-          err instanceof Error ? err.message : "제품 스캔 시작 실패",
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[wizard] triggerEnumeration failed; will still poll catalog",
+          err,
         );
-        setPollState("error");
-        return;
       }
       // Fire the first poll immediately — covers the common case where
       // the catalog was already populated from a prior wizard run on
@@ -182,8 +192,11 @@ export function WizardStepSelectProduct({ videoId }: Props) {
     };
     // criteria reference changes on every render (parseCriteriaFromUrl
     // returns a new object); we only care about videoId stability.
+    // retryCount is in the deps so the "다시 시도" button can re-enter
+    // this effect (codex P2). router.refresh() alone is insufficient —
+    // it doesn't change deps, so the effect wouldn't re-fire.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoId, getAccessToken, router]);
+  }, [videoId, getAccessToken, router, retryCount]);
 
   const handleSubmit = useCallback(async () => {
     if (!criteria || !selectedId) return;
@@ -281,7 +294,11 @@ export function WizardStepSelectProduct({ videoId }: Props) {
               setSelectedId(null);
               setErrorMessage(null);
               setPollState("enumerating");
-              router.refresh();
+              // Bumps the effect's deps → re-fires triggerEnumeration +
+              // poll. router.refresh() would re-fetch the RSC tree but
+              // wouldn't re-key the client effect, leaving the user on
+              // the loading state with no new API calls.
+              setRetryCount((n) => n + 1);
             }}
             className="rounded-md bg-red-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-red-700"
           >

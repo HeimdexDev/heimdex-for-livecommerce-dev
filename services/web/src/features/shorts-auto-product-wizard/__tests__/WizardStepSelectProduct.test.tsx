@@ -166,15 +166,71 @@ describe("WizardStepSelectProduct", () => {
     expect(getProductCatalogMock).not.toHaveBeenCalled();
   });
 
-  it("shows the error state when triggerEnumeration rejects", async () => {
-    // Use mockRejectedValue (not …Once) because React 18+ strict-mode
-    // mounts the effect twice in dev/test; both runs must reject for
-    // the assertion to find the original error message.
-    triggerEnumerationMock.mockRejectedValue(new Error("network down"));
+  it("trigger failure does NOT block access to cached catalog entries", async () => {
+    // Codex P2 fix: a transient triggerEnumeration failure must not
+    // strand the user — if a prior wizard run already populated the
+    // catalog, those entries should still render. We swallow the
+    // trigger error and let the poll be the source of truth.
+    triggerEnumerationMock.mockRejectedValue(new Error("transient blip"));
+    getProductCatalogMock.mockResolvedValue({
+      video_id: "gd_test",
+      entries: [SAMPLE_ENTRY],
+    });
+
+    render(<WizardStepSelectProduct videoId="gd_test" />);
+
+    const card = await screen.findByTestId("product-card");
+    expect(card.textContent).toContain("테스트 가방");
+    // The error UI does NOT take over.
+    expect(screen.queryByTestId("poll-error")).not.toBeInTheDocument();
+  });
+
+  it("shows the error state when the catalog poll itself fails", async () => {
+    // The poll endpoint failing IS a real error — no cached catalog
+    // means there's nothing the user can do but retry.
+    triggerEnumerationMock.mockResolvedValue({
+      job_id: "j1",
+      deduped: false,
+    });
+    getProductCatalogMock.mockRejectedValue(new Error("poll dead"));
 
     render(<WizardStepSelectProduct videoId="gd_test" />);
 
     const err = await screen.findByTestId("poll-error");
-    expect(err.textContent).toContain("network down");
+    expect(err.textContent).toContain("poll dead");
+  });
+
+  it("retry button restarts the polling effect", async () => {
+    // Codex P2 fix: clicking 다시 시도 must trigger fresh API calls.
+    // Pre-fix the button only reset local state — the useEffect's deps
+    // didn't change, so no new triggerEnumeration / getProductCatalog
+    // calls fired and the user was stuck on the loading state forever.
+    triggerEnumerationMock.mockResolvedValue({
+      job_id: "j1",
+      deduped: false,
+    });
+    // First two calls (StrictMode dev double-mount) reject; subsequent
+    // calls (after retry click) return entries.
+    getProductCatalogMock
+      .mockRejectedValueOnce(new Error("poll dead"))
+      .mockRejectedValueOnce(new Error("poll dead"))
+      .mockResolvedValue({ video_id: "gd_test", entries: [SAMPLE_ENTRY] });
+
+    render(<WizardStepSelectProduct videoId="gd_test" />);
+
+    // Wait for the initial failure to surface.
+    const err = await screen.findByTestId("poll-error");
+    expect(err).toBeInTheDocument();
+    const callsBefore = getProductCatalogMock.mock.calls.length;
+
+    // Click retry — this must re-enter the effect and call the catalog
+    // endpoint again (NOT just call router.refresh()).
+    fireEvent.click(screen.getByText("다시 시도"));
+
+    const card = await screen.findByTestId("product-card");
+    expect(card).toBeInTheDocument();
+    expect(getProductCatalogMock.mock.calls.length).toBeGreaterThan(
+      callsBefore,
+    );
   });
 });
