@@ -138,10 +138,25 @@ export function WizardStepSelectProduct({ videoId }: Props) {
       try {
         const resp = await getProductCatalog(videoId, getAccessToken);
         if (cancelled) return;
-        if (resp.entries.length > 0) {
-          setEntries(resp.entries);
+        if (resp.products.length > 0) {
+          setEntries(resp.products);
           setPollState("ready");
           return; // stop polling
+        }
+        // scan_status drives the empty-products decisions:
+        //   * failed   → terminal error (don't wait for the 3-min timeout)
+        //   * complete → enumeration ran and found nothing — terminal
+        //   * never / in_progress → keep polling until the timeout
+        if (resp.scan_status === "failed") {
+          setErrorMessage(
+            "이전 스캔이 실패했어요. 다시 시도해 주세요.",
+          );
+          setPollState("error");
+          return;
+        }
+        if (resp.scan_status === "complete") {
+          setPollState("no_products");
+          return;
         }
         if (Date.now() - startedAtRef.current >= POLL_TIMEOUT_MS) {
           setPollState("no_products");

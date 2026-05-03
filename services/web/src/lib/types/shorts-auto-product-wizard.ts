@@ -89,17 +89,36 @@ export interface ProductScanResponse {
 export interface CatalogProductSummary {
   catalog_entry_id: string;
   label: string;
-  canonical_crop_url: string | null;
+  // Required by the API (Field(..., min_length=1)); it's the product
+  // thumbnail the wizard renders. NEVER null in practice.
+  canonical_crop_url: string;
   enumeration_confidence: number;
   prominence_score: number;
+  /** True after the user picked this product and tracking ran. */
+  has_track_data: boolean;
   /** Populated only AFTER tracking — null during enumeration polling. */
   appearance_count: number | null;
+  total_appearance_seconds: number | null;
 }
+
+/**
+ * Lifecycle of the catalog from the user's POV — drives the wizard's
+ * polling decisions much more cleanly than guessing from
+ * ``products.length``: an empty list with ``scan_status='never'`` means
+ * "trigger me", with ``in_progress`` means "still scanning", with
+ * ``complete`` means "scan ran but found nothing", with ``failed``
+ * means "show the user the failure".
+ */
+export type ScanStatus = "never" | "in_progress" | "complete" | "failed";
 
 /** Response for ``GET /api/shorts/auto/products/{video_id}``. */
 export interface ProductCatalogResponse {
   video_id: string;
-  entries: CatalogProductSummary[];
+  scan_status: ScanStatus;
+  scan_job_id: string | null;
+  enumeration_version: string | null;
+  enumeration_prompt_version: string | null;
+  products: CatalogProductSummary[];
 }
 
 export interface ScanOrderResponse {

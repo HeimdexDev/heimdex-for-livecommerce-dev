@@ -53,7 +53,9 @@ const SAMPLE_ENTRY = {
   canonical_crop_url: "https://example/crop.jpg",
   enumeration_confidence: 0.9,
   prominence_score: 0.8,
+  has_track_data: false,
   appearance_count: null,
+  total_appearance_seconds: null,
 };
 
 describe("WizardStepSelectProduct", () => {
@@ -75,7 +77,7 @@ describe("WizardStepSelectProduct", () => {
     // Empty first poll → still loading.
     getProductCatalogMock.mockResolvedValue({
       video_id: "gd_test",
-      entries: [],
+      products: [],
     });
 
     render(<WizardStepSelectProduct videoId="gd_test" />);
@@ -97,7 +99,7 @@ describe("WizardStepSelectProduct", () => {
     });
     getProductCatalogMock.mockResolvedValue({
       video_id: "gd_test",
-      entries: [SAMPLE_ENTRY],
+      products: [SAMPLE_ENTRY],
     });
 
     render(<WizardStepSelectProduct videoId="gd_test" />);
@@ -114,7 +116,7 @@ describe("WizardStepSelectProduct", () => {
     });
     getProductCatalogMock.mockResolvedValue({
       video_id: "gd_test",
-      entries: [SAMPLE_ENTRY],
+      products: [SAMPLE_ENTRY],
     });
     createScanOrderMock.mockResolvedValue({
       parent_job_id: "00000000-0000-0000-0000-000000000123",
@@ -174,7 +176,7 @@ describe("WizardStepSelectProduct", () => {
     triggerEnumerationMock.mockRejectedValue(new Error("transient blip"));
     getProductCatalogMock.mockResolvedValue({
       video_id: "gd_test",
-      entries: [SAMPLE_ENTRY],
+      products: [SAMPLE_ENTRY],
     });
 
     render(<WizardStepSelectProduct videoId="gd_test" />);
@@ -214,7 +216,7 @@ describe("WizardStepSelectProduct", () => {
     getProductCatalogMock
       .mockRejectedValueOnce(new Error("poll dead"))
       .mockRejectedValueOnce(new Error("poll dead"))
-      .mockResolvedValue({ video_id: "gd_test", entries: [SAMPLE_ENTRY] });
+      .mockResolvedValue({ video_id: "gd_test", products: [SAMPLE_ENTRY] });
 
     render(<WizardStepSelectProduct videoId="gd_test" />);
 
