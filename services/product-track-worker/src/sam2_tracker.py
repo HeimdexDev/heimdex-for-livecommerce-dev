@@ -282,10 +282,21 @@ class Sam2TrackerImpl:
             # ``Sam2VideoSegmentationOutput`` per frame in
             # ascending frame order; ``output.pred_masks`` has
             # shape ``(batch_size, num_objects, H, W)``.
+            #
+            # ``start_frame_idx=anchor_idx`` is REQUIRED. Without
+            # it the iterator raises ``ValueError: Cannot determine
+            # the starting frame index; please specify it manually,
+            # or run inference on a frame with inputs first.`` —
+            # observed on every scene of staging incident 2026-05-04
+            # parent_job_id af195a4a. The auto-detect path expects
+            # the session to be primed via ``model.forward(...)``
+            # first, but we use the explicit-start path because
+            # we know the anchor placement.
             samples: list[TrackedSample] = []
             for prop_idx, output in enumerate(
                 loaded.model.propagate_in_video_iterator(
                     inference_session=inference_session,
+                    start_frame_idx=anchor_idx,
                 )
             ):
                 if prop_idx >= len(sampled_frames):
