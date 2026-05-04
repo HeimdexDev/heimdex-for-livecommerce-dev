@@ -177,32 +177,61 @@ class Sam2TrackerImpl:
             frame_width = sampled_w
             frame_height = sampled_h
 
-        # Anchor bbox bounds check — surface a clear ``ValueError``
-        # rather than letting SAM2's predictor silently produce
-        # garbage masks for an off-frame bbox.
-        if (
-            anchor_bbox.x < 0
-            or anchor_bbox.y < 0
-            or anchor_bbox.x + anchor_bbox.width > frame_width
-            or anchor_bbox.y + anchor_bbox.height > frame_height
-        ):
+        # Anchor bbox bounds — clamp to fit the frame instead of
+        # rejecting outright. The 2026-05-04 staging incident
+        # (catalog c9f7c69e) hit this path because the LLM
+        # enumeration produced ``BBoxXYWH(220, 150, 250, 300)``
+        # whose ``x + width = 470`` overflows a 406-wide proxy by
+        # 64 px. Strict rejection F4'd every scene of that
+        # product. Clamping is the right default — SAM2 still has
+        # a usable anchor, and operators see the over-spec via the
+        # warning log so they can chase the enumeration data
+        # quality issue separately.
+        clamped_bbox = _clamp_bbox_to_frame(
+            anchor_bbox, frame_width=frame_width, frame_height=frame_height,
+        )
+        if clamped_bbox is None:
+            # Bbox is entirely off-frame — origin past the right /
+            # bottom edge, or width/height is zero / negative after
+            # clamping. Nothing to track.
             raise ValueError(
-                f"anchor_bbox {anchor_bbox} falls outside frame "
+                f"anchor_bbox {anchor_bbox} falls entirely outside frame "
                 f"{frame_width}x{frame_height} for scene_id={scene_id}"
+            )
+        if clamped_bbox != anchor_bbox:
+            logger.warning(
+                "sam2_anchor_bbox_clamped",
+                extra={
+                    "scene_id": scene_id,
+                    "original_bbox": (
+                        anchor_bbox.x, anchor_bbox.y,
+                        anchor_bbox.width, anchor_bbox.height,
+                    ),
+                    "clamped_bbox": (
+                        clamped_bbox.x, clamped_bbox.y,
+                        clamped_bbox.width, clamped_bbox.height,
+                    ),
+                    "frame_width": frame_width,
+                    "frame_height": frame_height,
+                },
             )
 
         # ── 3. Anchor selection — first sampled frame (Phase 3c-B v1).
         anchor_idx = 0
 
         # ── 4. Initialise SAM2 video predictor + add anchor box.
-        # The transformers SAM2 video API surface is exercised
-        # against a fake model in unit tests; calibration on
-        # staging goldens validates against the real model's actual
-        # call shape.
-        frames_np = np.stack([f for _, f in sampled_frames], axis=0)
+        # The transformers ``Sam2VideoProcessor`` expects
+        # ``videos`` as a list-of-lists (one inner list per video,
+        # each holding PIL images). Passing a stacked 4D ndarray
+        # falls through to the "Either images or original_sizes
+        # must be provided" error path — staging incident
+        # 2026-05-04 (parent_job_id dfc2c05b) hit this on every
+        # one of 11 scenes. Convert RGB ndarrays to PIL up front.
+        from PIL import Image as _PILImage  # noqa: PLC0415 — keep module-import cheap
+        frames_pil = [_PILImage.fromarray(rgb) for _, rgb in sampled_frames]
         with torch.inference_mode():
             inputs = loaded.processor(
-                videos=frames_np,
+                videos=[frames_pil],
                 return_tensors="pt",
             ).to(loaded.device)
             video_state = loaded.model.init_state(
@@ -213,10 +242,10 @@ class Sam2TrackerImpl:
                 frame_idx=anchor_idx,
                 obj_id=1,
                 box=[
-                    anchor_bbox.x,
-                    anchor_bbox.y,
-                    anchor_bbox.x + anchor_bbox.width,
-                    anchor_bbox.y + anchor_bbox.height,
+                    clamped_bbox.x,
+                    clamped_bbox.y,
+                    clamped_bbox.x + clamped_bbox.width,
+                    clamped_bbox.y + clamped_bbox.height,
                 ],
             )
 
@@ -299,3 +328,65 @@ def _mask_to_bbox(mask_np) -> BBoxXYWH | None:
         width=max(1, x_max - x_min + 1),
         height=max(1, y_max - y_min + 1),
     )
+
+
+def _clamp_bbox_to_frame(
+    bbox: BBoxXYWH, *, frame_width: int, frame_height: int,
+) -> BBoxXYWH | None:
+    """Clamp a bbox so it sits entirely inside ``[0, frame_width) ×
+    [0, frame_height)``. Returns the clamped bbox, or ``None`` when
+    the bbox is fully outside the frame and clamping would yield a
+    zero-area region.
+
+    Conventions matching :class:`BBoxXYWH` (``width`` and ``height``
+    are extents, not maxima):
+      * ``bbox.x``, ``bbox.y`` are clamped to ``[0, frame_width-1]``
+        and ``[0, frame_height-1]`` respectively.
+      * ``bbox.x + bbox.width`` and ``bbox.y + bbox.height`` are
+        clamped so the right/bottom edges fit.
+      * If after clamping the resulting width or height is ``<= 0``,
+        the bbox is effectively off-frame; return ``None`` so the
+        caller can raise loudly.
+
+    Required because the LLM enumeration step occasionally produces
+    a bbox whose right or bottom edge overflows the proxy frame
+    (observed 2026-05-04 on staging entry c9f7c69e —
+    ``BBoxXYWH(220, 150, 250, 300)`` on a 406x720 proxy). Clamping
+    keeps SAM2 productive on the salvageable area; the worker
+    surfaces a warning so the enumeration data-quality issue stays
+    visible.
+    """
+    if frame_width <= 0 or frame_height <= 0:
+        return None
+
+    # Convert to edge coordinates first, clamp each edge to the frame
+    # independently, then reconstruct the (x, y, width, height) tuple.
+    # This is correct in both directions (negative origin, overflow
+    # origin, overflow extent) and avoids the sign-juggling pitfall
+    # where adding a "leading_x" can fail to shave the width.
+    x0 = bbox.x
+    x1 = bbox.x + bbox.width  # exclusive right edge
+    y0 = bbox.y
+    y1 = bbox.y + bbox.height
+
+    nx0 = max(0, min(x0, frame_width))
+    nx1 = max(0, min(x1, frame_width))
+    ny0 = max(0, min(y0, frame_height))
+    ny1 = max(0, min(y1, frame_height))
+
+    new_width = nx1 - nx0
+    new_height = ny1 - ny0
+
+    if new_width <= 0 or new_height <= 0:
+        return None
+    if (
+        nx0 == bbox.x
+        and ny0 == bbox.y
+        and new_width == bbox.width
+        and new_height == bbox.height
+    ):
+        # Already fits — return the original instance so callers
+        # can use ``clamped_bbox == anchor_bbox`` to detect "no
+        # clamping happened".
+        return bbox
+    return BBoxXYWH(x=nx0, y=ny0, width=new_width, height=new_height)

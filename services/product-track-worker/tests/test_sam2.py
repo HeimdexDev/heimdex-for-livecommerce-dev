@@ -225,17 +225,23 @@ class TestSam2TrackerImplFailureModes:
                     sample_fps=5,
                 )
 
-    def test_raises_value_error_when_anchor_bbox_outside_frame(self):
-        """Anchor bbox out-of-bounds means SAM2 would happily run
-        but produce nonsense masks — surface the misconfiguration
-        loudly at the worker boundary."""
+    def test_raises_value_error_when_anchor_bbox_fully_off_frame(self):
+        """A bbox whose origin is past the frame edge (or whose
+        width/height clamp to ≤ 0) is genuinely unsalvageable —
+        SAM2 has no anchor area. Surface as a ValueError so the
+        lib's per-scene catch logs it. Bboxes that merely overflow
+        the right/bottom edge get clamped instead (see
+        ``test_anchor_bbox_overflowing_frame_is_clamped``)."""
         tracker = Sam2TrackerImpl(model_id="x")
         set_singleton_for_testing(_fake_loaded(MagicMock()))
         frames = [_green_frame() for _ in range(5)]
-        bad_bbox = BBoxXYWH(x=10, y=10, width=500, height=500)  # > 320x240
+        # Origin at (1000, 1000) with width=1 → after clamp to a 320x240
+        # frame the new x snaps to 319, leading_x = 319-1000 = -681,
+        # so new_width = 1 + (-681) = -680 → clamp returns None → raise.
+        bad_bbox = BBoxXYWH(x=1000, y=1000, width=1, height=1)
         with patch("cv2.VideoCapture") as cap_factory:
             cap_factory.return_value = _FakeVideoCapture(frames=frames)
-            with pytest.raises(ValueError, match="anchor_bbox"):
+            with pytest.raises(ValueError, match="falls entirely outside frame"):
                 tracker.track(
                     scene_id="s1",
                     anchor_bbox=bad_bbox,
@@ -245,6 +251,74 @@ class TestSam2TrackerImplFailureModes:
                     scene_end_ms=1000,
                     sample_fps=5,
                 )
+
+    def test_anchor_bbox_overflowing_frame_is_clamped(self):
+        """The 2026-05-04 staging incident (catalog c9f7c69e) failed
+        every scene because the LLM enumeration produced
+        ``BBoxXYWH(220, 150, 250, 300)`` whose ``x + width = 470``
+        exceeded the proxy width 406 by 64 px. Strict rejection
+        F4'd every product. Clamping is the right default — SAM2
+        gets a usable anchor on the salvageable area, and the
+        operator sees a warning so the enumeration data quality
+        issue is still visible.
+
+        Pin the contract: bbox overflow on the right/bottom edge
+        does NOT raise; it gets clamped to the frame and tracking
+        proceeds."""
+        # Source video: 30fps, 30 frames; sample_fps=5 → 5 samples
+        # in [0, 1000ms]. Mirror the
+        # ``test_emits_one_sample_per_propagated_frame_in_time_order``
+        # setup so we know we hit the SAM2 path (not the
+        # no-frames-decoded fail).
+        frames = [_green_frame() for _ in range(30)]
+        cap = _FakeVideoCapture(frames=frames, fps=30.0)
+        # Real-incident bbox shape: starts inside frame, exceeds
+        # right edge by 64 px. Frame is 320x240 here so we use the
+        # equivalent overflow ratio.
+        overflow_bbox = BBoxXYWH(x=200, y=100, width=200, height=100)
+        # x + w = 400 > frame_width 320 → clamp width to 320-200=120.
+
+        # Capture the box passed into add_new_points_or_box so we
+        # can verify it was clamped, not raised.
+        captured: dict = {}
+
+        class _CapturingPredictor:
+            def init_state(self, *, pixel_values):
+                return MagicMock()
+
+            def add_new_points_or_box(self, *, state, frame_idx, obj_id, box):
+                captured["box"] = box
+
+            def propagate_in_video(self, _state):
+                return iter(())  # yield nothing — sampled list empty
+                # is fine; outer code emits empty samples list which
+                # the lib's downstream filter drops gracefully.
+
+        processor = MagicMock()
+        processor.return_value.to.return_value = {"pixel_values": MagicMock()}
+        set_singleton_for_testing(_fake_loaded(_CapturingPredictor(), processor=processor))
+        tracker = Sam2TrackerImpl(model_id="x")
+
+        with patch("cv2.VideoCapture", return_value=cap):
+            samples = tracker.track(
+                scene_id="s1",
+                anchor_bbox=overflow_bbox,
+                anchor_keyframe=Image.new("RGB", (1, 1)),
+                full_video_path="/tmp/proxy.mp4",
+                scene_start_ms=0,
+                scene_end_ms=1000,
+                sample_fps=5,
+            )
+
+        # Did NOT raise. Empty samples are fine here; what matters
+        # is that the box reaching SAM2 was clamped to the frame.
+        assert isinstance(samples, list)
+        assert "box" in captured, "SAM2 add_new_points_or_box never called"
+        # Box format is [x_min, y_min, x_max, y_max]. Clamped width
+        # is 320 - 200 = 120, so x_max = 200 + 120 = 320.
+        assert captured["box"] == [200, 100, 320, 200], (
+            f"expected clamped box [200, 100, 320, 200], got {captured['box']}"
+        )
 
     def test_raises_runtime_when_no_frames_decoded(self):
         """Capture opens but yields zero frames (corrupted proxy /
@@ -479,3 +553,161 @@ class TestSam2TrackerImplSeekAndWindow:
         assert cap._idx <= 35, (
             f"loop kept decoding past the window: read {cap._idx} of 120 frames"
         )
+
+
+# =====================================================================
+# Sam2VideoProcessor input-format contract (PR E)
+# =====================================================================
+
+
+class TestSam2ProcessorInputShape:
+    """The 2026-05-04 staging incident (parent_job_id dfc2c05b) hit
+    ``ValueError: Either images or original_sizes must be provided``
+    on every one of 11 scenes. Root cause: we were passing
+    ``videos=frames_np`` (a stacked 4D ndarray) to
+    ``Sam2VideoProcessor``; transformers expects a list-of-lists
+    with PIL images.
+
+    Tests pin the call-shape contract so this regression class is
+    caught in CI."""
+
+    def _build_capturing_processor(self) -> tuple:
+        captured: dict = {}
+
+        class _CapturingProcessor:
+            def __call__(self, *args, **kwargs):
+                captured["args"] = args
+                captured["kwargs"] = kwargs
+                # Mimic the real return_tensors="pt" + .to(device) chain.
+                resp = MagicMock()
+                resp.to.return_value = {"pixel_values": MagicMock()}
+                return resp
+
+        return _CapturingProcessor(), captured
+
+    def test_processor_receives_videos_as_list_of_lists_of_pil_images(self):
+        """``Sam2VideoProcessor`` requires
+        ``videos: List[List[ImageInput]]`` — outer list is one entry
+        per video, inner list is the frames. Pin both shapes so a
+        regression here surfaces in CI rather than at SAM2 call
+        time on Aircloud (which is what bit us 2026-05-04)."""
+        from PIL import Image as _PIL
+
+        frames = [_green_frame() for _ in range(30)]
+        cap = _FakeVideoCapture(frames=frames, fps=30.0)
+        proc, captured = self._build_capturing_processor()
+        model = MagicMock()
+        model.init_state.return_value = MagicMock()
+        model.add_new_points_or_box.return_value = None
+        model.propagate_in_video.side_effect = lambda _state: iter(())
+        set_singleton_for_testing(_fake_loaded(model, processor=proc))
+        tracker = Sam2TrackerImpl(model_id="x")
+
+        with patch("cv2.VideoCapture", return_value=cap):
+            tracker.track(
+                scene_id="s1",
+                anchor_bbox=_bbox_for_320x240(),
+                anchor_keyframe=_PIL.new("RGB", (1, 1)),
+                full_video_path="/tmp/proxy.mp4",
+                scene_start_ms=0,
+                scene_end_ms=1000,
+                sample_fps=5,
+            )
+
+        videos = captured["kwargs"].get("videos")
+        assert videos is not None, (
+            f"processor not called with ``videos=`` kwarg; got "
+            f"kwargs={list(captured['kwargs'].keys())}"
+        )
+        # Outer: list with exactly one entry (single video).
+        assert isinstance(videos, list), f"videos must be a list; got {type(videos)}"
+        assert len(videos) == 1, f"expected 1 video; got {len(videos)}"
+        # Inner: list of PIL images, NOT a stacked ndarray.
+        inner = videos[0]
+        assert isinstance(inner, list), (
+            f"inner ``videos[0]`` must be a list of frames, not "
+            f"{type(inner).__name__} — passing a stacked ndarray "
+            f"falls through to ``Either images or original_sizes "
+            f"must be provided``"
+        )
+        assert all(isinstance(f, _PIL.Image) for f in inner), (
+            "all inner items must be PIL images"
+        )
+        assert len(inner) == 5, (
+            f"expected 5 sampled frames at 30fps/sample_fps=5/1000ms window; "
+            f"got {len(inner)}"
+        )
+
+
+# =====================================================================
+# _clamp_bbox_to_frame — pure function (PR E)
+# =====================================================================
+
+
+class TestClampBboxToFrame:
+    """Broad coverage of the clamping helper. Independent of cv2
+    so this runs even on hosts without opencv-python-headless."""
+
+    def test_returns_bbox_unchanged_when_already_inside_frame(self):
+        from src.sam2_tracker import _clamp_bbox_to_frame
+
+        bbox = BBoxXYWH(x=10, y=20, width=100, height=50)
+        out = _clamp_bbox_to_frame(bbox, frame_width=200, frame_height=200)
+        assert out == bbox
+
+    def test_clamps_right_edge_overflow(self):
+        from src.sam2_tracker import _clamp_bbox_to_frame
+
+        # Mirrors the real-incident shape (catalog c9f7c69e).
+        bbox = BBoxXYWH(x=220, y=150, width=250, height=300)
+        out = _clamp_bbox_to_frame(bbox, frame_width=406, frame_height=720)
+        assert out is not None
+        assert out.x == 220
+        assert out.y == 150
+        # 406 - 220 = 186 (the salvageable width)
+        assert out.width == 186
+        assert out.height == 300  # bottom edge fits
+
+    def test_clamps_bottom_edge_overflow(self):
+        from src.sam2_tracker import _clamp_bbox_to_frame
+
+        bbox = BBoxXYWH(x=10, y=200, width=50, height=100)
+        out = _clamp_bbox_to_frame(bbox, frame_width=320, frame_height=240)
+        assert out is not None
+        assert out.height == 240 - 200  # 40 px
+
+    def test_clamps_negative_origin(self):
+        from src.sam2_tracker import _clamp_bbox_to_frame
+
+        bbox = BBoxXYWH(x=-20, y=-10, width=100, height=80)
+        out = _clamp_bbox_to_frame(bbox, frame_width=200, frame_height=200)
+        assert out is not None
+        # x snaps to 0; the leading 20px gets shaved off the width.
+        assert out.x == 0
+        assert out.y == 0
+        assert out.width == 80   # original 100 minus 20 leading clamp
+        assert out.height == 70  # original 80 minus 10 leading clamp
+
+    def test_returns_none_when_origin_past_right_edge(self):
+        from src.sam2_tracker import _clamp_bbox_to_frame
+
+        bbox = BBoxXYWH(x=1000, y=10, width=50, height=50)
+        out = _clamp_bbox_to_frame(bbox, frame_width=200, frame_height=200)
+        assert out is None
+
+    def test_returns_none_when_origin_past_bottom_edge(self):
+        from src.sam2_tracker import _clamp_bbox_to_frame
+
+        bbox = BBoxXYWH(x=10, y=1000, width=50, height=50)
+        out = _clamp_bbox_to_frame(bbox, frame_width=200, frame_height=200)
+        assert out is None
+
+    def test_returns_none_for_zero_frame_dimensions(self):
+        """Defensive: a 0x0 frame can't anchor any bbox."""
+        from src.sam2_tracker import _clamp_bbox_to_frame
+
+        bbox = BBoxXYWH(x=10, y=10, width=10, height=10)
+        out = _clamp_bbox_to_frame(bbox, frame_width=0, frame_height=240)
+        assert out is None
+        out = _clamp_bbox_to_frame(bbox, frame_width=320, frame_height=0)
+        assert out is None
