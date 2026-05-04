@@ -168,12 +168,34 @@ class _CountingKeyframeFetcher:
 
 
 class _CountingSam2Tracker:
-    """Wraps a :class:`Sam2Tracker`; counts attempts + failures."""
+    """Wraps a :class:`Sam2Tracker`; counts attempts + failures.
 
-    def __init__(self, inner: Sam2Tracker) -> None:
+    PR F: when ``job_id`` / ``org_id`` / ``video_id`` are provided
+    at construction, also emits a structured ``worker_event`` per
+    scene-level exception with the exception type + message. The
+    lib's ``propagate_within_candidate_scenes`` catches per-scene
+    exceptions and only stdout-logs them — without this wrapper,
+    every SAM2 failure mode collapses into the generic
+    ``scan_order_product_sam2_f4`` aggregate and operators have to
+    chase Aircloud logs for the actual exception text. With this
+    wrapper, the next failure's per-scene exception is one SQL
+    query away.
+    """
+
+    def __init__(
+        self,
+        inner: Sam2Tracker,
+        *,
+        job_id: str | None = None,
+        org_id: str | None = None,
+        video_id: str | None = None,
+    ) -> None:
         self._inner = inner
         self.attempted = 0
         self.failed = 0
+        self._job_id = job_id
+        self._org_id = org_id
+        self._video_id = video_id
 
     def track(
         self,
@@ -197,8 +219,36 @@ class _CountingSam2Tracker:
                 scene_end_ms=scene_end_ms,
                 sample_fps=sample_fps,
             )
-        except Exception:
+        except Exception as exc:
             self.failed += 1
+            # Best-effort per-scene diagnostic — the worker has full
+            # context the lib lacks, so emit before re-raise. Skip
+            # cleanly if construction context wasn't supplied (unit
+            # tests that don't care about the diagnostic path).
+            if self._job_id is not None:
+                try:
+                    emit_event(
+                        service="product-track-worker",
+                        event_name="sam2_track_scene_failed",
+                        category="job_failure",
+                        level="WARNING",
+                        org_id=self._org_id,
+                        job_id=self._job_id,
+                        video_id=self._video_id,
+                        message=f"{type(exc).__name__}: {exc}"[:1000],
+                        metadata={
+                            "scene_id": scene_id,
+                            "scene_start_ms": scene_start_ms,
+                            "scene_end_ms": scene_end_ms,
+                            "exception_type": type(exc).__name__,
+                            "exception_message": str(exc)[:1000],
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    # emit_event is fire-and-forget; never let a
+                    # diagnostic-emission failure poison the actual
+                    # error path.
+                    logger.exception("sam2_track_scene_failed_emit_failed")
             raise
 
     @property
@@ -569,7 +619,10 @@ def handle_track_job(
         # F4) so we never leak across retries on Aircloud's tight
         # /tmp.
         tracker_impl = _CountingSam2Tracker(
-            tracker or Sam2TrackerImpl(model_id=settings.sam2_model_id)
+            tracker or Sam2TrackerImpl(model_id=settings.sam2_model_id),
+            job_id=str(decoded.job_id),
+            org_id=str(decoded.org_id),
+            video_id=str(decoded.video_id),
         )
         with downloaded_proxy(
             s3=s3,
@@ -1692,7 +1745,10 @@ def _process_one_product_for_parent(
     # proxy the parent already downloaded — the SAM2 wrapper seeks
     # to each scene window in-memory.
     tracker_impl = _CountingSam2Tracker(
-        tracker or Sam2TrackerImpl(model_id=settings.sam2_model_id)
+        tracker or Sam2TrackerImpl(model_id=settings.sam2_model_id),
+        job_id=str(decoded.job_id),
+        org_id=str(decoded.org_id),
+        video_id=str(decoded.video_id),
     )
     detections = propagate_within_candidate_scenes(
         candidates=candidate_scenes,

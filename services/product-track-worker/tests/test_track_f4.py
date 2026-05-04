@@ -203,6 +203,67 @@ class TestCountingSam2Tracker:
         assert wrapped.failed == 1
         assert wrapped.all_attempts_failed is True
 
+    def test_emits_per_scene_event_on_failure_when_context_set(self):
+        """PR F: when constructed with job_id/org_id/video_id, the
+        wrapper emits a structured ``sam2_track_scene_failed``
+        event with the exception type + message before re-raising.
+        Pin the contract — without this the lib's per-scene
+        try/except only stdout-logs, and operators have to chase
+        Aircloud container logs to learn what fired."""
+        inner = MagicMock()
+        inner.track.side_effect = ValueError("Either images or original_sizes must be provided")
+        wrapped = _CountingSam2Tracker(
+            inner,
+            job_id="00000000-0000-0000-0000-000000000777",
+            org_id="00000000-0000-0000-0000-00000000aaaa",
+            video_id="33faa1ff-f6c6-4069-95b0-03451912227a",
+        )
+
+        with patch("src.tasks.track.emit_event") as mock_emit:
+            with pytest.raises(ValueError):
+                wrapped.track(**self._kwargs())
+
+        mock_emit.assert_called_once()
+        kwargs = mock_emit.call_args.kwargs
+        assert kwargs["event_name"] == "sam2_track_scene_failed"
+        assert kwargs["job_id"] == "00000000-0000-0000-0000-000000000777"
+        assert kwargs["video_id"] == "33faa1ff-f6c6-4069-95b0-03451912227a"
+        assert kwargs["metadata"]["exception_type"] == "ValueError"
+        assert "images or original_sizes" in kwargs["metadata"]["exception_message"]
+        assert kwargs["metadata"]["scene_id"] == "s1"
+
+    def test_does_not_emit_when_context_not_set(self):
+        """Backward-compat: existing call sites that construct
+        without the context kwargs (unit tests, legacy paths) MUST
+        not get an ``emit_event`` side effect — otherwise tests
+        would need a network mock for the fire-and-forget HTTP."""
+        inner = MagicMock()
+        inner.track.side_effect = RuntimeError("boom")
+        wrapped = _CountingSam2Tracker(inner)  # no job_id
+
+        with patch("src.tasks.track.emit_event") as mock_emit:
+            with pytest.raises(RuntimeError):
+                wrapped.track(**self._kwargs())
+
+        mock_emit.assert_not_called()
+
+    def test_emit_failure_does_not_mask_original_exception(self):
+        """Defence-in-depth: a network blip on the
+        worker_events POST must not poison the actual exception
+        path. The original ``RuntimeError`` always re-raises."""
+        inner = MagicMock()
+        inner.track.side_effect = RuntimeError("real failure")
+        wrapped = _CountingSam2Tracker(
+            inner,
+            job_id="00000000-0000-0000-0000-000000000888",
+            org_id="00000000-0000-0000-0000-00000000aaaa",
+            video_id="33faa1ff-f6c6-4069-95b0-03451912227a",
+        )
+
+        with patch("src.tasks.track.emit_event", side_effect=RuntimeError("emit blew up")):
+            with pytest.raises(RuntimeError, match="real failure"):
+                wrapped.track(**self._kwargs())
+
 
 # ─── handle_track_job F4 paths ──────────────────────────────────────
 
