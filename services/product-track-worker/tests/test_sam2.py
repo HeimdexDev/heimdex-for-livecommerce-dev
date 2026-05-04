@@ -278,25 +278,11 @@ class TestSam2TrackerImplFailureModes:
         overflow_bbox = BBoxXYWH(x=200, y=100, width=200, height=100)
         # x + w = 400 > frame_width 320 → clamp width to 320-200=120.
 
-        # Capture the box passed into add_new_points_or_box so we
-        # can verify it was clamped, not raised.
-        captured: dict = {}
-
-        class _CapturingPredictor:
-            def init_state(self, *, pixel_values):
-                return MagicMock()
-
-            def add_new_points_or_box(self, *, state, frame_idx, obj_id, box):
-                captured["box"] = box
-
-            def propagate_in_video(self, _state):
-                return iter(())  # yield nothing — sampled list empty
-                # is fine; outer code emits empty samples list which
-                # the lib's downstream filter drops gracefully.
-
-        processor = MagicMock()
-        processor.return_value.to.return_value = {"pixel_values": MagicMock()}
-        set_singleton_for_testing(_fake_loaded(_CapturingPredictor(), processor=processor))
+        # Build a v5-shaped predictor pair. We set sample_count=0
+        # because we only care about the bbox sent INTO the
+        # processor, not the propagation output.
+        model, processor, _ = _make_v5_sam2_pair(sample_count=0)
+        set_singleton_for_testing(_fake_loaded(model, processor=processor))
         tracker = Sam2TrackerImpl(model_id="x")
 
         with patch("cv2.VideoCapture", return_value=cap):
@@ -313,11 +299,12 @@ class TestSam2TrackerImplFailureModes:
         # Did NOT raise. Empty samples are fine here; what matters
         # is that the box reaching SAM2 was clamped to the frame.
         assert isinstance(samples, list)
-        assert "box" in captured, "SAM2 add_new_points_or_box never called"
-        # Box format is [x_min, y_min, x_max, y_max]. Clamped width
-        # is 320 - 200 = 120, so x_max = 200 + 120 = 320.
-        assert captured["box"] == [200, 100, 320, 200], (
-            f"expected clamped box [200, 100, 320, 200], got {captured['box']}"
+        # ``input_boxes`` is nested 3-deep: [batch][per-object][xyxy].
+        # Clamped width is 320 - 200 = 120, so x_max = 200 + 120 = 320.
+        processor.process_new_points_or_boxes_for_video_frame.assert_called_once()
+        kwargs = processor.process_new_points_or_boxes_for_video_frame.call_args.kwargs
+        assert kwargs["input_boxes"] == [[[200.0, 100.0, 320.0, 200.0]]], (
+            f"expected clamped box [[[200, 100, 320, 200]]], got {kwargs['input_boxes']}"
         )
 
     def test_raises_runtime_when_no_frames_decoded(self):
@@ -344,32 +331,59 @@ class TestSam2TrackerImplFailureModes:
                 )
 
 
+def _make_v5_sam2_pair(*, mask_h: int = 240, mask_w: int = 320, sample_count: int = 1000):
+    """Build a (model, processor, fake_session) triple that mimics
+    the transformers 5.5.4 SAM2 video API surface used by
+    ``Sam2TrackerImpl.track``:
+
+      - ``processor.init_video_session(video, inference_device, dtype)``
+        returns the fake session.
+      - ``processor.process_new_points_or_boxes_for_video_frame(...)``
+        is called with the anchor bbox.
+      - ``model.propagate_in_video_iterator(inference_session=...)``
+        yields up to ``sample_count`` ``Sam2VideoSegmentationOutput``
+        stand-ins, each with a ``pred_masks`` tensor of shape
+        ``(1, 1, mask_h, mask_w)`` and ``iou_scores=0.95``.
+
+    Tests pass any ``sample_count`` they like; the tracker itself
+    stops iterating once it exhausts ``sampled_frames``, so a high
+    number is fine.
+    """
+    import torch
+
+    def _make_mask():
+        m = np.zeros((mask_h, mask_w), dtype=np.uint8)
+        m[20:80, 30:90] = 1  # 60x60 region starting at (30, 20)
+        return torch.tensor(m)
+
+    def _iter(*_args, **_kwargs):
+        for _ in range(sample_count):
+            output = MagicMock()
+            mask_2d = _make_mask()
+            # pred_masks shape: (batch, num_obj, H, W)
+            output.pred_masks = mask_2d.unsqueeze(0).unsqueeze(0)
+            output.iou_scores = torch.tensor([[0.95]])
+            yield output
+
+    fake_session = MagicMock()
+    processor = MagicMock()
+    processor.init_video_session.return_value = fake_session
+    processor.process_new_points_or_boxes_for_video_frame.return_value = fake_session
+
+    model = MagicMock()
+    model.propagate_in_video_iterator.side_effect = _iter
+
+    return model, processor, fake_session
+
+
 class TestSam2TrackerImplHappyPath:
-    def _make_fake_predictor(
-        self, *, mask_h: int = 240, mask_w: int = 320,
-    ) -> MagicMock:
-        """Produces a model whose ``propagate_in_video`` yields
-        increasing-time samples with a small bbox-sized mask
-        (so ``_mask_to_bbox`` returns a valid bbox)."""
-        import torch
-
-        def _make_mask():
-            m = np.zeros((mask_h, mask_w), dtype=np.uint8)
-            m[20:80, 30:90] = 1
-            return torch.tensor(m)
-
-        def _propagate(_state):
-            for prop_idx in range(5):  # 5 sampled frames
-                masks = MagicMock()
-                masks.__getitem__.return_value = _make_mask()
-                masks.score = 0.95
-                yield prop_idx, [1], masks
-
-        model = MagicMock()
-        model.init_state.return_value = MagicMock()
-        model.add_new_points_or_box.return_value = None
-        model.propagate_in_video.side_effect = _propagate
-        return model
+    def _make_fake_predictor(self, *, mask_h: int = 240, mask_w: int = 320, sample_count: int = 5):
+        """Backward-compat shim that yields exactly ``sample_count``
+        outputs by default, matching the legacy 5-sample
+        expectation."""
+        return _make_v5_sam2_pair(
+            mask_h=mask_h, mask_w=mask_w, sample_count=sample_count,
+        )
 
     def test_emits_one_sample_per_propagated_frame_in_time_order(self):
         """5 propagated frames → 5 ``TrackedSample`` rows in
@@ -380,11 +394,7 @@ class TestSam2TrackerImplHappyPath:
         # accepted at timestamps 0, 200, 400, 600, 800.
         frames = [_green_frame() for _ in range(30)]
         cap = _FakeVideoCapture(frames=frames, fps=30.0)
-        model = self._make_fake_predictor()
-        processor = MagicMock()
-        processor.return_value.to.return_value = {
-            "pixel_values": MagicMock(),
-        }
+        model, processor, _ = self._make_fake_predictor()
         set_singleton_for_testing(_fake_loaded(model, processor=processor))
         tracker = Sam2TrackerImpl(model_id="x")
 
@@ -418,33 +428,12 @@ class TestSam2TrackerImplHappyPath:
 # =====================================================================
 
 
-def _adaptive_predictor(*, mask_h: int = 240, mask_w: int = 320) -> MagicMock:
-    """Like ``_make_fake_predictor`` but emits one sample per
-    sampled frame regardless of count — the new tests below sample
-    different numbers of frames depending on the scene window."""
-    import torch
-
-    def _make_mask():
-        m = np.zeros((mask_h, mask_w), dtype=np.uint8)
-        m[20:80, 30:90] = 1
-        return torch.tensor(m)
-
-    captured: dict = {}
-
-    def _propagate(state):
-        # Walk an arbitrary number of indices — the tracker stops
-        # iterating once ``prop_idx >= len(sampled_frames)``.
-        for prop_idx in range(captured.get("sample_count", 1000)):
-            masks = MagicMock()
-            masks.__getitem__.return_value = _make_mask()
-            masks.score = 0.95
-            yield prop_idx, [1], masks
-
-    model = MagicMock()
-    model.init_state.return_value = MagicMock()
-    model.add_new_points_or_box.return_value = None
-    model.propagate_in_video.side_effect = _propagate
-    return model
+def _adaptive_predictor(*, mask_h: int = 240, mask_w: int = 320):
+    """Backward-compat shim — returns a ``(model, processor, session)``
+    triple from :func:`_make_v5_sam2_pair` with a generous sample
+    count so the tracker's ``len(sampled_frames)`` cap is the only
+    upper bound on iteration."""
+    return _make_v5_sam2_pair(mask_h=mask_h, mask_w=mask_w, sample_count=1000)
 
 
 class TestSam2TrackerImplSeekAndWindow:
@@ -456,9 +445,7 @@ class TestSam2TrackerImplSeekAndWindow:
         cap = _FakeVideoCapture(
             frames=frames, fps=fps, keyframe_interval_ms=keyframe_interval_ms,
         )
-        model = _adaptive_predictor()
-        processor = MagicMock()
-        processor.return_value.to.return_value = {"pixel_values": MagicMock()}
+        model, processor, _ = _adaptive_predictor()
         set_singleton_for_testing(_fake_loaded(model, processor=processor))
         return cap, Sam2TrackerImpl(model_id="x")
 
@@ -565,49 +552,36 @@ class TestSam2ProcessorInputShape:
     ``ValueError: Either images or original_sizes must be provided``
     on every one of 11 scenes — even after PR E switched to
     ``videos=[List[PIL]]``. Root cause: in transformers 5.5.4,
-    ``Sam2VideoProcessor.__call__`` has NO ``videos=`` kwarg. The
-    first positional / keyword arg is ``images: ImageInput | None``,
-    where ``ImageInput`` accepts ``list[PIL.Image.Image]`` directly
-    (no outer wrapping).
+    transformers v5 reworked the SAM2 video API. v4 used
+    ``processor(videos=..., return_tensors='pt')`` then
+    ``model.init_state(pixel_values=...)`` etc. — none of those
+    methods / kwargs exist in v5.5.4. v5 instead uses:
 
-    Inspection on the real worker container ran:
+      processor.init_video_session(video=List[PIL.Image], ...)
+        → returns a Sam2VideoInferenceSession
+      processor.process_new_points_or_boxes_for_video_frame(
+          inference_session=..., frame_idx=..., obj_ids=[1],
+          input_boxes=[[[x1, y1, x2, y2]]],
+          original_size=(H, W),
+      )
+      model.propagate_in_video_iterator(inference_session=...)
 
-        signature: (self, images: ImageInput | None = None,
-                    segmentation_maps=..., input_points=..., ...,
-                    **kwargs)
+    Tests pin the v5.5.4 call-shape contract so a regression
+    re-introducing the v4 ``videos=`` / ``init_state`` /
+    ``add_new_points_or_box`` shapes is caught in CI rather than
+    at SAM2 call time on Aircloud."""
 
-    Tests pin the post-PR-G call-shape contract so this regression
-    class is caught in CI rather than at SAM2 call time on
-    Aircloud."""
-
-    def _build_capturing_processor(self) -> tuple:
-        captured: dict = {}
-
-        class _CapturingProcessor:
-            def __call__(self, *args, **kwargs):
-                captured["args"] = args
-                captured["kwargs"] = kwargs
-                # Mimic the real return_tensors="pt" + .to(device) chain.
-                resp = MagicMock()
-                resp.to.return_value = {"pixel_values": MagicMock()}
-                return resp
-
-        return _CapturingProcessor(), captured
-
-    def test_processor_receives_images_kwarg_with_flat_list_of_pil(self):
-        """Pin the v5.5.4 contract: kwarg is ``images=`` (NOT
-        ``videos=``), and the value is a flat ``list[PIL.Image]``
-        (NOT a list-of-lists)."""
+    def test_init_video_session_called_with_pil_list(self):
+        """Pin: the inference session is created via
+        ``processor.init_video_session(video=List[PIL])``. We do
+        NOT call ``processor(images=...)`` directly anymore — the
+        session takes care of preprocessing."""
         from PIL import Image as _PIL
 
         frames = [_green_frame() for _ in range(30)]
         cap = _FakeVideoCapture(frames=frames, fps=30.0)
-        proc, captured = self._build_capturing_processor()
-        model = MagicMock()
-        model.init_state.return_value = MagicMock()
-        model.add_new_points_or_box.return_value = None
-        model.propagate_in_video.side_effect = lambda _state: iter(())
-        set_singleton_for_testing(_fake_loaded(model, processor=proc))
+        model, processor, _ = _make_v5_sam2_pair(sample_count=0)
+        set_singleton_for_testing(_fake_loaded(model, processor=processor))
         tracker = Sam2TrackerImpl(model_id="x")
 
         with patch("cv2.VideoCapture", return_value=cap):
@@ -621,30 +595,85 @@ class TestSam2ProcessorInputShape:
                 sample_fps=5,
             )
 
-        kwargs = captured["kwargs"]
-        # Kwarg name must be ``images``. ``videos`` does not exist
-        # in v5 — passing it falls through to ``**kwargs``, leaving
-        # the processor input-less.
-        assert "images" in kwargs, (
-            f"processor must be called with ``images=`` kwarg; got "
+        processor.init_video_session.assert_called_once()
+        kwargs = processor.init_video_session.call_args.kwargs
+        # ``video=List[PIL.Image]`` (singular ``video``, NOT
+        # ``videos`` — that's the v4 name).
+        assert "video" in kwargs, (
+            f"init_video_session must be called with ``video=``; got "
             f"kwargs={list(kwargs.keys())}"
         )
-        assert "videos" not in kwargs, (
-            "``videos=`` is the v4 name; in transformers 5.x it's "
-            "absorbed into **kwargs and ignored, leaving the "
-            "processor with no input"
+        video = kwargs["video"]
+        assert isinstance(video, list)
+        assert all(isinstance(f, _PIL.Image) for f in video)
+        assert len(video) == 5, (
+            f"expected 5 sampled frames at 30fps/sample_fps=5/1000ms; "
+            f"got {len(video)}"
         )
-        images = kwargs["images"]
-        # Flat list of PIL images, NOT a list-of-lists.
-        assert isinstance(images, list), (
-            f"images must be a list; got {type(images)}"
-        )
-        assert all(isinstance(f, _PIL.Image) for f in images), (
-            "all items must be PIL images (not wrapped in another list)"
-        )
-        assert len(images) == 5, (
-            f"expected 5 sampled frames at 30fps/sample_fps=5/1000ms window; "
-            f"got {len(images)}"
+
+    def test_process_new_points_or_boxes_called_with_anchor_bbox(self):
+        """Pin: the anchor bbox is added via the v5
+        ``processor.process_new_points_or_boxes_for_video_frame``
+        call with ``input_boxes`` 3-deep-nested
+        ``[[[x1, y1, x2, y2]]]`` and ``original_size=(H, W)``."""
+        from PIL import Image as _PIL
+
+        frames = [_green_frame() for _ in range(30)]
+        cap = _FakeVideoCapture(frames=frames, fps=30.0)
+        model, processor, _ = _make_v5_sam2_pair(sample_count=0)
+        set_singleton_for_testing(_fake_loaded(model, processor=processor))
+        tracker = Sam2TrackerImpl(model_id="x")
+
+        with patch("cv2.VideoCapture", return_value=cap):
+            tracker.track(
+                scene_id="s1",
+                anchor_bbox=BBoxXYWH(x=10, y=20, width=50, height=60),
+                anchor_keyframe=_PIL.new("RGB", (1, 1)),
+                full_video_path="/tmp/proxy.mp4",
+                scene_start_ms=0,
+                scene_end_ms=1000,
+                sample_fps=5,
+            )
+
+        processor.process_new_points_or_boxes_for_video_frame.assert_called_once()
+        kwargs = processor.process_new_points_or_boxes_for_video_frame.call_args.kwargs
+        # Box is xyxy (NOT xywh) per the SAM2 contract:
+        # x1 = 10, y1 = 20, x2 = 60, y2 = 80.
+        assert kwargs["input_boxes"] == [[[10.0, 20.0, 60.0, 80.0]]]
+        assert kwargs["frame_idx"] == 0  # anchor on first sampled frame
+        assert kwargs["obj_ids"] == [1]
+        # original_size is (H, W).
+        assert kwargs["original_size"] == (240, 320)
+
+    def test_propagate_in_video_iterator_called_with_session(self):
+        """Pin: model propagation uses the v5
+        ``propagate_in_video_iterator(inference_session=...)``.
+        ``init_state`` / ``propagate_in_video`` (v4) do not exist
+        on Sam2VideoModel in v5."""
+        from PIL import Image as _PIL
+
+        frames = [_green_frame() for _ in range(30)]
+        cap = _FakeVideoCapture(frames=frames, fps=30.0)
+        model, processor, fake_session = _make_v5_sam2_pair(sample_count=0)
+        set_singleton_for_testing(_fake_loaded(model, processor=processor))
+        tracker = Sam2TrackerImpl(model_id="x")
+
+        with patch("cv2.VideoCapture", return_value=cap):
+            tracker.track(
+                scene_id="s1",
+                anchor_bbox=_bbox_for_320x240(),
+                anchor_keyframe=_PIL.new("RGB", (1, 1)),
+                full_video_path="/tmp/proxy.mp4",
+                scene_start_ms=0,
+                scene_end_ms=1000,
+                sample_fps=5,
+            )
+
+        model.propagate_in_video_iterator.assert_called_once()
+        kwargs = model.propagate_in_video_iterator.call_args.kwargs
+        assert kwargs["inference_session"] is fake_session, (
+            "iterator must be passed the session returned by "
+            "init_video_session, not a freshly-constructed one"
         )
 
 

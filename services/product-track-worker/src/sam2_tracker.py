@@ -219,79 +219,105 @@ class Sam2TrackerImpl:
         # ── 3. Anchor selection — first sampled frame (Phase 3c-B v1).
         anchor_idx = 0
 
-        # ── 4. Initialise SAM2 video predictor + add anchor box.
-        # transformers 5.5.4 ``Sam2VideoProcessor.__call__``
-        # signature (verified empirically inside the worker
-        # container 2026-05-04):
+        # ── 4. SAM2 video tracking (transformers 5.5.4 API).
         #
-        #   def __call__(
-        #       self, images: ImageInput | None = None,
-        #       segmentation_maps=..., input_points=...,
-        #       input_labels=..., input_boxes=...,
-        #       original_sizes=..., return_tensors=..., **kwargs
-        #   )
+        # The v5 API is fundamentally different from v4. Replaced:
         #
-        # ``ImageInput`` accepts ``list[PIL.Image.Image]`` directly
-        # — no outer list wrapping. There is NO ``videos=`` kwarg
-        # in v5; passing one falls through to ``**kwargs``,
-        # leaving the processor with no input → it raises
-        # ``ValueError: Either images or original_sizes must be
-        # provided`` (staging incident 2026-05-04, parent_job_id
-        # 79560cf0 — every one of 11 scenes hit this).
+        #   v4:  processor(videos=..., return_tensors="pt") +
+        #        model.init_state(pixel_values=...) +
+        #        model.add_new_points_or_box(state, frame_idx, obj_id, box) +
+        #        model.propagate_in_video(state)
+        #
+        #   v5:  processor.init_video_session(video=frames) → session
+        #        processor.process_new_points_or_boxes_for_video_frame(
+        #            session, frame_idx, obj_ids=[1],
+        #            input_boxes=[[[x1, y1, x2, y2]]],
+        #            original_size=(H, W),
+        #        )
+        #        for output in model.propagate_in_video_iterator(
+        #            inference_session=session,
+        #        ):
+        #            output.pred_masks  # (batch, num_obj, H, W)
+        #
+        # Verified empirically inside the worker container against
+        # ``transformers.Sam2VideoProcessor`` and
+        # ``transformers.models.sam2_video.modeling_sam2_video.Sam2VideoInferenceSession``
+        # signatures on 2026-05-04. The earlier ``init_state``
+        # / ``add_new_points_or_box`` / ``propagate_in_video``
+        # methods do not exist on ``Sam2VideoModel`` in v5.
         from PIL import Image as _PILImage  # noqa: PLC0415 — keep module-import cheap
         frames_pil = [_PILImage.fromarray(rgb) for _, rgb in sampled_frames]
+
         with torch.inference_mode():
-            inputs = loaded.processor(
-                images=frames_pil,
-                return_tensors="pt",
-            ).to(loaded.device)
-            video_state = loaded.model.init_state(
-                pixel_values=inputs["pixel_values"],
-            )
-            loaded.model.add_new_points_or_box(
-                state=video_state,
-                frame_idx=anchor_idx,
-                obj_id=1,
-                box=[
-                    clamped_bbox.x,
-                    clamped_bbox.y,
-                    clamped_bbox.x + clamped_bbox.width,
-                    clamped_bbox.y + clamped_bbox.height,
-                ],
+            # 4a. Build the inference session. The processor handles
+            # all preprocessing (frame resize / normalize / pixel_values
+            # tensor allocation); we don't manually call
+            # ``processor(images=...)`` anymore.
+            inference_session = loaded.processor.init_video_session(
+                video=frames_pil,
+                inference_device=str(loaded.device),
+                dtype=loaded.dtype,
             )
 
-            # ── 5. Propagate. The video model emits masks per
-            # sampled frame as it walks the timeline.
+            # 4b. Add the anchor bbox. ``input_boxes`` is nested
+            # 3-deep: outer batch (one video), middle per-object
+            # (one bbox), innermost xyxy coords. ``original_size``
+            # is required so the processor can scale the bbox from
+            # frame-pixel space to the model's normalized internal
+            # coordinates.
+            loaded.processor.process_new_points_or_boxes_for_video_frame(
+                inference_session=inference_session,
+                frame_idx=anchor_idx,
+                obj_ids=[1],
+                input_boxes=[[[
+                    float(clamped_bbox.x),
+                    float(clamped_bbox.y),
+                    float(clamped_bbox.x + clamped_bbox.width),
+                    float(clamped_bbox.y + clamped_bbox.height),
+                ]]],
+                original_size=(frame_height, frame_width),
+            )
+
+            # 4c. Propagate. The iterator yields one
+            # ``Sam2VideoSegmentationOutput`` per frame in
+            # ascending frame order; ``output.pred_masks`` has
+            # shape ``(batch_size, num_objects, H, W)``.
             samples: list[TrackedSample] = []
-            for prop_idx, _obj_ids, masks in loaded.model.propagate_in_video(
-                video_state,
+            for prop_idx, output in enumerate(
+                loaded.model.propagate_in_video_iterator(
+                    inference_session=inference_session,
+                )
             ):
                 if prop_idx >= len(sampled_frames):
                     continue  # defensive — should never exceed
-                # First tuple element is now an absolute millisecond
-                # timestamp on the FULL-video timeline (not a 0-based
-                # counter), set during the seek+sample loop above.
-                # No conversion needed.
                 frame_ts_ms, _ = sampled_frames[prop_idx]
-                # ``masks`` is shape (num_obj, H, W) — we added
-                # exactly one object so index 0 is the only mask.
-                mask_t = masks[0]
-                mask_score = getattr(masks, "score", None)
-                mask_conf = float(
-                    mask_score
-                    if mask_score is not None
-                    else mask_t.float().mean().item()
-                )
+
+                # We added exactly one object (obj_id=1), so the
+                # first dim of ``pred_masks`` is "this video" and
+                # the second is "this object".
+                mask_t = output.pred_masks[0, 0]
+                # Confidence: prefer iou_scores when SAM2 emits
+                # them on the output object; otherwise fall back
+                # to mean-of-mask. Conservative default; calibration
+                # can tighten later.
+                iou_attr = getattr(output, "iou_scores", None)
+                if iou_attr is not None:
+                    try:
+                        mask_conf = float(iou_attr.flatten()[0].item())
+                    except Exception:  # noqa: BLE001
+                        mask_conf = float(mask_t.float().mean().item())
+                else:
+                    mask_conf = float(mask_t.float().mean().item())
                 mask_np = mask_t.detach().cpu().numpy()
                 bbox = _mask_to_bbox(mask_np)
                 if bbox is None:
                     # Empty mask — SAM2 lost the object. Emit a
-                    # low-confidence sample with the original
-                    # anchor bbox as a placeholder; the lib's
-                    # window-assembly threshold filters drop it.
+                    # low-confidence sample with the anchor bbox
+                    # as a placeholder; the lib's window-assembly
+                    # threshold filters drop it.
                     samples.append(TrackedSample(
                         frame_timestamp_ms=frame_ts_ms,
-                        bbox=anchor_bbox,
+                        bbox=clamped_bbox,
                         mask_confidence=0.0,
                         frame_width=frame_width,
                         frame_height=frame_height,
