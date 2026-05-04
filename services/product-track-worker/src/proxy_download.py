@@ -19,6 +19,20 @@ Loose-coupling rules enforced here:
     deterministically. Aircloud /tmp is small (~tmpfs); leaking
     even a few hundred MB across job retries would wedge the
     container.
+
+2026-05-04 Aircloud /tmp incident:
+  Real livecommerce proxies on devorg run ~500 MB (64-min H.264 at
+  ~900 kbit/s). The default Python ``tempfile.TemporaryDirectory``
+  uses ``/tmp`` which on Aircloud is a small tmpfs; downloads
+  silently truncate (or boto3's TransferManager fails partway) and
+  cv2 then can't open the proxy → every per-scene SAM2 call raises
+  → looks like a SAM2 OOM but is really a disk-pressure issue.
+
+  Fix: default to ``/var/tmp`` (real disk on Aircloud, plenty of
+  space). Plus a post-download integrity check that compares the
+  local file size against the S3 ``ContentLength`` so a partial
+  download fails LOUDLY with a distinct error instead of silently
+  poisoning every SAM2 call downstream.
 """
 
 from __future__ import annotations
@@ -27,9 +41,18 @@ import logging
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Protocol
+from typing import Iterator, Optional, Protocol
 
 logger = logging.getLogger(__name__)
+
+
+# Default scratch dir. ``/var/tmp`` is on real disk on Aircloud
+# (whereas ``/tmp`` is tmpfs); fall back gracefully on hosts that
+# don't have it (some minimal containers) by setting to ``None``
+# which lets ``tempfile`` pick the system default.
+_DEFAULT_PROXY_SCRATCH_DIR: Optional[Path] = (
+    Path("/var/tmp") if Path("/var/tmp").is_dir() else None
+)
 
 
 class S3DownloadClient(Protocol):
@@ -47,6 +70,7 @@ def downloaded_proxy(
     proxy_s3_key: str,
     job_id_for_naming: str,
     parent_dir: Path | None = None,
+    expected_size_bytes: int | None = None,
 ) -> Iterator[Path]:
     """Download ``proxy_s3_key`` to a per-job tempdir, yield the
     local path, and clean up on exit (success OR exception).
@@ -57,8 +81,17 @@ def downloaded_proxy(
     bumped above 1. The handoff calls out concurrency=1 today, but
     naming this way costs nothing and removes a future foot-gun.
 
-    ``parent_dir`` defaults to the system temp dir; tests inject a
-    pytest ``tmp_path`` so they don't pollute /tmp.
+    ``parent_dir`` defaults to ``/var/tmp`` on hosts where it
+    exists (Aircloud, most Linux servers) so we don't fight tmpfs
+    pressure on ``/tmp``. Tests inject a pytest ``tmp_path``.
+
+    ``expected_size_bytes``, if provided, is compared against the
+    downloaded file's size; mismatch raises ``RuntimeError`` with
+    a distinct ``proxy_download_truncated`` signature so the
+    failure mode shows up in worker logs rather than silently
+    poisoning every downstream SAM2 call. Callers typically pass
+    the S3 ``ContentLength`` from a ``head_object`` call. ``None``
+    skips the size match (still verifies the file is non-empty).
     """
     if not proxy_s3_key:
         # Defensive — callers should have null-checked already, but
@@ -66,9 +99,12 @@ def downloaded_proxy(
         # cryptic ``InvalidArgument`` that buries the root cause.
         raise ValueError("proxy_s3_key is empty; cannot download")
 
+    effective_parent = (
+        parent_dir if parent_dir is not None else _DEFAULT_PROXY_SCRATCH_DIR
+    )
     with tempfile.TemporaryDirectory(
         prefix=f"track_{job_id_for_naming}_",
-        dir=str(parent_dir) if parent_dir is not None else None,
+        dir=str(effective_parent) if effective_parent is not None else None,
     ) as td:
         local_path = Path(td) / "proxy.mp4"
         logger.info(
@@ -77,16 +113,38 @@ def downloaded_proxy(
                 "proxy_s3_key": proxy_s3_key,
                 "local_path": str(local_path),
                 "job_id": job_id_for_naming,
+                "expected_size_bytes": expected_size_bytes,
             },
         )
         s3.download_file(proxy_s3_key, local_path)
+        local_size = local_path.stat().st_size if local_path.exists() else 0
+
+        # Integrity gate: catch tmpfs-truncation / partial download.
+        # 0 bytes is always wrong — boto3's ``download_file`` is
+        # supposed to either complete or raise, but in practice on
+        # Aircloud's tmpfs we've seen silent partial writes.
+        if local_size == 0:
+            raise RuntimeError(
+                f"proxy_download_zero_bytes: download produced an "
+                f"empty file at {local_path} (key={proxy_s3_key}, "
+                f"job_id={job_id_for_naming}). Likely "
+                f"out-of-disk-space on the worker's scratch dir."
+            )
+        if expected_size_bytes is not None and local_size != expected_size_bytes:
+            raise RuntimeError(
+                f"proxy_download_truncated: local size {local_size} != "
+                f"expected {expected_size_bytes} (key={proxy_s3_key}, "
+                f"job_id={job_id_for_naming}). Likely "
+                f"out-of-disk-space on the worker's scratch dir, or "
+                f"S3 object mutated mid-download."
+            )
+
         logger.info(
             "proxy_download_done",
             extra={
                 "proxy_s3_key": proxy_s3_key,
-                "size_bytes": (
-                    local_path.stat().st_size if local_path.exists() else None
-                ),
+                "size_bytes": local_size,
+                "expected_size_bytes": expected_size_bytes,
                 "job_id": job_id_for_naming,
             },
         )

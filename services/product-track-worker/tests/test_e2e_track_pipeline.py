@@ -134,6 +134,14 @@ def _make_pipeline_mocks(*, picker_cost: Decimal = Decimal("0")):
     Image.new("RGB", (4, 4), 0).save(good_buf, format="JPEG")
     s3 = MagicMock()
     s3.get_object_bytes.return_value = good_buf.getvalue()
+    # PR D: ``downloaded_proxy`` integrity check requires the local
+    # file to be non-empty after ``s3.download_file``. The default
+    # MagicMock is a no-op, so we wire a side_effect that writes
+    # placeholder bytes — keeps every existing test happy without
+    # them needing to know about the integrity gate.
+    s3.download_file.side_effect = lambda key, local_path: local_path.write_bytes(
+        b"fake-mp4-bytes" * 100
+    )
 
     tracker = MagicMock()
     tracker.track.side_effect = _good_track_factory()

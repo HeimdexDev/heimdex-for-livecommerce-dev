@@ -238,6 +238,12 @@ class TestHandleTrackJobAllScenesFailed:
 
         # S3 client raises on every keyframe fetch.
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
         s3.get_object_bytes.side_effect = RuntimeError("S3 unavailable")
 
         with patch(
@@ -271,6 +277,12 @@ class TestHandleTrackJobAllScenesFailed:
         embedder = MagicMock()
         embedder.embed.return_value = [0.1] * 768
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
 
         with patch(
             "src.tasks.track._fetch_canonical_crop",
@@ -311,6 +323,12 @@ class TestHandleTrackJobAllScenesFailed:
         Image.new("RGB", (4, 4), 0).save(good_buf, format="JPEG")
         good_bytes = good_buf.getvalue()
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
         s3.get_object_bytes.side_effect = [
             RuntimeError("missing"),
             good_bytes,
@@ -368,6 +386,12 @@ class TestHandleTrackJobAllScenesFailed:
         Image.new("RGB", (4, 4), 0).save(good_buf, format="JPEG")
         good_bytes = good_buf.getvalue()
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
         s3.get_object_bytes.return_value = good_bytes
 
         with patch(
@@ -409,6 +433,12 @@ class TestHandleTrackJobAllScenesFailed:
         embedder = MagicMock()
         embedder.embed.return_value = [0.1] * 768
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
 
         with patch(
             "src.tasks.track._fetch_canonical_crop",
@@ -447,6 +477,12 @@ class TestHandleTrackJobAllScenesFailed:
         embedder = MagicMock()
         embedder.embed.return_value = [0.1] * 768
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
 
         with patch(
             "src.tasks.track._fetch_canonical_crop",
@@ -484,6 +520,12 @@ class TestHandleTrackJobAllScenesFailed:
         embedder = MagicMock()
         embedder.embed.return_value = [0.1] * 768
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
 
         with patch(
             "src.tasks.track._fetch_canonical_crop",
@@ -514,6 +556,12 @@ class TestHandleTrackJobAllScenesFailed:
         embedder = MagicMock()
         embedder.embed.return_value = [0.1] * 768
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
 
         with patch(
             "src.tasks.track._fetch_canonical_crop",
@@ -551,6 +599,12 @@ class TestHandleTrackJobAllScenesFailed:
         good_buf = _io.BytesIO()
         Image.new("RGB", (4, 4), 0).save(good_buf, format="JPEG")
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
         s3.get_object_bytes.return_value = good_buf.getvalue()
 
         # SAM2 returns one short low-confidence sample per scene.
@@ -621,6 +675,12 @@ class TestHandleTrackJobAllScenesFailed:
         Image.new("RGB", (4, 4), 0).save(good_buf, format="JPEG")
         good_bytes = good_buf.getvalue()
         s3 = MagicMock()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
         s3.get_object_bytes.return_value = good_bytes
 
         # SAM2 tracker raises on every scene.

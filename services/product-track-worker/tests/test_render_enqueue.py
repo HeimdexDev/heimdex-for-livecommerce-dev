@@ -243,6 +243,12 @@ class TestHandleTrackJobRenderEnqueue:
         Image.new("RGB", (4, 4), 0).save(good_buf, format="JPEG")
         s3 = MagicMock()
         s3.get_object_bytes.return_value = good_buf.getvalue()
+        # PR D integrity gate: ``downloaded_proxy`` rejects 0-byte
+        # files, so the mock has to write bytes when download_file
+        # is called.
+        s3.download_file.side_effect = (
+            lambda key, local_path: local_path.write_bytes(b"x" * 100)
+        )
         # SAM2 returns a dense, high-confidence sample stream so
         # window-assembly produces an accepted window.
         tracker = MagicMock()

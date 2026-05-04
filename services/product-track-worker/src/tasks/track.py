@@ -575,6 +575,7 @@ def handle_track_job(
             s3=s3,
             proxy_s3_key=proxy_s3_key,
             job_id_for_naming=str(decoded.job_id),
+            expected_size_bytes=_resolve_proxy_size(s3, proxy_s3_key),
         ) as full_video_path:
             detections = propagate_within_candidate_scenes(
                 candidates=candidate_scenes,
@@ -740,6 +741,46 @@ def handle_track_job(
 
 
 # ─── helpers ─────────────────────────────────────────────────────────
+
+
+def _resolve_proxy_size(s3: S3Client, proxy_s3_key: str) -> int | None:
+    """Best-effort ``head_object`` to learn the proxy's expected size.
+
+    Returns ``None`` on any failure so the integrity check in
+    ``downloaded_proxy`` falls back to the ``size > 0`` gate. We
+    explicitly do NOT propagate the head_object exception here:
+    the actual download attempt below will surface the real S3
+    error if there is one, and it would be silly to fail the job
+    on a HEAD that we only use as a sanity check.
+
+    Reaches into the SDK's underlying boto3 client because
+    ``heimdex_worker_sdk.s3.S3Client`` doesn't expose a public
+    size accessor (only ``exists``). Treat this as a worker-local
+    convenience; if the SDK ever grows ``head_object_size``,
+    switch to that.
+    """
+    try:
+        # ``S3Client._client`` is the boto3 client. ``S3Client._bucket``
+        # is the bucket bound at construction. Both private but stable
+        # within our SDK.
+        resp = s3._client.head_object(Bucket=s3._bucket, Key=proxy_s3_key)  # noqa: SLF001
+    except Exception:
+        logger.warning(
+            "proxy_head_object_failed",
+            extra={"proxy_s3_key": proxy_s3_key},
+            exc_info=True,
+        )
+        return None
+
+    # Defensive shape check. boto3 returns a dict with int
+    # ``ContentLength``; anything else (notably MagicMock objects in
+    # tests, where ``__int__`` returns 1 by default) is unsafe to
+    # feed into the integrity gate. Skip the size match in that case
+    # — the helper's ``size > 0`` floor still applies.
+    if not isinstance(resp, dict):
+        return None
+    size = resp.get("ContentLength")
+    return size if isinstance(size, int) else None
 
 
 def _make_config(settings: WorkerSettings) -> TrackingConfig:
@@ -1367,6 +1408,7 @@ def _handle_scan_order_parent(
         s3=s3,
         proxy_s3_key=proxy_s3_key,
         job_id_for_naming=str(decoded.job_id),
+        expected_size_bytes=_resolve_proxy_size(s3, proxy_s3_key),
     ) as full_video_path_obj:
         full_video_path = str(full_video_path_obj)
         for i, entry in enumerate(catalog_entries):

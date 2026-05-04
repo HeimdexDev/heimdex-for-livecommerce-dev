@@ -104,3 +104,129 @@ def test_propagates_s3_download_failure(tmp_path):
             parent_dir=tmp_path,
         ):
             pass
+
+
+# ---------- integrity gate (PR D) ----------
+
+
+def test_zero_byte_download_raises_proxy_download_zero_bytes(tmp_path):
+    """Defensive against silent /tmp truncation. boto3's
+    ``download_file`` is supposed to either complete or raise, but
+    on Aircloud's tmpfs we observed silent partial writes. A
+    0-byte file is always a fault — surface it loudly so the
+    operator sees ``proxy_download_zero_bytes`` instead of every
+    downstream cv2 call failing as if SAM2 itself crashed."""
+
+    class _ZeroByteS3:
+        def download_file(self, s3_key: str, local_path):
+            local_path.touch()  # 0 bytes
+
+    with pytest.raises(RuntimeError, match="proxy_download_zero_bytes"):
+        with downloaded_proxy(
+            s3=_ZeroByteS3(),
+            proxy_s3_key="k",
+            job_id_for_naming="job",
+            parent_dir=tmp_path,
+        ):
+            pass
+
+
+def test_size_mismatch_raises_proxy_download_truncated(tmp_path):
+    """When the caller knows the expected size (head_object), the
+    integrity check enforces a strict match. This catches partial
+    downloads that ``download_file`` somehow returned without
+    raising, and surfaces them with a distinct
+    ``proxy_download_truncated`` signature so the failure mode
+    isn't confused with SAM2 OOM."""
+
+    class _PartialS3:
+        def download_file(self, s3_key, local_path):
+            # Wrote 100 bytes but caller expected 1000.
+            local_path.write_bytes(b"x" * 100)
+
+    with pytest.raises(RuntimeError, match="proxy_download_truncated"):
+        with downloaded_proxy(
+            s3=_PartialS3(),
+            proxy_s3_key="k",
+            job_id_for_naming="job",
+            parent_dir=tmp_path,
+            expected_size_bytes=1000,
+        ):
+            pass
+
+
+def test_expected_size_match_passes(tmp_path):
+    """Happy path: bytes downloaded match expected size → yield
+    proceeds normally."""
+
+    class _GoodS3:
+        def download_file(self, s3_key, local_path):
+            local_path.write_bytes(b"x" * 12345)
+
+    with downloaded_proxy(
+        s3=_GoodS3(),
+        proxy_s3_key="k",
+        job_id_for_naming="job",
+        parent_dir=tmp_path,
+        expected_size_bytes=12345,
+    ) as local:
+        assert local.stat().st_size == 12345
+
+
+def test_expected_size_none_skips_match_but_still_checks_nonzero(tmp_path):
+    """Best-effort case: when ``head_object`` failed, the caller
+    passes ``None`` and we still gate on size > 0 — a 0-byte
+    download is a fault regardless of whether the caller could
+    learn the expected size."""
+
+    class _ZeroByteS3:
+        def download_file(self, s3_key, local_path):
+            local_path.touch()
+
+    with pytest.raises(RuntimeError, match="proxy_download_zero_bytes"):
+        with downloaded_proxy(
+            s3=_ZeroByteS3(),
+            proxy_s3_key="k",
+            job_id_for_naming="job",
+            parent_dir=tmp_path,
+            expected_size_bytes=None,
+        ):
+            pass
+
+
+def test_default_parent_dir_uses_var_tmp_when_available(monkeypatch, tmp_path):
+    """Locks the contract that the default scratch dir is
+    ``/var/tmp`` (real disk on Aircloud), not the system default
+    ``/tmp`` (tmpfs on Aircloud). The 2026-05-04 incident showed
+    every per-scene SAM2 call failing after a 503 MB proxy
+    silently truncated on tmpfs — switching the default removes
+    that whole class of failure on Aircloud while staying
+    compatible with hosts that don't have ``/var/tmp``."""
+    from src import proxy_download as pd
+
+    # Verify the module-level default points at /var/tmp on this
+    # machine. Skip the assertion gracefully on hosts that don't
+    # have /var/tmp (very minimal containers) — the fallback to
+    # ``None`` (system default) is documented behavior.
+    if Path("/var/tmp").is_dir():
+        assert pd._DEFAULT_PROXY_SCRATCH_DIR == Path("/var/tmp")
+    else:
+        assert pd._DEFAULT_PROXY_SCRATCH_DIR is None
+
+    # And the runtime path: when no ``parent_dir`` is passed, the
+    # module honours the default. Patch the default to ``tmp_path``
+    # so the test doesn't actually pollute /var/tmp.
+    monkeypatch.setattr(pd, "_DEFAULT_PROXY_SCRATCH_DIR", tmp_path)
+
+    class _StubS3:
+        def download_file(self, s3_key, local_path):
+            local_path.write_bytes(b"x" * 100)
+
+    with downloaded_proxy(
+        s3=_StubS3(),
+        proxy_s3_key="k",
+        job_id_for_naming="default-dir-test",
+        # parent_dir intentionally omitted to exercise the default.
+    ) as local:
+        # The download landed under tmp_path (the patched default).
+        assert tmp_path in local.parents
