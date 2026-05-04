@@ -683,3 +683,110 @@ def test_scan_order_parent_downloads_proxy_once_for_multiple_products():
     # scenes-with-keyframes response.
     download_args = s3.download_file.call_args.args
     assert download_args[0] == "tenant/drive/d/g/proxy.mp4"
+
+
+# =====================================================================
+# Per-stage F4 worker_event diagnostics (PR C, post-2026-05-04 incident)
+# =====================================================================
+
+
+def test_canonical_crop_s3_returns_none_emits_per_product_failed_event_with_exception_details():
+    """Regression coverage for the silent-S3-None failure mode that
+    cost us a debugging session 2026-05-04 (Aircloud container lost
+    its ``MINIO_ENDPOINT=disabled`` override on restart, every S3
+    read returned None, ``_fetch_canonical_crop`` raised
+    ``FileNotFoundError``, the outer ``except Exception`` caught it
+    and only logged to stdout — leaving the operator with the
+    opaque ``internal_error`` aggregate message).
+
+    Pin the contract that the per-product exception handler emits a
+    structured worker_event carrying the exception type + message,
+    so the same failure is SQL-queryable from the api DB without
+    chasing Aircloud container logs."""
+    catalog_entry_id = uuid4()
+    api = MagicMock()
+    api.fetch_catalog_entries_for_video.return_value = [
+        {
+            "catalog_entry_id": str(catalog_entry_id),
+            "org_id": str(uuid4()),
+            "video_id": "gd_test",
+            "canonical_crop_s3_key": "tenant/products/x/y.jpg",
+            "canonical_bbox": {"x": 0, "y": 0, "w": 10, "h": 10},
+            "llm_label": "테스트 제품",
+        }
+    ]
+    # _fetch_canonical_crop reads the entry by id, then s3-fetches.
+    # Return the matching payload from the single-entry endpoint
+    # so the org-mismatch defence-in-depth doesn't fire first.
+    org_id = uuid4()
+    api.fetch_catalog_entry.return_value = {
+        "catalog_entry_id": str(catalog_entry_id),
+        "org_id": str(org_id),
+        "video_id": "gd_test",
+        "canonical_crop_s3_key": "tenant/products/x/y.jpg",
+        "canonical_bbox": {"x": 0, "y": 0, "w": 10, "h": 10},
+        "llm_label": "테스트 제품",
+    }
+    # Re-stub the catalog list to the matching org so both paths agree.
+    api.fetch_catalog_entries_for_video.return_value[0]["org_id"] = str(org_id)
+    api.fetch_scenes_with_keyframes.return_value = _scenes_response(n=3)
+
+    embedder, s3, tracker, picker = _make_pipeline_mocks()
+    # Simulate the MINIO_ENDPOINT regression: S3 reads silently
+    # return None instead of raising. _fetch_canonical_crop's null
+    # check then raises FileNotFoundError.
+    s3.get_object_bytes.return_value = None
+
+    # Body uses the matching org_id so Pattern B doesn't 404.
+    body = _scan_order_body()
+    body["org_id"] = str(org_id)
+
+    with patch("src.tasks.track.emit_event") as mock_emit:
+        handle_track_job(
+            message=body,
+            settings=_settings(),
+            api_client=api,
+            embedder=embedder,
+            tracker=tracker,
+            picker=picker,
+            s3_client=s3,
+        )
+
+    # Two events fire on this path:
+    #   1. scan_order_per_product_failed — captures FileNotFoundError
+    #   2. scan_order_all_products_f4_failed — aggregate summary
+    event_names = [c.kwargs.get("event_name") for c in mock_emit.call_args_list]
+    assert "scan_order_per_product_failed" in event_names, (
+        f"per-product event missing — operators have no SQL-queryable "
+        f"signal of which step failed. Got: {event_names}"
+    )
+    assert "scan_order_all_products_f4_failed" in event_names
+
+    # Per-product event MUST carry the exception type/message so a
+    # MINIO regression / S3 outage / catalog-corruption are all
+    # distinguishable in worker_events queries.
+    per_product = next(
+        c for c in mock_emit.call_args_list
+        if c.kwargs.get("event_name") == "scan_order_per_product_failed"
+    )
+    md = per_product.kwargs["metadata"]
+    assert md["exception_type"] == "FileNotFoundError", (
+        f"exception_type missing or wrong; metadata={md}"
+    )
+    assert "canonical crop" in md["exception_message"].lower(), (
+        f"exception_message should reference the failure source; got: {md}"
+    )
+    # job_id + video_id propagated so per-job triage is one query.
+    # ``video_id`` here is ``TrackJobMessage.video_id`` — the
+    # DriveFile UUID, NOT the OS string "gd_test". Worker_events
+    # convention across services.
+    assert per_product.kwargs.get("job_id") is not None
+    assert per_product.kwargs.get("video_id") is not None
+
+    # And api.fail's error_message points operators at worker_events
+    # (instead of "Check worker logs" which means Aircloud-only).
+    api.fail.assert_called_once()
+    fail_msg = api.fail.call_args.kwargs["error_message"]
+    assert "worker_events" in fail_msg, (
+        f"fail message should redirect to worker_events; got: {fail_msg}"
+    )
