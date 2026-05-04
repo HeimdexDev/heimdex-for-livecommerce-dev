@@ -675,6 +675,15 @@ class TestSam2ProcessorInputShape:
             "iterator must be passed the session returned by "
             "init_video_session, not a freshly-constructed one"
         )
+        # ``start_frame_idx`` MUST be explicit. Default ``None``
+        # raises ``ValueError: Cannot determine the starting
+        # frame index`` because the session was primed via
+        # ``process_new_points_or_boxes_for_video_frame``, not
+        # ``model.forward(...)``, so the auto-detect path fails.
+        assert kwargs["start_frame_idx"] == 0, (
+            f"expected start_frame_idx=0 (anchor frame); got "
+            f"{kwargs.get('start_frame_idx')!r}"
+        )
 
 
 # =====================================================================
