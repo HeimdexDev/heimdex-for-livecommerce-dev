@@ -220,18 +220,29 @@ class Sam2TrackerImpl:
         anchor_idx = 0
 
         # ── 4. Initialise SAM2 video predictor + add anchor box.
-        # The transformers ``Sam2VideoProcessor`` expects
-        # ``videos`` as a list-of-lists (one inner list per video,
-        # each holding PIL images). Passing a stacked 4D ndarray
-        # falls through to the "Either images or original_sizes
-        # must be provided" error path — staging incident
-        # 2026-05-04 (parent_job_id dfc2c05b) hit this on every
-        # one of 11 scenes. Convert RGB ndarrays to PIL up front.
+        # transformers 5.5.4 ``Sam2VideoProcessor.__call__``
+        # signature (verified empirically inside the worker
+        # container 2026-05-04):
+        #
+        #   def __call__(
+        #       self, images: ImageInput | None = None,
+        #       segmentation_maps=..., input_points=...,
+        #       input_labels=..., input_boxes=...,
+        #       original_sizes=..., return_tensors=..., **kwargs
+        #   )
+        #
+        # ``ImageInput`` accepts ``list[PIL.Image.Image]`` directly
+        # — no outer list wrapping. There is NO ``videos=`` kwarg
+        # in v5; passing one falls through to ``**kwargs``,
+        # leaving the processor with no input → it raises
+        # ``ValueError: Either images or original_sizes must be
+        # provided`` (staging incident 2026-05-04, parent_job_id
+        # 79560cf0 — every one of 11 scenes hit this).
         from PIL import Image as _PILImage  # noqa: PLC0415 — keep module-import cheap
         frames_pil = [_PILImage.fromarray(rgb) for _, rgb in sampled_frames]
         with torch.inference_mode():
             inputs = loaded.processor(
-                videos=[frames_pil],
+                images=frames_pil,
                 return_tensors="pt",
             ).to(loaded.device)
             video_state = loaded.model.init_state(
