@@ -561,15 +561,24 @@ class TestSam2TrackerImplSeekAndWindow:
 
 
 class TestSam2ProcessorInputShape:
-    """The 2026-05-04 staging incident (parent_job_id dfc2c05b) hit
+    """The 2026-05-04 staging incident (parent_job_id 79560cf0) hit
     ``ValueError: Either images or original_sizes must be provided``
-    on every one of 11 scenes. Root cause: we were passing
-    ``videos=frames_np`` (a stacked 4D ndarray) to
-    ``Sam2VideoProcessor``; transformers expects a list-of-lists
-    with PIL images.
+    on every one of 11 scenes — even after PR E switched to
+    ``videos=[List[PIL]]``. Root cause: in transformers 5.5.4,
+    ``Sam2VideoProcessor.__call__`` has NO ``videos=`` kwarg. The
+    first positional / keyword arg is ``images: ImageInput | None``,
+    where ``ImageInput`` accepts ``list[PIL.Image.Image]`` directly
+    (no outer wrapping).
 
-    Tests pin the call-shape contract so this regression class is
-    caught in CI."""
+    Inspection on the real worker container ran:
+
+        signature: (self, images: ImageInput | None = None,
+                    segmentation_maps=..., input_points=..., ...,
+                    **kwargs)
+
+    Tests pin the post-PR-G call-shape contract so this regression
+    class is caught in CI rather than at SAM2 call time on
+    Aircloud."""
 
     def _build_capturing_processor(self) -> tuple:
         captured: dict = {}
@@ -585,12 +594,10 @@ class TestSam2ProcessorInputShape:
 
         return _CapturingProcessor(), captured
 
-    def test_processor_receives_videos_as_list_of_lists_of_pil_images(self):
-        """``Sam2VideoProcessor`` requires
-        ``videos: List[List[ImageInput]]`` — outer list is one entry
-        per video, inner list is the frames. Pin both shapes so a
-        regression here surfaces in CI rather than at SAM2 call
-        time on Aircloud (which is what bit us 2026-05-04)."""
+    def test_processor_receives_images_kwarg_with_flat_list_of_pil(self):
+        """Pin the v5.5.4 contract: kwarg is ``images=`` (NOT
+        ``videos=``), and the value is a flat ``list[PIL.Image]``
+        (NOT a list-of-lists)."""
         from PIL import Image as _PIL
 
         frames = [_green_frame() for _ in range(30)]
@@ -614,28 +621,30 @@ class TestSam2ProcessorInputShape:
                 sample_fps=5,
             )
 
-        videos = captured["kwargs"].get("videos")
-        assert videos is not None, (
-            f"processor not called with ``videos=`` kwarg; got "
-            f"kwargs={list(captured['kwargs'].keys())}"
+        kwargs = captured["kwargs"]
+        # Kwarg name must be ``images``. ``videos`` does not exist
+        # in v5 — passing it falls through to ``**kwargs``, leaving
+        # the processor input-less.
+        assert "images" in kwargs, (
+            f"processor must be called with ``images=`` kwarg; got "
+            f"kwargs={list(kwargs.keys())}"
         )
-        # Outer: list with exactly one entry (single video).
-        assert isinstance(videos, list), f"videos must be a list; got {type(videos)}"
-        assert len(videos) == 1, f"expected 1 video; got {len(videos)}"
-        # Inner: list of PIL images, NOT a stacked ndarray.
-        inner = videos[0]
-        assert isinstance(inner, list), (
-            f"inner ``videos[0]`` must be a list of frames, not "
-            f"{type(inner).__name__} — passing a stacked ndarray "
-            f"falls through to ``Either images or original_sizes "
-            f"must be provided``"
+        assert "videos" not in kwargs, (
+            "``videos=`` is the v4 name; in transformers 5.x it's "
+            "absorbed into **kwargs and ignored, leaving the "
+            "processor with no input"
         )
-        assert all(isinstance(f, _PIL.Image) for f in inner), (
-            "all inner items must be PIL images"
+        images = kwargs["images"]
+        # Flat list of PIL images, NOT a list-of-lists.
+        assert isinstance(images, list), (
+            f"images must be a list; got {type(images)}"
         )
-        assert len(inner) == 5, (
+        assert all(isinstance(f, _PIL.Image) for f in images), (
+            "all items must be PIL images (not wrapped in another list)"
+        )
+        assert len(images) == 5, (
             f"expected 5 sampled frames at 30fps/sample_fps=5/1000ms window; "
-            f"got {len(inner)}"
+            f"got {len(images)}"
         )
 
 
