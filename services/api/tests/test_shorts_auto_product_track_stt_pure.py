@@ -230,11 +230,14 @@ class TestCompositionBuilder:
         assert spec.scene_clips[0].timeline_start_ms == 0
         assert spec.scene_clips[1].timeline_start_ms == 20_000
 
-    def test_chunk_attributed_to_max_overlap_scene(self):
-        # Chunk 5-25s; scene_a (0-15) overlaps 10s, scene_b (15-30)
-        # overlaps 10s — tie. The first match wins per implementation.
-        # We test the more discriminating case: chunk 5-25, scene_a 0-10
-        # (5s overlap), scene_b 10-30 (15s overlap) → scene_b wins.
+    def test_scene_crossing_chunk_splits_into_clamped_subclips(self):
+        """A 20s chunk that spans two scenes must produce 2
+        ``SceneClipSpec``s, each clamped to the underlying scene's
+        bounds. Without this split, the render service 422s
+        ``end_ms out of scene bounds`` because chunks (20s) routinely
+        span Korean livecommerce scenes (1-15s each).
+        """
+        # Chunk 5-25s; scene_a 0-10 (overlap 5-10), scene_b 10-30 (overlap 10-25)
         scene_a = _scene(0, 10_000, sid="A")
         scene_b = _scene(10_000, 30_000, sid="B")
         seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene_a, scene_b])
@@ -243,7 +246,50 @@ class TestCompositionBuilder:
             segments=[seg],
             os_video_id="gd_x",
         )
-        assert spec.scene_clips[0].scene_id == "B"
+        assert len(spec.scene_clips) == 2
+        # Sub-clip 1: scene A, clamped to overlap.
+        assert spec.scene_clips[0].scene_id == "A"
+        assert spec.scene_clips[0].start_ms == 5_000
+        assert spec.scene_clips[0].end_ms == 10_000
+        # Sub-clip 2: scene B, clamped to overlap. Timeline cursor
+        # advanced by sub-clip-1's duration (5s).
+        assert spec.scene_clips[1].scene_id == "B"
+        assert spec.scene_clips[1].start_ms == 10_000
+        assert spec.scene_clips[1].end_ms == 25_000
+        assert spec.scene_clips[1].timeline_start_ms == 5_000
+
+    def test_chunk_within_single_scene_produces_one_clip(self):
+        """When a chunk stays within a single scene's bounds, only
+        one sub-clip is emitted (no split)."""
+        scene = _scene(0, 30_000, sid="solo")
+        seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene])
+        spec = build_composition_spec(
+            selected_chunks=[_chunk(5_000, 25_000)],
+            segments=[seg],
+            os_video_id="gd_x",
+        )
+        assert len(spec.scene_clips) == 1
+        assert spec.scene_clips[0].scene_id == "solo"
+        assert spec.scene_clips[0].start_ms == 5_000
+        assert spec.scene_clips[0].end_ms == 25_000
+
+    def test_chunk_extending_past_scene_end_clamps_to_scene(self):
+        """Real failure mode from staging:
+        clip 1350000-1370000 vs scene 1350000-1365000.
+        Chunk extends past scene's end_ms — the sub-clip must be
+        clamped to the scene's actual end_ms."""
+        scene = _scene(1_350_000, 1_365_000, sid="short")
+        seg = MentionSegment(
+            start_ms=1_350_000, end_ms=1_400_000, scenes=[scene],
+        )
+        spec = build_composition_spec(
+            selected_chunks=[_chunk(1_350_000, 1_370_000)],
+            segments=[seg],
+            os_video_id="gd_x",
+        )
+        assert len(spec.scene_clips) == 1
+        # End clamped to scene's actual end (1_365_000), NOT chunk end.
+        assert spec.scene_clips[0].end_ms == 1_365_000
 
 
 # ---------- mention_extractor query construction ----------

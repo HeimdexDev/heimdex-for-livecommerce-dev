@@ -76,24 +76,51 @@ def build_composition_spec(
     timeline_cursor_ms = 0
     clips: list[SceneClipSpec] = []
 
+    # Korean livecommerce scenes are 1-15s; chunks are fixed-width 20s
+    # by default. A chunk routinely spans multiple scenes. The render
+    # service requires each ``SceneClipSpec`` to be within the
+    # underlying source scene's bounds (see
+    # ``ShortsRenderService.create_render_job`` 422 path), so a
+    # scene-crossing chunk must split into N ``SceneClipSpec``s — one
+    # per overlapping scene, each clamped to that scene's bounds.
     for chunk in selected_chunks:
-        scene_id = _attach_scene_id(chunk=chunk, segments=segments)
-        chunk_duration_ms = chunk.end_ms - chunk.start_ms
-        clips.append(
-            SceneClipSpec(
-                scene_id=scene_id,
-                video_id=os_video_id,
-                source_type="gdrive",
-                start_ms=chunk.start_ms,
-                end_ms=chunk.end_ms,
-                timeline_start_ms=timeline_cursor_ms,
-                volume=1.0,
-                # crop / output defaults are fine for v1 — wizard
-                # output is always full-frame 9:16. Output spec is
-                # populated by CompositionSpec's default_factory.
-            )
+        sub_clips = _chunk_to_scene_clipped_subclips(
+            chunk=chunk, segments=segments,
         )
-        timeline_cursor_ms += chunk_duration_ms
+        if not sub_clips:
+            # Defensive: chunks come FROM segments, so every chunk
+            # should have ≥1 overlapping scene. If somehow not,
+            # skip rather than emit an invalid clip.
+            logger.warning(
+                "stt_composition_chunk_no_overlap_skipped",
+                extra={
+                    "chunk_start_ms": chunk.start_ms,
+                    "chunk_end_ms": chunk.end_ms,
+                },
+            )
+            continue
+        for scene_id, src_start_ms, src_end_ms in sub_clips:
+            sub_duration_ms = src_end_ms - src_start_ms
+            if sub_duration_ms <= 0:
+                continue
+            clips.append(
+                SceneClipSpec(
+                    scene_id=scene_id,
+                    video_id=os_video_id,
+                    source_type="gdrive",
+                    start_ms=src_start_ms,
+                    end_ms=src_end_ms,
+                    timeline_start_ms=timeline_cursor_ms,
+                    volume=1.0,
+                )
+            )
+            timeline_cursor_ms += sub_duration_ms
+
+    if not clips:
+        raise ValueError(
+            "build_composition_spec produced 0 clips from "
+            f"{len(selected_chunks)} chunks (no scene overlap?)"
+        )
 
     spec = CompositionSpec(scene_clips=clips, title=title)
     logger.info(
@@ -109,6 +136,49 @@ def build_composition_spec(
 
 
 # ---------- internals ----------
+
+
+def _chunk_to_scene_clipped_subclips(
+    *,
+    chunk: ScoredChunk,
+    segments: list[MentionSegment],
+) -> list[tuple[str, int, int]]:
+    """Split a chunk into 1+ scene-clamped sub-clips.
+
+    Each returned tuple is ``(scene_id, clamped_start_ms, clamped_end_ms)``
+    where the start/end are guaranteed to be within the corresponding
+    scene's actual bounds. Sub-clips are emitted in chronological
+    order (ascending ``clamped_start_ms``).
+
+    Pure function. No I/O. Trivially testable.
+
+    Why this exists: the render service rejects ``SceneClipSpec``s
+    whose start/end fall outside the underlying scene's time range
+    (``ShortsRenderService.create_render_job`` 422). My chunks are
+    fixed-width 20s windows that frequently span 2+ Korean
+    livecommerce scenes (1-15s each). Without this split, every
+    chunk that crosses a scene boundary 422s the whole render.
+    """
+    chunk_start_ms = chunk.start_ms
+    chunk_end_ms = chunk.end_ms
+    sub_clips: list[tuple[str, int, int]] = []
+
+    for segment in segments:
+        for scene in segment.scenes:
+            overlap_start = max(chunk_start_ms, scene.start_ms)
+            overlap_end = min(chunk_end_ms, scene.end_ms)
+            if overlap_end <= overlap_start:
+                continue
+            sub_clips.append(
+                (scene.scene_id, overlap_start, overlap_end),
+            )
+
+    # Multiple scenes can carry the same scene_id if the assembler
+    # ever merges duplicates (currently it doesn't, but be defensive).
+    # Sort by start time so the timeline cursor in the caller
+    # advances monotonically per chunk.
+    sub_clips.sort(key=lambda t: t[1])
+    return sub_clips
 
 
 def _attach_scene_id(
