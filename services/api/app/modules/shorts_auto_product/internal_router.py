@@ -366,6 +366,14 @@ async def complete(
                 "prominence_score": entry.prominence_score,
                 "enumeration_version": entry.enumeration_version,
                 "enumeration_prompt_version": entry.enumeration_prompt_version,
+                # v0.16.0 — explicit provenance. The DB default is
+                # 'vision' so omitting this would produce the same
+                # row, but provenance is semantic data the worker is
+                # responsible for, not a schema convenience. Drift on
+                # the default would silently mislabel rows; explicit
+                # write means a future migration that changes the
+                # default doesn't change observed behavior.
+                "enumeration_source": "vision",
             })
         rows = await catalog_repo.bulk_insert(entries=catalog_dicts)
         persisted_catalog = len(rows)

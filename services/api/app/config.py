@@ -467,6 +467,32 @@ class Settings(BaseSettings):
     # docker-compose .env override).
     auto_shorts_product_v2_publish_scan_order_enabled: bool = False
 
+    # ---------- v0.16.0 STT-first enumeration (parallel to vision) ----------
+    #
+    # Inline in-process LLM enumeration over the full transcript.
+    # Runs alongside the existing vision keyframe enumerator on every
+    # ``POST /scan``; the wizard polls a merged catalog. No GPU, no
+    # SQS, no worker. ~$0.003/video on gpt-4o-mini, roughly 10× cheaper
+    # than the vision path.
+    #
+    # See ``.claude/plans/shorts-auto-product-stt-enum-2026-05-06.md``.
+    auto_shorts_product_v2_stt_enum_enabled: bool = False
+    auto_shorts_product_v2_stt_enum_model: str = "gpt-4o-mini"
+    # Bound the asyncio fan-out from /scan into the LLM. STT enum is
+    # fire-and-forget; this caps how many concurrent enumeration calls
+    # an api replica spawns. Defaults match image_caption's pattern.
+    auto_shorts_product_v2_stt_enum_max_concurrency: int = 4
+    # Mirrors heimdex_media_contracts.product.TranscriptEnumerationPrompt.VERSION.
+    # Bumping in lockstep is the goldens-eval gate (PR 5 of plan).
+    auto_shorts_product_v2_stt_enum_prompt_version: str = "v1.0"
+    # Truncation guardrail. ~80k tokens covers 2-3hr of dense Korean
+    # transcript before we hit gpt-4o-mini's context. Multi-pass
+    # chunking would land in Phase 8 if a video genuinely exceeds it.
+    auto_shorts_product_v2_stt_enum_max_transcript_tokens: int = 80000
+    # Per-call wall-time ceiling. Trips for transcripts that genuinely
+    # take that long; surface as ``enumeration_llm_failed``.
+    auto_shorts_product_v2_stt_enum_timeout_s: float = 90.0
+
     # --- CORS ---
     cors_allow_origin_regex: str = (
         r"^https?://"

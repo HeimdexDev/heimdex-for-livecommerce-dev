@@ -332,6 +332,23 @@ class ProductScanService:
                 detail="failed to enqueue scan; please retry",
             )
 
+        # v0.16.0 — fan out to the STT-first enumeration path. Runs
+        # in-process on the same event loop, OUTSIDE the request
+        # lifecycle. The function is a no-op when the feature flag
+        # is off or the OpenAI key isn't configured. Vision still
+        # owns the ``enumerating → enumeration_done`` job lifecycle
+        # transition; STT only writes additional catalog rows.
+        # Plan: .claude/plans/shorts-auto-product-stt-enum-2026-05-06.md
+        from app.modules.shorts_auto_product.enumerate_stt.service import (
+            schedule_stt_enumeration_task,
+        )
+        schedule_stt_enumeration_task(
+            settings=self.settings,
+            org_id=org_id,
+            video_db_id=video_id,
+            video_drive_id=None,  # resolved inside the task
+        )
+
         logger.info(
             "product_v2_scan_enqueued",
             job_id=str(job.id),
