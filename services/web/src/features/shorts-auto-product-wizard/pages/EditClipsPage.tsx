@@ -133,28 +133,45 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
   const selectedRenderJobId = selectedChild?.render_job_id ?? null;
 
   // Lazy-load per-clip data when the user switches to a clip we
-  // haven't loaded yet.
+  // haven't loaded yet. Note ``clipStates`` is intentionally NOT in
+  // the dep array — including it caused a React race: the moment
+  // this effect's first setClipStates({loading: true}) fired, the
+  // effect re-ran (clipStates changed), the previous run's cleanup
+  // set cancelled=true, and the async fetch's setClipStates was
+  // silently dropped. State stayed stuck at {loading: true} forever.
+  // Instead, the "already loaded" guard lives inside the functional
+  // setState updater, which sees the freshest state without making
+  // the effect react to its own writes.
   useEffect(() => {
     if (!selectedRenderJobId || !scenesByVideo) return;
-    const existing = clipStates[selectedRenderJobId];
-    if (existing && !existing.error) return;
 
     let cancelled = false;
-    setClipStates((prev) => ({
-      ...prev,
-      [selectedRenderJobId]: {
-        renderJobId: selectedRenderJobId,
-        index: selectedClipIdx,
-        title: "",
-        clips: [],
-        subtitles: [],
-        composition: null,
-        downloadUrl: null,
-        totalDurationMs: 0,
-        loading: true,
-        error: null,
-      },
-    }));
+    let alreadyLoaded = false;
+    setClipStates((prev) => {
+      const existing = prev[selectedRenderJobId];
+      if (existing && !existing.error && !existing.loading) {
+        alreadyLoaded = true;
+        return prev;
+      }
+      return {
+        ...prev,
+        [selectedRenderJobId]: {
+          renderJobId: selectedRenderJobId,
+          index: selectedClipIdx,
+          title: "",
+          clips: [],
+          subtitles: [],
+          composition: null,
+          downloadUrl: null,
+          totalDurationMs: 0,
+          loading: true,
+          error: null,
+        },
+      };
+    });
+    if (alreadyLoaded) {
+      return;
+    }
 
     (async () => {
       try {
@@ -223,7 +240,7 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
       cancelled = true;
     };
   }, [
-    selectedRenderJobId, scenesByVideo, selectedClipIdx, clipStates, getAccessToken, videoId,
+    selectedRenderJobId, scenesByVideo, selectedClipIdx, getAccessToken, videoId,
   ]);
 
   // Reset playback state when switching clips.
