@@ -77,6 +77,8 @@ jobs:
             tests/test_v2_router_video_id_resolution.py \
             tests/test_videos_internal_scenes_with_keyframes.py \
             tests/test_shorts_auto_product_alias_generator.py \
+            tests/test_shorts_auto_product_track_stt_pure.py \
+            tests/test_shorts_auto_product_track_stt_async.py \
             --tb=short
 
           # NOTE: shorts_auto tests are deliberately NOT in the CI

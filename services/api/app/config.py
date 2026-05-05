@@ -377,6 +377,23 @@ class Settings(BaseSettings):
     auto_shorts_product_v2_enumeration_version: str = "v1.0"
     auto_shorts_product_v2_tracker_version: str = "v1.0"
 
+    # ---------- v0.15.0 STT-pivot track mode ----------
+    #
+    # ``"sam2"`` (default) preserves existing behavior — the
+    # ``shorts_auto_product`` orchestrator fans out to
+    # ``product-track-worker`` via SQS for per-scene SAM2 mask
+    # propagation. ``"stt"`` swaps in the in-process STT pipeline at
+    # ``shorts_auto_product/track_stt``: BM25 mention extraction over
+    # OpenSearch, gpt-4o-mini chunk scoring, no GPU. Flip to ``"stt"``
+    # only after the catalog backfill of ``spoken_aliases`` is complete
+    # for the org (PR 1b).
+    #
+    # See ``.claude/plans/shorts-auto-product-stt-pivot.md`` for the
+    # full migration plan, including the prod rollback path which
+    # requires keeping the SAM2 worker deployable for at least 30 days
+    # post-flip.
+    auto_shorts_product_v2_track_mode: str = "sam2"
+
     # Idempotency window for the scan endpoint — same (video_id,
     # user_id) within this window returns the existing job_id.
     auto_shorts_product_v2_scan_idempotency_seconds: int = 60
