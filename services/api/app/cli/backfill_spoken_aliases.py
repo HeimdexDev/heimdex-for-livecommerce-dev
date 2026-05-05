@@ -153,6 +153,12 @@ async def _run(args: argparse.Namespace) -> int:
 
     from app.config import get_settings
     from app.db.base import get_async_engine
+    # Trigger registration of every ORM model so SQLAlchemy can
+    # resolve cross-table relationships (e.g., Org.users → User) at
+    # mapper configuration time. Without this, querying Org raises
+    # ``InvalidRequestError: expression 'User' failed to locate a
+    # name``. Mirrors the pattern in app/cli/backfill.py.
+    import app.db.models  # noqa: F401
     from app.storage.s3 import S3Client
 
     settings = get_settings()
