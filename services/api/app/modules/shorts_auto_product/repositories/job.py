@@ -344,6 +344,55 @@ class ProductScanJobRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def transition_parent_to_fanned_out_unclaimed(
+        self,
+        *,
+        job_id: UUID,
+    ) -> ProductScanJob | None:
+        """Variant of :meth:`transition_parent_to_fanned_out` for the
+        STT-mode inline fan-out path (PR 2.6).
+
+        The SAM2-driven flow has the worker holding the parent's lease
+        when it transitions to ``fanned_out``; the existing method's
+        ``claimed_by`` guard is the right defense for that path. The
+        STT-mode path runs INSIDE the api at scan_order creation time,
+        before any worker has touched the row, so there is no lease to
+        match. This method skips the claimed_by check.
+
+        Same end-state as the worker path: ``stage=fanned_out``,
+        ``claimed_by=None``, ``lease_expires_at=None``,
+        ``progress_pct=100``, ``last_heartbeat_at=NOW``. No cost delta
+        — STT-mode doesn't incur tracking cost at fan-out time
+        (per-child STT pipeline cost is recorded by the runner).
+
+        Guarded on ``mode = SCAN_MODE_SCAN_ORDER`` so a buggy caller
+        can't accidentally use this on an enumerate or render_child
+        row. Returns ``None`` if no row matched (parent missing or
+        wrong mode).
+        """
+        from app.modules.shorts_auto_product.models import (
+            SCAN_MODE_SCAN_ORDER,
+            SCAN_STAGE_FANNED_OUT,
+        )
+
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(ProductScanJob)
+            .where(
+                ProductScanJob.id == job_id,
+                ProductScanJob.mode == SCAN_MODE_SCAN_ORDER,
+            )
+            .values(
+                stage=SCAN_STAGE_FANNED_OUT,
+                progress_pct=100,
+                last_heartbeat_at=now,
+                claimed_by=None,
+                lease_expires_at=None,
+            )
+            .returning(ProductScanJob)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def _complete(
         self,
         *,

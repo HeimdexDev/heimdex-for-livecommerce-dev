@@ -703,7 +703,7 @@ class ProductScanService:
             await self.job_repo.create_render_children(
                 parent=parent, count=body.requested_count,
             )
-            await self.job_repo.transition_parent_to_fanned_out(
+            await self.job_repo.transition_parent_to_fanned_out_unclaimed(
                 job_id=parent.id,
             )
             logger.info(
