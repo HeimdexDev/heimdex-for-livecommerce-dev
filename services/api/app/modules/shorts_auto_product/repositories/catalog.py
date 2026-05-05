@@ -124,6 +124,93 @@ class ProductCatalogRepository:
         result = await self.session.execute(stmt)
         return result.rowcount > 0
 
+    # ---------- v0.15.0 — STT-pivot spoken aliases ----------
+
+    async def find_entries_needing_aliases(
+        self,
+        *,
+        current_prompt_version: str,
+        org_id: UUID | None = None,
+        video_id: UUID | None = None,
+        limit: int = 1000,
+    ) -> list[ProductCatalogEntry]:
+        """Return active catalog entries that need alias generation.
+
+        Selection: ``rejected_at IS NULL`` AND
+        (``aliases_generated_at IS NULL`` OR
+        ``aliases_prompt_version != current_prompt_version``). Both
+        conditions are needed so a future prompt bump targets stale
+        rows; the IS NULL covers freshly-inserted rows that the
+        backfill hasn't touched yet.
+
+        Org / video filters are optional. Backfill CLI uses ``org_id``
+        only (org-wide); the future per-entry realtime hook will use
+        ``id`` directly via :meth:`get_by_id_resource_scoped`.
+
+        Caller orders by ``created_at`` to make backfills resumable —
+        if the CLI dies mid-run, re-running picks up where it left off
+        (already-aliased rows naturally drop out of the selection).
+        """
+        stmt = (
+            select(ProductCatalogEntry)
+            .where(
+                ProductCatalogEntry.rejected_at.is_(None),
+                (
+                    ProductCatalogEntry.aliases_generated_at.is_(None)
+                    | (
+                        ProductCatalogEntry.aliases_prompt_version
+                        != current_prompt_version
+                    )
+                ),
+            )
+            .order_by(ProductCatalogEntry.created_at.asc())
+            .limit(limit)
+        )
+        if org_id is not None:
+            stmt = stmt.where(ProductCatalogEntry.org_id == org_id)
+        if video_id is not None:
+            stmt = stmt.where(ProductCatalogEntry.video_id == video_id)
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def update_aliases(
+        self,
+        *,
+        entry_id: UUID,
+        aliases: list[str],
+        prompt_version: str,
+    ) -> bool:
+        """Persist alias generation result for one catalog entry.
+
+        Idempotent: re-running with the same ``(aliases, prompt_version)``
+        yields the same end state. The provenance pair
+        (``aliases_generated_at``, ``aliases_prompt_version``) lets a
+        future prompt bump distinguish "this row is fresh under v1.1"
+        from "this row hasn't seen any alias generation yet".
+
+        Not org-scoped because the backfill CLI iterates entries it
+        has already loaded via :meth:`find_entries_needing_aliases`
+        (which honors the org filter); a per-entry write does not need
+        to re-validate the tenant boundary. The realtime hook (PR 2+)
+        likewise calls this after re-fetching the entry within the
+        request-scoped session.
+
+        Returns ``True`` if a row was updated, ``False`` if the
+        ``entry_id`` does not exist (caller should warn — usually
+        means the row was deleted between selection and update,
+        which is rare but worth noticing in CLI runs).
+        """
+        stmt = (
+            update(ProductCatalogEntry)
+            .where(ProductCatalogEntry.id == entry_id)
+            .values(
+                spoken_aliases=aliases,
+                aliases_generated_at=datetime.now(timezone.utc),
+                aliases_prompt_version=prompt_version,
+            )
+        )
+        result = await self.session.execute(stmt)
+        return bool(result.rowcount or 0)
+
     async def invalidate_video_catalog(
         self,
         *,

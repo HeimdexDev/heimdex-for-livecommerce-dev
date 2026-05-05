@@ -211,6 +211,29 @@ class ProductCatalogEntry(Base, UUIDMixin, TimestampMixin):
     enumeration_version: Mapped[str] = mapped_column(Text, nullable=False)
     enumeration_prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
 
+    # ---------- v0.15.0 — STT-pivot spoken-form aliases (migration 054) ----------
+    #
+    # Search-only metadata used by the ``shorts_auto_product`` STT track
+    # (see ``.claude/plans/shorts-auto-product-stt-pivot.md`` PR 1b).
+    # Populated post-hoc by the API via ``app.cli.backfill_spoken_aliases``
+    # — NOT by the enumerate worker. Backward-compat with v0.14.0
+    # workers: they produce ``ProductCatalogEntry`` payloads without
+    # this field, the v0.15.0 contracts schema applies the empty-list
+    # default on parse, the DB column accepts the empty default.
+    #
+    # ``aliases_generated_at`` IS NULL means "never attempted"; the
+    # backfill CLI selection query keys on it. The provenance pair
+    # (timestamp + prompt version) lets a future prompt bump target
+    # only stale rows for re-generation without disturbing the
+    # already-shipped enumeration calibration gates.
+    spoken_aliases: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, server_default="{}",
+    )
+    aliases_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    aliases_prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     rejected_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
