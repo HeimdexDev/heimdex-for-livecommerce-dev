@@ -79,6 +79,7 @@ jobs:
             tests/test_shorts_auto_product_alias_generator.py \
             tests/test_shorts_auto_product_track_stt_pure.py \
             tests/test_shorts_auto_product_track_stt_async.py \
+            tests/test_shorts_auto_product_stt_runner_branch.py \
             --tb=short
 
           # NOTE: shorts_auto tests are deliberately NOT in the CI
