@@ -78,6 +78,27 @@ export async function listRenderJobs(
   return res.json();
 }
 
+/**
+ * Fetch a single render job by id. Backend ``GET /api/shorts/render/{job_id}``
+ * returns ``RenderJobResponse`` including the (presigned, expiring)
+ * ``download_url`` for the rendered MP4. Owner-scoped on the server.
+ */
+export async function getRenderJob(
+  jobId: string,
+  getToken: TokenGetter,
+): Promise<RenderJobResponse> {
+  const headers = await authHeaders(getToken);
+  const res = await fetch(`${getApiBaseUrl()}/api/shorts/render/${jobId}`, {
+    method: "GET",
+    headers,
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Failed to get render job (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function getShortComposition(
   shortId: string,
   getToken: TokenGetter,

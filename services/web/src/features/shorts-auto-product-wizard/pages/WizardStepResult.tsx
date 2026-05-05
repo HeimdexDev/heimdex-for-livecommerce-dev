@@ -69,6 +69,19 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
               onCancel={cancel}
             />
             <ChildList children={status.children} videoId={videoId} />
+            {status.children.some((c) => Boolean(c.render_job_id)) ? (
+              <div className="flex justify-end">
+                <Link
+                  href={`/export/shorts/auto/wizard/${encodeURIComponent(
+                    videoId,
+                  )}/result/${encodeURIComponent(parentJobId)}/edit-clips`}
+                  className="rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+                  data-testid="open-edit-clips"
+                >
+                  자막 편집기 열기
+                </Link>
+              </div>
+            ) : null}
           </>
         )}
       </div>
