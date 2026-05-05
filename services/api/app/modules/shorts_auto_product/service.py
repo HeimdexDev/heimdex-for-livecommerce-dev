@@ -684,6 +684,34 @@ class ProductScanService:
         )
         await self.session.flush()
 
+        # PR 2.6 STT-pivot: when track_mode='stt', skip the SQS
+        # publish entirely (the SAM2 product-track-worker is the
+        # consumer of that queue) and fan out children inline. The
+        # api-process child runner (PR 2.5) picks up the children
+        # via the queued-render_children poll and runs the in-process
+        # STT pipeline.
+        #
+        # Without this branch, a track_mode='stt' scan_order races
+        # the still-deployed SAM2 worker which claims the SQS message
+        # first and runs SAM2 tracking — exactly what the STT pivot
+        # is replacing. See plan §"PR 2.6 — inline fan-out for STT mode"
+        # for the full sequencing.
+        track_mode = getattr(
+            self.settings, "auto_shorts_product_v2_track_mode", "sam2",
+        )
+        if track_mode == "stt":
+            await self.job_repo.create_render_children(
+                parent=parent, count=body.requested_count,
+            )
+            await self.job_repo.transition_parent_to_fanned_out(
+                job_id=parent.id,
+            )
+            logger.info(
+                "product_v2_scan_order_stt_fanout",
+                parent_job_id=str(parent.id),
+                org_id=str(org_id),
+                child_count=body.requested_count,
+            )
         # Phase 4 PR — publish the parent track job to SQS so the
         # product-track-worker picks it up and runs the per-catalog
         # tracking loop. Gated on
@@ -693,7 +721,7 @@ class ProductScanService:
         # ready would fill the worker DLQ with unparseable messages
         # (extra='forbid' rejects the new wizard fields on a v0.13.0
         # contracts pin).
-        if self.settings.auto_shorts_product_v2_publish_scan_order_enabled:
+        elif self.settings.auto_shorts_product_v2_publish_scan_order_enabled:
             try:
                 sqs_producer.publish_product_track_job(
                     job_id=parent.id,
@@ -761,8 +789,10 @@ class ProductScanService:
             intent=body.intent,
             settings_hash=settings_hash,
             published=(
-                self.settings.auto_shorts_product_v2_publish_scan_order_enabled
+                track_mode != "stt"
+                and self.settings.auto_shorts_product_v2_publish_scan_order_enabled
             ),
+            track_mode=track_mode,
         )
         return ScanOrderResponse(parent_job_id=parent.id, deduped=False)
 
