@@ -421,6 +421,24 @@ class ChildRunner:
         chosen_catalog_id = catalog_pick.catalog_entry_id
         catalog_label = catalog_label_lookup.get(chosen_catalog_id)
 
+        # ── 3.5. Track-mode branch ────────────────────────────────
+        # When ``auto_shorts_product_v2_track_mode='stt'`` the rest of
+        # this method is replaced by the in-process STT pipeline
+        # (``track_stt.service.assemble_stt_clip``). Default ``"sam2"``
+        # preserves the existing path. See
+        # ``.claude/plans/shorts-auto-product-stt-pivot.md`` PR 2.5.
+        if (
+            getattr(self.settings, "auto_shorts_product_v2_track_mode", "sam2")
+            == "stt"
+        ):
+            await self._process_child_stt(
+                child=child,
+                parent=parent,
+                chosen_catalog_id=chosen_catalog_id,
+                catalog_label=catalog_label,
+            )
+            return
+
         # ── 4. Score + select windows for the chosen catalog ──────
         appearances = await self._load_appearances_for_catalog(
             org_id=parent.org_id, catalog_entry_id=chosen_catalog_id,
@@ -519,6 +537,260 @@ class ChildRunner:
                 "shorts_index": child.shorts_index,
                 "windows": len(plan.windows),
             },
+        )
+
+    # ── STT track (PR 2.5) ───────────────────────────────────────────
+
+    async def _process_child_stt(
+        self,
+        *,
+        child: ProductScanJob,
+        parent: ProductScanJob,
+        chosen_catalog_id: UUID,
+        catalog_label: str | None,
+    ) -> None:
+        """STT-track replacement for steps 4-6 of ``_process_child_payload``.
+
+        Branched into when ``auto_shorts_product_v2_track_mode='stt'``.
+        Loads the full catalog entry (we already have its label, but
+        not ``llm_label`` + ``spoken_aliases``), resolves the
+        ``os_video_id`` from ``drive_files``, constructs an
+        AsyncOpenSearch + AsyncOpenAI per-call (simpler v1; revisit
+        if profiling flags this — see plan §"Open question for PR 2.5"),
+        and runs the STT pipeline.
+
+        Error mapping:
+
+        * :class:`NoMentionsFoundError` and
+          :class:`TranscriptUnavailableError` → ``_complete_no_render``
+          (terminal stage=done with ``render_job_id=None``). The wizard
+          UI already surfaces "no render produced" friendly-error-style
+          for the SAM2 ``no_appearances_for_catalog`` path; STT reuses
+          that same DB shape so the frontend doesn't need a new branch.
+        * :class:`SttPipelineError` (base / OS unreachable / render
+          enqueue failed) → ``_mark_child_failed`` with descriptive
+          message. Distinct from no-render because the user CAN retry.
+
+        Imports the STT module lazily so the SAM2 path doesn't pay
+        the import cost when track_mode='sam2'.
+        """
+        from openai import AsyncOpenAI
+
+        from app.modules.shorts_auto_product.track_stt import service as stt_service
+        from app.modules.shorts_auto_product.track_stt.errors import (
+            NoMentionsFoundError,
+            SttPipelineError,
+            TranscriptUnavailableError,
+        )
+
+        # ── 1. Load full catalog entry + os_video_id resolution ────
+        os_video_id, llm_label, spoken_aliases = await self._load_stt_inputs(
+            org_id=parent.org_id,
+            catalog_entry_id=chosen_catalog_id,
+            drive_file_id=parent.video_id,
+        )
+        if os_video_id is None or llm_label is None:
+            # Catalog entry vanished between picker and load (rare),
+            # or the drive_files row is missing. Either way, no
+            # render to produce.
+            await self._complete_no_render(
+                child_id=child.id,
+                reason="stt_inputs_missing",
+            )
+            return
+
+        length_seconds = (
+            parent.length_seconds
+            or parent.duration_preset_sec
+            or 60
+        )
+        target_duration_ms = int(length_seconds) * 1000
+
+        # ── 2. Construct per-call clients ──────────────────────────
+        os_client = self._build_os_client()
+        openai_client = AsyncOpenAI(
+            api_key=getattr(self.settings, "openai_api_key", "") or "",
+            timeout=15.0,
+        )
+
+        # ── 3. Build the enqueue_render closure ────────────────────
+        # Captures parent + os_video_id by closure so track_stt itself
+        # never sees DB-row internals. Mirrors the existing
+        # ``_create_render_job`` call in the SAM2 path.
+        async def _enqueue_render(spec) -> UUID:
+            return await self._create_render_job(
+                org_id=parent.org_id,
+                user_id=parent.requested_by_user_id,
+                os_video_id=os_video_id,  # type: ignore[arg-type]
+                title=catalog_label,
+                composition_spec=spec,
+            )
+
+        # ── 4. Run the pipeline ────────────────────────────────────
+        try:
+            try:
+                result = await stt_service.assemble_stt_clip(
+                    org_id=parent.org_id,
+                    catalog_entry_id=chosen_catalog_id,
+                    llm_label=llm_label,
+                    spoken_aliases=list(spoken_aliases or []),
+                    os_video_id=os_video_id,
+                    target_duration_ms=target_duration_ms,
+                    title=catalog_label,
+                    os_client=os_client,
+                    openai_client=openai_client,
+                    enqueue_render=_enqueue_render,
+                )
+            except NoMentionsFoundError as e:
+                logger.info(
+                    "stt_runner_no_mentions",
+                    extra={
+                        "child_id": str(child.id),
+                        "catalog_entry_id": str(chosen_catalog_id),
+                        "video_id": os_video_id,
+                        "reason": str(e)[:200],
+                    },
+                )
+                await self._complete_no_render(
+                    child_id=child.id,
+                    reason="stt_no_mentions",
+                )
+                return
+            except TranscriptUnavailableError as e:
+                logger.info(
+                    "stt_runner_transcript_unavailable",
+                    extra={
+                        "child_id": str(child.id),
+                        "video_id": os_video_id,
+                        "reason": str(e)[:200],
+                    },
+                )
+                await self._complete_no_render(
+                    child_id=child.id,
+                    reason="stt_transcript_unavailable",
+                )
+                return
+            except SttPipelineError as e:
+                logger.warning(
+                    "stt_runner_pipeline_error",
+                    extra={
+                        "child_id": str(child.id),
+                        "video_id": os_video_id,
+                        "error": str(e)[:300],
+                    },
+                )
+                await self._mark_child_failed(
+                    child_id=child.id,
+                    error_message=f"stt pipeline failed: {e}"[:1900],
+                )
+                return
+        finally:
+            # AsyncOpenSearch / AsyncOpenAI both expose ``.close``;
+            # swallow exceptions so a teardown error doesn't mask a
+            # successful run.
+            for client in (os_client, openai_client):
+                close = getattr(client, "close", None)
+                if close is None:
+                    continue
+                try:
+                    maybe_awaitable = close()
+                    if hasattr(maybe_awaitable, "__await__"):
+                        await maybe_awaitable
+                except Exception:  # noqa: BLE001 — teardown best-effort
+                    pass
+
+        # ── 5. Mark terminal with the produced render_job_id ───────
+        async with self.session_factory() as session:
+            repo = ProductScanJobRepository(session)
+            completed = await repo.complete_tracking(
+                job_id=child.id,
+                claimed_by=self.claimed_by,
+                cost_delta_usd=Decimal("0"),
+                render_job_id=result.render_job_id,
+            )
+            if completed is None:
+                logger.warning(
+                    "stt_runner_complete_lease_lost",
+                    extra={
+                        "child_id": str(child.id),
+                        "instance_id": self.instance_id,
+                        "render_job_id": str(result.render_job_id),
+                    },
+                )
+                return
+            await session.commit()
+        logger.info(
+            "stt_runner_processed_child",
+            extra={
+                "child_id": str(child.id),
+                "render_job_id": str(result.render_job_id),
+                "catalog_entry_id": str(chosen_catalog_id),
+                "shorts_index": child.shorts_index,
+                "mentioned_scene_count": result.mentioned_scene_count,
+                "matched_alias_count": len(result.matched_aliases),
+            },
+        )
+
+    async def _load_stt_inputs(
+        self,
+        *,
+        org_id: UUID,
+        catalog_entry_id: UUID,
+        drive_file_id: UUID,
+    ) -> tuple[str | None, str | None, list[str]]:
+        """Load (os_video_id, llm_label, spoken_aliases) for the STT
+        pipeline. Read-only, single session.
+
+        Returns ``(None, None, [])`` if either the catalog entry or
+        the drive_file row is missing — caller routes to
+        ``_complete_no_render`` rather than failing the child.
+        """
+        from sqlalchemy import select as _select
+
+        # Lazy local import to keep DriveFile out of the runner's
+        # module-level import graph until the STT path is taken.
+        from app.modules.drive.models import DriveFile
+
+        async with self.session_factory() as session:
+            catalog_repo = ProductCatalogRepository(session)
+            entry = await catalog_repo.get(
+                org_id=org_id, entry_id=catalog_entry_id,
+            )
+            if entry is None:
+                return None, None, []
+            drive_row = await session.execute(
+                _select(DriveFile).where(DriveFile.id == drive_file_id),
+            )
+            drive_file = drive_row.scalar_one_or_none()
+            if drive_file is None:
+                return None, None, []
+            return (
+                drive_file.video_id,
+                entry.llm_label,
+                list(entry.spoken_aliases or []),
+            )
+
+    def _build_os_client(self):
+        """Construct an AsyncOpenSearch client for one STT pipeline call.
+
+        Mirrors ``app/modules/search/client.py::get_opensearch_client``
+        (we don't import it because the loose-coupling rule forbids
+        cross-module imports; the duplication is ~14 lines of
+        configuration).
+        """
+        from opensearchpy import AsyncOpenSearch
+
+        url = getattr(self.settings, "opensearch_url", "http://localhost:9200")
+        is_https = url.startswith("https://")
+        return AsyncOpenSearch(
+            hosts=[url],
+            use_ssl=is_https,
+            verify_certs=is_https,
+            ssl_show_warn=False,
+            timeout=60,
+            max_retries=3,
+            retry_on_timeout=True,
+            pool_maxsize=20,
         )
 
     # ── helpers (private; tests patch via process_child_fn) ──────────
