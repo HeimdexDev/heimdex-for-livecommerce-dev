@@ -244,6 +244,25 @@ class ProductScanService:
         if most_recent.stage in ACTIVE_SCAN_STAGES:
             return "in_progress", most_recent.id
         if most_recent.stage == SCAN_STAGE_FAILED:
+            # Distinguish "scan ran cleanly but found nothing" from
+            # "scan crashed". Prior bug: every failed enumeration
+            # mapped to scan_status='failed', which the wizard
+            # surfaced as "이전 스캔이 실패했어요. 다시 시도해 주세요"
+            # — telling the user to retry on a video the LLM had
+            # already correctly classified as having no detectable
+            # products. Caught while testing on
+            # gd_907a1b5c8cdf5bb5 (a banner-heavy intro masked the
+            # host-with-product moments deeper in the video).
+            #
+            # ``no_products_detected`` is the worker's terminal-but-
+            # benign outcome (LLM ran end-to-end and clustered nothing
+            # above the noise floor). Map it to ``complete`` so the
+            # wizard renders the "no products in this video" UX
+            # (matching the empty-catalog branch) rather than the
+            # retry-please surface. All other error_codes (timeouts,
+            # schema errors, internal_error) stay as ``failed``.
+            if most_recent.error_code == "no_products_detected":
+                return "complete", None
             return "failed", None
         return "never", None
 
