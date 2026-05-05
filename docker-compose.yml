@@ -132,6 +132,11 @@ services:
       - AUTO_SHORTS_PRODUCT_V2_ENABLED=${AUTO_SHORTS_PRODUCT_V2_ENABLED:-false}
       - AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT=${AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT:-0}
       - AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED=${AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED:-false}
+      # PR 2.5 STT-pivot: track_mode flag. ``"sam2"`` (default) preserves
+      # SAM2 visual tracking. ``"stt"`` swaps in the in-process STT
+      # pipeline at shorts_auto_product/track_stt — see
+      # .claude/plans/shorts-auto-product-stt-pivot.md.
+      - AUTO_SHORTS_PRODUCT_V2_TRACK_MODE=${AUTO_SHORTS_PRODUCT_V2_TRACK_MODE:-sam2}
       # Auth0 configuration
       - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
       - AUTH0_DOMAIN=${AUTH0_DOMAIN:-}
