@@ -137,6 +137,15 @@ services:
       # pipeline at shorts_auto_product/track_stt — see
       # .claude/plans/shorts-auto-product-stt-pivot.md.
       - AUTO_SHORTS_PRODUCT_V2_TRACK_MODE=${AUTO_SHORTS_PRODUCT_V2_TRACK_MODE:-sam2}
+      # PR 3 v0.16.0 STT-first enumeration. Runs alongside vision in the
+      # api process; OFF by default until calibration goldens land
+      # (PR 5 of .claude/plans/shorts-auto-product-stt-enum-2026-05-06.md).
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_ENABLED=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_ENABLED:-false}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MODEL=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MODEL:-gpt-4o-mini}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_CONCURRENCY=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_CONCURRENCY:-4}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_PROMPT_VERSION=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_PROMPT_VERSION:-v1.0}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_TRANSCRIPT_TOKENS=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_TRANSCRIPT_TOKENS:-80000}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_TIMEOUT_S=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_TIMEOUT_S:-90}
       # Auth0 configuration
       - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
       - AUTH0_DOMAIN=${AUTH0_DOMAIN:-}
