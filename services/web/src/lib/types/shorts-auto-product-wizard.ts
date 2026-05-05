@@ -89,16 +89,25 @@ export interface ProductScanResponse {
 export interface CatalogProductSummary {
   catalog_entry_id: string;
   label: string;
-  // Required by the API (Field(..., min_length=1)); it's the product
-  // thumbnail the wizard renders. NEVER null in practice.
-  canonical_crop_url: string;
+  // v0.16.0: nullable for STT-source rows (no canonical crop because
+  // STT enumeration never sees a frame). The wizard renders a
+  // generic icon when null. Vision-source rows always have a URL.
+  canonical_crop_url: string | null;
   enumeration_confidence: number;
-  prominence_score: number;
+  // v0.16.0: nullable — vision-only metric, NULL for STT-source rows.
+  prominence_score: number | null;
   /** True after the user picked this product and tracking ran. */
   has_track_data: boolean;
   /** Populated only AFTER tracking — null during enumeration polling. */
   appearance_count: number | null;
   total_appearance_seconds: number | null;
+  // v0.16.0 — STT-first enumeration provenance fields.
+  /** ``"vision"`` (default) | ``"stt"`` | ``"stt_xref"`` | ``"manifest"`` | ``"hybrid"``. */
+  enumeration_source: string;
+  /** First spoken mention timestamp (ms). NULL for vision-source rows. */
+  first_mention_ms: number | null;
+  /** Verbatim host quote that surfaced this product. NULL for vision rows. */
+  example_quote: string | null;
 }
 
 /**

@@ -80,18 +80,27 @@ class CatalogProductSummary(BaseModel):
     the track worker writes appearances; until then,
     ``appearance_count`` and ``total_appearance_seconds`` are ``None``
     so the UI can show a "track to see appearances" affordance.
+
+    v0.16.0 — STT-source rows have NO canonical crop (no frame to
+    crop) and NO prominence score (vision-only concept). The frontend
+    falls back to a generic icon when ``canonical_crop_url`` is null;
+    ``enumeration_source`` drives the badge/provenance UX.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     catalog_entry_id: UUID
     label: str = Field(..., min_length=1)
-    canonical_crop_url: str = Field(..., min_length=1)
+    canonical_crop_url: str | None = None
     enumeration_confidence: float = Field(..., ge=0.0, le=1.0)
-    prominence_score: float = Field(..., ge=0.0, le=1.0)
+    prominence_score: float | None = Field(default=None, ge=0.0, le=1.0)
     has_track_data: bool
     appearance_count: int | None = Field(default=None, ge=0)
     total_appearance_seconds: float | None = Field(default=None, ge=0.0)
+    # v0.16.0 — STT-first enumeration provenance fields.
+    enumeration_source: str = "vision"
+    first_mention_ms: int | None = Field(default=None, ge=0)
+    example_quote: str | None = None
 
 
 class ProductCatalogResponse(BaseModel):

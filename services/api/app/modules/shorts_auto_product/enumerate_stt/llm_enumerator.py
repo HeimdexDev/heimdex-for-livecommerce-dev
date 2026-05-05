@@ -261,17 +261,26 @@ class TranscriptEnumerator:
         # ours, not the host's — so a quote that spans a scene
         # boundary still matches. The LLM is told the markers are
         # timestamps; it does NOT include them in example_quote.
-        normalized_transcript = _normalize_whitespace(
+        # Use NFKC + punctuation-strip on BOTH sides — the LLM and the
+        # STT pass disagree on punctuation cadence often enough that a
+        # whitespace-only normalize was rejecting real verbatim quotes.
+        normalized_transcript = _normalize_for_fidelity(
             _strip_timestamp_markers(transcript)
         )
         kept: list[Any] = []
         dropped = 0
+        dropped_samples: list[str] = []
         for product in parsed.products:
-            normalized_quote = _normalize_whitespace(product.example_quote)
+            normalized_quote = _normalize_for_fidelity(product.example_quote)
             if normalized_quote and normalized_quote in normalized_transcript:
                 kept.append(product)
             else:
                 dropped += 1
+                # Capture a small sample of dropped quotes for the
+                # warning log so calibration goldens (PR 5) can be
+                # tuned against real misses without re-running the LLM.
+                if len(dropped_samples) < 3:
+                    dropped_samples.append(product.example_quote[:80])
 
         if dropped:
             logger.warning(
@@ -280,6 +289,7 @@ class TranscriptEnumerator:
                     "dropped_count": dropped,
                     "kept_count": len(kept),
                     "model": self._model,
+                    "dropped_quote_samples": dropped_samples,
                 },
             )
 
@@ -314,6 +324,14 @@ _WHITESPACE_RE = re.compile(r"\s+")
 # ``[mm:ss]`` or ``[m:ss]`` marker, with arbitrary digit length on the
 # minutes side (long videos render as ``[127:33]``).
 _TIMESTAMP_MARKER_RE = re.compile(r"\[\d+:\d{2}\]")
+# Punctuation + Korean / fullwidth quote marks the LLM can emit at
+# different cadence than the source transcript. The fidelity check
+# strips these on BOTH sides so a paraphrase still gets caught while
+# punctuation drift does not falsely reject a real quote.
+_PUNCTUATION_RE = re.compile(
+    r"[.,?!~・「」『』\"\'()\[\]<>:;…—\-—~"
+    r"“”‘’、。．，？！]"
+)
 
 
 def _strip_timestamp_markers(text: str) -> str:
@@ -328,14 +346,39 @@ def _strip_timestamp_markers(text: str) -> str:
     return _TIMESTAMP_MARKER_RE.sub(" ", text)
 
 
-def _normalize_whitespace(text: str) -> str:
-    """Collapse runs of whitespace to a single space + strip ends.
+def _normalize_for_fidelity(text: str) -> str:
+    """Aggressive normalization for the quote-fidelity substring check.
 
-    The fidelity check has to tolerate the LLM rewrapping internal
-    whitespace (it reads the transcript in chunks and sometimes
-    emits the quote with a space where a newline was). We do NOT
-    casefold — Korean preserves case-insensitive matching naturally,
-    and we want to catch a Latin-script paraphrase that drifts.
+    Real-world Korean transcripts vs LLM-emitted quotes diverge on:
+
+    * Punctuation cadence — the STT pass adds period/comma where the
+      host paused; the LLM-quoted version may drop those, or add a
+      Korean comma where there wasn't one.
+    * Unicode normalization — Hangul syllables can be NFC composed
+      (``하``) or NFD decomposed (``ㅎ + ㅏ``); Latin/digit characters
+      can be fullwidth (``１``) vs halfwidth (``1``). NFKC collapses
+      both into a single canonical form so a fullwidth digit in one
+      side matches a halfwidth in the other.
+    * Whitespace cadence — already handled (run-collapse + strip).
+
+    We keep this conservative on the linguistic axis: do NOT casefold
+    Korean (no-op anyway) and do NOT strip Korean particles. The goal
+    is to catch a true paraphrase (different words / clauses) while
+    tolerating punctuation drift.
+    """
+    import unicodedata
+
+    nfkc = unicodedata.normalize("NFKC", text)
+    no_punct = _PUNCTUATION_RE.sub("", nfkc)
+    return _WHITESPACE_RE.sub(" ", no_punct).strip()
+
+
+# Backward-compat alias — older callers in this module use the old
+# name. _normalize_for_fidelity is the new canonical entry point.
+def _normalize_whitespace(text: str) -> str:
+    """Deprecated alias retained for callers that only need
+    whitespace-collapse semantics. New call sites should use
+    :func:`_normalize_for_fidelity` which adds NFKC + punctuation-strip.
     """
     return _WHITESPACE_RE.sub(" ", text).strip()
 

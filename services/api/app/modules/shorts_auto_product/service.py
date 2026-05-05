@@ -178,10 +178,16 @@ class ProductScanService:
         s3 = S3Client(bucket=self.settings.drive_s3_bucket)
         products: list[CatalogProductSummary] = []
         for entry in entries:
-            crop_url = await s3.generate_presigned_url_async(
-                entry.canonical_crop_s3_key,
-                expires_in=_CROP_URL_TTL_SECONDS,
-            )
+            # v0.16.0 — STT-source rows have NULL canonical_crop_s3_key
+            # (no frame, no crop). Skip the presigned URL call to avoid
+            # botocore raising on Key=None; the frontend falls back to
+            # a generic icon when canonical_crop_url is null.
+            crop_url: str | None = None
+            if entry.canonical_crop_s3_key:
+                crop_url = await s3.generate_presigned_url_async(
+                    entry.canonical_crop_s3_key,
+                    expires_in=_CROP_URL_TTL_SECONDS,
+                )
             appearance_count = await self.appearance_repo.count_active(
                 org_id=org_id, catalog_entry_id=entry.id,
             )
@@ -204,6 +210,9 @@ class ProductScanService:
                     has_track_data=appearance_count > 0,
                     appearance_count=appearance_count if appearance_count > 0 else None,
                     total_appearance_seconds=total_seconds,
+                    enumeration_source=entry.enumeration_source,
+                    first_mention_ms=entry.first_mention_ms,
+                    example_quote=entry.example_quote,
                 )
             )
 

@@ -379,6 +379,49 @@ class TestTranscriptEnumerator:
         assert len(result.products) == 1
         assert result.dropped_count == 0
 
+    @pytest.mark.asyncio
+    async def test_quote_fidelity_tolerates_punctuation_drift(self):
+        # Real-world failure mode (staging 2026-05-06 on
+        # gd_d60b8c8f80e7907e): LLM emitted quote without trailing
+        # period; transcript had it. Strict substring rejected every
+        # product → catalog stayed empty → wizard showed "no products."
+        transcript = "[00:05] 오늘은 제주도 패키지를 39000원에 모시겠습니다."
+        openai = _make_openai_mock(response=_mock_openai_response(
+            products=[{
+                "llm_label": "제주도 패키지",
+                "spoken_aliases": ["제주", "패키지"],
+                "first_mention_ms": 5000,
+                # Note: no period at end. Transcript has one.
+                "example_quote": "오늘은 제주도 패키지를 39000원에 모시겠습니다",
+                "confidence": 0.9,
+            }],
+        ))
+        enumerator = TranscriptEnumerator(openai_client=openai)
+        result = await enumerator.enumerate(transcript=transcript)
+        assert len(result.products) == 1
+        assert result.dropped_count == 0
+
+    @pytest.mark.asyncio
+    async def test_quote_fidelity_tolerates_fullwidth_digit_drift(self):
+        # Transcript has fullwidth digit ``１`` (NFKC compose case
+        # — STT pipelines occasionally emit fullwidth for numerics);
+        # LLM emits halfwidth ``1``. NFKC normalization should make
+        # the substring match work either way.
+        transcript = "[00:05] ３9０００원입니다"  # fullwidth digits
+        openai = _make_openai_mock(response=_mock_openai_response(
+            products=[{
+                "llm_label": "x",
+                "spoken_aliases": ["x"],
+                "first_mention_ms": 5000,
+                "example_quote": "39000원입니다",  # halfwidth
+                "confidence": 0.8,
+            }],
+        ))
+        enumerator = TranscriptEnumerator(openai_client=openai)
+        result = await enumerator.enumerate(transcript=transcript)
+        assert len(result.products) == 1
+        assert result.dropped_count == 0
+
 
 # ======================================================================
 # service helpers
