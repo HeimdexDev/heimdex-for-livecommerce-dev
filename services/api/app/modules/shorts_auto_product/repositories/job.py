@@ -344,6 +344,55 @@ class ProductScanJobRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def transition_parent_to_committed_unclaimed(
+        self,
+        *,
+        job_id: UUID,
+    ) -> ProductScanJob | None:
+        """Transition a wizard scan_order parent from ``fanned_out`` →
+        ``committed`` (PR 2.6 sibling).
+
+        ``committed`` is the parent's terminal state once all children
+        have terminated (Phase 4 plan). This method is the
+        atomically-guarded transition. Caller MUST verify "all children
+        terminal" before invoking — this method does NOT re-check
+        because the children query happens outside the WHERE-clause
+        atomic guard anyway.
+
+        Guarded on ``stage = fanned_out`` AND
+        ``mode = SCAN_MODE_SCAN_ORDER`` so concurrent calls are
+        idempotent: only the first race-winner transitions; subsequent
+        calls return ``None`` and the caller treats that as
+        "already-committed, re-fetch".
+
+        ``completed_at`` is set on this transition since ``committed``
+        IS the workflow's terminal point — wizard polling sees a
+        non-null ``completed_at`` and stops polling.
+        """
+        from app.modules.shorts_auto_product.models import (
+            SCAN_MODE_SCAN_ORDER,
+            SCAN_STAGE_COMMITTED,
+            SCAN_STAGE_FANNED_OUT,
+        )
+
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(ProductScanJob)
+            .where(
+                ProductScanJob.id == job_id,
+                ProductScanJob.stage == SCAN_STAGE_FANNED_OUT,
+                ProductScanJob.mode == SCAN_MODE_SCAN_ORDER,
+            )
+            .values(
+                stage=SCAN_STAGE_COMMITTED,
+                progress_pct=100,
+                completed_at=now,
+                last_heartbeat_at=now,
+            )
+            .returning(ProductScanJob)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def transition_parent_to_fanned_out_unclaimed(
         self,
         *,

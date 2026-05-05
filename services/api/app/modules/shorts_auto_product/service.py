@@ -41,9 +41,11 @@ from app.modules.shorts_auto_product.models import (
     SCAN_STAGE_ENUMERATING,
     SCAN_STAGE_ENUMERATION_DONE,
     SCAN_STAGE_FAILED,
+    SCAN_STAGE_FANNED_OUT,
     SCAN_STAGE_QUEUED,
     SCAN_STAGE_RENDERING,
     SCAN_STAGE_TRACKING,
+    TERMINAL_SCAN_STAGES,
     ProductCatalogEntry,
     ProductScanJob,
 )
@@ -813,6 +815,38 @@ class ProductScanService:
                 detail="scan order not found",
             )
         parent, children = result
+
+        # Lazy parent → committed transition.
+        #
+        # In the SAM2 SQS flow the worker's terminal callback could
+        # carry the parent transition along; the STT inline path
+        # (PR 2.6) has no such callback — children terminate via the
+        # api-process runner and there is no follow-up that promotes
+        # the parent to ``committed``. Without this lazy check the
+        # parent stays at ``fanned_out`` forever and the wizard's
+        # polling subscription never sees a terminal state.
+        #
+        # Trigger conditions:
+        #   - parent.stage == fanned_out
+        #   - children list non-empty (defensive — should always be
+        #     so for fanned_out parents)
+        #   - every child stage is in TERMINAL_SCAN_STAGES
+        # Atomically guarded inside the repo method (only the first
+        # racing caller wins). On race-loss the caller falls through
+        # and the next poll sees the already-transitioned parent.
+        if (
+            parent.stage == SCAN_STAGE_FANNED_OUT
+            and children
+            and all(
+                c.stage in TERMINAL_SCAN_STAGES for c in children
+            )
+        ):
+            transitioned = await self.job_repo.transition_parent_to_committed_unclaimed(
+                job_id=parent.id,
+            )
+            if transitioned is not None:
+                parent = transitioned
+
         children_responses = [_job_to_status_response(c) for c in children]
         complete_count = sum(
             1 for c in children_responses if c.completed_at is not None
