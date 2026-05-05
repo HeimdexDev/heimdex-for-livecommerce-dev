@@ -23,6 +23,7 @@ from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -182,18 +183,20 @@ class ProductCatalogEntry(Base, UUIDMixin, TimestampMixin):
         nullable=False,
     )
 
-    # Best reference frame — chosen by the reference picker's quality
-    # composite, NOT by first appearance. Lets re-id / SAM2 anchor on
-    # the highest-quality crop instead of an intro montage flash.
-    canonical_crop_s3_key: Mapped[str] = mapped_column(Text, nullable=False)
-    canonical_video_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), nullable=False,
+    # Best reference frame — vision-source rows have a canonical crop
+    # picked by the reference picker's quality composite. STT-source
+    # rows have NULL for every canonical_* field (the transcript pass
+    # never sees a frame). Migration 055 dropped NOT NULL on these
+    # columns so STT-source rows can be inserted without sentinels.
+    canonical_crop_s3_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    canonical_video_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True,
     )
-    canonical_frame_idx: Mapped[int] = mapped_column(Integer, nullable=False)
-    canonical_bbox_x: Mapped[int] = mapped_column(Integer, nullable=False)
-    canonical_bbox_y: Mapped[int] = mapped_column(Integer, nullable=False)
-    canonical_bbox_w: Mapped[int] = mapped_column(Integer, nullable=False)
-    canonical_bbox_h: Mapped[int] = mapped_column(Integer, nullable=False)
+    canonical_frame_idx: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    canonical_bbox_x: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    canonical_bbox_y: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    canonical_bbox_w: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    canonical_bbox_h: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     llm_label: Mapped[str] = mapped_column(Text, nullable=False)
     user_label: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -206,7 +209,10 @@ class ProductCatalogEntry(Base, UUIDMixin, TimestampMixin):
     )
 
     enumeration_confidence: Mapped[float] = mapped_column(REAL, nullable=False)
-    prominence_score: Mapped[float] = mapped_column(REAL, nullable=False)
+
+    # Vision-only — bbox-area / clarity composite. NULL for STT-source
+    # rows (no visual signal). Migration 055 dropped the NOT NULL.
+    prominence_score: Mapped[float | None] = mapped_column(REAL, nullable=True)
 
     enumeration_version: Mapped[str] = mapped_column(Text, nullable=False)
     enumeration_prompt_version: Mapped[str] = mapped_column(Text, nullable=False)
@@ -233,6 +239,32 @@ class ProductCatalogEntry(Base, UUIDMixin, TimestampMixin):
         DateTime(timezone=True), nullable=True,
     )
     aliases_prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ---------- v0.16.0 — STT-first enumeration (migration 055) ----------
+    #
+    # Provenance flag for the enumeration path that produced this row.
+    # CHECK-locked at the DB level to {vision, stt, stt_xref, manifest,
+    # hybrid}; do NOT add a new value without updating both the
+    # migration's CHECK constraint AND the wizard UI's badge mapping.
+    # ``server_default='vision'`` makes existing rows inherit the
+    # correct provenance without a backfill — pre-PR-2 catalog was
+    # 100% vision-enumerated.
+    #
+    # ``first_mention_ms`` and ``example_quote`` are STT-source-only;
+    # NULL on vision rows. ``first_mention_ms`` orders the wizard's
+    # catalog view chronologically (Phase 4 wizard UX) and anchors
+    # optional Phase 5 visual back-fill. ``example_quote`` powers the
+    # provenance tooltip on STT-source cards.
+    enumeration_source: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="vision",
+    )
+    first_mention_ms: Mapped[int | None] = mapped_column(
+        # BIGINT — videos can run hours; INT4 would overflow at ~24 days
+        # but the safe pattern across the codebase is BIGINT for any
+        # millisecond timestamp.
+        BigInteger, nullable=True,
+    )
+    example_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     rejected_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
