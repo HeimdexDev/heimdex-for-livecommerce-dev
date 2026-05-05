@@ -74,9 +74,12 @@ export function EditorHeader({
 
   const handleDownload = useCallback(async () => {
     if (!renderJob?.download_url) return;
-    const url = `${getApiBaseUrl()}${renderJob.download_url}`;
+    // ``download_url`` is now an absolute presigned S3 URL (post
+    // 2026-05-06 fix). The browser can hit it directly with no
+    // auth header. Don't prefix the api base url — that would
+    // produce a malformed double-host URL.
     const a = document.createElement("a");
-    a.href = url;
+    a.href = renderJob.download_url;
     a.download = `short_${renderJob.id}.mp4`;
     document.body.appendChild(a);
     a.click();

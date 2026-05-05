@@ -238,6 +238,38 @@ async def cleanup_expired_renders(
     return result
 
 
+# 1 hour TTL — long enough for an operator to open the editor, edit
+# subtitles, and click download without re-fetching, but short enough
+# to bound exposure if the URL leaks. Mirrors the existing crop URL
+# TTL on the catalog gallery (see _CROP_URL_TTL_SECONDS).
+_PLAYBACK_URL_TTL_SECONDS = 3600
+
+
+async def _build_playback_url(job: ShortsRenderJob) -> str | None:
+    """Return a presigned S3 URL the browser can use directly for
+    ``<video src>`` / download anchors, or ``None`` when the job
+    hasn't completed.
+
+    Why presigned over the api ``/download`` endpoint: that endpoint
+    requires Bearer auth, which the browser cannot attach to a
+    ``<video>`` element or an anchor click. Returning the api path
+    in ``download_url`` produced silent 401s on every inline play
+    (staging incident 2026-05-06). Presigned URLs work without
+    auth headers and natively support HTTP Range requests.
+    """
+    if job.status != "completed" or not job.output_s3_key:
+        return None
+    from app.config import get_settings
+    from app.storage.s3 import S3Client
+
+    settings = get_settings()
+    s3 = S3Client(bucket=settings.drive_s3_bucket)
+    return await s3.generate_presigned_url_async(
+        job.output_s3_key,
+        expires_in=_PLAYBACK_URL_TTL_SECONDS,
+    )
+
+
 def _to_response(job: ShortsRenderJob, download_url: str | None = None) -> RenderJobResponse:
     # Extract thumbnail from first scene clip in input_spec
     thumb_vid = None
@@ -448,10 +480,7 @@ class ShortsRenderService:
                 detail="Render job not found",
             )
 
-        download_url: str | None = None
-        if job.status == "completed" and job.output_s3_key:
-            download_url = f"/api/shorts/render/{job.id}/download"
-
+        download_url = await _build_playback_url(job)
         return _to_response(job, download_url=download_url)
 
     async def update_render_job_title(
@@ -479,9 +508,7 @@ class ShortsRenderService:
                 detail="Render job not found",
             )
 
-        download_url: str | None = None
-        if job.status == "completed" and job.output_s3_key:
-            download_url = f"/api/shorts/render/{job.id}/download"
+        download_url = await _build_playback_url(job)
         return _to_response(job, download_url=download_url)
 
     async def list_render_jobs(

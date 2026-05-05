@@ -412,6 +412,11 @@ async def test_update_render_job_title_clears_when_set_to_none():
 async def test_update_render_job_title_completed_job_includes_download_url():
     """Response shape parity with get_render_job: completed jobs get a
     download_url so the FE can immediately offer download after rename.
+
+    Post 2026-05-06 fix: download_url is a PRESIGNED S3 URL the
+    browser can use directly (``<video src>`` / anchor click). It is
+    NOT the api's ``/api/shorts/render/{id}/download`` endpoint —
+    that path required Bearer auth and 401'd silently in browsers.
     """
     svc = _make_service_with_mocks()
     job = _make_completed_job("renamed", with_output=True)
@@ -419,7 +424,11 @@ async def test_update_render_job_title_completed_job_includes_download_url():
 
     result = await svc.update_render_job_title(uuid4(), uuid4(), job.id, "renamed")
 
-    assert result.download_url == f"/api/shorts/render/{job.id}/download"
+    assert result.download_url is not None
+    # Must be an absolute URL with the S3 signing query params, not
+    # the api-relative path.
+    assert result.download_url.startswith("http")
+    assert "X-Amz-Signature=" in result.download_url
 
 
 @pytest.mark.asyncio
