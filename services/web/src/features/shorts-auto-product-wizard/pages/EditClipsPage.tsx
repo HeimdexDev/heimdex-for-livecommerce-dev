@@ -28,8 +28,11 @@ import {
   getRenderJob,
   getShortComposition,
   RenderRateLimitError,
-  submitRender,
 } from "@/lib/api/shorts-render";
+import {
+  rerenderFromEdits,
+  type SubtitleEdit,
+} from "@/lib/api/highlight-reel";
 import { getVideoScenes } from "@/lib/api/videos";
 import type { VideoScene, VideoScenesResponse } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
@@ -40,12 +43,12 @@ import {
   generateSubtitlesFromTranscript,
 } from "@/features/shorts-editor/hooks/useEditorState";
 import type {
-  CompositionSubtitle,
   EditorClip,
   EditorSubtitle,
   SubtitleStyle,
 } from "@/features/shorts-editor/lib/types";
 
+import { SubtitleEditor } from "../components/SubtitleEditor";
 import { useScanOrder } from "../hooks/useScanOrder";
 
 interface Props {
@@ -74,6 +77,12 @@ interface ClipState {
   loading: boolean;
   /** Per-clip error message. */
   error: string | null;
+  /**
+   * Backend's ``refinement_source`` flag — drives the SubtitleEditor's
+   * "edits not yet rendered" banner. Set to ``'manual_edit'`` once
+   * the operator has saved edits via PATCH /subtitles.
+   */
+  refinementSource: string | null;
 }
 
 export function EditClipsPage({ videoId, parentJobId }: Props) {
@@ -168,6 +177,7 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
           totalDurationMs: 0,
           loading: true,
           error: null,
+          refinementSource: null,
         },
       };
     });
@@ -248,6 +258,7 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
             totalDurationMs,
             loading: false,
             error: null,
+            refinementSource: job.refinement_source ?? null,
           },
         }));
       } catch (err) {
@@ -283,19 +294,40 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
 
   const currentClip = selectedRenderJobId ? clipStates[selectedRenderJobId] : undefined;
 
-  const onUpdateSubtitle = useCallback(
-    (idx: number, updates: Partial<EditorSubtitle>) => {
-      if (!selectedRenderJobId || !currentClip) return;
-      const next = currentClip.subtitles.map((s, i) =>
-        i === idx ? { ...s, ...updates } : s,
-      );
-      setClipStates((prev) => ({
-        ...prev,
-        [selectedRenderJobId]: { ...currentClip, subtitles: next },
-      }));
-    },
-    [selectedRenderJobId, currentClip],
-  );
+  // Adapt the parent's composition.subtitles[] (snake_case JSONB) into
+  // the SubtitleEditor's SubtitleEdit shape. The editor owns its own
+  // state via useSubtitleEditorState — these are only the *initial*
+  // cues at mount + on render-id pivot. Subsequent edits flow through
+  // the editor's debounced auto-save (PATCH /subtitles), not back into
+  // currentClip.subtitles. The ClipPreview overlay continues to read
+  // the snapshot for orientation; that's intentional v1 — the operator
+  // sees their edits authoritatively in the editor panel and on the
+  // post-rerender MP4.
+  const editorCues: SubtitleEdit[] = useMemo(() => {
+    const comp = currentClip?.composition;
+    if (!comp || typeof comp !== "object") return [];
+    const subs = (comp as { subtitles?: unknown }).subtitles;
+    if (!Array.isArray(subs)) return [];
+    return subs.flatMap((s) => {
+      if (typeof s !== "object" || s === null) return [];
+      const r = s as Record<string, unknown>;
+      const text = typeof r.text === "string" ? r.text : null;
+      const startMs = typeof r.start_ms === "number" ? r.start_ms : null;
+      const endMs = typeof r.end_ms === "number" ? r.end_ms : null;
+      if (text === null || startMs === null || endMs === null) return [];
+      const tid = typeof r.template_id === "string" ? r.template_id : null;
+      const styleRaw = (typeof r.style === "object" && r.style !== null)
+        ? (r.style as Record<string, unknown>)
+        : undefined;
+      return [{
+        text,
+        start_ms: startMs,
+        end_ms: endMs,
+        template_id: tid,
+        style: styleRaw,
+      }];
+    });
+  }, [currentClip?.composition]);
 
   const onTogglePlay = useCallback(() => {
     const v = videoRef.current;
@@ -307,45 +339,34 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
     }
   }, []);
 
-  const onExport = useCallback(async () => {
-    if (!currentClip || !selectedRenderJobId) return;
+  const onRerenderRequested = useCallback(async () => {
+    if (!selectedRenderJobId) return;
     setExportError(null);
     setExportSuccess(null);
     setExportInFlight(true);
     try {
-      const baseComp = currentClip.composition ?? {};
-      const subs: CompositionSubtitle[] = currentClip.subtitles.map((s) => ({
-        text: s.text,
-        start_ms: s.startMs,
-        end_ms: s.endMs,
-        style: {
-          font_family: s.style.fontFamily,
-          font_size_px: s.style.fontSizePx,
-          font_color: s.style.fontColor,
-          font_weight: s.style.fontWeight,
-          position_x: s.style.positionX,
-          position_y: s.style.positionY,
-          background_color: s.style.backgroundColor ?? null,
-          background_opacity: s.style.backgroundOpacity ?? null,
-        },
-      }));
-      const composition = { ...baseComp, subtitles: subs };
-      const job = await submitRender(
-        composition,
-        videoId,
-        currentClip.title || null,
+      // The SubtitleEditor's debounced auto-save has already pushed
+      // the operator's edits into ``input_spec.subtitles`` via PATCH
+      // /subtitles (the editor's render button is disabled while a
+      // save is in flight or pending, so by the time we get here the
+      // backend state is consistent). The /rerender endpoint reads
+      // the parent's current input_spec server-side — no body needed.
+      const child = await rerenderFromEdits(
+        selectedRenderJobId,
         getAccessToken,
       );
-      // Poll the render job for completion. Mirrors the manual
-      // editor's useCompositionExport polling cadence.
-      setExportSuccess({ jobId: job.id, downloadUrl: job.download_url });
+      setExportSuccess({ jobId: child.id, downloadUrl: child.download_url });
+      // Poll the new child until completed, then surface its
+      // presigned download URL. The page does NOT swap the video
+      // preview mid-edit (would be disorienting); operator clicks
+      // the success-banner link to download the refined MP4.
       const pollId = window.setInterval(async () => {
         try {
-          const fresh = await getRenderJob(job.id, getAccessToken);
+          const fresh = await getRenderJob(child.id, getAccessToken);
           if (fresh.status === "completed" || fresh.status === "failed") {
             window.clearInterval(pollId);
             setExportSuccess({
-              jobId: job.id,
+              jobId: child.id,
               downloadUrl: fresh.download_url,
             });
           }
@@ -357,12 +378,12 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
       if (err instanceof RenderRateLimitError) {
         setExportError("잠시 후 다시 시도해주세요. (요청이 많습니다)");
       } else {
-        setExportError(err instanceof Error ? err.message : "내보내기에 실패했습니다.");
+        setExportError(err instanceof Error ? err.message : "다시 렌더링에 실패했습니다.");
       }
     } finally {
       setExportInFlight(false);
     }
-  }, [currentClip, selectedRenderJobId, videoId, getAccessToken]);
+  }, [selectedRenderJobId, getAccessToken]);
 
   if (scanOrder.error) {
     return <ErrorState message={`클립 정보를 불러올 수 없습니다: ${scanOrder.error.message}`} />;
@@ -395,14 +416,13 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
           >
             새 쇼츠
           </Link>
-          <button
-            type="button"
-            onClick={() => void onExport()}
-            disabled={exportInFlight || !currentClip || currentClip.loading}
-            className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:bg-gray-400"
-          >
-            {exportInFlight ? "내보내는 중..." : "내보내기"}
-          </button>
+          {/*
+           * Header export button removed in PR 3 of
+           * auto-shorts-subtitle-editor-2026-05-06.md. The render
+           * action now lives inside ``<SubtitleEditor>`` as
+           * "내 편집으로 다시 렌더링" — placing it next to the cue list
+           * makes the cause-and-effect (edit → render) visible.
+           */}
         </div>
       </div>
 
@@ -427,28 +447,17 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
         </div>
 
         <div className="w-[420px] overflow-y-auto border-l bg-white p-4">
-          <div className="mb-2 flex gap-1 rounded bg-gray-100 p-1 text-xs">
-            <span className="flex-1 rounded bg-white px-2 py-1 text-center font-medium">자막</span>
-          </div>
-          <h3 className="mb-2 text-sm font-semibold">자동 자막</h3>
-          {currentClip?.subtitles.length === 0 ? (
-            <p className="text-xs text-gray-500">이 클립에는 발화 자막이 없습니다.</p>
+          {selectedRenderJobId && currentClip && !currentClip.loading ? (
+            <SubtitleEditor
+              renderId={selectedRenderJobId}
+              initialCues={editorCues}
+              getToken={getAccessToken}
+              refinementSource={currentClip.refinementSource}
+              onRerenderRequested={onRerenderRequested}
+              isRendering={exportInFlight}
+            />
           ) : (
-            <ul className="space-y-3">
-              {currentClip?.subtitles.map((sub, idx) => (
-                <li key={sub.id} className="space-y-1">
-                  <div className="text-[11px] text-gray-500">
-                    {fmtMs(sub.startMs)} - {fmtMs(sub.endMs)}
-                  </div>
-                  <textarea
-                    value={sub.text}
-                    onChange={(e) => onUpdateSubtitle(idx, { text: e.target.value })}
-                    className="w-full resize-y rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none"
-                    rows={2}
-                  />
-                </li>
-              ))}
-            </ul>
+            <p className="text-xs text-gray-500">로딩 중...</p>
           )}
           {exportError ? (
             <p className="mt-3 rounded bg-red-50 p-2 text-xs text-red-700">{exportError}</p>
