@@ -1,4 +1,3 @@
-import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -8,12 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db_session
 from app.dependencies import get_drive_file_repository, verify_internal_token
+from app.logging_config import get_logger
 from app.modules.drive.repository import DriveFileRepository
 from app.modules.shorts_render import post_render_hook
 from app.modules.shorts_render.repository import ShortsRenderJobRepository
 from app.modules.shorts_render.schemas import RenderStatusUpdate
 
-logger = logging.getLogger(__name__)
+# Use structlog so structured fields (job_id, render_time_ms, etc.)
+# reach the JSON formatter — same fix as in the rest of shorts_render.
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/internal/shorts-render", tags=["internal-shorts-render"])
 
@@ -83,7 +85,7 @@ async def update_render_status(
         if did_flip:
             logger.info(
                 "render_job_completed",
-                extra={
+                **{
                     "job_id": str(job_id),
                     "render_time_ms": payload.render_time_ms,
                     "output_size_bytes": payload.output_size_bytes,
@@ -100,12 +102,12 @@ async def update_render_status(
             except Exception:
                 logger.exception(
                     "post_render_hook_invocation_failed",
-                    extra={"job_id": str(job_id)},
+                    **{"job_id": str(job_id)},
                 )
         else:
             logger.info(
                 "render_job_completed_idempotent_noop",
-                extra={"job_id": str(job_id)},
+                **{"job_id": str(job_id)},
             )
         return {"ok": True, "job_id": str(job_id), "status": payload.status}
 
@@ -126,12 +128,12 @@ async def update_render_status(
     if payload.status == "failed":
         logger.warning(
             "render_job_failed",
-            extra={"job_id": str(job_id), "error": payload.error},
+            **{"job_id": str(job_id), "error": payload.error},
         )
     else:
         logger.info(
             "render_status_updated",
-            extra={"job_id": str(job_id), "status": payload.status},
+            **{"job_id": str(job_id), "status": payload.status},
         )
     return {"ok": True, "job_id": str(job_id), "status": payload.status}
 
