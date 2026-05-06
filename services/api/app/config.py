@@ -353,8 +353,19 @@ class Settings(BaseSettings):
     auto_shorts_product_v2_daily_budget_usd: float = 50.0
     auto_shorts_product_v2_budget_alert_pct: int = 80
 
-    # Concurrency cap. 4th in-flight scan from the same org returns 429.
-    auto_shorts_product_v2_max_concurrent_per_org: int = 3
+    # Concurrency cap. (N+1)-th in-flight scan from the same org
+    # returns 429. Counts rows across all modes (scan_order,
+    # enumerate, render_child) in ACTIVE_SCAN_STAGES — see
+    # ``ProductScanJobRepository.count_active_for_org``.
+    #
+    # Bumped 3→10 on 2026-05-06 after the cap was tripping operators
+    # mid-iteration on staging. Cost is gated separately by
+    # ``auto_shorts_product_v2_daily_budget_usd``; concurrency just
+    # determines how many can be in-flight simultaneously, not total
+    # spend. 10 leaves comfortable headroom for an operator who has
+    # 2-3 wizard runs queued + an enumeration scan + a half-finished
+    # rerender, without paper-cutting them on parallel work.
+    auto_shorts_product_v2_max_concurrent_per_org: int = 10
 
     # Cap on LLM-vision calls per video (60 keyframes × 1 batch of 10 ≈
     # 6 calls = ~$0.03 with gpt-4o-mini). Bound the worst-case spend on

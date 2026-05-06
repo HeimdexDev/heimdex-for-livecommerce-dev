@@ -131,6 +131,11 @@ services:
       # vars wired but the api block didn't, so the API never saw flag flips.
       - AUTO_SHORTS_PRODUCT_V2_ENABLED=${AUTO_SHORTS_PRODUCT_V2_ENABLED:-false}
       - AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT=${AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT:-0}
+      # Per-org concurrency cap on in-flight ProductScanJob rows
+      # (counts modes scan_order + enumerate + render_child in ACTIVE
+      # stages). Default 10. Operators raised this from 3 to 10 on
+      # 2026-05-06 after the cap was paper-cutting iteration cycles.
+      - AUTO_SHORTS_PRODUCT_V2_MAX_CONCURRENT_PER_ORG=${AUTO_SHORTS_PRODUCT_V2_MAX_CONCURRENT_PER_ORG:-10}
       - AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED=${AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED:-false}
       # PR 2.5 STT-pivot: track_mode flag. ``"sam2"`` (default) preserves
       # SAM2 visual tracking. ``"stt"`` swaps in the in-process STT
