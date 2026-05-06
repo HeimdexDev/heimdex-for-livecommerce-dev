@@ -94,6 +94,8 @@ jobs:
             tests/test_refinement_service_runner.py \
             tests/test_shorts_render_internal_router.py \
             tests/test_shorts_render_subtitles_patch.py \
+            tests/test_subtitles_export.py \
+            tests/test_shorts_render_subtitles_download.py \
             tests/test_rerender_from_edits.py \
             tests/test_render_idempotency_key.py \
             --tb=short

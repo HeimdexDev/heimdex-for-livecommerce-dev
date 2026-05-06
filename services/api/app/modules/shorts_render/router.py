@@ -3,8 +3,8 @@ import logging
 from typing import Annotated, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from app.dependencies import get_scene_opensearch_client, get_shorts_render_service
 from app.modules.auth.service import get_current_user
@@ -153,6 +153,110 @@ async def update_render_job_subtitles(
     user_id = cast(UUID, user.id)
     return await service.update_render_job_subtitles(
         org_ctx.org_id, user_id, job_id, body.subtitles,
+    )
+
+
+_SUBTITLE_FILENAME_FALLBACK = "subtitles"
+_SUBTITLE_MIME_BY_FORMAT = {
+    "srt": "application/x-subrip; charset=utf-8",
+    "vtt": "text/vtt; charset=utf-8",
+}
+
+
+def _safe_subtitle_filename_stem(title: str | None) -> str:
+    """Strip a job title down to a filesystem-friendly stem.
+
+    Keeps Hangul, ASCII letters/digits, dash, underscore. Replaces
+    other characters with ``-`` so operators get a recognisable
+    filename instead of the render UUID. Falls back to
+    ``_SUBTITLE_FILENAME_FALLBACK`` when the title is missing or
+    sanitises to empty.
+    """
+    if not title:
+        return _SUBTITLE_FILENAME_FALLBACK
+    cleaned: list[str] = []
+    for ch in title:
+        if ch.isalnum() or ch == "_":
+            cleaned.append(ch)
+        elif "가" <= ch <= "힣":  # Hangul syllables
+            cleaned.append(ch)
+        else:
+            # Any unsafe char becomes a dash; consecutive dashes are
+            # collapsed below so "Heimdex Mini · {hash}" produces
+            # "Heimdex-Mini-{hash}", not "Heimdex-Mini---{hash}".
+            cleaned.append("-")
+    stem = "".join(cleaned)
+    while "--" in stem:
+        stem = stem.replace("--", "-")
+    stem = stem.strip("-")
+    return stem or _SUBTITLE_FILENAME_FALLBACK
+
+
+@router.get(
+    "/{job_id}/subtitles.{fmt}",
+    response_class=PlainTextResponse,
+)
+async def download_render_job_subtitles(
+    job_id: UUID,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[ShortsRenderService, Depends(get_shorts_render_service)],
+    fmt: Annotated[str, Path(pattern="^(srt|vtt)$")],
+):
+    """Serialize the render's current ``input_spec.subtitles`` and return as a download.
+
+    Reads from ``input_spec.subtitles`` (where PATCH ``/subtitles``
+    persists operator edits), so the downloaded file always reflects
+    the LATEST saved cues — not whatever was burned into the rendered
+    MP4. Operators can edit + immediately download a polished
+    subtitle file without waiting for a re-render.
+
+    Owner-scoped — 404 when the caller doesn't own the job. Returns
+    200 with an empty body when the job exists but carries zero
+    subtitles (rare; image-only renders, legacy compositions). The
+    SubtitleEditor's empty-state copy already handles "no cues" UX,
+    so a 200-empty download keeps the contract simple.
+
+    The ``Content-Disposition`` header sets a sensible default
+    filename — uses the (sanitised) job title with the ``.srt`` /
+    ``.vtt`` extension. Korean titles are preserved via the RFC 5987
+    ``filename*`` form alongside an ASCII fallback for older
+    clients.
+    """
+    from urllib.parse import quote
+
+    from app.modules.shorts_render.subtitles_export import (
+        subtitles_to_srt,
+        subtitles_to_vtt,
+    )
+
+    user_id = cast(UUID, user.id)
+    job = await service.get_render_job_record(org_ctx.org_id, user_id, job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Render job not found",
+        )
+
+    subtitles = (job.input_spec or {}).get("subtitles") or []
+    body = (
+        subtitles_to_srt(subtitles)
+        if fmt == "srt"
+        else subtitles_to_vtt(subtitles)
+    )
+
+    stem = _safe_subtitle_filename_stem(job.title)
+    filename = f"{stem}.{fmt}"
+    ascii_filename = f"{_SUBTITLE_FILENAME_FALLBACK}.{fmt}"
+    content_disposition = (
+        f'attachment; filename="{ascii_filename}"; '
+        f"filename*=UTF-8''{quote(filename)}"
+    )
+
+    return PlainTextResponse(
+        content=body,
+        media_type=_SUBTITLE_MIME_BY_FORMAT[fmt],
+        headers={"Content-Disposition": content_disposition},
     )
 
 
