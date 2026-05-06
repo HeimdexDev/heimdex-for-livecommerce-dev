@@ -82,6 +82,18 @@ jobs:
             tests/test_shorts_auto_product_stt_runner_branch.py \
             tests/test_shorts_auto_product_enumeration_source.py \
             tests/test_shorts_auto_product_enumerate_stt.py \
+            tests/test_whisper_transcribe_schemas.py \
+            tests/test_whisper_transcribe_budget.py \
+            tests/test_whisper_transcribe_client.py \
+            tests/test_subtitle_chunking_chunker.py \
+            tests/test_subtitle_chunking_word_to_subtitle.py \
+            tests/test_subtitle_chunking_regression.py \
+            tests/test_rollout.py \
+            tests/test_refinement_pure.py \
+            tests/test_post_render_hook.py \
+            tests/test_refinement_service_runner.py \
+            tests/test_shorts_render_internal_router.py \
+            tests/test_shorts_render_subtitles_patch.py \
             --tb=short
 
           # NOTE: shorts_auto tests are deliberately NOT in the CI

@@ -1,12 +1,12 @@
-"""Backend port of the FE ``generateSubtitlesFromTranscript`` chunker.
+"""Auto-shorts subtitle distribution over a clip timeline.
 
-The auto-shorts product mode runs entirely server-side — the
-operator's first viewing of a rendered short is the MP4 the
-shorts-render-worker produces. If we don't burn subtitles into that
-MP4 at render time, every operator has to manually open the
-EditClipsPage and re-export to get burnt-in subtitles. The first-view
-UX (``/export/shorts``) then ships subtitle-free MP4s, which is what
-operators saw on staging 2026-05-06.
+The character-aware chunker (``chunk_subtitle_text`` and the merge
+helper) lives in :mod:`app.lib.subtitle_chunking` so other features
+(premiere export, blur, future product-track) can reuse it without
+depending on auto-shorts internals. This module owns only the
+auto-shorts-specific *time distribution* logic — converting chunked
+text into ``(start_ms, end_ms, text)`` tuples that fan out across
+the clip's window.
 
 Same chunking heuristic as ``services/web/src/features/shorts-editor/
 hooks/useEditorState.ts::chunkSubtitleText``:
@@ -14,37 +14,41 @@ hooks/useEditorState.ts::chunkSubtitleText``:
 * 25-char target per row (≈ 5-7 Korean eojeol; reads in 1-2s at
   livecommerce pace).
 * Two-pass split — sentence boundaries first, then Korean clause
-  boundaries (conjunctive endings + commas) within oversize sentences;
-  eojeol-greedy fallback for runaway clauses without internal
-  boundaries.
+  boundaries; eojeol-greedy fallback for runaway clauses.
 * Distribution timing — chunks fan out across the source clip's
   timeline window with an 800ms minimum per-chunk duration.
 
-Pure functions. No I/O. Trivially testable.
+Pure functions. No I/O.
 """
 
 from __future__ import annotations
 
 import re
 
-# Sentence-ending patterns (Korean + Latin) — primary split.
-# Python's ``re`` requires fixed-width lookbehinds, so we split into
-# two alternatives instead of the FE's variable-width form.
-_SENTENCE_SPLIT_RE = re.compile(
-    r"(?<=[.!?。])\s+|(?<=[요다죠음네까게세지])\s+(?=[가-힣A-Za-z0-9])"
+from app.lib.subtitle_chunking import (
+    MAX_SUBTITLE_CHARS,
+    chunk_subtitle_text,
+    merge_chunks_to_count,
 )
 
-# Korean clause-boundary patterns — secondary split for finer chunks.
-# Conjunctive endings ("는데", "면서요", "이기 때문에", etc.) and
-# connective particles mark natural pause points.
-_CLAUSE_SPLIT_RE = re.compile(
-    r"(?<=,)\s+|(?<=[는면서고지만니까데서야면])\s+(?=[가-힣])"
-)
+# Re-export so existing callers that imported these names from this
+# module keep working without changing import paths. Anything new
+# should import directly from :mod:`app.lib.subtitle_chunking`.
+__all__ = [
+    "MAX_SUBTITLE_CHARS",
+    "chunk_subtitle_text",
+    "distribute_subtitles_for_clip",
+    "distribute_subtitles_with_speaker_timing",
+    "merge_chunks_to_count",
+    "parse_speaker_transcript",
+    "parse_timestamp_ms",
+]
 
-# Whitespace runs.
-_WHITESPACE_RE = re.compile(r"\s+")
 
-_MAX_SUBTITLE_CHARS = 25
+# Minimum duration per displayed chunk. Auto-shorts-specific: at
+# livecommerce pace, sub-800ms subtitles flicker faster than viewers
+# can read them. Other features (premiere export) may want a different
+# threshold; that's why this stays here, not in the lib.
 _MIN_CHUNK_DURATION_MS = 800
 
 
@@ -107,61 +111,6 @@ def parse_speaker_transcript(
     return out
 
 
-def chunk_subtitle_text(text: str) -> list[str]:
-    """Two-pass chunker matching the FE behavior.
-
-    Returns ``[]`` for empty / whitespace-only input. Otherwise
-    returns 1+ chunks, each ≤ ``_MAX_SUBTITLE_CHARS`` long.
-    """
-    trimmed = (text or "").strip()
-    if not trimmed:
-        return []
-    if len(trimmed) <= _MAX_SUBTITLE_CHARS:
-        return [trimmed]
-
-    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(trimmed) if s.strip()]
-    chunks: list[str] = []
-
-    for sentence in sentences:
-        if len(sentence) <= _MAX_SUBTITLE_CHARS:
-            chunks.append(sentence)
-            continue
-        # Pass 2: clause-level split inside an oversize sentence.
-        clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(sentence) if c.strip()]
-        current = ""
-        for clause in clauses:
-            if len(clause) > _MAX_SUBTITLE_CHARS:
-                # Pass 3: eojeol greedy pack — fall through when a
-                # single clause is still too long.
-                if current:
-                    chunks.append(current)
-                    current = ""
-                eojeols = clause.split()
-                buf = ""
-                for e in eojeols:
-                    nxt = f"{buf} {e}" if buf else e
-                    if len(nxt) > _MAX_SUBTITLE_CHARS:
-                        if buf:
-                            chunks.append(buf)
-                        buf = e
-                    else:
-                        buf = nxt
-                if buf:
-                    current = buf
-                continue
-            candidate = f"{current} {clause}" if current else clause
-            if len(candidate) <= _MAX_SUBTITLE_CHARS:
-                current = candidate
-            else:
-                if current:
-                    chunks.append(current)
-                current = clause
-        if current:
-            chunks.append(current)
-
-    return chunks if chunks else [trimmed[:_MAX_SUBTITLE_CHARS]]
-
-
 def distribute_subtitles_for_clip(
     *,
     transcript: str,
@@ -196,7 +145,7 @@ def distribute_subtitles_for_clip(
     # — too fast to read; better to merge into 3-4 chunks of ~800ms.
     max_chunks = max(1, clip_duration_ms // _MIN_CHUNK_DURATION_MS)
     if len(chunks) > max_chunks:
-        chunks = _merge_chunks_to_count(chunks, max_chunks)
+        chunks = merge_chunks_to_count(chunks, max_chunks)
 
     chunk_duration_ms = max(
         _MIN_CHUNK_DURATION_MS,
@@ -273,7 +222,7 @@ def distribute_subtitles_with_speaker_timing(
             continue
         max_chunks = max(1, slot_duration_ms // _MIN_CHUNK_DURATION_MS)
         if len(chunks) > max_chunks:
-            chunks = _merge_chunks_to_count(chunks, max_chunks)
+            chunks = merge_chunks_to_count(chunks, max_chunks)
         chunk_duration_ms = max(
             _MIN_CHUNK_DURATION_MS,
             slot_duration_ms // len(chunks),
@@ -292,28 +241,3 @@ def distribute_subtitles_with_speaker_timing(
                 continue
             out.append((timeline_start, timeline_end, text))
     return out
-
-
-def _merge_chunks_to_count(chunks: list[str], target_count: int) -> list[str]:
-    """Greedy merge adjacent chunks until len(chunks) == target_count.
-
-    Used when uniform distribution would compress per-chunk duration
-    below the readable minimum. Merging neighbors preserves the
-    chunker's reading-rhythm choices better than dropping every
-    other chunk.
-    """
-    if target_count <= 0 or not chunks:
-        return chunks
-    merged = list(chunks)
-    while len(merged) > target_count:
-        # Find the shortest adjacent pair (sum of lengths) and merge.
-        best_i = 0
-        best_len = len(merged[0]) + len(merged[1]) if len(merged) >= 2 else 0
-        for i in range(1, len(merged) - 1):
-            pair_len = len(merged[i]) + len(merged[i + 1])
-            if pair_len < best_len:
-                best_len = pair_len
-                best_i = i
-        merged[best_i] = f"{merged[best_i]} {merged[best_i + 1]}"
-        del merged[best_i + 1]
-    return merged
