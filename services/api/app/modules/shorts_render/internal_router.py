@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.base import get_db_session
 from app.dependencies import get_drive_file_repository, verify_internal_token
 from app.modules.drive.repository import DriveFileRepository
+from app.modules.shorts_render import post_render_hook
 from app.modules.shorts_render.repository import ShortsRenderJobRepository
 from app.modules.shorts_render.schemas import RenderStatusUpdate
 
@@ -41,9 +42,74 @@ async def update_render_status(
     _token: Annotated[str, Depends(verify_internal_token)],
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ):
-    """Called by render worker to report job completion/failure."""
+    """Called by render worker to report job completion/failure.
+
+    For ``status='completed'``: uses ``repo.complete_idempotent`` so
+    a double-delivered worker callback (SQS redelivery, network
+    retry) flips the row exactly once. The post-render Whisper
+    refinement hook only fires when this call was the one that did
+    the flip — preventing duplicate refinement renders.
+
+    Other statuses (``rendering``, ``failed``) still use
+    ``update_status`` since they have no idempotency-sensitive side
+    effects.
+    """
     repo = ShortsRenderJobRepository(db)
 
+    if payload.status == "completed":
+        # Existence check first — distinguishes 404 (no row) from
+        # 200-no-op (row already completed). complete_idempotent
+        # alone returns False for both cases.
+        existing = await repo._get_by_id_internal(job_id)
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Render job not found",
+            )
+
+        did_flip = await repo.complete_idempotent(
+            job_id,
+            output_s3_key=payload.output_s3_key,
+            output_duration_ms=payload.output_duration_ms,
+            output_size_bytes=payload.output_size_bytes,
+            render_time_ms=payload.render_time_ms,
+        )
+        # Commit explicitly so the post-render hook reads
+        # post-commit state (without this, the runner could open a
+        # new session before the request session's auto-commit and
+        # see the row in pre-completed state).
+        await db.commit()
+
+        if did_flip:
+            logger.info(
+                "render_job_completed",
+                extra={
+                    "job_id": str(job_id),
+                    "render_time_ms": payload.render_time_ms,
+                    "output_size_bytes": payload.output_size_bytes,
+                    "output_duration_ms": payload.output_duration_ms,
+                },
+            )
+            # Fire-and-forget. Hook is defense-in-depth on its own
+            # exception path; this try/except is belt-and-suspenders.
+            try:
+                post_render_hook.schedule_refinement_if_eligible(
+                    parent_job_id=job_id,
+                    org_id=existing.org_id,  # type: ignore[arg-type]
+                )
+            except Exception:
+                logger.exception(
+                    "post_render_hook_invocation_failed",
+                    extra={"job_id": str(job_id)},
+                )
+        else:
+            logger.info(
+                "render_job_completed_idempotent_noop",
+                extra={"job_id": str(job_id)},
+            )
+        return {"ok": True, "job_id": str(job_id), "status": payload.status}
+
+    # Non-completed: keep the original update_status path unchanged.
     kwargs = {}
     for field in ("output_s3_key", "output_duration_ms", "output_size_bytes", "render_time_ms", "error"):
         value = getattr(payload, field)
@@ -57,17 +123,7 @@ async def update_render_status(
             detail="Render job not found",
         )
 
-    if payload.status == "completed":
-        logger.info(
-            "render_job_completed",
-            extra={
-                "job_id": str(job_id),
-                "render_time_ms": payload.render_time_ms,
-                "output_size_bytes": payload.output_size_bytes,
-                "output_duration_ms": payload.output_duration_ms,
-            },
-        )
-    elif payload.status == "failed":
+    if payload.status == "failed":
         logger.warning(
             "render_job_failed",
             extra={"job_id": str(job_id), "error": payload.error},

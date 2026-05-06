@@ -493,6 +493,38 @@ class Settings(BaseSettings):
     # take that long; surface as ``enumeration_llm_failed``.
     auto_shorts_product_v2_stt_enum_timeout_s: float = 90.0
 
+    # --- Auto-shorts: post-render Whisper subtitle refinement ---
+    # Plan: ``.claude/plans/auto-shorts-whisper-subtitles-2026-05-06.md``
+    # Off-by-default master flag. Even with the column migration
+    # (056) in place, no refinement fires until this flips to True.
+    auto_shorts_product_v2_whisper_refine_enabled: bool = False
+    # 0-100, hashed on org_id (mirrors auto_shorts_llm_rollout_pct
+    # behavior). Allows progressive rollout without an org-specific
+    # allowlist. 0 = nobody, 100 = everyone with the flag on.
+    auto_shorts_product_v2_whisper_rollout_pct: int = 0
+    # OpenAI model name. ``whisper-1`` is the only model currently
+    # exposing word-level timestamps via ``timestamp_granularities``.
+    # Verify pricing + capability before changing.
+    auto_shorts_product_v2_whisper_model: str = "whisper-1"
+    # ISO 639-1 language code pinned on every transcription request.
+    # Korean livecommerce defaults to ``ko``; multi-language tenants
+    # need a per-org override (not in scope for v1).
+    auto_shorts_product_v2_whisper_language: str = "ko"
+    # **Separate budget bucket** from auto_shorts_llm,
+    # image_caption, and auto_shorts_product_v2 enumeration. Daily
+    # USD ceiling enforced by an in-memory tracker; hitting it
+    # silently skips refinement until UTC rollover.
+    auto_shorts_product_v2_whisper_daily_budget_usd: float = 5.0
+    # Hard timeout on each Whisper API call. Larger than the LLM
+    # timeout because audio uploads add measurable latency on
+    # slower networks.
+    auto_shorts_product_v2_whisper_timeout_s: float = 60.0
+    # Separate timeout for the S3 download that precedes the
+    # Whisper call. A 25 MB MP4 on a slow link can outlast the
+    # API timeout — keep them split so log triage points at the
+    # right hop.
+    auto_shorts_product_v2_whisper_s3_download_timeout_s: float = 30.0
+
     # --- CORS ---
     cors_allow_origin_regex: str = (
         r"^https?://"

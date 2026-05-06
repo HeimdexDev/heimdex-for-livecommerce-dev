@@ -142,30 +142,42 @@ def test_put_status_invalid_token_returns_401():
 
 
 def test_put_status_completed_with_output():
+    """Completed path uses ``complete_idempotent`` (PR 4 of whisper-subtitles).
+
+    On did_flip=True the post_render_hook fires (no-op when flag is off,
+    which is the default — confirmed by `assert_called_once`).
+    """
     job_id = uuid4()
+    existing_job = _make_render_job(job_id=job_id, status="rendering")
+    existing_job.org_id = uuid4()
     mock_repo = AsyncMock()
-    updated_job = _make_render_job(
-        job_id=job_id,
-        status="completed",
-        output_s3_key="org/shorts/render/output.mp4",
-    )
-    mock_repo.update_status = AsyncMock(return_value=updated_job)
+    mock_repo._get_by_id_internal = AsyncMock(return_value=existing_job)
+    mock_repo.complete_idempotent = AsyncMock(return_value=True)
 
     app = _build_app()
     from app.db.base import get_db_session
     from app.modules.shorts_render import internal_router
 
+    mock_session = AsyncMock()
+
     async def _mock_db():
-        return AsyncMock()
+        return mock_session
 
     app.dependency_overrides[get_db_session] = _mock_db
 
     original_init = internal_router.ShortsRenderJobRepository
+    original_hook = internal_router.post_render_hook.schedule_refinement_if_eligible
 
     def _mock_repo_init(session):
         return mock_repo
 
+    hook_calls: list[dict] = []
+
+    def _spy_hook(*, parent_job_id, org_id):
+        hook_calls.append({"parent_job_id": parent_job_id, "org_id": org_id})
+
     internal_router.ShortsRenderJobRepository = _mock_repo_init
+    internal_router.post_render_hook.schedule_refinement_if_eligible = _spy_hook
     try:
         with TestClient(app) as client:
             response = client.put(
@@ -182,11 +194,25 @@ def test_put_status_completed_with_output():
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "completed"
-        mock_repo.update_status.assert_called_once()
-        call_kwargs = mock_repo.update_status.call_args
-        assert call_kwargs[0][1] == "completed"
+        # New idempotent path
+        mock_repo._get_by_id_internal.assert_called_once_with(job_id)
+        mock_repo.complete_idempotent.assert_called_once()
+        ci_kwargs = mock_repo.complete_idempotent.call_args.kwargs
+        assert ci_kwargs["output_s3_key"] == "org/shorts/render/output.mp4"
+        assert ci_kwargs["output_duration_ms"] == 15000
+        # update_status NOT called for completed status
+        mock_repo.update_status.assert_not_called()
+        # Explicit commit before scheduling the hook
+        mock_session.commit.assert_awaited()
+        # Hook fires exactly once on did_flip=True
+        assert len(hook_calls) == 1
+        assert hook_calls[0]["parent_job_id"] == job_id
+        assert hook_calls[0]["org_id"] == existing_job.org_id
     finally:
         internal_router.ShortsRenderJobRepository = original_init
+        internal_router.post_render_hook.schedule_refinement_if_eligible = (
+            original_hook
+        )
 
 
 # --- Test 15: PUT /status with failed + error → job updated ---

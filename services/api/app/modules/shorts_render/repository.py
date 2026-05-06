@@ -160,6 +160,52 @@ class ShortsRenderJobRepository:
 
         return await self._get_by_id_internal(job_id)
 
+    async def complete_idempotent(
+        self,
+        job_id: UUID,
+        *,
+        output_s3_key: str | None,
+        output_duration_ms: int | None,
+        output_size_bytes: int | None,
+        render_time_ms: int | None,
+    ) -> bool:
+        """Atomically flip a job to ``completed`` if it isn't already.
+
+        Returns ``True`` iff this call was the one that flipped the
+        row. ``False`` means either:
+        - the row was already completed (SQS redelivery / retry); or
+        - the row doesn't exist (caller should 404 separately if it
+          cares — check via ``_get_by_id_internal`` BEFORE calling
+          this method to distinguish).
+
+        Used by the worker callback path so the post-render Whisper
+        refinement hook fires exactly once per render, even when
+        the worker's status callback is double-delivered.
+
+        Distinct from ``update_status`` (which always overwrites,
+        no idempotency guard) — kept separate to preserve the
+        existing behaviour for non-completed transitions.
+        """
+        now = datetime.now(timezone.utc)
+        result = await self.session.execute(
+            update(ShortsRenderJob)
+            .where(
+                ShortsRenderJob.id == job_id,
+                ShortsRenderJob.status != "completed",
+            )
+            .values(
+                status="completed",
+                completed_at=now,
+                updated_at=now,
+                output_s3_key=output_s3_key,
+                output_duration_ms=output_duration_ms,
+                output_size_bytes=output_size_bytes,
+                render_time_ms=render_time_ms,
+            )
+        )
+        await self.session.flush()
+        return result.rowcount > 0
+
     async def update_title(
         self,
         org_id: UUID,
@@ -182,6 +228,52 @@ class ShortsRenderJobRepository:
             update(ShortsRenderJob)
             .where(ShortsRenderJob.id == job_id)
             .values(title=title, updated_at=datetime.now(timezone.utc))
+        )
+        await self.session.flush()
+        return await self._get_by_id_internal(job_id)
+
+    async def update_subtitles_with_manual_edit(
+        self,
+        org_id: UUID,
+        user_id: UUID,
+        job_id: UUID,
+        subtitles: list[dict[str, Any]],
+    ) -> ShortsRenderJob | None:
+        """Replace ``input_spec.subtitles`` and mark as manually edited.
+
+        Atomic in a single ``UPDATE``: both the JSONB rewrite and the
+        ``refinement_source='manual_edit'`` flag flip happen together.
+        That flag is what the post-render Whisper hook checks via
+        ``_check_guards`` to refuse overwriting operator-edited
+        subtitles.
+
+        Org+user-scoped via ``get_by_id`` — a guess at someone else's
+        job UUID returns ``None``. Returns the refreshed job, or
+        ``None`` when the row doesn't exist or isn't owned by
+        ``(org_id, user_id)``.
+
+        ``subtitles`` is a list of plain dicts (already validated as
+        :class:`SubtitleSpec` at the router layer; we accept dicts
+        here so the repository stays free of contract-package
+        imports).
+
+        Note: assigning a NEW dict to the JSONB column triggers the
+        update; in-place mutation of ``job.input_spec`` would not
+        reach the DB because SQLAlchemy doesn't track JSONB internal
+        changes by default.
+        """
+        job = await self.get_by_id(org_id, user_id, job_id)
+        if job is None:
+            return None
+        new_spec = {**(job.input_spec or {}), "subtitles": subtitles}
+        await self.session.execute(
+            update(ShortsRenderJob)
+            .where(ShortsRenderJob.id == job_id)
+            .values(
+                input_spec=new_spec,
+                refinement_source="manual_edit",
+                updated_at=datetime.now(timezone.utc),
+            )
         )
         await self.session.flush()
         return await self._get_by_id_internal(job_id)
