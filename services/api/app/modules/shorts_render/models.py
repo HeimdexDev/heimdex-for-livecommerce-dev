@@ -51,6 +51,46 @@ class ShortsRenderJob(Base, UUIDMixin, TimestampMixin):
         String(64), nullable=True
     )
 
+    # Refinement chain (migration 056). Used by the post-render Whisper
+    # subtitle refinement hook to link a parent render to the refined
+    # render produced from its output MP4.
+    #
+    # ``replaced_by_render_job_id`` (forward pointer): the parent points
+    # to the refined child once that child completes. NULL while the
+    # parent is canonical.
+    # ``refined_from_render_job_id`` (back pointer): the refined child
+    # points back at its parent. Used by the cascade-idempotency guard
+    # in :mod:`app.modules.shorts_render.refinement_service` (PR 4) to
+    # short-circuit recursive refinement attempts.
+    # ``refinement_source``: which path produced the current row's
+    # ``input_spec.subtitles``. CHECK-constrained to {'whisper',
+    # 'manual_edit'}. NULL means "default speaker_transcript timing
+    # (no manual or LLM refinement applied)" — the most common state
+    # for non-refined rows.
+    #
+    # All three columns ship nullable so existing rows are unaffected.
+    # ON DELETE SET NULL on both FKs so deleting one render in the
+    # chain doesn't cascade-delete its parent or child — the chain
+    # simply breaks at the deleted node.
+    #
+    # NO SQLAlchemy ``relationship()`` defined here on purpose: the
+    # refinement service queries by id directly. Adding eager-loading
+    # relationships would change the cost of every existing
+    # ``ShortsRenderJob`` query in the codebase.
+    replaced_by_render_job_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("shorts_render_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    refined_from_render_job_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("shorts_render_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    refinement_source: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+
     __table_args__: tuple[object, ...] = (
         Index("ix_shorts_render_jobs_org_id_user_id", "org_id", "user_id"),
         Index(
@@ -59,5 +99,13 @@ class ShortsRenderJob(Base, UUIDMixin, TimestampMixin):
             "user_id",
             "composition_hash",
             "created_at",
+        ),
+        # Partial index supports the "have we already refined this
+        # parent?" guard query without bloating writes for the common
+        # case (no refinement pending).
+        Index(
+            "ix_shorts_render_jobs_replaced_by",
+            "replaced_by_render_job_id",
+            postgresql_where="replaced_by_render_job_id IS NOT NULL",
         ),
     )
