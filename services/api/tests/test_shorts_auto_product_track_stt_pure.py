@@ -23,6 +23,9 @@ from app.modules.shorts_auto_product.track_stt.clip_selector import (
     select_top_chunks,
 )
 from app.modules.shorts_auto_product.track_stt.composition_builder import (
+    _build_auto_shorts_subtitle_style,
+    _compute_chars_per_line,
+    _wrap_korean_subtitle_lines,
     build_composition_spec,
 )
 from app.modules.shorts_auto_product.track_stt.mention_extractor import (
@@ -290,6 +293,180 @@ class TestCompositionBuilder:
         assert len(spec.scene_clips) == 1
         # End clamped to scene's actual end (1_365_000), NOT chunk end.
         assert spec.scene_clips[0].end_ms == 1_365_000
+
+
+# ---------- responsive subtitle style + auto-wrap ----------
+
+
+class TestSubtitleStyleScaling:
+    def test_default_720p_height_yields_32px_font(self):
+        # Sanity floor: at the legacy default canvas (720p height),
+        # font lands on 32px — chosen so that 11-12 Hangul chars fit
+        # per line on the 406-px-wide canvas.
+        style = _build_auto_shorts_subtitle_style(canvas_height=720)
+        assert style.font_size_px == 32
+        # Padding should track font at ~33% (32 * 0.33 ≈ 10.6 → 11).
+        assert style.background_padding == 11
+
+    def test_1080p_height_scales_proportionally(self):
+        # Bumping canvas height should bump font + padding together.
+        style = _build_auto_shorts_subtitle_style(canvas_height=1080)
+        assert style.font_size_px == round(1080 * 0.045)  # 49
+        assert style.background_padding == round(49 * 0.33)  # 16
+
+    def test_floor_protects_tiny_canvas(self):
+        # Below the 16px floor → clamp. Otherwise drawtext renders
+        # illegible captions; better to over-size than under-size on
+        # an unusual aspect.
+        style = _build_auto_shorts_subtitle_style(canvas_height=240)
+        # 240 * 0.045 = 10.8 → would be 11; floor 16 wins.
+        assert style.font_size_px == 16
+        # Padding floor (8) trips when font is at the floor too.
+        assert style.background_padding == 8
+
+    def test_fixed_design_fields_do_not_scale(self):
+        # Position + colors are design choices, NOT canvas-derived.
+        s_a = _build_auto_shorts_subtitle_style(canvas_height=720)
+        s_b = _build_auto_shorts_subtitle_style(canvas_height=1080)
+        assert s_a.position_y == s_b.position_y == 0.82
+        assert s_a.font_color == s_b.font_color == "#000000"
+        assert s_a.background_color == s_b.background_color == "#FFFFFF"
+        assert s_a.font_weight == s_b.font_weight == 700
+
+
+class TestComputeCharsPerLine:
+    def test_default_canvas_yields_around_11_chars(self):
+        # 406-wide canvas, 32px font, 11px padding.
+        # available = 406 - 22 = 384; 384 / 32 = 12.
+        chars = _compute_chars_per_line(
+            canvas_width=406, font_size_px=32, padding=11,
+        )
+        assert chars == 12
+
+    def test_wider_canvas_more_chars(self):
+        # 720-wide → more horizontal headroom.
+        # available = 720 - 22 = 698; 698 / 32 = 21.
+        chars = _compute_chars_per_line(
+            canvas_width=720, font_size_px=32, padding=11,
+        )
+        assert chars == 21
+
+    def test_zero_font_size_returns_zero(self):
+        # Defensive — never divide by zero.
+        chars = _compute_chars_per_line(
+            canvas_width=406, font_size_px=0, padding=11,
+        )
+        assert chars == 0
+
+    def test_padding_larger_than_canvas_returns_zero(self):
+        # Pathological — padding wins. Returns 0 rather than negative.
+        chars = _compute_chars_per_line(
+            canvas_width=20, font_size_px=16, padding=50,
+        )
+        assert chars == 0
+
+
+class TestWrapKoreanSubtitleLines:
+    def test_short_text_passes_through(self):
+        # ≤ chars_per_line: no break point inserted.
+        out = _wrap_korean_subtitle_lines(
+            "안녕하세요", chars_per_line=12,
+        )
+        assert "\n" not in out
+        assert out == "안녕하세요"
+
+    def test_staging_overflow_cue_wraps_at_word_boundary(self):
+        # The exact cue from the staging 2026-05-06 overflow incident.
+        # 14 chars at chars_per_line=12 → wrap at last 어절 boundary.
+        out = _wrap_korean_subtitle_lines(
+            "근데 이번에 수량 좀 짜게", chars_per_line=12,
+        )
+        lines = out.split("\n")
+        assert len(lines) == 2
+        # Each line must respect the budget.
+        assert all(len(line) <= 12 for line in lines)
+        # Re-joining (with single space) must reconstruct the original.
+        assert " ".join(lines) == "근데 이번에 수량 좀 짜게"
+
+    def test_wraps_at_last_whitespace_within_budget(self):
+        # Greedy: pack as many 어절 as fit, break before the one
+        # that would exceed budget.
+        out = _wrap_korean_subtitle_lines(
+            "하나 둘 셋 넷 다섯 여섯", chars_per_line=8,
+        )
+        lines = out.split("\n")
+        # Line 1 should pack as many 어절 as fit in 8 chars; line 2
+        # carries the rest. Both ≤ 8 chars.
+        for line in lines:
+            assert len(line) <= 8
+
+    def test_single_long_word_mid_syllable_break(self):
+        # No whitespace in budget — fall back to mid-syllable break.
+        # Korean tolerates this when forced.
+        out = _wrap_korean_subtitle_lines(
+            "가나다라마바사아자차카타", chars_per_line=5,
+        )
+        lines = out.split("\n")
+        # First line breaks mid-word at exactly chars_per_line.
+        assert lines[0] == "가나다라마"
+
+    def test_max_lines_cap_appends_residue(self):
+        # If the text would need more than max_lines, we append the
+        # residue to the last line rather than truncate (preserves
+        # operator's words even at slight overflow).
+        out = _wrap_korean_subtitle_lines(
+            "하나 둘 셋 넷 다섯 여섯 일곱 여덟",
+            chars_per_line=4,
+            max_lines=2,
+        )
+        lines = out.split("\n")
+        assert len(lines) == 2
+
+    def test_chars_per_line_zero_returns_original(self):
+        # Defensive — can't break a line with zero budget.
+        out = _wrap_korean_subtitle_lines(
+            "any text here", chars_per_line=0,
+        )
+        assert out == "any text here"
+
+    def test_strips_outer_whitespace(self):
+        # Caller might hand us padded text; result has no leading or
+        # trailing whitespace (cosmetic — drawtext renders the text
+        # exactly as given).
+        out = _wrap_korean_subtitle_lines(
+            "   안녕하세요   ", chars_per_line=12,
+        )
+        assert out == "안녕하세요"
+
+
+class TestBuildCompositionSpecResponsiveSubtitles:
+    def test_default_canvas_uses_32px_font(self):
+        scene = _scene(0, 30_000, sid="gd_x_scene_001")
+        seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene])
+        spec = build_composition_spec(
+            selected_chunks=[_chunk(0, 30_000)],
+            segments=[seg],
+            os_video_id="gd_x",
+        )
+        # _scene's transcript "transcript at 0" is short enough to
+        # fit one line, but the style must reflect the responsive
+        # font sizing regardless of cue length.
+        assert all(s.style.font_size_px == 32 for s in spec.subtitles)
+
+    def test_explicit_canvas_dimensions_scale_subtitles(self):
+        scene = _scene(0, 30_000, sid="gd_x_scene_001")
+        seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene])
+        spec = build_composition_spec(
+            selected_chunks=[_chunk(0, 30_000)],
+            segments=[seg],
+            os_video_id="gd_x",
+            canvas_width=1080,
+            canvas_height=1920,
+        )
+        # 1920 * 0.045 = 86 (rounded). Padding ≈ 86 * 0.33 = 28.
+        for s in spec.subtitles:
+            assert s.style.font_size_px == 86
+            assert s.style.background_padding == 28
 
 
 # ---------- mention_extractor query construction ----------
