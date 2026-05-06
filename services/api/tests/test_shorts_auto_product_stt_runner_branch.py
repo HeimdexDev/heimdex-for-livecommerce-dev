@@ -211,14 +211,26 @@ async def test_stt_happy_path_persists_render_job_id(monkeypatch):
 
     expected_render_id = uuid4()
 
+    # _create_render_job is the closure target. Stub to return the
+    # expected id so the assemble_stt_clip fake can claim it.
+    create_render_mock = AsyncMock(return_value=expected_render_id)
+    monkeypatch.setattr(runner, "_create_render_job", create_render_mock)
+
+    sentinel_spec = {"composition": "sentinel"}
+
     async def _fake_assemble(**kwargs):
-        # Caller passes the closure — call it to verify the wiring.
+        # Caller passes the closure — invoke it so the test exercises
+        # the closure body. Without this, signature drift in
+        # ``_create_render_job`` (e.g. a newly required kw-only arg)
+        # would silently slip past — the staging 2026-05-06 incident.
         assert kwargs["llm_label"] == "달심"
         assert kwargs["spoken_aliases"] == ["이 주스"]
         assert kwargs["os_video_id"] == "gd_x"
         assert kwargs["target_duration_ms"] == 60_000
+        rendered = await kwargs["enqueue_render"](sentinel_spec)
+        assert rendered == expected_render_id
         return SttClipResult(
-            render_job_id=expected_render_id,
+            render_job_id=rendered,
             selected_chunks=[],
             mentioned_scene_count=5,
             matched_aliases=["달심"],
@@ -234,13 +246,6 @@ async def test_stt_happy_path_persists_render_job_id(monkeypatch):
     monkeypatch.setattr(
         runner_module, "ProductScanJobRepository",
         MagicMock(return_value=fake_repo),
-    )
-
-    # _create_render_job is the closure target. Stub to return the
-    # expected id so the assemble_stt_clip mock can claim it.
-    monkeypatch.setattr(
-        runner, "_create_render_job",
-        AsyncMock(return_value=expected_render_id),
     )
 
     child = MagicMock(id=uuid4(), shorts_index=1)
@@ -262,6 +267,18 @@ async def test_stt_happy_path_persists_render_job_id(monkeypatch):
     kwargs = fake_repo.complete_tracking.await_args.kwargs
     assert kwargs["render_job_id"] == expected_render_id
     assert kwargs["job_id"] == child.id
+
+    # The closure must forward all kwargs ``_create_render_job`` requires —
+    # crucially ``scan_job_id``, added in migration 057. A future
+    # required-kwarg addition would also surface here.
+    create_render_mock.assert_awaited_once()
+    enqueue_kwargs = create_render_mock.await_args.kwargs
+    assert enqueue_kwargs["org_id"] == parent.org_id
+    assert enqueue_kwargs["user_id"] == parent.requested_by_user_id
+    assert enqueue_kwargs["os_video_id"] == "gd_x"
+    assert enqueue_kwargs["title"] == "my product"
+    assert enqueue_kwargs["composition_spec"] is sentinel_spec
+    assert enqueue_kwargs["scan_job_id"] == child.id
 
 
 @pytest.mark.asyncio

@@ -621,9 +621,11 @@ class ChildRunner:
         )
 
         # ── 3. Build the enqueue_render closure ────────────────────
-        # Captures parent + os_video_id by closure so track_stt itself
-        # never sees DB-row internals. Mirrors the existing
-        # ``_create_render_job`` call in the SAM2 path.
+        # Captures parent + child + os_video_id by closure so
+        # track_stt itself never sees DB-row internals. Mirrors the
+        # existing ``_create_render_job`` call in the SAM2 path —
+        # both paths must forward ``scan_job_id`` so render dedupe
+        # is scoped per scan_job (migration 057).
         async def _enqueue_render(spec) -> UUID:
             return await self._create_render_job(
                 org_id=parent.org_id,
@@ -631,6 +633,7 @@ class ChildRunner:
                 os_video_id=os_video_id,  # type: ignore[arg-type]
                 title=catalog_label,
                 composition_spec=spec,
+                scan_job_id=child.id,
             )
 
         # ── 4. Run the pipeline ────────────────────────────────────
