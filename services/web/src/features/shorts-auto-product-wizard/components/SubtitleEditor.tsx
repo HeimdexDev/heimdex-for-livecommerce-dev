@@ -18,15 +18,17 @@
 //     plan doc's open-questions section.
 // ============================================================================
 
-import { useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
 import {
   useSubtitleEditorState,
   type SaveStatus,
 } from "@/features/shorts-auto-product-wizard/hooks/useSubtitleEditorState";
-import type {
-  RenderJobResponse,
-  SubtitleEdit,
+import {
+  fetchRenderSubtitles,
+  type RenderJobResponse,
+  type SubtitleDownloadFormat,
+  type SubtitleEdit,
 } from "@/lib/api/highlight-reel";
 
 type TokenGetter = () => Promise<string | null>;
@@ -58,6 +60,14 @@ export interface SubtitleEditorProps {
    * ``useRefinedRenderChain`` hook (``stage === 'polling_child'``).
    */
   isRendering: boolean;
+  /**
+   * Optional. Fires whenever the editor's internal cue list changes
+   * — including the initial replay on mount + after each
+   * ``updateCue``. The page uses this to mirror the live cues into
+   * its in-player DOM overlay so operators can preview edits before
+   * paying for a re-render.
+   */
+  onCuesChange?: (cues: SubtitleEdit[]) => void;
 }
 
 /** Display ``mm:ss.cs`` for a millisecond timestamp. */
@@ -91,6 +101,7 @@ export function SubtitleEditor({
   refinementSource,
   onRerenderRequested,
   isRendering,
+  onCuesChange,
 }: SubtitleEditorProps) {
   const {
     cues,
@@ -104,6 +115,23 @@ export function SubtitleEditor({
     initialCues,
     getToken,
   });
+
+  // Bubble cue changes up to the page so the in-player DOM overlay
+  // can preview unsaved/post-save edits without waiting for a
+  // re-render. ``cues`` is a stable reference per render via React
+  // memo from inside the hook, so this fires once per actual change.
+  const onCuesChangeRef = useRef(onCuesChange);
+  useEffect(() => {
+    onCuesChangeRef.current = onCuesChange;
+  }, [onCuesChange]);
+  useEffect(() => {
+    onCuesChangeRef.current?.(cues);
+  }, [cues]);
+
+  const [downloadStatus, setDownloadStatus] = useState<
+    "idle" | "downloading" | "error"
+  >("idle");
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   // Show the "edits not yet rendered" banner when:
   //   - the user has typed unsaved edits (hasUnsavedEdits=true), OR
@@ -127,6 +155,45 @@ export function SubtitleEditor({
       await flushNow();
     }
     await onRerenderRequested();
+  }
+
+  async function handleDownloadClick(format: SubtitleDownloadFormat) {
+    if (downloadStatus === "downloading") return;
+    // Flush pending edits first — otherwise the server would serialize
+    // the stale pre-debounce subtitles. The PATCH side-effect (sets
+    // refinement_source='manual_edit') is harmless if redundant.
+    if (hasUnsavedEdits) {
+      try {
+        await flushNow();
+      } catch {
+        // The save itself surfaces an error via saveStatus; we still
+        // attempt the download below using whatever the server has.
+      }
+    }
+    setDownloadStatus("downloading");
+    setDownloadError(null);
+    try {
+      const { body, filename } = await fetchRenderSubtitles(
+        renderId, format, getToken,
+      );
+      // Anchor click in a same-tab navigation is the only cross-browser
+      // way to surface the OS save-as dialog from a fetch result.
+      const blob = new Blob([body], {
+        type: format === "srt" ? "application/x-subrip" : "text/vtt",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setDownloadStatus("idle");
+    } catch (e) {
+      setDownloadStatus("error");
+      setDownloadError(e instanceof Error ? e.message : "다운로드 실패");
+    }
   }
 
   return (
@@ -185,7 +252,28 @@ export function SubtitleEditor({
         </p>
       ) : null}
 
-      <div className="flex items-center justify-end gap-2 border-t border-neutral-100 pt-3">
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-neutral-100 pt-3">
+        {downloadError ? (
+          <p
+            data-testid="subtitle-editor-download-error"
+            className="basis-full text-right text-xs text-red-600"
+          >
+            {downloadError}
+          </p>
+        ) : null}
+        <button
+          type="button"
+          data-testid="subtitle-editor-download-srt-button"
+          onClick={() => handleDownloadClick("srt")}
+          disabled={cues.length === 0 || downloadStatus === "downloading"}
+          className={
+            cues.length === 0 || downloadStatus === "downloading"
+              ? "rounded border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-400"
+              : "rounded border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-700 hover:bg-neutral-50"
+          }
+        >
+          {downloadStatus === "downloading" ? "다운로드 중..." : "자막 다운로드 (.srt)"}
+        </button>
         <button
           type="button"
           data-testid="subtitle-editor-rerender-button"

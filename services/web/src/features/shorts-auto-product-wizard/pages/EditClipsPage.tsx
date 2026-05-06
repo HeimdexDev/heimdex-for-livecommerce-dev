@@ -114,6 +114,15 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
   const [scenesByVideo, setScenesByVideo] = useState<VideoScenesResponse | null>(null);
   const [scenesError, setScenesError] = useState<string | null>(null);
   const [clipStates, setClipStates] = useState<Record<string, ClipState>>({});
+  // Mirrors the SubtitleEditor's internal cue list per render id so the
+  // in-player DOM overlay can preview operator edits before a re-render.
+  // Keyed by renderId — switching clips does NOT reset entries here, so a
+  // user can edit Clip 1, jump to Clip 2, jump back, and still see their
+  // unrendered draft. Reset happens implicitly when the operator triggers
+  // a re-render (page pivots to the new child render id).
+  const [liveCuesByRender, setLiveCuesByRender] = useState<
+    Record<string, SubtitleEdit[]>
+  >({});
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportInFlight, setExportInFlight] = useState(false);
   const [exportSuccess, setExportSuccess] = useState<{ jobId: string; downloadUrl: string | null } | null>(null);
@@ -329,6 +338,52 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
     });
   }, [currentClip?.composition]);
 
+  // Live cues for the active clip, populated by SubtitleEditor's
+  // ``onCuesChange`` callback. Defaults to the burned-in editorCues
+  // until the editor reports its first state — keeps the overlay in
+  // sync if the operator never touches the editor.
+  const liveCues: SubtitleEdit[] = selectedRenderJobId
+    ? liveCuesByRender[selectedRenderJobId] ?? editorCues
+    : editorCues;
+
+  const handleCuesChange = useCallback((cues: SubtitleEdit[]) => {
+    if (!selectedRenderJobId) return;
+    setLiveCuesByRender((prev) => ({ ...prev, [selectedRenderJobId]: cues }));
+  }, [selectedRenderJobId]);
+
+  // Divergence: live cues differ from the burned-in (compositional)
+  // ones. Only when this is true do we render the DOM-overlay preview
+  // — otherwise the burned-in subtitles in the rendered MP4 are the
+  // single source of truth and the overlay would just duplicate them.
+  // Compares the three fields the renderer actually uses; ignores
+  // cosmetic style differences. O(n) — N is small (≤ ~20 cues).
+  const previewDivergesFromBurnedIn = useMemo(() => {
+    if (liveCues.length !== editorCues.length) return true;
+    for (let i = 0; i < liveCues.length; i++) {
+      const live = liveCues[i];
+      const burned = editorCues[i];
+      if (live.text !== burned.text) return true;
+      if (live.start_ms !== burned.start_ms) return true;
+      if (live.end_ms !== burned.end_ms) return true;
+    }
+    return false;
+  }, [liveCues, editorCues]);
+
+  // Subtitles handed to ClipPreview's overlay layer. Empty when the
+  // live cues match the burned-in source — prevents the
+  // double-subtitle bug where the same text was drawn both via FFmpeg
+  // drawtext (in the MP4) and via the React overlay.
+  const previewSubtitles: EditorSubtitle[] = useMemo(() => {
+    if (!previewDivergesFromBurnedIn) return [];
+    return liveCues.map((c, idx) => ({
+      id: `live-${selectedRenderJobId}-${idx}`,
+      text: c.text,
+      startMs: c.start_ms,
+      endMs: c.end_ms,
+      style: DEFAULT_SUBTITLE_STYLE as SubtitleStyle,
+    }));
+  }, [previewDivergesFromBurnedIn, liveCues, selectedRenderJobId]);
+
   const onTogglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -436,7 +491,7 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
             <ClipPreview
               ref={videoRef}
               src={currentClip.downloadUrl}
-              subtitles={currentClip.subtitles}
+              subtitles={previewSubtitles}
               playheadMs={playheadMs}
               onPlayheadChange={setPlayheadMs}
               onPlayingChange={setIsPlaying}
@@ -455,6 +510,7 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
               refinementSource={currentClip.refinementSource}
               onRerenderRequested={onRerenderRequested}
               isRendering={exportInFlight}
+              onCuesChange={handleCuesChange}
             />
           ) : (
             <p className="text-xs text-gray-500">로딩 중...</p>

@@ -30,6 +30,7 @@ vi.mock("@/lib/api/highlight-reel", async () => {
   return {
     ...actual,
     patchRenderJobSubtitles: vi.fn(),
+    fetchRenderSubtitles: vi.fn(),
   };
 });
 
@@ -362,5 +363,148 @@ describe("SubtitleEditor — save status indicator", () => {
     expect(screen.getByTestId("subtitle-editor-error").textContent).toBe(
       "network down",
     );
+  });
+});
+
+describe("SubtitleEditor — onCuesChange", () => {
+  it("invokes onCuesChange with the initial cues on mount", async () => {
+    const onCuesChange = vi.fn();
+    render(
+      <SubtitleEditor
+        renderId={RENDER_ID}
+        initialCues={initialCues}
+        getToken={tokenGetter}
+        refinementSource={null}
+        onRerenderRequested={async () => {}}
+        isRendering={false}
+        onCuesChange={onCuesChange}
+      />,
+    );
+    await waitFor(() => expect(onCuesChange).toHaveBeenCalled());
+    expect(onCuesChange).toHaveBeenLastCalledWith(initialCues);
+  });
+
+  it("invokes onCuesChange after each edit so the page mirror stays live", async () => {
+    const onCuesChange = vi.fn();
+    render(
+      <SubtitleEditor
+        renderId={RENDER_ID}
+        initialCues={initialCues}
+        getToken={tokenGetter}
+        refinementSource={null}
+        onRerenderRequested={async () => {}}
+        isRendering={false}
+        onCuesChange={onCuesChange}
+      />,
+    );
+    onCuesChange.mockClear();
+    fireEvent.change(
+      screen.getByTestId("subtitle-editor-textarea-0"),
+      { target: { value: "edited" } },
+    );
+    await waitFor(() => expect(onCuesChange).toHaveBeenCalled());
+    const lastCall = onCuesChange.mock.calls.at(-1)?.[0] as api.SubtitleEdit[];
+    expect(lastCall[0].text).toBe("edited");
+    // The second cue stays untouched — partial update should preserve it.
+    expect(lastCall[1].text).toBe(initialCues[1].text);
+  });
+});
+
+describe("SubtitleEditor — download button", () => {
+  let createObjectURL: ReturnType<typeof vi.fn>;
+  let revokeObjectURL: ReturnType<typeof vi.fn>;
+  let originalCreateObjectURL: typeof URL.createObjectURL | undefined;
+  let originalRevokeObjectURL: typeof URL.revokeObjectURL | undefined;
+
+  beforeEach(() => {
+    createObjectURL = vi.fn(() => "blob:fake-url");
+    revokeObjectURL = vi.fn();
+    originalCreateObjectURL = URL.createObjectURL;
+    originalRevokeObjectURL = URL.revokeObjectURL;
+    // jsdom doesn't ship URL.createObjectURL by default — install a spy
+    // so the component's blob-anchor flow runs without crashing.
+    URL.createObjectURL = createObjectURL as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL as unknown as typeof URL.revokeObjectURL;
+
+    vi.mocked(api.fetchRenderSubtitles).mockReset();
+    vi.mocked(api.fetchRenderSubtitles).mockResolvedValue({
+      body: "1\n00:00:00,000 --> 00:00:00,500\n안녕\n",
+      filename: "Heimdex-Mini.srt",
+    });
+  });
+
+  afterEach(() => {
+    if (originalCreateObjectURL !== undefined) {
+      URL.createObjectURL = originalCreateObjectURL;
+    }
+    if (originalRevokeObjectURL !== undefined) {
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it("clicking the SRT download button calls fetchRenderSubtitles with format=srt", async () => {
+    render(
+      <SubtitleEditor
+        renderId={RENDER_ID}
+        initialCues={initialCues}
+        getToken={tokenGetter}
+        refinementSource={null}
+        onRerenderRequested={async () => {}}
+        isRendering={false}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("subtitle-editor-download-srt-button"));
+    await waitFor(() =>
+      expect(vi.mocked(api.fetchRenderSubtitles)).toHaveBeenCalled(),
+    );
+    const call = vi.mocked(api.fetchRenderSubtitles).mock.calls[0];
+    expect(call[0]).toBe(RENDER_ID);
+    expect(call[1]).toBe("srt");
+    // Object URL was created from a Blob and the anchor was clicked
+    // (revoke runs synchronously after click in our handler).
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalled());
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:fake-url");
+  });
+
+  it("download button is disabled when there are no cues", () => {
+    render(
+      <SubtitleEditor
+        renderId={RENDER_ID}
+        initialCues={[]}
+        getToken={tokenGetter}
+        refinementSource={null}
+        onRerenderRequested={async () => {}}
+        isRendering={false}
+      />,
+    );
+    const btn = screen.getByTestId(
+      "subtitle-editor-download-srt-button",
+    ) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it("surfaces a download error when fetchRenderSubtitles rejects", async () => {
+    vi.mocked(api.fetchRenderSubtitles).mockRejectedValue(
+      new Error("403 Forbidden"),
+    );
+    render(
+      <SubtitleEditor
+        renderId={RENDER_ID}
+        initialCues={initialCues}
+        getToken={tokenGetter}
+        refinementSource={null}
+        onRerenderRequested={async () => {}}
+        isRendering={false}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("subtitle-editor-download-srt-button"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("subtitle-editor-download-error"),
+      ).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByTestId("subtitle-editor-download-error").textContent,
+    ).toBe("403 Forbidden");
   });
 });

@@ -204,6 +204,101 @@ export async function patchRenderJobSubtitles(
   return res.json();
 }
 
+/**
+ * Subtitle file format the backend exposes via
+ * ``GET /api/shorts/render/{job_id}/subtitles.{format}``.
+ *
+ * SRT covers every NLE + social platform; WebVTT is needed for
+ * ``<track>`` injection in custom HTML5 players.
+ */
+export type SubtitleDownloadFormat = "srt" | "vtt";
+
+export interface SubtitleDownloadResult {
+  /** Serialized subtitle file body, ready to write to disk. */
+  body: string;
+  /**
+   * Server-suggested filename. Read from the response's
+   * ``Content-Disposition`` header — prefers the RFC 5987
+   * ``filename*`` form so Korean titles survive intact, falls
+   * back to the ASCII ``filename=`` and finally to a fixed
+   * default if the header is malformed.
+   */
+  filename: string;
+}
+
+const _SUBTITLE_DOWNLOAD_DEFAULT_FILENAME: Record<SubtitleDownloadFormat, string> = {
+  srt: "subtitles.srt",
+  vtt: "subtitles.vtt",
+};
+
+/** Pull the best-available filename out of a Content-Disposition header. */
+function _parseSubtitleFilename(
+  header: string | null,
+  format: SubtitleDownloadFormat,
+): string {
+  const fallback = _SUBTITLE_DOWNLOAD_DEFAULT_FILENAME[format];
+  if (!header) return fallback;
+  // RFC 5987 form: filename*=UTF-8''<percent-encoded>. Prefer this so
+  // Korean titles survive — every modern browser respects it.
+  const utf8Match = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      /* fall through to ASCII */
+    }
+  }
+  const asciiMatch = header.match(/filename="([^"]+)"/i);
+  if (asciiMatch) return asciiMatch[1];
+  return fallback;
+}
+
+/**
+ * Download the latest saved subtitle list as a serialized
+ * file. Reads from ``input_spec.subtitles`` server-side, so the
+ * returned body always reflects the most recent
+ * ``patchRenderJobSubtitles`` call — no need to re-render before
+ * exporting.
+ *
+ * Returns the raw body + the server-suggested filename. Caller is
+ * responsible for triggering the actual save-as dialog (typically
+ * via a Blob + anchor click in the component layer) so this helper
+ * stays pure for tests.
+ */
+export async function fetchRenderSubtitles(
+  jobId: string,
+  format: SubtitleDownloadFormat,
+  getToken: TokenGetter,
+): Promise<SubtitleDownloadResult> {
+  const headers: Record<string, string> = {};
+  try {
+    const token = await getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  } catch { /* noop */ }
+
+  const res = await fetch(
+    `${getApiBaseUrl()}/api/shorts/render/${jobId}/subtitles.${format}`,
+    { method: "GET", headers },
+  );
+
+  if (!res.ok) {
+    let detail: { detail?: string } = {};
+    try {
+      detail = await res.json();
+    } catch {
+      /* noop */
+    }
+    throw new Error(detail.detail || `Subtitle download failed (${res.status})`);
+  }
+
+  const body = await res.text();
+  const filename = _parseSubtitleFilename(
+    res.headers.get("Content-Disposition"),
+    format,
+  );
+  return { body, filename };
+}
+
 export async function submitHighlightRender(
   personClusterId: string,
   clips: HighlightClipPreview[],
