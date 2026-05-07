@@ -290,14 +290,23 @@ class TestSkipPaths:
         assert repo_calls["create_calls"] == 0
 
     @pytest.mark.asyncio
-    async def test_no_subtitles_in_parent_skips(
+    async def test_empty_subtitles_in_parent_runs_whisper(
         self, mock_transcriber, mock_s3, session_holder, repo_calls, sqs_calls
     ) -> None:
+        # Post 2026-05-07 OS-decoupling: track_stt/composition_builder
+        # deliberately emits subtitles=[]. The runner MUST proceed —
+        # Whisper is the source of subtitles, not a refiner of pre-
+        # existing ones.
         parent = _make_parent(has_subtitles=False)
-        repo_calls["lock_returns"] = [parent]
+        repo_calls["lock_returns"] = [parent, parent]  # initial + re-lock
         await refinement_service._run_refinement(parent.id)
-        assert mock_transcriber.transcribe.call_count == 0
-        assert sqs_calls == []
+        assert mock_transcriber.transcribe.call_count == 1
+        assert repo_calls["create_calls"] == 1
+        assert len(sqs_calls) == 1
+        # The refined spec carries Whisper-derived subtitles even
+        # though the parent had none.
+        spec = repo_calls["last_refined_spec"]
+        assert len(spec["subtitles"]) >= 1
 
 
 # ---------- failures (post-guard) ----------

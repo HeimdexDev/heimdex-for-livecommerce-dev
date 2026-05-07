@@ -67,8 +67,13 @@ class TestCheckGuards:
         assert _check_guards(_parent(output_s3_key=None)) == "no_output_s3_key"
         assert _check_guards(_parent(output_s3_key="")) == "no_output_s3_key"
 
-    def test_no_subtitles_in_parent_blocks(self) -> None:
-        assert _check_guards(_parent(subtitles_in_spec=False)) == "no_subtitles"
+    def test_empty_subtitles_in_parent_proceeds(self) -> None:
+        # Post 2026-05-07 OS-decoupling: empty subtitles is the
+        # canonical state for auto-shorts product mode (Whisper is
+        # the source, not a refiner). The guard MUST NOT short-
+        # circuit on this — doing so blocks Whisper for every
+        # storyboard render.
+        assert _check_guards(_parent(subtitles_in_spec=False)) is None
 
     def test_priority_manual_edit_over_already_refined(self) -> None:
         # Both flags set — manual_edit checked first

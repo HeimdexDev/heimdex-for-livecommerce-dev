@@ -6,7 +6,7 @@ the row to ``completed``:
   1. Acquire row lock with ``SKIP LOCKED`` (so two concurrent
      callbacks can't both pass guards).
   2. Run guards: parent has output, isn't already refined, isn't a
-     refined child, and has subtitles to refine.
+     refined child, and isn't a manual edit.
   3. Download the rendered MP4 from S3 (timeout-bounded).
   4. Call OpenAI Whisper for word-level timestamps.
   5. Re-chunk Whisper words into a fresh subtitle list with
@@ -397,7 +397,14 @@ def _check_guards(parent: Any) -> str | None:
       - ``already_refined``: forward pointer set; refinement already happened.
       - ``refined_from``: this row IS a refined child; don't recurse.
       - ``no_output_s3_key``: render never produced an MP4 to transcribe.
-      - ``no_subtitles``: parent had no subtitles to refine; nothing to swap.
+
+    Empty parent ``subtitles`` is intentionally NOT a skip case after
+    the 2026-05-07 OS-decoupling: ``track_stt/composition_builder``
+    deliberately emits ``subtitles=[]`` so Whisper post-render can be
+    the sole caption source. Treating empty as "nothing to refine"
+    would block every product-mode short — the failure mode that
+    drove this change. See
+    ``project_auto_shorts_captions_whisper_only.md``.
     """
     if parent.refinement_source == "manual_edit":
         return "manual_edit"
@@ -407,9 +414,6 @@ def _check_guards(parent: Any) -> str | None:
         return "refined_from"
     if not parent.output_s3_key:
         return "no_output_s3_key"
-    spec = parent.input_spec or {}
-    if not spec.get("subtitles"):
-        return "no_subtitles"
     return None
 
 
