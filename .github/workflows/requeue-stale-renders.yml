@@ -79,7 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Run janitor via SSH
+      - name: Run janitor via SSH (skip if module missing)
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.PRODUCTION_HOST }}
@@ -97,6 +97,23 @@ jobs:
             STALE_MINUTES="${{ github.event.inputs.stale_minutes || '5' }}"
 
             cd "$APP_DIR"
+
+            # The CLI ships with the api image. Production is deployed
+            # manually via ``gh workflow run "Deploy Production"`` — it
+            # may lag the staging auto-deploy by hours-to-days. While
+            # the prod image doesn't yet contain
+            # ``app.cli.requeue_stale_renders``, treat the cron as a
+            # no-op rather than a recurring red workflow run. The next
+            # prod deploy that includes this commit makes the check
+            # pass and the cron starts working automatically.
+            if ! docker compose exec -T api python -c \
+                "import importlib.util, sys; \
+                 sys.exit(0 if importlib.util.find_spec('app.cli.requeue_stale_renders') else 1)" \
+                2>/dev/null; then
+              echo "requeue_stale_renders not deployed to production yet — skipping cron run"
+              exit 0
+            fi
+
             docker compose exec -T api python -m app.cli.requeue_stale_renders \
               --stale-minutes "$STALE_MINUTES" \
               $DRY_RUN_FLAG
