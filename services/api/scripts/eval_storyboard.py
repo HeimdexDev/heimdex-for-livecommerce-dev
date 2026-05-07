@@ -269,12 +269,24 @@ def _ordering_correct(plan: StoryboardPlan) -> bool:
 
 async def _run_fixture(
     *, fixture: dict[str, Any], picker_name: str,
+    cache_dir: Path, refresh_cache: bool,
 ) -> dict[str, Any]:
     chunks = _to_scored_chunks(fixture["scored_chunks"])
     segments = _to_segments(fixture["segments"])
 
     if picker_name == "heuristic":
         picker = HeuristicStoryboardPicker(budgets=SlotBudgets())
+    elif picker_name == "llm":
+        # Tier C — LLM director. Plan
+        # ``.claude/plans/storyboard-tier-c-llm-picker-2026-05-07.md``.
+        # Eval uses a snapshot cache so reruns are deterministic and
+        # offline. ``--refresh-cache`` re-fires the real OpenAI call
+        # and overwrites the snapshot; default mode replays from disk.
+        picker = _build_llm_picker_for_eval(
+            fixture_name=str(fixture["name"]),
+            cache_dir=cache_dir,
+            refresh_cache=refresh_cache,
+        )
     else:
         raise ValueError(f"unsupported picker '{picker_name}'")
 
@@ -308,6 +320,194 @@ async def _run_fixture(
     }
 
 
+# ---------- Tier C / LLM picker eval shim ----------
+#
+# Snapshot cache for the eval harness. Live LLM calls during eval
+# would be slow + non-deterministic + costly to repeat; the cache
+# makes goldens reproducible offline. Default mode replays cached
+# responses; ``--refresh-cache`` re-fires real calls.
+#
+# Cache layout::
+#
+#   tests/shorts_auto_product/eval/llm_cache/<prompt_version>/<fixture_name>.json
+#
+# The file holds the LLM's raw JSON response body (the
+# ``message.content`` string). Bumping ``llm_prompt.PROMPT_VERSION``
+# silently invalidates the cache by directory name — the eval will
+# fail with "no snapshot for fixture X at prompt_version v2" and
+# the runner re-fires with ``--refresh-cache`` to fill the new
+# version's cache.
+
+
+class _SnapshotChatCompletions:
+    """Mimics ``openai.AsyncOpenAI().chat.completions``.
+
+    On ``create()`` reads the cached JSON response body for the
+    given fixture; if missing AND ``refresh_cache=True`` will issue
+    the real OpenAI call and write the response to disk; otherwise
+    raises ``FileNotFoundError`` so the picker's exception handler
+    falls back to the heuristic (which is what we want — eval surface
+    a "missing snapshot" without crashing the run).
+    """
+
+    def __init__(
+        self,
+        *,
+        cache_path: Path,
+        refresh: bool,
+        real_client: Any | None,
+    ) -> None:
+        self._cache_path = cache_path
+        self._refresh = refresh
+        self._real_client = real_client
+
+    async def create(self, **kwargs: Any) -> Any:
+        if self._refresh:
+            if self._real_client is None:
+                raise RuntimeError(
+                    "--refresh-cache requires OPENAI_API_KEY to be set "
+                    "in the environment so the eval can fire real calls"
+                )
+            response = await self._real_client.chat.completions.create(**kwargs)
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            self._cache_path.write_text(
+                json.dumps(
+                    {
+                        "content": response.choices[0].message.content,
+                        "prompt_tokens": response.usage.prompt_tokens,
+                        "completion_tokens": response.usage.completion_tokens,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            return response
+        # Replay-only path
+        if not self._cache_path.exists():
+            raise FileNotFoundError(
+                f"no snapshot at {self._cache_path}; run with "
+                "--refresh-cache to populate"
+            )
+        snap = json.loads(self._cache_path.read_text(encoding="utf-8"))
+        return _SimpleResponse(
+            content=snap["content"],
+            prompt_tokens=int(snap.get("prompt_tokens", 1250)),
+            completion_tokens=int(snap.get("completion_tokens", 300)),
+        )
+
+
+class _SnapshotChat:
+    def __init__(self, completions: _SnapshotChatCompletions) -> None:
+        self.completions = completions
+
+
+class _SnapshotOpenAIClient:
+    """Drop-in for ``openai.AsyncOpenAI`` exposing only the surface
+    the picker uses (``client.chat.completions.create``)."""
+
+    def __init__(
+        self,
+        *,
+        cache_path: Path,
+        refresh: bool,
+        real_client: Any | None,
+    ) -> None:
+        self.chat = _SnapshotChat(
+            _SnapshotChatCompletions(
+                cache_path=cache_path,
+                refresh=refresh,
+                real_client=real_client,
+            ),
+        )
+
+
+class _SimpleResponse:
+    """Minimal ``response`` object the picker consumes."""
+
+    def __init__(
+        self, *, content: str, prompt_tokens: int, completion_tokens: int,
+    ) -> None:
+        self.choices = [_SimpleChoice(content)]
+        self.usage = _SimpleUsage(
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+        )
+
+
+class _SimpleChoice:
+    def __init__(self, content: str) -> None:
+        self.message = _SimpleMessage(content)
+
+
+class _SimpleMessage:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class _SimpleUsage:
+    def __init__(self, *, prompt_tokens: int, completion_tokens: int) -> None:
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+
+
+def _build_llm_picker_for_eval(
+    *, fixture_name: str, cache_dir: Path, refresh_cache: bool,
+) -> Any:
+    """Construct an ``LlmStoryboardPicker`` whose OpenAI client reads
+    from / writes to the snapshot cache.
+
+    The cache is keyed on ``PROMPT_VERSION`` so a prompt edit (which
+    bumps the version) invalidates by directory rather than silently
+    serving stale snapshots.
+    """
+    # Lazy-import so the heuristic-only eval path doesn't pay the
+    # OpenAI SDK import cost.
+    import os
+
+    from app.lib.whisper_transcribe.budget import InMemoryBudgetTracker
+    from app.modules.shorts_auto_product.track_stt.storyboard.heuristic_picker import (
+        HeuristicStoryboardPicker as _HeuristicForEval,
+    )
+    from app.modules.shorts_auto_product.track_stt.storyboard.llm_picker import (
+        LlmStoryboardPicker,
+    )
+    from app.modules.shorts_auto_product.track_stt.storyboard.llm_prompt import (
+        PROMPT_VERSION,
+    )
+
+    cache_path = cache_dir / PROMPT_VERSION / f"{fixture_name}.json"
+
+    real_client: Any | None = None
+    if refresh_cache:
+        api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError(
+                "--refresh-cache requires OPENAI_API_KEY in the environment"
+            )
+        # Lazy import — only when actually refreshing.
+        from openai import AsyncOpenAI  # type: ignore[import-not-found]
+
+        real_client = AsyncOpenAI(api_key=api_key)
+
+    snapshot_client = _SnapshotOpenAIClient(
+        cache_path=cache_path,
+        refresh=refresh_cache,
+        real_client=real_client,
+    )
+
+    return LlmStoryboardPicker(
+        openai_client=snapshot_client,
+        model="gpt-4o-mini",
+        prompt_version=PROMPT_VERSION,
+        timeout_s=15.0,  # generous for eval; production uses 5s
+        budgets=SlotBudgets(),
+        # Eval doesn't enforce a real budget — set high so a refresh
+        # run on N fixtures isn't artificially capped.
+        budget_tracker=InMemoryBudgetTracker(daily_budget_usd=100.0),
+        fallback=_HeuristicForEval(budgets=SlotBudgets()),
+    )
+
+
 def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
     if not results:
         return {"fixture_count": 0}
@@ -336,8 +536,28 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="directory of .json fixture files",
     )
     p.add_argument(
-        "--picker", choices=("heuristic",), default="heuristic",
-        help="which picker to evaluate (Tier C 'llm' added later)",
+        "--picker", choices=("heuristic", "llm"), default="heuristic",
+        help=(
+            "which picker to evaluate. 'llm' replays from the snapshot "
+            "cache by default; pass --refresh-cache to re-fire real "
+            "OpenAI calls"
+        ),
+    )
+    p.add_argument(
+        "--cache-dir", type=Path,
+        default=Path("tests/shorts_auto_product/eval/llm_cache"),
+        help=(
+            "snapshot cache root (LLM picker only). Cache files keyed "
+            "as <cache-dir>/<prompt_version>/<fixture_name>.json"
+        ),
+    )
+    p.add_argument(
+        "--refresh-cache", action="store_true",
+        help=(
+            "re-fire real OpenAI calls and overwrite snapshots "
+            "(LLM picker only). Costs ~$0.0004 per fixture; explicit "
+            "knob — default mode is replay-only"
+        ),
     )
     p.add_argument(
         "--out", type=Path, default=None,
@@ -378,6 +598,7 @@ async def _amain(argv: list[str]) -> int:
             return 2
         result = await _run_fixture(
             fixture=fixture, picker_name=args.picker,
+            cache_dir=args.cache_dir, refresh_cache=args.refresh_cache,
         )
         results.append(result)
 
