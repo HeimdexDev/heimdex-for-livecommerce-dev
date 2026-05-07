@@ -355,6 +355,15 @@ class SceneSearchService:
         All embedding generation and OpenSearch queries run in parallel via
         ``asyncio.gather()`` for minimal latency overhead.
         """
+        # --- Closed-vocab fast path (VMD search) ---
+        from app.modules.search.closed_vocab import get_closed_vocab_client
+
+        vocab_result = await get_closed_vocab_client().classify(ctx.query)
+        if vocab_result is not None:
+            return await self._search_closed_vocab(
+                ctx, vocab_result, alpha, page_size, max_per_video,
+            )
+
         intent = classify_intent(ctx.query)
         settings = self.settings
 
@@ -545,6 +554,78 @@ class SceneSearchService:
             org_id=ctx.org_id,
             group_by=ctx.group_by,
         )
+
+    # ------------------------------------------------------------------
+    # Mode: closed-vocab (VMD — pre-computed SigLIP embedding kNN)
+    # ------------------------------------------------------------------
+    async def _search_closed_vocab(
+        self,
+        ctx: _SearchContext,
+        vocab_result: "ClosedVocabResult",
+        alpha: float,
+        page_size: int,
+        max_per_video: int,
+    ) -> SceneSearchResponse | VideoSearchResponse:
+        settings = self.settings
+
+        logger.info(
+            "closed_vocab_search",
+            query=ctx.query[:50],
+            vocab=vocab_result.vocab,
+            axis=vocab_result.axis,
+            tier=vocab_result.tier,
+        )
+
+        visual_results = await self.scene_opensearch.search_visual_vector(
+            visual_embedding=vocab_result.embedding,
+            org_id=ctx.org_id_str,
+            filters=ctx.filter_dict,
+            size=20,
+        )
+
+        ranked_items = compute_weighted_rrf(
+            lexical_results=[],
+            vector_results=[],
+            visual_results=visual_results,
+            bm25_weight=0.0,
+            text_knn_weight=0.0,
+            visual_weight=1.0,
+        )
+
+        if (
+            settings.reranker_enabled
+            and len(ranked_items) > 1
+            and vocab_result.prompted_text.strip()
+        ):
+            from app.modules.search.reranker import apply_reranking
+
+            ranked_items = await apply_reranking(
+                query=vocab_result.prompted_text,
+                ranked_items=ranked_items[:settings.reranker_top_k],
+                remaining=ranked_items[settings.reranker_top_k:],
+            )
+
+        diversified = diversify_results(
+            ranked_items,
+            max_per_video=max_per_video,
+            target_count=page_size,
+            content_types=ctx.filter_dict.get("content_types"),
+        )
+
+        results = self._build_scene_results(diversified, ctx.library_map)
+        facets = self._build_facets(ctx.facet_data, ctx.library_map, ctx.people_label_map)
+        await self._backfill_web_view_links(results, ctx.org_id)
+
+        return self._maybe_group_by_video(
+            results=results,
+            ranked_items=ranked_items,
+            facets=facets,
+            query=ctx.query,
+            alpha=alpha,
+            org_id=ctx.org_id,
+            group_by=ctx.group_by,
+        )
+
     # ------------------------------------------------------------------
     # Shared helpers
     # ------------------------------------------------------------------

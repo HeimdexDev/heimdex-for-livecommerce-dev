@@ -254,6 +254,11 @@ class Settings(BaseSettings):
     aircloud_wake_debounce_seconds: int = 300   # 5 min between wake-up calls per worker
     aircloud_cooldown_checks: int = 3           # 3 × 5 min = 15 min idle before stop
 
+    # --- Closed-vocabulary VMD search (sidecar container) ---
+    closed_vocab_enabled: bool = False
+    closed_vocab_service_url: str = ""
+    closed_vocab_timeout_ms: int = 1000
+
     # --- PII blur (user-triggered, see app/modules/blur/) ---
     # BLUR_ENABLED is the global kill switch. While false the
     # /api/blur/videos/{id} router returns 404 and no SQS traffic
