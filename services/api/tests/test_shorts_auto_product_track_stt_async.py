@@ -477,3 +477,232 @@ class TestServiceEndToEnd:
         )
         assert result.render_job_id == captured[0]
         assert result.fallback_used == "none"
+
+
+# ---------- storyboard mode wiring ----------
+
+
+class TestServiceStoryboardWiring:
+    """Service.py picks the right composition path based on whether
+    a storyboard picker is supplied. Failures in the picker fall
+    back cleanly to the legacy clip_selector path so a render
+    always completes when there's enough chunk data.
+    """
+
+    def _two_scene_os_client(self) -> _FakeOSClient:
+        return _FakeOSClient(
+            hits=[
+                _hit("scene_001", 0, 15_000, transcript="달심 이거 진짜 좋아요"),
+                _hit("scene_002", 15_000, 30_000, transcript="달심 가격도 좋고"),
+            ],
+        )
+
+    @pytest.mark.asyncio
+    async def test_legacy_path_when_picker_is_none(self) -> None:
+        # No picker → legacy clip_selector → composition_builder
+        # gets chunks (not a storyboard). The CompositionSpec
+        # contains scene_clips but no subtitles (post-2026-05-07
+        # default). This is the regression check that picker=None
+        # leaves the existing code path untouched.
+        os_client = self._two_scene_os_client()
+        openai = _FakeOpenAI()
+        captured: list[Any] = []
+
+        async def _enqueue(spec):
+            captured.append(spec)
+            return uuid4()
+
+        await service.assemble_stt_clip(
+            org_id=uuid4(),
+            catalog_entry_id=uuid4(),
+            llm_label="달심",
+            spoken_aliases=[],
+            os_video_id="gd_x",
+            target_duration_ms=30_000,
+            title="t",
+            os_client=os_client,
+            openai_client=openai,
+            enqueue_render=_enqueue,
+            storyboard_picker=None,
+        )
+        assert len(captured) == 1
+        spec = captured[0]
+        assert len(spec.scene_clips) >= 1
+        assert spec.subtitles == []
+
+    @pytest.mark.asyncio
+    async def test_storyboard_picker_drives_composition_when_supplied(self) -> None:
+        # When a picker is wired in, the composition spec's
+        # scene_clips MUST come from the picker's fragments — not
+        # the legacy contiguous window. We verify by handing in a
+        # fake picker that returns a known fragment range and
+        # asserting the resulting scene_clips correspond.
+        from app.modules.shorts_auto_product.track_stt.storyboard import (
+            SlotRole,
+            StoryboardFragment,
+            StoryboardPlan,
+        )
+
+        os_client = self._two_scene_os_client()
+        openai = _FakeOpenAI()
+        captured: list[Any] = []
+
+        async def _enqueue(spec):
+            captured.append(spec)
+            return uuid4()
+
+        class _StubPicker:
+            async def assemble(self, **kwargs):
+                # Return a single HOOK fragment in the FIRST scene,
+                # 0-8s. The legacy clip_selector would normally pick
+                # all 30s; if storyboard wins, scene_clips will be
+                # exactly the 8s slice.
+                score = ChunkScore(
+                    hook_score=0.9, has_cta=False, importance_score=0.5,
+                )
+                return StoryboardPlan(
+                    fragments=[
+                        StoryboardFragment(
+                            role=SlotRole.HOOK,
+                            source_start_ms=0,
+                            source_end_ms=8_000,
+                            target_duration_ms=8_000,
+                            chunk_score=score,
+                            rationale="test:hook",
+                        ),
+                    ],
+                    total_duration_ms=8_000,
+                    slots_filled={SlotRole.HOOK},
+                    fallbacks_used=[],
+                )
+
+        await service.assemble_stt_clip(
+            org_id=uuid4(),
+            catalog_entry_id=uuid4(),
+            llm_label="달심",
+            spoken_aliases=[],
+            os_video_id="gd_x",
+            target_duration_ms=30_000,
+            title="t",
+            os_client=os_client,
+            openai_client=openai,
+            enqueue_render=_enqueue,
+            storyboard_picker=_StubPicker(),
+        )
+        spec = captured[0]
+        # Storyboard fragment 0-8000ms is fully inside scene_001;
+        # exactly one SceneClipSpec emitted.
+        assert len(spec.scene_clips) == 1
+        assert spec.scene_clips[0].start_ms == 0
+        assert spec.scene_clips[0].end_ms == 8_000
+        assert spec.scene_clips[0].scene_id == "scene_001"
+
+    @pytest.mark.asyncio
+    async def test_storyboard_picker_failure_falls_back_to_legacy(self) -> None:
+        # If the picker raises, service.py logs and falls back to
+        # the legacy clip_selector path so a render still gets out.
+        # Critical for prod safety — no picker bug should ever drop
+        # a real wizard request.
+        os_client = self._two_scene_os_client()
+        openai = _FakeOpenAI()
+        captured: list[Any] = []
+
+        async def _enqueue(spec):
+            captured.append(spec)
+            return uuid4()
+
+        class _BoomPicker:
+            async def assemble(self, **kwargs):
+                raise RuntimeError("picker exploded")
+
+        await service.assemble_stt_clip(
+            org_id=uuid4(),
+            catalog_entry_id=uuid4(),
+            llm_label="달심",
+            spoken_aliases=[],
+            os_video_id="gd_x",
+            target_duration_ms=30_000,
+            title="t",
+            os_client=os_client,
+            openai_client=openai,
+            enqueue_render=_enqueue,
+            storyboard_picker=_BoomPicker(),
+        )
+        # Render still happened — picker failure didn't propagate.
+        assert len(captured) == 1
+        spec = captured[0]
+        # Legacy path → scene_clips span the full window picked
+        # by clip_selector, not just an 8s storyboard slice.
+        total_clip_duration = sum(
+            c.end_ms - c.start_ms for c in spec.scene_clips
+        )
+        assert total_clip_duration > 8_000
+
+    @pytest.mark.asyncio
+    async def test_storyboard_shadow_mode_emits_diff_but_uses_legacy(self) -> None:
+        # Shadow mode runs the picker AND the legacy selector,
+        # logs a diff event for telemetry, but the LEGACY plan is
+        # what produces the actual render. Validates Tier B output
+        # against ground-truth before flipping the real switch.
+        from app.modules.shorts_auto_product.track_stt.storyboard import (
+            SlotRole,
+            StoryboardFragment,
+            StoryboardPlan,
+        )
+
+        os_client = self._two_scene_os_client()
+        openai = _FakeOpenAI()
+        captured: list[Any] = []
+
+        async def _enqueue(spec):
+            captured.append(spec)
+            return uuid4()
+
+        score = ChunkScore(
+            hook_score=0.9, has_cta=False, importance_score=0.5,
+        )
+
+        class _StubPicker:
+            assemble_calls = 0
+
+            async def assemble(self, **kwargs):
+                _StubPicker.assemble_calls += 1
+                return StoryboardPlan(
+                    fragments=[
+                        StoryboardFragment(
+                            role=SlotRole.HOOK,
+                            source_start_ms=0,
+                            source_end_ms=8_000,
+                            target_duration_ms=8_000,
+                            chunk_score=score,
+                            rationale="shadow",
+                        ),
+                    ],
+                    total_duration_ms=8_000,
+                    slots_filled={SlotRole.HOOK},
+                    fallbacks_used=[],
+                )
+
+        await service.assemble_stt_clip(
+            org_id=uuid4(),
+            catalog_entry_id=uuid4(),
+            llm_label="달심",
+            spoken_aliases=[],
+            os_video_id="gd_x",
+            target_duration_ms=30_000,
+            title="t",
+            os_client=os_client,
+            openai_client=openai,
+            enqueue_render=_enqueue,
+            storyboard_picker=_StubPicker(),
+            storyboard_shadow_mode=True,
+        )
+        # Picker DID run (shadow mode logs the diff)…
+        assert _StubPicker.assemble_calls == 1
+        # …but the rendered scene_clips come from LEGACY, so total
+        # duration is bigger than the 8s storyboard would produce.
+        spec = captured[0]
+        total_clip_duration = sum(
+            c.end_ms - c.start_ms for c in spec.scene_clips
+        )
+        assert total_clip_duration > 8_000

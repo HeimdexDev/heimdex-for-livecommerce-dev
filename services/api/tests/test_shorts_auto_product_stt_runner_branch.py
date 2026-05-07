@@ -41,6 +41,18 @@ def _settings_stub(*, track_mode: str = "stt"):
     s.auto_shorts_product_v2_child_lease_seconds = 300
     s.auto_shorts_product_v2_child_runner_enabled = True
     s.auto_shorts_product_v2_track_mode = track_mode
+    # Storyboard mode default-off for the legacy STT path tests —
+    # ``getattr`` on a bare MagicMock would otherwise return a
+    # truthy MagicMock and the factory would try to build a picker
+    # with a mock-typed picker name (raises ValueError).
+    s.auto_shorts_product_v2_storyboard_mode_enabled = False
+    s.auto_shorts_product_v2_storyboard_picker = "heuristic"
+    s.auto_shorts_product_v2_storyboard_shadow_mode = False
+    s.auto_shorts_product_v2_storyboard_hook_ms = 8_000
+    s.auto_shorts_product_v2_storyboard_intro_ms = 12_000
+    s.auto_shorts_product_v2_storyboard_detail_ms = 25_000
+    s.auto_shorts_product_v2_storyboard_cta_ms = 8_000
+    s.auto_shorts_product_v2_legacy_os_subtitles_enabled = False
     s.openai_api_key = "sk-test"
     s.opensearch_url = "http://localhost:9200"
     s.opensearch_index_prefix = "heimdex"

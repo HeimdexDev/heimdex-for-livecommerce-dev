@@ -60,6 +60,9 @@ from app.modules.shorts_auto_product.track_stt.models import (
     MentionSegment,
     ScoredChunk,
 )
+from app.modules.shorts_auto_product.track_stt.storyboard import (
+    StoryboardPlan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,8 @@ _wrap_korean_subtitle_lines = wrap_korean_subtitle_lines
 
 def build_composition_spec(
     *,
-    selected_chunks: list[ScoredChunk],
+    selected_chunks: list[ScoredChunk] | None = None,
+    storyboard: StoryboardPlan | None = None,
     segments: list[MentionSegment],
     os_video_id: str,
     title: str | None = None,
@@ -86,12 +90,23 @@ def build_composition_spec(
 ) -> CompositionSpec:
     """Build the render-ready CompositionSpec.
 
+    Accepts EITHER ``selected_chunks`` (legacy single-window
+    selection from ``clip_selector``) OR ``storyboard`` (Tier B
+    multi-fragment composition from the storyboard picker). Exactly
+    one must be provided.
+
     Args:
         selected_chunks: Output of :func:`clip_selector.select_top_chunks`,
-            already chronologically ordered.
+            already chronologically ordered. Mutually exclusive with
+            ``storyboard``.
+        storyboard: Output of a ``StoryboardPicker`` implementation.
+            Fragments are emitted as scene_clips in storyboard order
+            (HOOK → INTRO → DETAIL → CTA). Mutually exclusive with
+            ``selected_chunks``.
         segments: All segments produced by the assembler — used to
-            map each chunk back to its containing scene_id (and, in
-            the legacy rollback path, to source caption text).
+            map each chunk/fragment back to its containing scene_id
+            (and, in the legacy rollback path, to source caption
+            text).
         os_video_id: The drive ``video_id`` string (e.g.
             ``"gd_05e7f957502e86cf"``).
         title: Optional title for the saved short. v1 wizard doesn't
@@ -105,47 +120,88 @@ def build_composition_spec(
             when True, restores the historical OS-transcript-derived
             subtitle generation. False (default) emits no subtitles
             and lets Whisper post-render produce them on the actual
-            audio.
+            audio. Only honored when ``selected_chunks`` is in use;
+            the storyboard path always emits empty subtitles
+            (storyboard composition is post-OS-decoupling and
+            captions ALWAYS come from Whisper).
 
     Returns:
         ``CompositionSpec`` ready to hand to ``ShortsRenderService.create_render_job``.
 
     Raises:
-        ValueError: ``selected_chunks`` is empty. Caller must surface
-            ``NoMentionsFoundError`` upstream rather than build an
-            invalid spec — :class:`CompositionSpec.scene_clips` has
-            ``min_length=1``.
+        ValueError: Both or neither of ``selected_chunks`` /
+            ``storyboard`` provided; or the input produced 0 clips
+            after scene-clamping.
     """
-    if not selected_chunks:
+    if (selected_chunks is None or not selected_chunks) and (
+        storyboard is None or storyboard.is_empty
+    ):
         raise ValueError(
-            "build_composition_spec requires at least one selected "
-            "chunk; caller must surface no-mentions earlier"
+            "build_composition_spec requires either non-empty "
+            "selected_chunks or a non-empty storyboard"
         )
+    if (
+        selected_chunks is not None
+        and selected_chunks
+        and storyboard is not None
+        and not storyboard.is_empty
+    ):
+        raise ValueError(
+            "build_composition_spec accepts EITHER selected_chunks "
+            "OR storyboard, not both"
+        )
+
+    using_storyboard = storyboard is not None and not storyboard.is_empty
+
+    # Normalize both paths to a list of (source_start_ms,
+    # source_end_ms, debug_label) ranges so the scene-clamping +
+    # SceneClipSpec emission logic is shared.
+    if using_storyboard:
+        assert storyboard is not None  # narrow for the type checker
+        ranges: list[tuple[int, int, str]] = [
+            (
+                f.source_start_ms,
+                f.source_end_ms,
+                f"storyboard:{f.role.value}",
+            )
+            for f in storyboard.fragments
+        ]
+    else:
+        assert selected_chunks is not None  # narrow for the type checker
+        ranges = [
+            (c.start_ms, c.end_ms, "legacy_chunk")
+            for c in selected_chunks
+        ]
 
     timeline_cursor_ms = 0
     clips: list[SceneClipSpec] = []
 
-    # Korean livecommerce scenes are 1-15s; chunks are fixed-width 20s
-    # by default. A chunk routinely spans multiple scenes. The render
-    # service requires each ``SceneClipSpec`` to be within the
-    # underlying source scene's bounds (see
-    # ``ShortsRenderService.create_render_job`` 422 path), so a
-    # scene-crossing chunk must split into N ``SceneClipSpec``s — one
-    # per overlapping scene, each clamped to that scene's bounds.
+    # Korean livecommerce scenes are 1-15s; chunks are fixed-width
+    # 20s by default and storyboard fragments are clamped to slot
+    # budgets (typically 8-25s). Either way, a single range routinely
+    # spans multiple scenes. The render service requires each
+    # ``SceneClipSpec`` to be within the underlying source scene's
+    # bounds (see ``ShortsRenderService.create_render_job`` 422
+    # path), so a scene-crossing range must split into N
+    # ``SceneClipSpec``s — one per overlapping scene, each clamped
+    # to that scene's bounds.
     sub_clip_groups: list[list[tuple[str, int, int, int]]] = []
-    for chunk in selected_chunks:
-        sub_clips = _chunk_to_scene_clipped_subclips(
-            chunk=chunk, segments=segments,
+    for range_start_ms, range_end_ms, range_label in ranges:
+        sub_clips = _range_to_scene_clipped_subclips(
+            range_start_ms=range_start_ms,
+            range_end_ms=range_end_ms,
+            segments=segments,
         )
         if not sub_clips:
-            # Defensive: chunks come FROM segments, so every chunk
-            # should have ≥1 overlapping scene. If somehow not,
-            # skip rather than emit an invalid clip.
+            # Defensive: chunks come FROM segments, so every chunk/
+            # fragment should have ≥1 overlapping scene. If somehow
+            # not, skip rather than emit an invalid clip.
             logger.warning(
-                "stt_composition_chunk_no_overlap_skipped",
+                "stt_composition_range_no_overlap_skipped",
                 extra={
-                    "chunk_start_ms": chunk.start_ms,
-                    "chunk_end_ms": chunk.end_ms,
+                    "range_start_ms": range_start_ms,
+                    "range_end_ms": range_end_ms,
+                    "range_label": range_label,
                 },
             )
             continue
@@ -174,10 +230,16 @@ def build_composition_spec(
     if not clips:
         raise ValueError(
             "build_composition_spec produced 0 clips from "
-            f"{len(selected_chunks)} chunks (no scene overlap?)"
+            f"{len(ranges)} ranges (no scene overlap?)"
         )
 
-    if legacy_os_subtitles_enabled:
+    # The legacy_os_subtitles_enabled rollback ONLY makes sense
+    # for the chunks path — storyboard composition is post-OS-
+    # decoupling and always sources captions from Whisper. Forcing
+    # the legacy path under storyboard would re-introduce the
+    # exact bug the storyboard work + Whisper-only decoupling were
+    # built to prevent.
+    if legacy_os_subtitles_enabled and not using_storyboard:
         # Rollback path — see module docstring. Restores pre-2026-05-07
         # behavior of pulling captions from OS speaker_transcript.
         subtitles = _legacy_build_subtitles_from_os_transcripts(
@@ -192,7 +254,11 @@ def build_composition_spec(
         # parent render goes out with no burned subtitles; the wizard
         # surfaces "자막 생성 중…" until the Whisper child lands.
         subtitles = []
-        log_event = "stt_composition_built"
+        log_event = (
+            "stt_composition_built_storyboard"
+            if using_storyboard
+            else "stt_composition_built"
+        )
 
     spec = CompositionSpec(
         scene_clips=clips,
@@ -207,7 +273,18 @@ def build_composition_spec(
             "subtitle_count": len(subtitles),
             "duration_ms": spec.total_duration_ms,
             "title": title,
-            "captions_pending_whisper": not legacy_os_subtitles_enabled,
+            "captions_pending_whisper": not (
+                legacy_os_subtitles_enabled and not using_storyboard
+            ),
+            "compose_mode": "storyboard" if using_storyboard else "legacy_chunks",
+            "fragment_count": (
+                len(storyboard.fragments) if using_storyboard else None
+            ),
+            "fragment_roles": (
+                [f.role.value for f in storyboard.fragments]
+                if using_storyboard
+                else None
+            ),
         },
     )
     return spec
@@ -296,35 +373,35 @@ def _legacy_build_subtitles_from_os_transcripts(
 # ---------- internals ----------
 
 
-def _chunk_to_scene_clipped_subclips(
+def _range_to_scene_clipped_subclips(
     *,
-    chunk: ScoredChunk,
+    range_start_ms: int,
+    range_end_ms: int,
     segments: list[MentionSegment],
 ) -> list[tuple[str, int, int]]:
-    """Split a chunk into 1+ scene-clamped sub-clips.
+    """Split a source-time range into 1+ scene-clamped sub-clips.
 
-    Each returned tuple is ``(scene_id, clamped_start_ms, clamped_end_ms)``
-    where the start/end are guaranteed to be within the corresponding
-    scene's actual bounds. Sub-clips are emitted in chronological
+    Shared between the legacy chunks path (a chunk's full range) and
+    the storyboard fragment path (a fragment's clamped range). Each
+    returned tuple is ``(scene_id, clamped_start_ms, clamped_end_ms)``
+    where start/end are guaranteed to fall within the corresponding
+    scene's actual bounds.
+
+    Pure function. No I/O. Sub-clips are emitted in chronological
     order (ascending ``clamped_start_ms``).
-
-    Pure function. No I/O. Trivially testable.
 
     Why this exists: the render service rejects ``SceneClipSpec``s
     whose start/end fall outside the underlying scene's time range
-    (``ShortsRenderService.create_render_job`` 422). My chunks are
-    fixed-width 20s windows that frequently span 2+ Korean
-    livecommerce scenes (1-15s each). Without this split, every
-    chunk that crosses a scene boundary 422s the whole render.
+    (``ShortsRenderService.create_render_job`` 422). Korean
+    livecommerce scenes are 1-15s; chunks/fragments routinely span
+    2+ scenes. Without this split, every cross-scene range 422s the
+    whole render.
     """
-    chunk_start_ms = chunk.start_ms
-    chunk_end_ms = chunk.end_ms
     sub_clips: list[tuple[str, int, int]] = []
-
     for segment in segments:
         for scene in segment.scenes:
-            overlap_start = max(chunk_start_ms, scene.start_ms)
-            overlap_end = min(chunk_end_ms, scene.end_ms)
+            overlap_start = max(range_start_ms, scene.start_ms)
+            overlap_end = min(range_end_ms, scene.end_ms)
             if overlap_end <= overlap_start:
                 continue
             sub_clips.append(
@@ -334,9 +411,26 @@ def _chunk_to_scene_clipped_subclips(
     # Multiple scenes can carry the same scene_id if the assembler
     # ever merges duplicates (currently it doesn't, but be defensive).
     # Sort by start time so the timeline cursor in the caller
-    # advances monotonically per chunk.
+    # advances monotonically per range.
     sub_clips.sort(key=lambda t: t[1])
     return sub_clips
+
+
+def _chunk_to_scene_clipped_subclips(
+    *,
+    chunk: ScoredChunk,
+    segments: list[MentionSegment],
+) -> list[tuple[str, int, int]]:
+    """Backwards-compatible wrapper. Prefer ``_range_to_scene_clipped_subclips``
+    for new code — this exists only because some external test
+    harnesses (and ``children/composition.py``) import the chunk
+    helper by name.
+    """
+    return _range_to_scene_clipped_subclips(
+        range_start_ms=chunk.start_ms,
+        range_end_ms=chunk.end_ms,
+        segments=segments,
+    )
 
 
 def _attach_scene_id(

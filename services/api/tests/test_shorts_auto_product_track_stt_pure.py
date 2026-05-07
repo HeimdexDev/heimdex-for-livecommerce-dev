@@ -195,7 +195,7 @@ class TestClipSelector:
 
 class TestCompositionBuilder:
     def test_empty_chunks_raises(self):
-        with pytest.raises(ValueError, match="at least one selected chunk"):
+        with pytest.raises(ValueError, match="non-empty selected_chunks"):
             build_composition_spec(
                 selected_chunks=[],
                 segments=[],
@@ -516,6 +516,148 @@ class TestBuildCompositionSpecLegacyRollback:
         for s in spec.subtitles:
             assert s.style.font_size_px == 86
             assert s.style.background_padding == 28
+
+
+class TestBuildCompositionSpecStoryboard:
+    """Tier B storyboard composition path: ``build_composition_spec``
+    accepts a ``StoryboardPlan`` and emits one or more
+    ``SceneClipSpec`` per fragment, scene-clamped via the same
+    ``_range_to_scene_clipped_subclips`` helper that the legacy
+    chunks path uses.
+    """
+
+    def _plan_from_fragments(
+        self, fragments: list[tuple[int, int, str]],
+    ):
+        # Helper: build a minimal StoryboardPlan from
+        # (start_ms, end_ms, role_name) tuples.
+        from app.modules.shorts_auto_product.track_stt.models import (
+            ChunkScore,
+        )
+        from app.modules.shorts_auto_product.track_stt.storyboard import (
+            SlotRole,
+            StoryboardFragment,
+            StoryboardPlan,
+        )
+
+        score = ChunkScore(hook_score=0.5, has_cta=False, importance_score=0.5)
+        return StoryboardPlan(
+            fragments=[
+                StoryboardFragment(
+                    role=SlotRole(role_name),
+                    source_start_ms=start,
+                    source_end_ms=end,
+                    target_duration_ms=end - start,
+                    chunk_score=score,
+                    rationale=f"test:{role_name}",
+                )
+                for (start, end, role_name) in fragments
+            ],
+            total_duration_ms=sum(e - s for (s, e, _) in fragments),
+            slots_filled={SlotRole(r) for (_, _, r) in fragments},
+            fallbacks_used=[],
+        )
+
+    def test_storyboard_emits_one_scene_clip_per_fragment(self):
+        # 3 fragments, each fully inside one scene → 3 SceneClipSpec.
+        scene_a = _scene(0, 30_000, sid="A")
+        scene_b = _scene(30_000, 60_000, sid="B")
+        scene_c = _scene(60_000, 90_000, sid="C")
+        seg = MentionSegment(
+            start_ms=0, end_ms=90_000, scenes=[scene_a, scene_b, scene_c],
+        )
+        plan = self._plan_from_fragments(
+            [(5_000, 13_000, "hook"), (35_000, 55_000, "detail"), (65_000, 73_000, "cta")],
+        )
+        spec = build_composition_spec(
+            storyboard=plan, segments=[seg], os_video_id="gd_x",
+        )
+        assert len(spec.scene_clips) == 3
+        # Storyboard order preserved (HOOK first, CTA last).
+        assert spec.scene_clips[0].scene_id == "A"
+        assert spec.scene_clips[1].scene_id == "B"
+        assert spec.scene_clips[2].scene_id == "C"
+        # Captions deferred to Whisper post-render — never emitted
+        # by the storyboard path.
+        assert spec.subtitles == []
+
+    def test_storyboard_fragment_split_across_scene_boundaries(self):
+        # One DETAIL fragment crossing two scenes → 2 SceneClipSpec
+        # entries clamped to each scene's bounds.
+        scene_a = _scene(0, 10_000, sid="A")
+        scene_b = _scene(10_000, 30_000, sid="B")
+        seg = MentionSegment(
+            start_ms=0, end_ms=30_000, scenes=[scene_a, scene_b],
+        )
+        plan = self._plan_from_fragments(
+            [(5_000, 25_000, "detail")],
+        )
+        spec = build_composition_spec(
+            storyboard=plan, segments=[seg], os_video_id="gd_x",
+        )
+        assert len(spec.scene_clips) == 2
+        assert spec.scene_clips[0].scene_id == "A"
+        assert spec.scene_clips[0].start_ms == 5_000
+        assert spec.scene_clips[0].end_ms == 10_000
+        assert spec.scene_clips[1].scene_id == "B"
+        assert spec.scene_clips[1].start_ms == 10_000
+        assert spec.scene_clips[1].end_ms == 25_000
+
+    def test_storyboard_timeline_cursor_accumulates_across_fragments(self):
+        # Two non-contiguous fragments → timeline_start_ms must
+        # accumulate continuously even though source ranges jump.
+        scene_a = _scene(0, 30_000, sid="A")
+        scene_b = _scene(60_000, 90_000, sid="B")
+        seg = MentionSegment(
+            start_ms=0, end_ms=90_000, scenes=[scene_a, scene_b],
+        )
+        plan = self._plan_from_fragments(
+            [(5_000, 13_000, "hook"), (65_000, 73_000, "cta")],
+        )
+        spec = build_composition_spec(
+            storyboard=plan, segments=[seg], os_video_id="gd_x",
+        )
+        # Timeline is contiguous regardless of source-time gap.
+        assert spec.scene_clips[0].timeline_start_ms == 0
+        assert spec.scene_clips[1].timeline_start_ms == 8_000  # 13_000 - 5_000
+
+    def test_storyboard_and_chunks_mutually_exclusive(self):
+        scene = _scene(0, 30_000, sid="A")
+        seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene])
+        plan = self._plan_from_fragments([(0, 8_000, "hook")])
+        with pytest.raises(ValueError, match="not both"):
+            build_composition_spec(
+                selected_chunks=[_chunk(0, 30_000)],
+                storyboard=plan,
+                segments=[seg],
+                os_video_id="gd_x",
+            )
+
+    def test_neither_chunks_nor_storyboard_raises(self):
+        scene = _scene(0, 30_000, sid="A")
+        seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene])
+        with pytest.raises(ValueError, match="non-empty"):
+            build_composition_spec(
+                segments=[seg], os_video_id="gd_x",
+            )
+
+    def test_storyboard_path_ignores_legacy_subtitles_flag(self):
+        # The legacy_os_subtitles_enabled rollback only applies to
+        # the chunks path; storyboard always emits empty subtitles.
+        # Without this guard the bug we shipped Whisper-only fixes
+        # for would re-appear under storyboard mode.
+        scene = _scene(
+            0, 30_000, sid="A",
+        )
+        seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene])
+        plan = self._plan_from_fragments([(0, 8_000, "hook")])
+        spec = build_composition_spec(
+            storyboard=plan,
+            segments=[seg],
+            os_video_id="gd_x",
+            legacy_os_subtitles_enabled=True,  # ← silently ignored
+        )
+        assert spec.subtitles == []
 
 
 # ---------- mention_extractor query construction ----------

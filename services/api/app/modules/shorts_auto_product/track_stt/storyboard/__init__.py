@@ -14,6 +14,9 @@ Public API:
       ``SlotBudgets`` — output shapes consumed by composition_builder.
 """
 
+from app.modules.shorts_auto_product.track_stt.storyboard.factory import (
+    build_storyboard_picker_from_settings,
+)
 from app.modules.shorts_auto_product.track_stt.storyboard.heuristic_picker import (
     HeuristicStoryboardPicker,
     INTRO_IMPORTANCE_FLOOR,
@@ -38,4 +41,5 @@ __all__ = [
     "StoryboardFragment",
     "StoryboardPicker",
     "StoryboardPlan",
+    "build_storyboard_picker_from_settings",
 ]

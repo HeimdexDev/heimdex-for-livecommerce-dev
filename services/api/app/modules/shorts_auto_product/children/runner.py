@@ -639,6 +639,16 @@ class ChildRunner:
         # ── 4. Run the pipeline ────────────────────────────────────
         try:
             try:
+                # Lazy import to avoid loading the storyboard
+                # submodule (and its enum + Protocol machinery)
+                # on the hot SAM2 path where it's not used.
+                from app.modules.shorts_auto_product.track_stt.storyboard import (
+                    build_storyboard_picker_from_settings,
+                )
+
+                storyboard_picker = build_storyboard_picker_from_settings(
+                    self.settings,
+                )
                 result = await stt_service.assemble_stt_clip(
                     org_id=parent.org_id,
                     catalog_entry_id=chosen_catalog_id,
@@ -653,6 +663,12 @@ class ChildRunner:
                     legacy_os_subtitles_enabled=getattr(
                         self.settings,
                         "auto_shorts_product_v2_legacy_os_subtitles_enabled",
+                        False,
+                    ),
+                    storyboard_picker=storyboard_picker,
+                    storyboard_shadow_mode=getattr(
+                        self.settings,
+                        "auto_shorts_product_v2_storyboard_shadow_mode",
                         False,
                     ),
                 )

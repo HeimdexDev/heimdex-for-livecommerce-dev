@@ -516,6 +516,35 @@ class Settings(BaseSettings):
     # behavior on prod.
     auto_shorts_product_v2_legacy_os_subtitles_enabled: bool = False
 
+    # --- Auto-shorts: storyboard composition (Tier B + Tier C) ---
+    # When True, the STT pipeline composes the final clip from
+    # role-labelled fragments (HOOK / INTRO / DETAIL / CTA) chosen
+    # by a ``StoryboardPicker`` instead of a single contiguous
+    # window. Default False ships the picker module as dead code
+    # — flip on staging first to soak. See plan
+    # ``track_stt/storyboard/__init__.py``.
+    auto_shorts_product_v2_storyboard_mode_enabled: bool = False
+    # ``"heuristic"`` = Tier B picker over already-scored chunks
+    # (no extra LLM cost). ``"llm"`` = Tier C director (future,
+    # not yet implemented). Both implementations satisfy the same
+    # ``StoryboardPicker`` Protocol; the factory in
+    # ``storyboard/factory.py`` instantiates the right one.
+    auto_shorts_product_v2_storyboard_picker: str = "heuristic"
+    # Slot duration budgets in milliseconds. Defaults sum to 53s
+    # leaving ~7s headroom for a 60s target. Tunable on staging
+    # without code change.
+    auto_shorts_product_v2_storyboard_hook_ms: int = 8_000
+    auto_shorts_product_v2_storyboard_intro_ms: int = 12_000
+    auto_shorts_product_v2_storyboard_detail_ms: int = 25_000
+    auto_shorts_product_v2_storyboard_cta_ms: int = 8_000
+    # Shadow mode — runs the storyboard picker alongside the
+    # legacy clip_selector and emits a diff event for telemetry,
+    # but the LEGACY plan is what produces the actual render.
+    # Lets us validate Tier B's output before flipping the real
+    # switch. Has no effect when
+    # ``auto_shorts_product_v2_storyboard_mode_enabled`` is True.
+    auto_shorts_product_v2_storyboard_shadow_mode: bool = False
+
     # --- Auto-shorts: post-render Whisper subtitle refinement ---
     # Plan: ``.claude/plans/auto-shorts-whisper-subtitles-2026-05-06.md``
     # Off-by-default master flag. Even with the column migration

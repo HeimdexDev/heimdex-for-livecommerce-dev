@@ -50,6 +50,10 @@ from app.modules.shorts_auto_product.track_stt.models import (
     ScoredChunk,
     SttClipResult,
 )
+from app.modules.shorts_auto_product.track_stt.storyboard import (
+    StoryboardPicker,
+    StoryboardPlan,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +79,8 @@ async def assemble_stt_clip(
     index_alias: str = "heimdex_scenes",
     chunker_model: str = "gpt-4o-mini",
     legacy_os_subtitles_enabled: bool = False,
+    storyboard_picker: StoryboardPicker | None = None,
+    storyboard_shadow_mode: bool = False,
 ) -> SttClipResult:
     """End-to-end STT pipeline. Returns the render_job_id wrapped in
     :class:`SttClipResult`.
@@ -182,23 +188,90 @@ async def assemble_stt_clip(
         )
 
     # ---- 4. Clip selection ----
+    # Always run the legacy clip_selector so it can serve as the
+    # storyboard fallback path AND the shadow-mode comparison
+    # baseline. Cheap (pure function over already-scored chunks).
     selected = clip_selector.select_top_chunks(
         chunks=all_chunks, target_duration_ms=target_duration_ms,
     )
-    if not selected:
+
+    storyboard_plan: StoryboardPlan | None = None
+    if storyboard_picker is not None:
+        try:
+            storyboard_plan = await storyboard_picker.assemble(
+                all_chunks=all_chunks,
+                segments=segments,
+                target_duration_ms=target_duration_ms,
+                llm_label=llm_label,
+                spoken_aliases=spoken_aliases,
+                org_id=org_id,
+            )
+        except Exception as e:  # noqa: BLE001 — never let picker break render
+            logger.warning(
+                "stt_storyboard_picker_failed_fallback_legacy",
+                extra={
+                    "video_id": os_video_id,
+                    "catalog_entry_id": str(catalog_entry_id),
+                    "error_type": type(e).__name__,
+                    "error": str(e)[:300],
+                },
+            )
+            storyboard_plan = None
+
+    use_storyboard_for_render = (
+        storyboard_picker is not None
+        and storyboard_plan is not None
+        and not storyboard_plan.is_empty
+        and not storyboard_shadow_mode
+    )
+
+    # Shadow-mode telemetry: emit a one-shot diff event so we can
+    # see what storyboard WOULD have produced before flipping the
+    # actual switch. Render still goes out using the legacy plan.
+    if (
+        storyboard_picker is not None
+        and storyboard_shadow_mode
+        and storyboard_plan is not None
+    ):
+        logger.info(
+            "stt_storyboard_shadow_diff",
+            extra={
+                "video_id": os_video_id,
+                "catalog_entry_id": str(catalog_entry_id),
+                "legacy_chunk_count": len(selected),
+                "storyboard_fragment_count": len(storyboard_plan.fragments),
+                "storyboard_slots_filled": sorted(
+                    s.value for s in storyboard_plan.slots_filled
+                ),
+                "storyboard_fallbacks_used": storyboard_plan.fallbacks_used,
+            },
+        )
+
+    if not use_storyboard_for_render and not selected:
+        # Neither path produced a valid plan → no clip possible.
         raise NoMentionsFoundError(
             f"no contiguous chunk window meets the duration floor for "
             f"catalog entry {catalog_entry_id} (target={target_duration_ms}ms)"
         )
 
     # ---- 5. Composition ----
-    spec = composition_builder.build_composition_spec(
-        selected_chunks=selected,
-        segments=segments,
-        os_video_id=os_video_id,
-        title=title,
-        legacy_os_subtitles_enabled=legacy_os_subtitles_enabled,
-    )
+    if use_storyboard_for_render:
+        spec = composition_builder.build_composition_spec(
+            storyboard=storyboard_plan,
+            segments=segments,
+            os_video_id=os_video_id,
+            title=title,
+            # legacy_os_subtitles_enabled is silently ignored on the
+            # storyboard path — captions ALWAYS come from Whisper.
+        )
+    else:
+        spec = composition_builder.build_composition_spec(
+            selected_chunks=selected,
+            segments=segments,
+            os_video_id=os_video_id,
+            title=title,
+            legacy_os_subtitles_enabled=legacy_os_subtitles_enabled,
+        )
 
     # ---- 6. Render enqueue (caller-supplied) ----
     try:
