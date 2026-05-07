@@ -613,19 +613,38 @@ class ShortsRenderService:
                 detail="Render job not found",
             )
 
-        # Link parent → child. Reuse the existing chain helper so manual
-        # and Whisper rerenders share the same write path. The helper
-        # is in refinement_repository (a generic chain helper despite
-        # its name); importing here is acceptable per the loose-
-        # coupling rules (this service may import the chain helper,
-        # but NOT refinement_service).
+        # Link parent → child unless overlay mode is on. In overlay
+        # mode the parent stays canonical (the operator's editable
+        # working canvas with subs in input_spec); the export child
+        # is a download artifact only. Setting ``replaced_by`` would
+        # point future chain walks at a stale snapshot and break the
+        # editor's cue source. The export child still carries
+        # ``refined_from_render_job_id=parent.id`` (set by
+        # ``create_rerender_child``) — that's what the post_render
+        # hook's ``_check_guards`` reads to skip Whisper recursion on
+        # the export child.
+        # In OFF mode (legacy Whisper-refined-child flow) the link is
+        # how ``useRefinedRenderChain`` finds the canonical render —
+        # MUST stay set.
         from app.modules.shorts_render import refinement_repository
 
-        await refinement_repository.link_parent_to_child(
-            self.repository.session,
-            parent_id=parent_job_id,
-            child_id=cast(UUID, child.id),
+        overlay_mode = (
+            get_settings().auto_shorts_product_v2_overlay_mode_enabled
         )
+        if not overlay_mode:
+            await refinement_repository.link_parent_to_child(
+                self.repository.session,
+                parent_id=parent_job_id,
+                child_id=cast(UUID, child.id),
+            )
+        else:
+            logger.info(
+                "rerender_export_link_skipped",
+                parent_id=str(parent_job_id),
+                child_id=str(child.id),
+                org_id=str(org_id),
+                user_id=str(user_id),
+            )
 
         logger.info(
             "rerender_from_edits_created",
