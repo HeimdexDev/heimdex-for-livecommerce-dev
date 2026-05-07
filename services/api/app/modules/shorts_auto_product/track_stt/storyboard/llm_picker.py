@@ -80,6 +80,33 @@ logger = get_logger(__name__)
 _RESERVATION_USD = 0.001
 
 
+# Hard floor: 1× HOOK + 1× INTRO + 1× CTA + 1× DETAIL = 4 unique
+# chunks needed to satisfy the schema without reuse. Below this the
+# picker early-exits to heuristic without firing the LLM call.
+_MIN_CHUNKS_FOR_LLM = 4
+
+# Threshold below which the prompt nudges the LLM to use 1× DETAIL
+# only. With 4 chunks total and 1× DETAIL, all 4 are unique. Two
+# DETAILs would require 5 unique chunks.
+_SMALL_CHUNK_HINT_BELOW = 5
+
+# Cap on chunks fed to the LLM per call. Prompt size scales with
+# this; staging spot-check 2026-05-08 saw 128-142 chunks on a
+# 66-min source video → ~6500 input tokens → 10s+ timeouts and
+# the LLM losing track of "last third" with that many candidates.
+# 20 is empirically large enough for narrative quality (chunk_scorer
+# bounds chunks at 30s, so 20 chunks ≈ 5-10 min of speech) and
+# small enough for sub-3s gpt-4o-mini latency.
+_MAX_CHUNKS_TO_LLM = 20
+
+# Chunks per third when capping. ``HOOK_CANDIDATES_PER_THIRD`` from
+# first third (high hook_score), ``CTA_CANDIDATES_PER_THIRD`` from
+# last (has_cta=True preferred), DETAIL fills the rest by
+# importance.
+_HOOK_CANDIDATES_PER_THIRD = 5
+_CTA_CANDIDATES_PER_THIRD = 5
+
+
 # gpt-4o-mini pricing (USD per 1M tokens). See
 # https://openai.com/api/pricing/ — bump in lockstep with model
 # changes. Wrapped in a ``_cost_from_usage`` helper so test fixtures
@@ -151,6 +178,28 @@ class LlmStoryboardPicker:
                 org_id=org_id,
             )
 
+        # ── 1b. Insufficient chunks — schema-impossible ──
+        # 1× HOOK + 1× INTRO + 1× CTA + 1× DETAIL = 4 unique chunks
+        # required. Below this the LLM has no path to a valid plan
+        # and would either reuse a chunk_index (Pydantic rejects) or
+        # the request would be wasted budget.
+        if len(all_chunks) < _MIN_CHUNKS_FOR_LLM:
+            logger.info(
+                "stt_storyboard_llm_skipped",
+                reason="insufficient_chunks",
+                chunk_count=len(all_chunks),
+                min_required=_MIN_CHUNKS_FOR_LLM,
+                picker="llm",
+            )
+            return await self.fallback.assemble(
+                all_chunks=all_chunks,
+                segments=segments,
+                target_duration_ms=target_duration_ms,
+                llm_label=llm_label,
+                spoken_aliases=spoken_aliases,
+                org_id=org_id,
+            )
+
         # ── 2. Budget reservation ──
         try:
             self.budget_tracker.check_and_reserve(self._reservation_usd)
@@ -171,19 +220,35 @@ class LlmStoryboardPicker:
             )
 
         # ── 3. Build prompt + call OpenAI ──
-        chronological = sorted(all_chunks, key=lambda c: c.start_ms)
+        # Cap chunks to keep prompt size bounded — without this, a
+        # 60-min source video produces 100+ chunks (~6500 input
+        # tokens) and gpt-4o-mini either times out OR loses track
+        # of "last third" with that many candidates (staging
+        # 2026-05-08 finding). The selected subset preserves
+        # temporal coverage so HOOK / INTRO / CTA all have viable
+        # picks, but the LLM gets a manageable list.
+        chronological_full = sorted(all_chunks, key=lambda c: c.start_ms)
+        chronological = _select_chunks_for_prompt(
+            chronological=chronological_full,
+            cap=_MAX_CHUNKS_TO_LLM,
+        )
+        small_hint = len(chronological) < _SMALL_CHUNK_HINT_BELOW
+
         user_prompt = build_user_prompt(
             all_chunks=chronological,
             target_duration_ms=target_duration_ms,
             llm_label=llm_label,
             spoken_aliases=spoken_aliases,
             slot_budgets=self.budgets,
+            small_chunk_hint=small_hint,
         )
         seed = _stable_seed(llm_label=llm_label, prompt_version=self.prompt_version)
 
         logger.info(
             "stt_storyboard_llm_request",
             chunk_count=len(chronological),
+            chunk_count_pre_cap=len(chronological_full),
+            small_chunk_hint=small_hint,
             target_duration_ms=target_duration_ms,
             model=self.model,
             prompt_version=self.prompt_version,
@@ -374,6 +439,102 @@ def _make_fragment(
         chunk_score=chunk.score,
         rationale=pick.rationale,
     )
+
+
+def _select_chunks_for_prompt(
+    *,
+    chronological: list[ScoredChunk],
+    cap: int,
+) -> list[ScoredChunk]:
+    """Cap the chunk list passed to the LLM with temporal coverage.
+
+    When the source has more chunks than ``cap``, naively passing all
+    of them inflates the prompt + slows the response + confuses the
+    LLM about temporal placement (staging 2026-05-08 finding —
+    128-chunk prompts produced CTA picks in the first third). This
+    helper selects a representative subset:
+
+      * From the FIRST third: top-K by ``hook_score`` (HOOK candidates).
+      * From the LAST  third: chunks with ``has_cta=True`` first, then
+        top by ``hook_score`` (CTA candidates).
+      * From the MIDDLE third: top-K by ``importance_score``
+        (DETAIL/INTRO candidates).
+      * Padding: if any third runs out of distinctive chunks, fill
+        from the residual pool by composite score.
+
+    Returns chunks sorted CHRONOLOGICALLY (the order the prompt and
+    the LLM's chunk_index responses depend on).
+
+    Pure function — no I/O, no logging.
+    """
+    n = len(chronological)
+    if n <= cap:
+        return list(chronological)
+
+    # Source duration anchors the third boundaries.
+    source_duration = max(c.end_ms for c in chronological)
+    first_cutoff = source_duration // 3
+    last_cutoff = (source_duration * 2) // 3
+
+    first_third = [c for c in chronological if c.start_ms < first_cutoff]
+    middle_third = [
+        c for c in chronological
+        if first_cutoff <= c.start_ms < last_cutoff
+    ]
+    last_third = [c for c in chronological if c.start_ms >= last_cutoff]
+
+    selected: dict[tuple[int, int], ScoredChunk] = {}
+
+    def _key(c: ScoredChunk) -> tuple[int, int]:
+        return (c.start_ms, c.end_ms)
+
+    # First third — HOOK candidates by hook_score, then importance.
+    for c in sorted(
+        first_third, key=lambda c: (-c.score.hook_score, -c.score.importance_score),
+    )[:_HOOK_CANDIDATES_PER_THIRD]:
+        selected[_key(c)] = c
+
+    # Last third — has_cta first (sorted by start_ms so latest CTA wins
+    # when multiple), then high hook_score.
+    cta_chunks = sorted(
+        [c for c in last_third if c.score.has_cta], key=lambda c: -c.start_ms,
+    )
+    for c in cta_chunks[:_CTA_CANDIDATES_PER_THIRD]:
+        selected[_key(c)] = c
+    # Backfill last third with high hook_score chunks.
+    remaining_last = [
+        c for c in last_third if _key(c) not in selected
+    ]
+    for c in sorted(remaining_last, key=lambda c: -c.score.hook_score)[
+        : _CTA_CANDIDATES_PER_THIRD - sum(
+            1 for c in cta_chunks[:_CTA_CANDIDATES_PER_THIRD]
+        )
+    ]:
+        selected[_key(c)] = c
+
+    # Middle third — DETAIL/INTRO candidates by importance.
+    middle_budget = max(0, cap - len(selected))
+    for c in sorted(
+        middle_third,
+        key=lambda c: (-c.score.importance_score, -c.composite),
+    )[:middle_budget]:
+        selected[_key(c)] = c
+
+    # If we still have headroom (e.g., short source where middle is
+    # tiny), backfill from the global pool by composite score so we
+    # don't return fewer chunks than the cap allows when more were
+    # available.
+    if len(selected) < cap:
+        residual = [c for c in chronological if _key(c) not in selected]
+        residual.sort(key=lambda c: -c.composite)
+        for c in residual:
+            if len(selected) >= cap:
+                break
+            selected[_key(c)] = c
+
+    out = list(selected.values())
+    out.sort(key=lambda c: c.start_ms)
+    return out
 
 
 def _validate_semantic_constraints(

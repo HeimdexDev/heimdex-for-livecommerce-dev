@@ -251,6 +251,241 @@ class TestEmptyInput:
         spied.assemble.assert_called_once()
 
 
+class TestInsufficientChunks:
+    """PR 9: early-exit when chunk_count < 4. The schema requires
+    1× HOOK + 1× INTRO + 1× CTA + 1× DETAIL = 4 unique chunks; below
+    this the LLM has no path to a valid plan and would always fall
+    back via Pydantic. Skip the API call entirely.
+    """
+
+    @pytest.mark.asyncio
+    async def test_three_chunks_skips_llm_call(self):
+        chunks = _chunks_with_temporal_spread()[:3]
+        picker, mock_client, spied = _make_picker(
+            create_returns=_mock_openai_response(_well_formed_llm_response()),
+        )
+        plan = await picker.assemble(
+            all_chunks=chunks, segments=_segments_for(chunks),
+            target_duration_ms=60_000, llm_label="X", spoken_aliases=[],
+        )
+        assert isinstance(plan, StoryboardPlan)
+        # No LLM call fired — saves cost + latency.
+        mock_client.chat.completions.create.assert_not_called()
+        spied.assemble.assert_called_once()
+        # Budget untouched — early-exit happens before reservation.
+        assert picker.budget_tracker.spent_today_usd() == 0.0
+
+    @pytest.mark.asyncio
+    async def test_four_chunks_proceeds_to_llm(self):
+        # 4 is the minimum for a valid plan — picker should fire.
+        chunks = _chunks_with_temporal_spread()[:4]
+        # Pick well-formed response that uses chunk indices 0, 1, 2, 3.
+        body = {
+            "fragments": [
+                {"role": "hook", "chunk_index": 0, "rationale": "open"},
+                {"role": "intro", "chunk_index": 1, "rationale": "intro"},
+                {"role": "detail", "chunk_index": 2, "rationale": "demo"},
+                {"role": "cta", "chunk_index": 3, "rationale": "close"},
+            ],
+            "global_rationale": "arc",
+        }
+        # 4 chunks span 0-90s; CTA at index 3 starts at 60s — that's
+        # the last third of source_duration=90s. Adjust spread so
+        # semantic constraints pass.
+        chunks[3] = ScoredChunk(
+            start_ms=70_000, end_ms=88_000, text="cta",
+            score=ChunkScore(hook_score=0.1, has_cta=True, importance_score=0.5),
+        )
+        picker, mock_client, spied = _make_picker(
+            create_returns=_mock_openai_response(body),
+        )
+        plan = await picker.assemble(
+            all_chunks=chunks, segments=_segments_for(chunks),
+            target_duration_ms=60_000, llm_label="X", spoken_aliases=[],
+        )
+        assert isinstance(plan, StoryboardPlan)
+        # LLM call WAS fired (chunk_count = 4 ≥ minimum).
+        mock_client.chat.completions.create.assert_called_once()
+        # Picker succeeded → no fallback.
+        spied.assemble.assert_not_called()
+
+
+class TestSmallChunkHint:
+    """PR 9: when chunk_count is in [4, 5), the prompt nudges the
+    LLM to pick 1× DETAIL only — 2× DETAIL would require 5 unique
+    chunks and force chunk_index reuse.
+    """
+
+    @pytest.mark.asyncio
+    async def test_hint_added_when_chunk_count_below_threshold(self):
+        chunks = _chunks_with_temporal_spread()[:4]
+        # Adjust chunk[3] to satisfy semantic constraints (CTA in last third)
+        chunks[3] = ScoredChunk(
+            start_ms=70_000, end_ms=88_000, text="cta",
+            score=ChunkScore(hook_score=0.1, has_cta=True, importance_score=0.5),
+        )
+        body = {
+            "fragments": [
+                {"role": "hook", "chunk_index": 0, "rationale": "o"},
+                {"role": "intro", "chunk_index": 1, "rationale": "i"},
+                {"role": "detail", "chunk_index": 2, "rationale": "d"},
+                {"role": "cta", "chunk_index": 3, "rationale": "c"},
+            ],
+            "global_rationale": "arc",
+        }
+        picker, mock_client, _ = _make_picker(
+            create_returns=_mock_openai_response(body),
+        )
+        await picker.assemble(
+            all_chunks=chunks, segments=_segments_for(chunks),
+            target_duration_ms=60_000, llm_label="X", spoken_aliases=[],
+        )
+        # The user prompt sent to OpenAI must contain the hint.
+        call = mock_client.chat.completions.create.call_args
+        user_msg = next(
+            m for m in call.kwargs["messages"] if m["role"] == "user"
+        )
+        assert "NOT enough chunks for 2 DETAILs" in user_msg["content"]
+
+    @pytest.mark.asyncio
+    async def test_hint_omitted_when_chunk_count_above_threshold(self):
+        chunks = _chunks_with_temporal_spread()  # 6 chunks
+        picker, mock_client, _ = _make_picker(
+            create_returns=_mock_openai_response(_well_formed_llm_response()),
+        )
+        await picker.assemble(
+            all_chunks=chunks, segments=_segments_for(chunks),
+            target_duration_ms=60_000, llm_label="X", spoken_aliases=[],
+        )
+        call = mock_client.chat.completions.create.call_args
+        user_msg = next(
+            m for m in call.kwargs["messages"] if m["role"] == "user"
+        )
+        assert "NOT enough chunks" not in user_msg["content"]
+
+
+class TestChunkCap:
+    """PR 9: ``_select_chunks_for_prompt`` caps chunks to 20 when
+    source has more, preserving temporal coverage. Staging 2026-05-08
+    saw 128-142 chunks per scan timing out gpt-4o-mini.
+    """
+
+    @pytest.mark.asyncio
+    async def test_capped_chunk_count_logged(self):
+        # 30-chunk source, cap is 20.
+        chunks = []
+        for i in range(30):
+            chunks.append(ScoredChunk(
+                start_ms=i * 60_000, end_ms=i * 60_000 + 30_000,
+                text=f"c{i}",
+                score=ChunkScore(
+                    hook_score=0.5, has_cta=(i >= 22),
+                    importance_score=0.5,
+                ),
+            ))
+        body = _well_formed_llm_response()
+        # Adjust indices to stay within the capped list (0..19).
+        body["fragments"] = [
+            {"role": "hook", "chunk_index": 0, "rationale": "o"},
+            {"role": "intro", "chunk_index": 5, "rationale": "i"},
+            {"role": "detail", "chunk_index": 10, "rationale": "d"},
+            {"role": "cta", "chunk_index": 19, "rationale": "c"},
+        ]
+        picker, mock_client, _ = _make_picker(
+            create_returns=_mock_openai_response(body),
+        )
+        plan = await picker.assemble(
+            all_chunks=chunks, segments=_segments_for(chunks),
+            target_duration_ms=60_000, llm_label="X", spoken_aliases=[],
+        )
+        # Picker fired LLM with capped (≤20) chunks, then mapped indices
+        # back to ScoredChunk via the capped list.
+        assert isinstance(plan, StoryboardPlan)
+        # Prompt content reflects the cap.
+        call = mock_client.chat.completions.create.call_args
+        user_msg = next(
+            m for m in call.kwargs["messages"] if m["role"] == "user"
+        )
+        # The prompt lists 20 chunks (indices 0..19); index 25 should
+        # NOT appear because it's beyond the cap.
+        assert "[20]" not in user_msg["content"]
+        assert "[25]" not in user_msg["content"]
+        assert "[19]" in user_msg["content"]
+
+
+class TestSelectChunksForPromptHelper:
+    """Direct unit tests for the cap helper. Pure function — no
+    LLM, no asyncio, no fixtures."""
+
+    def _spread_chunks(self, n: int) -> list[ScoredChunk]:
+        return [
+            ScoredChunk(
+                start_ms=i * 60_000, end_ms=i * 60_000 + 30_000,
+                text=f"c{i}",
+                score=ChunkScore(
+                    hook_score=0.9 - (i * 0.02),
+                    has_cta=(i >= int(n * 0.7)),
+                    importance_score=0.5 + (i % 3) * 0.15,
+                ),
+            )
+            for i in range(n)
+        ]
+
+    def test_cap_smaller_than_chunk_count_passes_through(self):
+        from app.modules.shorts_auto_product.track_stt.storyboard.llm_picker import (
+            _select_chunks_for_prompt,
+        )
+        chunks = self._spread_chunks(8)
+        out = _select_chunks_for_prompt(chronological=chunks, cap=20)
+        assert len(out) == 8
+        assert out == chunks  # exact pass-through, sorted
+
+    def test_cap_returns_at_most_cap_chunks(self):
+        from app.modules.shorts_auto_product.track_stt.storyboard.llm_picker import (
+            _select_chunks_for_prompt,
+        )
+        chunks = self._spread_chunks(50)
+        out = _select_chunks_for_prompt(chronological=chunks, cap=20)
+        assert len(out) <= 20
+
+    def test_cap_returns_chunks_in_chronological_order(self):
+        from app.modules.shorts_auto_product.track_stt.storyboard.llm_picker import (
+            _select_chunks_for_prompt,
+        )
+        chunks = self._spread_chunks(50)
+        out = _select_chunks_for_prompt(chronological=chunks, cap=20)
+        starts = [c.start_ms for c in out]
+        assert starts == sorted(starts)
+
+    def test_cap_preserves_temporal_thirds_coverage(self):
+        from app.modules.shorts_auto_product.track_stt.storyboard.llm_picker import (
+            _select_chunks_for_prompt,
+        )
+        chunks = self._spread_chunks(50)
+        out = _select_chunks_for_prompt(chronological=chunks, cap=20)
+        src_dur = max(c.end_ms for c in chunks)
+        first = sum(1 for c in out if c.start_ms < src_dur // 3)
+        last = sum(1 for c in out if c.start_ms >= src_dur * 2 // 3)
+        # Each third must contribute ≥1 chunk so HOOK / CTA candidates
+        # remain available to the LLM.
+        assert first >= 1
+        assert last >= 1
+
+    def test_cap_keeps_all_has_cta_chunks_in_last_third(self):
+        from app.modules.shorts_auto_product.track_stt.storyboard.llm_picker import (
+            _select_chunks_for_prompt,
+            _CTA_CANDIDATES_PER_THIRD,
+        )
+        chunks = self._spread_chunks(50)
+        out = _select_chunks_for_prompt(chronological=chunks, cap=20)
+        # All has_cta chunks in the last third should appear, capped
+        # at _CTA_CANDIDATES_PER_THIRD. Without CTA preservation the
+        # LLM would have no valid CTA pick.
+        ctas_in_out = [c for c in out if c.score.has_cta]
+        assert len(ctas_in_out) >= 1
+        assert len(ctas_in_out) <= _CTA_CANDIDATES_PER_THIRD
+
+
 class TestBudgetExhausted:
     @pytest.mark.asyncio
     async def test_budget_zero_falls_back_without_call(self):

@@ -39,8 +39,17 @@ from app.modules.shorts_auto_product.track_stt.storyboard.types import (
 # PROMPT_VERSION — bump on every system-prompt edit. Eval cache keys
 # on this. Mirror the bump in
 # ``app.config.Settings.auto_shorts_product_v2_storyboard_llm_prompt_version``.
+#
+# v2 (2026-05-08, PR 9):
+#   * `build_user_prompt` accepts ``small_chunk_hint`` to nudge the
+#     LLM toward 1× DETAIL when chunk_count < 5 (otherwise the schema
+#     is impossible — see the staging spot-check mistakes log).
+#   * Picker pre-caps chunks to <= 20 with temporal-coverage-aware
+#     selection (helper in ``llm_picker._select_chunks_for_prompt``);
+#     the prompt no longer scales with source-video duration.
+# v1: initial.
 # ====================================================================
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 
 _SYSTEM_PROMPT = """You are a livecommerce shorts director. Pick chunks from \
@@ -78,6 +87,7 @@ def build_user_prompt(
     llm_label: str,
     spoken_aliases: list[str],
     slot_budgets: SlotBudgets,
+    small_chunk_hint: bool = False,
 ) -> str:
     """Compose the user-message content for one OpenAI call.
 
@@ -145,9 +155,21 @@ def build_user_prompt(
             f"{end_mm:02d}:{end_ss:02d} ({score_line}): \"{text}\""
         )
 
-    return "\n".join(
-        [product_line, target_line, budget_line, "", *chunk_lines]
-    )
+    sections: list[str] = [product_line, target_line, budget_line]
+    if small_chunk_hint:
+        # v2: when chunk_count is just-enough for 4 unique slots,
+        # the schema is satisfied only with 1× DETAIL. Without this
+        # hint the LLM picked 2× DETAIL on 4-chunk inputs and reused
+        # a chunk_index, which Pydantic rejects (mistakes log
+        # 2026-05-08).
+        sections.append(
+            "Note: there are barely enough chunks to fill all slots. "
+            "Use exactly 1 DETAIL fragment — there are NOT enough "
+            "chunks for 2 DETAILs without reusing a chunk."
+        )
+    sections.append("")
+    sections.extend(chunk_lines)
+    return "\n".join(sections)
 
 
 __all__ = [

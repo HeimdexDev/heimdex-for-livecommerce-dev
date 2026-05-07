@@ -32,7 +32,9 @@ def _make_chunk(start_ms: int, end_ms: int, *, hook=0.5, has_cta=False, importan
 
 class TestPromptVersion:
     def test_module_constant_exists(self):
-        assert PROMPT_VERSION == "v1"
+        # Bumped v1 → v2 in PR 9 (chunk-cap + small-chunk hint —
+        # changes prompt input shape, eval cache invalidates).
+        assert PROMPT_VERSION == "v2"
 
     def test_system_prompt_non_empty(self):
         assert len(_SYSTEM_PROMPT) > 100
@@ -194,3 +196,51 @@ class TestEmptyInput:
         )
         assert "Product: X" in out
         assert "Chunks (chronological, 0-indexed):" in out
+
+
+class TestSmallChunkHint:
+    """v2 hint nudges the LLM toward 1× DETAIL when chunk_count
+    is just-enough for unique fills — staging 2026-05-08 saw 2×
+    DETAIL picked on 4-chunk inputs which forced chunk_index reuse
+    and Pydantic-rejected the response.
+    """
+
+    def test_hint_omitted_by_default(self):
+        out = build_user_prompt(
+            all_chunks=[_make_chunk(0, 1000)],
+            target_duration_ms=60_000,
+            llm_label="X",
+            spoken_aliases=[],
+            slot_budgets=SlotBudgets(),
+        )
+        assert "NOT enough" not in out
+        assert "Use exactly 1 DETAIL" not in out
+
+    def test_hint_included_when_flag_set(self):
+        out = build_user_prompt(
+            all_chunks=[_make_chunk(0, 1000)],
+            target_duration_ms=60_000,
+            llm_label="X",
+            spoken_aliases=[],
+            slot_budgets=SlotBudgets(),
+            small_chunk_hint=True,
+        )
+        # Both phrases appear — keep the test resilient to minor copy
+        # tweaks but lock in the substantive message.
+        assert "NOT enough chunks for 2 DETAILs" in out
+        assert "Use exactly 1 DETAIL" in out
+
+    def test_hint_appears_before_chunk_listing(self):
+        # Hint must be visible to the LLM before it sees the chunks
+        # so it can plan accordingly.
+        out = build_user_prompt(
+            all_chunks=[_make_chunk(0, 1000)],
+            target_duration_ms=60_000,
+            llm_label="X",
+            spoken_aliases=[],
+            slot_budgets=SlotBudgets(),
+            small_chunk_hint=True,
+        )
+        hint_idx = out.find("Use exactly 1 DETAIL")
+        chunks_idx = out.find("Chunks (chronological")
+        assert 0 <= hint_idx < chunks_idx

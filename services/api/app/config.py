@@ -571,7 +571,7 @@ class Settings(BaseSettings):
     # between this env var and the module constant is a misconfig
     # signal — the picker logs a WARNING and continues with the
     # module's value.
-    auto_shorts_product_v2_storyboard_llm_prompt_version: str = "v1"
+    auto_shorts_product_v2_storyboard_llm_prompt_version: str = "v2"
 
     # --- Auto-shorts: post-render Whisper subtitle refinement ---
     # Plan: ``.claude/plans/auto-shorts-whisper-subtitles-2026-05-06.md``
