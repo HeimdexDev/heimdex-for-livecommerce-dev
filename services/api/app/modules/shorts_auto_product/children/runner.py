@@ -650,6 +650,11 @@ class ChildRunner:
                     os_client=os_client,
                     openai_client=openai_client,
                     enqueue_render=_enqueue_render,
+                    legacy_os_subtitles_enabled=getattr(
+                        self.settings,
+                        "auto_shorts_product_v2_legacy_os_subtitles_enabled",
+                        False,
+                    ),
                 )
             except NoMentionsFoundError as e:
                 logger.info(

@@ -441,8 +441,14 @@ class TestWrapKoreanSubtitleLines:
         assert out == "안녕하세요"
 
 
-class TestBuildCompositionSpecResponsiveSubtitles:
-    def test_default_canvas_uses_32px_font(self):
+class TestBuildCompositionSpecDefaultEmptyCaptions:
+    """Post 2026-05-07 default: no captions on parent — Whisper post-render
+    is the sole caption source. Without this, an OS resplit/indexing drift
+    can paint wrong text onto a rendered short (project memory:
+    ``project_resplit_manifest_stt_incident``).
+    """
+
+    def test_default_emits_no_subtitles(self):
         scene = _scene(0, 30_000, sid="gd_x_scene_001")
         seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene])
         spec = build_composition_spec(
@@ -450,12 +456,52 @@ class TestBuildCompositionSpecResponsiveSubtitles:
             segments=[seg],
             os_video_id="gd_x",
         )
-        # _scene's transcript "transcript at 0" is short enough to
-        # fit one line, but the style must reflect the responsive
-        # font sizing regardless of cue length.
+        # Captions are explicitly absent in the default path.
+        assert spec.subtitles == []
+        # Scene clip selection is unaffected — only the caption
+        # generation step is gated by the new flag.
+        assert len(spec.scene_clips) == 1
+        assert spec.scene_clips[0].scene_id == "gd_x_scene_001"
+
+    def test_default_preserves_clip_layout_unchanged(self):
+        # Multi-scene chunk → still produces clamped sub-clips. The
+        # subtitle gating must NOT regress scene_clip behavior.
+        scene_a = _scene(0, 10_000, sid="A")
+        scene_b = _scene(10_000, 30_000, sid="B")
+        seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene_a, scene_b])
+        spec = build_composition_spec(
+            selected_chunks=[_chunk(5_000, 25_000)],
+            segments=[seg],
+            os_video_id="gd_x",
+        )
+        assert spec.subtitles == []
+        assert len(spec.scene_clips) == 2
+        assert spec.scene_clips[0].scene_id == "A"
+        assert spec.scene_clips[1].scene_id == "B"
+
+
+class TestBuildCompositionSpecLegacyRollback:
+    """Emergency rollback path — exercises the historical subtitle
+    generation. Verifies the path stays runnable in case we need to
+    flip the flag, but the default behavior above is what ships.
+    """
+
+    def test_legacy_canvas_uses_32px_font(self):
+        scene = _scene(0, 30_000, sid="gd_x_scene_001")
+        seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene])
+        spec = build_composition_spec(
+            selected_chunks=[_chunk(0, 30_000)],
+            segments=[seg],
+            os_video_id="gd_x",
+            legacy_os_subtitles_enabled=True,
+        )
+        # _scene's transcript is uniform-distributed across the clip,
+        # so at least one cue should land. Style is the auto-shorts
+        # 32px pill at default 720p canvas.
+        assert len(spec.subtitles) >= 1
         assert all(s.style.font_size_px == 32 for s in spec.subtitles)
 
-    def test_explicit_canvas_dimensions_scale_subtitles(self):
+    def test_legacy_explicit_canvas_dimensions_scale(self):
         scene = _scene(0, 30_000, sid="gd_x_scene_001")
         seg = MentionSegment(start_ms=0, end_ms=30_000, scenes=[scene])
         spec = build_composition_spec(
@@ -464,8 +510,9 @@ class TestBuildCompositionSpecResponsiveSubtitles:
             os_video_id="gd_x",
             canvas_width=1080,
             canvas_height=1920,
+            legacy_os_subtitles_enabled=True,
         )
-        # 1920 * 0.045 = 86 (rounded). Padding ≈ 86 * 0.33 = 28.
+        # 1920 * 0.045 = 86. Padding ≈ 86 * 0.33 = 28.
         for s in spec.subtitles:
             assert s.style.font_size_px == 86
             assert s.style.background_padding == 28

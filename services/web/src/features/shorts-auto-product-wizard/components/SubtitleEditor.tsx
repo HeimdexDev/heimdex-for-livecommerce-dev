@@ -227,9 +227,29 @@ export function SubtitleEditor({
       ) : null}
 
       {cues.length === 0 ? (
-        <div className="rounded border border-dashed border-neutral-300 p-4 text-sm text-neutral-500">
-          음성 자막을 생성하지 못했습니다.
-        </div>
+        // Two empty-state branches:
+        //   * Parent waiting for Whisper post-render — auto-shorts
+        //     decoupled from OS speaker_transcript (2026-05-07), so
+        //     captions only show up after Whisper transcribes the
+        //     rendered audio. This is the COMMON path on first view.
+        //   * Operator deleted every cue — different copy because
+        //     it's a state they explicitly created, not a "still
+        //     working" state.
+        refinementSource === "manual_edit" ? (
+          <div className="rounded border border-dashed border-neutral-300 p-4 text-sm text-neutral-500">
+            음성 자막이 비어 있습니다.
+          </div>
+        ) : (
+          <div
+            data-testid="subtitle-editor-generating"
+            className="rounded border border-dashed border-amber-300 bg-amber-50 p-4 text-sm text-amber-900"
+          >
+            <p className="font-medium">자막 생성 중...</p>
+            <p className="mt-1 text-xs text-amber-800">
+              실제 음성을 분석해 약 30초 내에 정확한 자막이 생성됩니다.
+            </p>
+          </div>
+        )
       ) : (
         <div className="grid gap-2 overflow-y-auto pr-1">
           {cues.map((cue, index) => (

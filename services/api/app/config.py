@@ -504,6 +504,18 @@ class Settings(BaseSettings):
     # take that long; surface as ``enumeration_llm_failed``.
     auto_shorts_product_v2_stt_enum_timeout_s: float = 90.0
 
+    # --- Auto-shorts: caption-source switch ---
+    # Decoupled from OS speaker_transcript on 2026-05-07: Whisper
+    # post-render is the only caption source for auto-shorts so a
+    # resplit/indexing drift in OS can never paint wrong text onto
+    # a rendered short again. Set this to True ONLY for emergency
+    # rollback — flipping it back on revives the historical
+    # speaker_transcript-derived subtitle path inside
+    # ``track_stt/composition_builder.py``. Plan to delete this
+    # flag + the dead-code path after a 2-week soak with the new
+    # behavior on prod.
+    auto_shorts_product_v2_legacy_os_subtitles_enabled: bool = False
+
     # --- Auto-shorts: post-render Whisper subtitle refinement ---
     # Plan: ``.claude/plans/auto-shorts-whisper-subtitles-2026-05-06.md``
     # Off-by-default master flag. Even with the column migration

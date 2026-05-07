@@ -200,15 +200,33 @@ class TestBuildRefinedInputSpec:
         assert len(result["subtitles"]) == 1
         assert result["subtitles"][0]["text"] == "ok"
 
-    def test_no_parent_subtitles_yields_default_style(self) -> None:
+    def test_no_parent_subtitles_falls_back_to_auto_shorts_style(self) -> None:
+        # Post 2026-05-07 the auto-shorts caption-source switch means
+        # the parent ships with empty subtitles. Whisper refinement
+        # must NOT inherit ``SubtitleSpec`` defaults (white-on-
+        # transparent, illegible against white studio backgrounds);
+        # it must apply the auto-shorts pill (white box / black text /
+        # 32px @ 720p). Without this fallback the operator-target
+        # screenshot's look is lost on every refined render.
         parent_spec = {"scene_clips": [{"timeline_end_ms": 5000}]}
         new_subs = [Subtitle(start_ms=0, end_ms=500, text="x")]
         result = _build_refined_input_spec(parent_spec, new_subs)
-        # No style/template_id keys leaked from absent parent
         sub = result["subtitles"][0]
-        assert "style" not in sub
+        assert sub["text"] == "x"
+        assert sub["start_ms"] == 0
+        assert sub["end_ms"] == 500
+        # template_id stays absent (no parent template).
         assert "template_id" not in sub
-        assert sub == {"text": "x", "start_ms": 0, "end_ms": 500}
+        # Style is sourced from the auto-shorts pill helper — pinned
+        # to the canonical operator-target colors + the 720p font
+        # size resolved from the default canvas.
+        style = sub["style"]
+        assert style["font_color"] == "#000000"
+        assert style["background_color"] == "#FFFFFF"
+        assert style["background_opacity"] == 0.95
+        assert style["font_weight"] == 700
+        # Default canvas (720p) → 32px font (4.5% × 720, rounded).
+        assert style["font_size_px"] == 32
 
     def test_style_dict_is_copied_not_shared(self) -> None:
         """Mutating refined output's style must not affect parent."""

@@ -454,16 +454,39 @@ def _build_refined_input_spec(
     """Build a refined ``CompositionSpec`` JSON dict.
 
     Preserves every parent field except ``subtitles[]``, which is
-    replaced with the chunker output. Style and template_id are
-    inherited from the first parent subtitle if present (callers
-    are assumed to use uniform style — auto-shorts does this); if
-    absent, ``SubtitleSpec``'s default style applies.
+    replaced with the chunker output.
+
+    Style + template_id resolution:
+
+    1. If the parent carries any subtitles, inherit ``style`` and
+       ``template_id`` from the first one (callers use uniform
+       style for the whole render — historically that's been the
+       contract).
+    2. Else (parent has empty subtitles — the post-2026-05-07
+       auto-shorts default), fall back to the auto-shorts pill
+       style sized to the parent's output canvas. Without this
+       fallback, Whisper-only auto-shorts renders would lose the
+       white pill + black text the operator-target screenshot
+       requires.
+
+    Cue text is also passed through ``wrap_korean_subtitle_lines``
+    so multi-line wrapping stays consistent with the pre-render
+    composition_builder rules — same chars-per-line budget,
+    same 2-line cap.
 
     Returns a plain dict (no Pydantic round-trip) — the caller
     stores it in JSONB. The render worker re-validates against
     ``CompositionSpec`` on receipt, so any malformed output is
     surfaced loudly there.
     """
+    from app.modules.shorts_auto_product.subtitle_layout import (
+        DEFAULT_CANVAS_HEIGHT,
+        DEFAULT_CANVAS_WIDTH,
+        build_auto_shorts_subtitle_style,
+        compute_chars_per_line,
+        wrap_korean_subtitle_lines,
+    )
+
     refined = dict(parent_spec)
     parent_subs = parent_spec.get("subtitles") or []
     style_template: dict[str, Any] | None = None
@@ -476,17 +499,50 @@ def _build_refined_input_spec(
             if isinstance(tid, str):
                 template_id = tid
 
+    # Fallback to auto-shorts pill when the parent shipped without
+    # any subtitle template (the new caption-source default for
+    # auto-shorts). Sized to the parent's actual canvas so the same
+    # pill scales with future resolution bumps.
+    output_dims = parent_spec.get("output") if isinstance(parent_spec, dict) else None
+    canvas_height = (
+        int(output_dims["height"])
+        if isinstance(output_dims, dict)
+        and isinstance(output_dims.get("height"), (int, float))
+        else DEFAULT_CANVAS_HEIGHT
+    )
+    canvas_width = (
+        int(output_dims["width"])
+        if isinstance(output_dims, dict)
+        and isinstance(output_dims.get("width"), (int, float))
+        else DEFAULT_CANVAS_WIDTH
+    )
+    if style_template is None:
+        fallback_style = build_auto_shorts_subtitle_style(
+            canvas_height=canvas_height,
+        )
+        style_template = fallback_style.model_dump()
+
+    # Always compute the wrap budget from the resolved style — works
+    # whether the style came from the parent or the fallback.
+    chars_per_line = compute_chars_per_line(
+        canvas_width=canvas_width,
+        font_size_px=int(style_template.get("font_size_px") or 32),
+        padding=int(style_template.get("background_padding") or 11),
+    )
+
     refined_subs: list[dict[str, Any]] = []
     for sub in new_subtitles:
         if sub.end_ms <= sub.start_ms:
             continue  # SubtitleSpec validator rejects end <= start
+        wrapped_text = wrap_korean_subtitle_lines(
+            sub.text, chars_per_line=chars_per_line,
+        )
         item: dict[str, Any] = {
-            "text": sub.text,
+            "text": wrapped_text,
             "start_ms": sub.start_ms,
             "end_ms": sub.end_ms,
+            "style": dict(style_template),
         }
-        if style_template is not None:
-            item["style"] = dict(style_template)
         if template_id is not None:
             item["template_id"] = template_id
         refined_subs.append(item)

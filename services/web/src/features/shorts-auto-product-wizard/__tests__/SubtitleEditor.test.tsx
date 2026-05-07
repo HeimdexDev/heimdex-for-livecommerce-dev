@@ -94,7 +94,11 @@ describe("SubtitleEditor — initial render", () => {
     expect(ta1.value).toBe("하세요");
   });
 
-  it("shows empty-state copy when no cues", () => {
+  it("shows 'captions generating' when parent has no cues yet (Whisper pending)", () => {
+    // Default empty state on auto-shorts parents: post 2026-05-07
+    // captions come ONLY from Whisper post-render, so the parent
+    // ships subs=[]. The editor must surface a "still working" UX,
+    // not the historical "no captions could be generated" copy.
     render(
       <SubtitleEditor
         renderId={RENDER_ID}
@@ -105,7 +109,29 @@ describe("SubtitleEditor — initial render", () => {
         isRendering={false}
       />,
     );
-    expect(screen.getByText(/음성 자막을 생성하지 못했습니다/)).toBeInTheDocument();
+    expect(
+      screen.getByTestId("subtitle-editor-generating"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/자막 생성 중/)).toBeInTheDocument();
+  });
+
+  it("shows empty-state copy when operator deleted every cue (manual_edit)", () => {
+    // Different message: this is a state the operator created on
+    // purpose, not a "still working" state. Distinguishes
+    // ``refinementSource === 'manual_edit'`` from the Whisper-pending
+    // default so the operator doesn't think captions will magically
+    // reappear.
+    render(
+      <SubtitleEditor
+        renderId={RENDER_ID}
+        initialCues={[]}
+        getToken={tokenGetter}
+        refinementSource="manual_edit"
+        onRerenderRequested={async () => {}}
+        isRendering={false}
+      />,
+    );
+    expect(screen.getByText(/음성 자막이 비어 있습니다/)).toBeInTheDocument();
   });
 
   it("does NOT show the rerender banner on a clean parent", () => {

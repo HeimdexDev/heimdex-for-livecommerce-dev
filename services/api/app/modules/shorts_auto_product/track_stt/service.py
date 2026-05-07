@@ -74,6 +74,7 @@ async def assemble_stt_clip(
     enqueue_render: RenderEnqueuer,
     index_alias: str = "heimdex_scenes",
     chunker_model: str = "gpt-4o-mini",
+    legacy_os_subtitles_enabled: bool = False,
 ) -> SttClipResult:
     """End-to-end STT pipeline. Returns the render_job_id wrapped in
     :class:`SttClipResult`.
@@ -196,6 +197,7 @@ async def assemble_stt_clip(
         segments=segments,
         os_video_id=os_video_id,
         title=title,
+        legacy_os_subtitles_enabled=legacy_os_subtitles_enabled,
     )
 
     # ---- 6. Render enqueue (caller-supplied) ----
