@@ -163,6 +163,13 @@ services:
       - AUTO_SHORTS_PRODUCT_V2_WHISPER_DAILY_BUDGET_USD=${AUTO_SHORTS_PRODUCT_V2_WHISPER_DAILY_BUDGET_USD:-5.0}
       - AUTO_SHORTS_PRODUCT_V2_WHISPER_TIMEOUT_S=${AUTO_SHORTS_PRODUCT_V2_WHISPER_TIMEOUT_S:-60}
       - AUTO_SHORTS_PRODUCT_V2_WHISPER_S3_DOWNLOAD_TIMEOUT_S=${AUTO_SHORTS_PRODUCT_V2_WHISPER_S3_DOWNLOAD_TIMEOUT_S:-30}
+      # Auto-shorts overlay-mode caption flow
+      # (.claude/plans/auto-shorts-overlay-mode-2026-05-07.md). When
+      # ON: Whisper post-render writes cues to the parent's
+      # input_spec (no child render); /rerender produces an export
+      # child that does NOT replace the parent. Default off; flip on
+      # staging only.
+      - AUTO_SHORTS_PRODUCT_V2_OVERLAY_MODE_ENABLED=${AUTO_SHORTS_PRODUCT_V2_OVERLAY_MODE_ENABLED:-false}
       # Auto-shorts storyboard composition (Tier B / Tier C). Plan
       # in ``track_stt/storyboard/__init__.py``. Default-off; flip
       # on staging via .env. Same allowlist rule as the whisper
