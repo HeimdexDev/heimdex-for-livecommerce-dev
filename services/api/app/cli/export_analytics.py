@@ -241,8 +241,27 @@ def main() -> None:
                     settings.analytics_bq_dataset,
                     target,
                 )
-            except Exception:
-                logger.exception("BQ load failed — S3 upload was successful, continuing")
+            except Exception as exc:
+                # Predictable failure when GCP Workload Identity Federation
+                # isn't wired (no GOOGLE_APPLICATION_CREDENTIALS / external_account
+                # JSON / WIF pool — see project_prod_bq_federation_unwired.md).
+                # Match by class name to avoid a hard module-level dependency on
+                # google.auth.exceptions; this keeps the test allowlist independent
+                # of optional google-cloud-bigquery installation.
+                if type(exc).__name__ == "DefaultCredentialsError":
+                    logger.warning(
+                        "bq_load_skipped_no_credentials",
+                        extra={
+                            "project": settings.analytics_bq_project,
+                            "remediation": (
+                                "Wire GCP Workload Identity Federation + set "
+                                "GOOGLE_APPLICATION_CREDENTIALS on the api container, "
+                                "or set ANALYTICS_BQ_ENABLED=false to silence."
+                            ),
+                        },
+                    )
+                else:
+                    logger.exception("BQ load failed — S3 upload was successful, continuing")
 
 
 if __name__ == "__main__":
