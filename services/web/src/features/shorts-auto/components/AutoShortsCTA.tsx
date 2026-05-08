@@ -18,12 +18,22 @@ interface AutoShortsCTAProps {
    * Default: false (hidden until probe succeeds).
    */
   renderWhileProbing?: boolean;
+  /**
+   * When set, the CTA renders as a button that fires this callback
+   * instead of navigating. The video detail page uses this to switch
+   * the inline view-mode to ``auto-shorts`` (URL becomes
+   * ``?view=auto-shorts``) so the wizard renders next to the player
+   * rather than on a standalone route. When unset, falls back to the
+   * legacy /export/shorts/auto/wizard/{videoId}/criteria deep link.
+   */
+  onClick?: () => void;
   className?: string;
 }
 
 function CTAInner({
   videoId,
   renderWhileProbing = false,
+  onClick,
   className,
 }: AutoShortsCTAProps) {
   const { availability, isLoading } = useAutoShortsAvailability();
@@ -31,18 +41,27 @@ function CTAInner({
   if (availability === "disabled") return null;
   if (isLoading && !renderWhileProbing) return null;
 
-  // Routes to the 4-step wizard at step 2 (criteria) — videoId is
-  // already known from the video detail page so step 1's videoId
-  // input is bypassed entirely. The legacy v1 mode-tabs dashboard
-  // (/export/shorts/auto?videoId=…) stays accessible by direct URL
-  // for diagnostics, but isn't featured anywhere from this CTA.
+  const sharedClassName = cn(
+    "inline-flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100",
+    className,
+  );
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={sharedClassName}>
+        <MagicWandIcon className="h-4 w-4" />
+        AI 쇼츠 생성
+      </button>
+    );
+  }
+
+  // Legacy fallback: deep link to the standalone wizard route. Kept
+  // for direct callers that don't supply onClick. The video detail
+  // page provides onClick so users land on the inline experience.
   return (
     <Link
       href={`/export/shorts/auto/wizard/${encodeURIComponent(videoId)}/criteria`}
-      className={cn(
-        "inline-flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100",
-        className,
-      )}
+      className={sharedClassName}
     >
       <MagicWandIcon className="h-4 w-4" />
       AI 쇼츠 생성

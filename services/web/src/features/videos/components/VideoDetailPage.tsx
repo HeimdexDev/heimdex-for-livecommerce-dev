@@ -21,11 +21,22 @@ import { createBlurJob, type BlurCategory } from "@/lib/api/blur";
 import { SceneGroupCard } from "./SceneGroupCard";
 import { VideoPeoplePanel } from "./VideoPeoplePanel";
 import { AutoShortsCTA } from "@/features/shorts-auto";
+import {
+  InlineWizardContainer,
+  type InlineWizardStep,
+} from "@/features/shorts-auto-product-wizard/components/InlineWizardContainer";
 import { useOrgSettings } from "@/lib/orgSettings";
 import { useSceneGroups } from "@/features/videos/hooks/useSceneGroups";
 import { getDetailThumbnailClass, getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
-type ViewMode = "overview" | "scenes" | "people";
+type ViewMode = "overview" | "scenes" | "people" | "auto-shorts";
+
+const VALID_VIEW_MODES: ViewMode[] = [
+  "overview",
+  "scenes",
+  "people",
+  "auto-shorts",
+];
 
 const SCENES_PER_PAGE = 10;
 
@@ -704,6 +715,7 @@ function ScenesPanel({
   videoId,
   agentAvailable,
   onSeekToScene,
+  onAutoShortsClick,
   activeSceneMs,
   getToken,
   aspectRatio,
@@ -713,6 +725,10 @@ function ScenesPanel({
   videoId: string;
   agentAvailable: boolean;
   onSeekToScene?: (startMs: number) => void;
+  /** Optional override — when set, the AutoShorts CTA fires this callback
+   *  (used by the inline-wizard flow on the detail page) instead of
+   *  navigating to the legacy standalone wizard route. */
+  onAutoShortsClick?: () => void;
   activeSceneMs?: number | null;
   getToken: () => Promise<string | null>;
   aspectRatio: ThumbnailAspectRatio;
@@ -918,7 +934,7 @@ function ScenesPanel({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <AutoShortsCTA videoId={videoId} />
+          <AutoShortsCTA videoId={videoId} onClick={onAutoShortsClick} />
           <button
             type="button"
             disabled={selectedIds.size === 0}
@@ -1058,10 +1074,12 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
   const [view, setViewRaw] = useState<ViewMode>(
     initialT
       ? "scenes"
-      : initialView && (["overview", "scenes", "people"] as ViewMode[]).includes(initialView)
+      : initialView && VALID_VIEW_MODES.includes(initialView)
         ? initialView
         : "overview",
   );
+  const [autoShortsStep, setAutoShortsStep] =
+    useState<InlineWizardStep>("criteria");
   const [meta, setMeta] = useState<VideoScenesResponse | null>(null);
   const [scenes, setScenes] = useState<VideoScene[]>([]);
   const [totalScenes, setTotalScenes] = useState(0);
@@ -1120,6 +1138,14 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
   const handleViewChange = useCallback((newView: ViewMode) => {
     setViewRaw(newView);
+    // Re-entering auto-shorts always starts at the criteria step. The
+    // ``InlineWizardContainer`` owns the canonical step state via local
+    // useState — the page-level ``autoShortsStep`` only mirrors it for
+    // layout decisions (video panel visibility). Resetting here keeps
+    // the two in sync after a tab switch.
+    if (newView === "auto-shorts") {
+      setAutoShortsStep("criteria");
+    }
     const params = new URLSearchParams(window.location.search);
     if (newView === "overview") {
       params.delete("view");
@@ -1217,6 +1243,33 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
   const isReprocessing = reprocessStatus?.status === "pending" || reprocessStatus?.status === "processing";
 
+  // Derived for the inline auto-shorts wizard. Same scene-derived
+  // calculation that VideoInfoPanel uses internally — kept in sync
+  // by reading from the same ``scenes`` array.
+  const lastEnd = scenes.length > 0 ? scenes[scenes.length - 1].end_ms : 0;
+  const firstStart = scenes.length > 0 ? scenes[0].start_ms : 0;
+  const pageDurationMs = Math.max(0, lastEnd - firstStart);
+
+  // Scene boundary set for the slider's snap behavior (D4). Union of
+  // every scene's start_ms + end_ms, deduped + sorted. Memoized
+  // implicitly by the scenes-list identity from useEffect — only
+  // recomputes when the scenes array reference changes.
+  const sceneBoundariesMs = (() => {
+    if (scenes.length === 0) return [] as number[];
+    const set = new Set<number>();
+    for (const s of scenes) {
+      set.add(s.start_ms);
+      set.add(s.end_ms);
+    }
+    return Array.from(set).sort((a, b) => a - b);
+  })();
+
+  // Per Decision #5: the left video panel hides on the product-select
+  // step of the inline wizard. Anywhere else, it stays mounted.
+  const showVideoPanel = !(
+    view === "auto-shorts" && autoShortsStep === "select-product"
+  );
+
   return (
     <div className="mx-auto max-w-6xl pt-4">
       <div className="mb-4 flex items-center gap-3 text-sm text-gray-500 min-w-0">
@@ -1295,21 +1348,25 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
       </nav>
 
       <div className="flex items-start gap-8">
-        <div className="sticky top-4 w-[45%] flex-shrink-0 self-start">
-          <VideoInfoPanel
-            videoId={videoId}
-            meta={meta}
-            scenes={scenes}
-            seekMs={seekMs}
-            seekKey={seekKey}
-            onReprocessClick={() => setIsReprocessDialogOpen(true)}
-            isReprocessing={isReprocessing}
-            onBlurClick={handleBlurClick}
-            hasBlurJob={hasBlurJob}
-            blurDisabled={blurDisabled}
-          />
-
-        </div>
+        {showVideoPanel && (
+          <div
+            className="sticky top-4 w-[45%] flex-shrink-0 self-start"
+            data-testid="video-info-panel-slot"
+          >
+            <VideoInfoPanel
+              videoId={videoId}
+              meta={meta}
+              scenes={scenes}
+              seekMs={seekMs}
+              seekKey={seekKey}
+              onReprocessClick={() => setIsReprocessDialogOpen(true)}
+              isReprocessing={isReprocessing}
+              onBlurClick={handleBlurClick}
+              hasBlurJob={hasBlurJob}
+              blurDisabled={blurDisabled}
+            />
+          </div>
+        )}
 
         <div className="flex-1 min-w-0">
           {view === "overview" ? (
@@ -1325,17 +1382,25 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               videoId={videoId}
               agentAvailable={agentAvailable}
               onSeekToScene={handleSeekToScene}
+              onAutoShortsClick={() => handleViewChange("auto-shorts")}
               activeSceneMs={seekMs}
               getToken={getAccessToken}
               aspectRatio={aspectRatio}
             />
-          ) : (
+          ) : view === "people" ? (
             <VideoPeoplePanel
               videoId={videoId}
               scenes={scenes}
               onSeekToScene={handleSeekToScene}
               agentAvailable={agentAvailable}
               aspectRatio={aspectRatio}
+            />
+          ) : (
+            <InlineWizardContainer
+              videoId={videoId}
+              videoDurationMs={pageDurationMs}
+              snapTargetsMs={sceneBoundariesMs}
+              onStepChange={setAutoShortsStep}
             />
           )}
         </div>
