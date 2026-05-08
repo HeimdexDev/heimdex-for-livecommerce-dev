@@ -9,18 +9,20 @@ const AUTH0_ENABLED = process.env.NEXT_PUBLIC_AUTH0_ENABLED === "true";
 const AUTH0_DOMAIN = process.env.NEXT_PUBLIC_AUTH0_DOMAIN || "";
 const AUTH0_CLIENT_ID = process.env.NEXT_PUBLIC_AUTH0_CLIENT_ID || "";
 const AUTH0_AUDIENCE = process.env.NEXT_PUBLIC_AUTH0_AUDIENCE || "";
-// Auth0 organization is resolved dynamically from the subdomain via
-// /api/auth/org-info. Falls back to NEXT_PUBLIC_AUTH0_ORGANIZATION env var
-// during SSR or if the API call fails.
-const AUTH0_ORGANIZATION_FALLBACK = process.env.NEXT_PUBLIC_AUTH0_ORGANIZATION || "";
+// Auth0 organization is resolved at runtime from the current subdomain via
+// /api/auth/org-info on every AuthProvider mount. The Auth0 SPA clients are
+// configured with organization_usage="allow" + organization_require_behavior=
+// "no_prompt", so an empty value gracefully falls back to default user
+// routing if the resolution call fails. There is no build-time fallback —
+// a multi-tenant bundle cannot bake a correct value for every tenant.
 
 function getInitialAuth0Org(): string {
-  if (typeof window === "undefined") return AUTH0_ORGANIZATION_FALLBACK;
-  // Invitation URL has organization= param — use it directly
+  if (typeof window === "undefined") return "";
+  // Auth0 invitation URLs include ?organization= — honor it for the
+  // invitation flow. Otherwise wait for /api/auth/org-info to resolve
+  // from the Host header.
   const params = new URLSearchParams(window.location.search);
-  const orgParam = params.get("organization");
-  if (orgParam) return orgParam;
-  return AUTH0_ORGANIZATION_FALLBACK;
+  return params.get("organization") || "";
 }
 
 // Mutable — updated after /api/auth/org-info fetch completes
@@ -46,8 +48,6 @@ async function fetchAuth0OrgId(): Promise<string> {
   _orgInfoFetched = true;
   return _resolvedAuth0Org;
 }
-
-const AUTH0_ORGANIZATION = getInitialAuth0Org();
 
 // Validate Auth0 configuration
 if (AUTH0_ENABLED && (!AUTH0_DOMAIN || !AUTH0_CLIENT_ID)) {

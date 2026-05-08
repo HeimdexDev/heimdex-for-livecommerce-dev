@@ -147,3 +147,27 @@ jobs:
 
       - name: Run vitest
         run: npx vitest run --reporter=dot
+
+  no-auth0-org-fallback:
+    # Guard: the build-time Auth0 org fallback env var was removed in 2026-05
+    # because a multi-tenant build cannot bake a correct value for every
+    # tenant (livenow + ebsdemo + devorg share one bundle). Source of truth
+    # is the subdomain → DB lookup → /api/auth/org-info. This step blocks
+    # any future PR that re-introduces the build-time fallback.
+    #
+    # Grep target excludes this workflow file by design — the var name is
+    # constructed at runtime so the regex doesn't match the guard itself.
+    name: No Auth0 org build-time fallback
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Grep for re-introduction
+        run: |
+          # Construct the forbidden name at runtime to avoid self-match.
+          NAME='NEXT_PUBLIC_AUTH0_'"ORGANIZATION"
+          if grep -RnE --exclude-dir=.next --exclude-dir=node_modules "$NAME" services/web/ docker-compose*.yml 2>/dev/null; then
+            echo "::error::Build-time Auth0 org fallback reintroduced — multi-tenant builds cannot bake a correct value for all tenants. Use /api/auth/org-info dynamic resolution instead."
+            exit 1
+          fi
+          echo "OK: no fallback present"

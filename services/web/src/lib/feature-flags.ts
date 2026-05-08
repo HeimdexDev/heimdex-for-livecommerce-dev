@@ -6,9 +6,10 @@
  * rebuilding the web container, not a runtime config change.
  *
  * Strict-string parsing: only the literal "true" turns a flag on. Empty,
- * undefined, "false", "0", anything else → off. Avoids the
- * NEXT_PUBLIC_AUTH0_ORGANIZATION class of bugs where a non-empty default
- * accidentally enables a feature.
+ * undefined, "false", "0", anything else → off. Avoids the bug class where
+ * a non-empty build-time default accidentally enables a feature (or, in
+ * multi-tenant builds, picks the wrong tenant's value) in environments
+ * that should have it off.
  */
 
 function readBoolean(envValue: string | undefined): boolean {

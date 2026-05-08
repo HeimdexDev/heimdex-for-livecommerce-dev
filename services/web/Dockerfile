@@ -15,7 +15,6 @@ ARG NEXT_PUBLIC_AUTH0_ENABLED
 ARG NEXT_PUBLIC_AUTH0_DOMAIN
 ARG NEXT_PUBLIC_AUTH0_CLIENT_ID
 ARG NEXT_PUBLIC_AUTH0_AUDIENCE
-ARG NEXT_PUBLIC_AUTH0_ORGANIZATION
 ARG NEXT_PUBLIC_GA_MEASUREMENT_ID
 # Shorts editor V2 panel rollout flag — defaults false at the compose level,
 # flipped to "true" via .env on staging/prod EC2 hosts after the V2 panel
