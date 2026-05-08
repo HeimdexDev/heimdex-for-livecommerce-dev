@@ -212,4 +212,26 @@ describe("WizardStepResult — render actions", () => {
     ).toBeInTheDocument();
     expect(pushMock).not.toHaveBeenCalled();
   });
+
+  it("renders the new 3-step breadcrumb at step 3 (D2)", () => {
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    // The 3-step inline breadcrumb replaces the legacy 4-step WizardLayout
+    // breadcrumb. Step 3 is "AI 쇼츠 생성".
+    expect(
+      screen.getByTestId("inline-wizard-breadcrumb-step-3-circle").dataset
+        .active,
+    ).toBe("true");
+    expect(
+      screen.getByTestId("inline-wizard-breadcrumb-step-1-circle").dataset
+        .active,
+    ).toBe("false");
+  });
+
+  it("back link routes to the inline-wizard view on the detail page (D2)", () => {
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    const back = screen.getByTestId("result-back-link");
+    expect(back.getAttribute("href")).toBe(
+      "/videos/gd_test?view=auto-shorts",
+    );
+  });
 });

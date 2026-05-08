@@ -25,7 +25,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import type { JobStatusResponse } from "@/lib/types/shorts-auto-product-wizard";
 
-import { WizardLayout } from "../components/WizardLayout";
+import { InlineWizardBreadcrumb } from "../components/InlineWizardBreadcrumb";
 import { useScanOrder } from "../hooks/useScanOrder";
 
 interface Props {
@@ -41,12 +41,21 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
   );
 
   return (
-    <WizardLayout
-      currentStep={4}
-      heading="쇼츠 자동 생성"
-      next={null}
-      backHref={`/export/shorts/auto/wizard/${encodeURIComponent(videoId)}/criteria`}
+    <div
+      className="mx-auto max-w-5xl space-y-6 p-6"
+      data-testid="wizard-step-result"
     >
+      <header className="flex items-center justify-between gap-4">
+        <Link
+          href={`/videos/${encodeURIComponent(videoId)}?view=auto-shorts`}
+          className="text-sm text-gray-500 hover:text-gray-700"
+          data-testid="result-back-link"
+        >
+          &lt; 뒤로가기
+        </Link>
+        <InlineWizardBreadcrumb currentStep={3} />
+      </header>
+
       <div className="space-y-4">
         {error ? (
           <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">
@@ -89,7 +98,7 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
           </>
         )}
       </div>
-    </WizardLayout>
+    </div>
   );
 }
 
