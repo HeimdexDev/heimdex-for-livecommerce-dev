@@ -71,6 +71,7 @@ import logging
 import os
 import socket
 from contextlib import asynccontextmanager
+from datetime import datetime
 from decimal import Decimal
 from typing import AsyncIterator, Awaitable, Callable
 from uuid import UUID
@@ -285,15 +286,27 @@ class ChildRunner:
         FIFO order (no DB lock — claim is the race resolver) and
         dispatches each as an asyncio task. The semaphore bounds
         actual concurrent processing.
+
+        PR 3: behind ``auto_shorts_product_v2_self_heal_enabled``,
+        the poll widens to also cover render_child rows whose lease
+        has elapsed past ``LEASE_RECLAIM_GRACE_SECONDS`` — an API
+        replica restart no longer leaves children orphaned in
+        ``assembling``/``rendering`` forever. Flag-off reverts to
+        the queued-only legacy poll.
         """
         max_concurrency = (
             self.settings.auto_shorts_product_v2_child_runner_max_concurrency
         )
         async with self.session_factory() as session:
             repo = ProductScanJobRepository(session)
-            candidates = await repo.find_queued_render_children(
-                limit=max_concurrency * 2,
-            )
+            if self.settings.auto_shorts_product_v2_self_heal_enabled:
+                candidates = await repo.find_claimable_render_children(
+                    limit=max_concurrency * 2,
+                )
+            else:
+                candidates = await repo.find_queued_render_children(
+                    limit=max_concurrency * 2,
+                )
         for child_id in candidates:
             task = asyncio.create_task(self._run_one_child(child_id))
             self._inflight.add(task)
@@ -376,6 +389,34 @@ class ChildRunner:
                     },
                 )
                 return
+            # PR 3: distinguish re-claim of an expired lease from a
+            # fresh claim. claim() preserves started_at on re-claim
+            # via a CASE expression — fresh claims set it to NOW
+            # (== claimed_at), so started_at < claimed_at uniquely
+            # identifies a re-claim. This log is the observability
+            # hook for plan §Validation gate 1.A: spike on deploys,
+            # flat between deploys = healthy self-heal.
+            #
+            # ``isinstance(datetime)`` guards keep the comparison
+            # safe against test fakes (Python 3.11 disallows ordered
+            # comparison between bare MagicMocks). Production rows
+            # always carry datetime-aware values for both columns.
+            if (
+                isinstance(claimed.started_at, datetime)
+                and isinstance(claimed.claimed_at, datetime)
+                and claimed.started_at < claimed.claimed_at
+            ):
+                logger.warning(
+                    "child_re_claimed_after_lease_expiry",
+                    extra={
+                        "child_id": str(child_id),
+                        "instance_id": self.instance_id,
+                        "originally_started_at": (
+                            claimed.started_at.isoformat()
+                        ),
+                        "re_claimed_at": claimed.claimed_at.isoformat(),
+                    },
+                )
             await session.commit()
 
         # ── 2. Read child + parent + catalog set ──────────────────

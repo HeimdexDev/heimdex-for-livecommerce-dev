@@ -20,7 +20,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.shorts_auto_product.models import (
@@ -40,6 +40,16 @@ from app.modules.shorts_auto_product.models import (
     TERMINAL_SCAN_STAGES,
     ProductScanJob,
 )
+
+# PR 3 (self-healing runner): minimum age past lease expiry before
+# another runner instance is allowed to re-claim a render_child row.
+# A grace margin protects healthy-but-slow claimers whose heartbeat
+# is briefly delayed (network blip, GIL contention) from being
+# stolen mid-process. Doesn't need to exceed
+# ``poll_seconds × small_constant``; a true lease holder would have
+# heartbeated by then. See
+# .claude/plans/shorts-auto-product-cap-stuck-fix.md (PR 3 of 3).
+LEASE_RECLAIM_GRACE_SECONDS = 60
 
 
 class ProductScanJobRepository:
@@ -205,13 +215,31 @@ class ProductScanJobRepository:
         claimed_by: str,
         lease_seconds: int,
         next_stage: str,
+        grace_seconds: int = LEASE_RECLAIM_GRACE_SECONDS,
     ) -> ProductScanJob | None:
-        """Atomically transition ``queued → next_stage`` and set
-        the lease.
+        """Atomically transition queued → ``next_stage``, OR re-claim
+        an expired-lease assembling/rendering render_child.
 
-        Returns the claimed row, or ``None`` if the job was already
-        claimed / completed (idempotent — the worker can safely retry
-        and another worker will not steal the lease).
+        PR 3 (self-healing runner) widened this from "queued only" to
+        "queued OR (assembling/rendering with lease expired beyond
+        grace)". The expired-lease branch only matches the
+        render_child-side stages, so SAM2 worker callers
+        (``next_stage = enumerating | tracking``) keep their original
+        queued-only semantics unchanged.
+
+        ``started_at`` is preserved on re-claim via a CASE expression
+        so the runner can distinguish re-claims from fresh claims
+        (started_at < claimed_at = re-claim) for its
+        ``child_re_claimed_after_lease_expiry`` warning. Fresh claims
+        still set started_at = NOW (case-when: previous was NULL).
+
+        Returns the claimed row, or ``None`` if the job is already
+        claimed by a still-live worker (lease not yet beyond grace),
+        terminal, or non-existent. Race resolution between concurrent
+        claimers is the atomic UPDATE-with-WHERE itself.
+
+        See ``.claude/plans/shorts-auto-product-cap-stuck-fix.md``
+        (PR 3 of 3).
         """
         if next_stage not in {
             SCAN_STAGE_ENUMERATING,
@@ -220,12 +248,22 @@ class ProductScanJobRepository:
         }:
             raise ValueError(f"invalid claim next_stage: {next_stage!r}")
         now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=grace_seconds)
         lease_expires = now + timedelta(seconds=lease_seconds)
         stmt = (
             update(ProductScanJob)
             .where(
                 ProductScanJob.id == job_id,
-                ProductScanJob.stage == SCAN_STAGE_QUEUED,
+                or_(
+                    ProductScanJob.stage == SCAN_STAGE_QUEUED,
+                    and_(
+                        ProductScanJob.stage.in_([
+                            SCAN_STAGE_ASSEMBLING,
+                            SCAN_STAGE_RENDERING,
+                        ]),
+                        ProductScanJob.lease_expires_at < cutoff,
+                    ),
+                ),
             )
             .values(
                 stage=next_stage,
@@ -233,7 +271,14 @@ class ProductScanJobRepository:
                 claimed_at=now,
                 lease_expires_at=lease_expires,
                 last_heartbeat_at=now,
-                started_at=now,
+                # Preserve started_at on re-claim; fresh claims set
+                # it to NOW. The runner reads
+                # ``started_at < claimed_at`` to distinguish a
+                # re-claim of an expired lease from a fresh claim.
+                started_at=case(
+                    (ProductScanJob.started_at.is_(None), now),
+                    else_=ProductScanJob.started_at,
+                ),
             )
             .returning(ProductScanJob)
         )
@@ -794,19 +839,81 @@ class ProductScanJobRepository:
         *,
         limit: int,
     ) -> list[UUID]:
-        """Runner poll query — returns at most ``limit`` queued
-        ``mode='render_child'`` job ids ordered FIFO by created_at.
+        """Legacy queued-only runner poll query (PR 3 fallback).
 
-        Returns id-only to keep the row footprint small; the runner
-        re-fetches via ``get_internal`` after a successful claim.
-        Multi-replica safe: claim is the actual race resolver, not
-        this poll.
+        Returns at most ``limit`` queued ``mode='render_child'`` job
+        ids ordered FIFO by created_at. Returns id-only to keep the
+        row footprint small; the runner re-fetches via
+        ``get_internal`` after a successful claim. Multi-replica
+        safe: claim is the actual race resolver, not this poll.
+
+        Kept for the
+        ``auto_shorts_product_v2_self_heal_enabled = False`` path
+        as an emergency-disable fallback. Will be removed in the
+        cleanup PR after the self-heal flag is proven in prod for
+        30 days. See
+        .claude/plans/shorts-auto-product-cap-stuck-fix.md (PR 3).
         """
         stmt = (
             select(ProductScanJob.id)
             .where(
                 ProductScanJob.mode == SCAN_MODE_RENDER_CHILD,
                 ProductScanJob.stage == SCAN_STAGE_QUEUED,
+            )
+            .order_by(ProductScanJob.created_at.asc())
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def find_claimable_render_children(
+        self,
+        *,
+        limit: int,
+        grace_seconds: int = LEASE_RECLAIM_GRACE_SECONDS,
+    ) -> list[UUID]:
+        """Self-healing runner poll (PR 3): returns ids of
+        render_child rows ready to be claimed.
+
+        Two cases match:
+
+        1. ``stage = 'queued'`` — never started (the original poll
+           target).
+        2. ``stage IN ('assembling','rendering')`` AND
+           ``lease_expires_at < NOW() - grace_seconds`` — orphaned by
+           a dead replica (API restart, OOM kill, hung asyncio task).
+
+        The grace margin (default 60s) is a defense against false
+        steals when the original claimer is briefly slow on a
+        heartbeat. It does NOT need to exceed
+        ``poll_seconds × small_constant``; a true lease holder would
+        have heartbeated by then.
+
+        Returns id-only ordered by ``created_at`` ASC; the atomic
+        ``claim()`` is the actual race resolver between concurrent
+        runner instances. Pairs with the legacy
+        ``find_queued_render_children`` shim that the runner falls
+        back to when ``auto_shorts_product_v2_self_heal_enabled = False``.
+
+        See ``.claude/plans/shorts-auto-product-cap-stuck-fix.md``
+        (PR 3 of 3). The partial index
+        ``ix_product_scan_jobs_child_queue`` (migration 058) covers
+        this query's WHERE predicate exactly.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=grace_seconds)
+        stmt = (
+            select(ProductScanJob.id)
+            .where(
+                ProductScanJob.mode == SCAN_MODE_RENDER_CHILD,
+                or_(
+                    ProductScanJob.stage == SCAN_STAGE_QUEUED,
+                    and_(
+                        ProductScanJob.stage.in_([
+                            SCAN_STAGE_ASSEMBLING,
+                            SCAN_STAGE_RENDERING,
+                        ]),
+                        ProductScanJob.lease_expires_at < cutoff,
+                    ),
+                ),
             )
             .order_by(ProductScanJob.created_at.asc())
             .limit(limit)

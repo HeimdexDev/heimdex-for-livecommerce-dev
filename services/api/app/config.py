@@ -477,6 +477,17 @@ class Settings(BaseSettings):
     # lazy block stays as belt-and-suspenders regardless of this flag.
     auto_shorts_product_v2_eager_parent_promotion_enabled: bool = True
 
+    # PR 3: self-healing runner. When True, the runner's poll matches
+    # both queued render_children AND expired-lease assembling/rendering
+    # children. Re-claiming the latter recovers from API replica
+    # restarts that orphan rows mid-process — eliminates the
+    # "API restart kills runner mid-claim → child stuck in assembling
+    # forever" failure mode (Mechanism A in the plan). Default ON; the
+    # legacy ``find_queued_render_children`` path is preserved for the
+    # flag-off fallback. See
+    # .claude/plans/shorts-auto-product-cap-stuck-fix.md (PR 3 of 3).
+    auto_shorts_product_v2_self_heal_enabled: bool = True
+
     # Wizard idempotency window. Same shape as the legacy
     # ``auto_shorts_product_v2_scan_idempotency_seconds`` but keyed on
     # the canonical-JSON ``settings_hash`` so two different sets of
