@@ -545,6 +545,14 @@ class ChildRunner:
                 "windows": len(plan.windows),
             },
         )
+        # PR 2: eager parent promotion — when this child is the last
+        # active sibling, promote parent fanned_out → committed in a
+        # single atomic UPDATE. Lazy block in get_scan_order_status
+        # stays as belt-and-suspenders. parent.id is in scope from
+        # _load_child_context.
+        await self._try_promote_parent_for_child(
+            child_id=child_id, parent_id_hint=parent.id,
+        )
 
     # ── STT track (PR 2.5) ───────────────────────────────────────────
 
@@ -761,6 +769,10 @@ class ChildRunner:
                 "matched_alias_count": len(result.matched_aliases),
             },
         )
+        # PR 2: eager parent promotion (same shape as SAM2 path).
+        await self._try_promote_parent_for_child(
+            child_id=child.id, parent_id_hint=parent.id,
+        )
 
     async def _load_stt_inputs(
         self,
@@ -871,6 +883,74 @@ class ChildRunner:
                 org_id=org_id, catalog_entry_id=catalog_entry_id,
             )
 
+    async def _try_promote_parent_for_child(
+        self,
+        *,
+        child_id: UUID,
+        parent_id_hint: UUID | None = None,
+    ) -> None:
+        """Best-effort eager promotion of the child's parent.
+
+        Called immediately after every child terminal transition
+        (success / no-render / failed). When all sibling children
+        are terminal, the parent atomically transitions
+        ``fanned_out → committed`` — eliminating the "user closed
+        wizard before last child finished → parent stuck forever"
+        failure mode that the lazy block in
+        ``service.py::get_scan_order_status`` was the only safety
+        net for.
+
+        Failure to promote is logged but never raised — the lazy
+        block stays as belt-and-suspenders. Behind
+        ``auto_shorts_product_v2_eager_parent_promotion_enabled``
+        for emergency disable.
+
+        Pass ``parent_id_hint`` from sites where parent_id is
+        already known (success paths in ``_process_child_payload``
+        / ``_process_child_stt``). The catch-all failure paths
+        (``_complete_no_render`` / ``_mark_child_failed``) don't
+        have parent loaded and pay for one extra ``get_internal``
+        lookup; acceptable since the failure path is the cold path.
+
+        See ``.claude/plans/shorts-auto-product-cap-stuck-fix.md``
+        (PR 2 of 3).
+        """
+        if not self.settings.auto_shorts_product_v2_eager_parent_promotion_enabled:
+            return
+        try:
+            async with self.session_factory() as session:
+                repo = ProductScanJobRepository(session)
+                parent_id = parent_id_hint
+                if parent_id is None:
+                    child = await repo.get_internal(job_id=child_id)
+                    if child is None or child.parent_job_id is None:
+                        return
+                    parent_id = child.parent_job_id
+                promoted = await repo.try_promote_parent_if_all_children_terminal(
+                    parent_job_id=parent_id,
+                )
+                await session.commit()
+                if promoted is not None:
+                    logger.info(
+                        "scan_order_parent_auto_promoted",
+                        extra={
+                            "parent_id": str(parent_id),
+                            "trigger_child_id": str(child_id),
+                            "instance_id": self.instance_id,
+                        },
+                    )
+        except Exception:
+            logger.exception(
+                "parent_promotion_attempt_failed",
+                extra={
+                    "child_id": str(child_id),
+                    "parent_id_hint": (
+                        str(parent_id_hint) if parent_id_hint else None
+                    ),
+                    "instance_id": self.instance_id,
+                },
+            )
+
     async def _complete_no_render(
         self, *, child_id: UUID, reason: str,
     ) -> None:
@@ -907,6 +987,10 @@ class ChildRunner:
                 "reason": reason,
             },
         )
+        # PR 2: eager parent promotion. No parent_id_hint here —
+        # _complete_no_render's callers don't all have parent loaded
+        # in their scope; helper does the get_internal lookup.
+        await self._try_promote_parent_for_child(child_id=child_id)
 
     async def _create_render_job(
         self,
@@ -995,6 +1079,12 @@ class ChildRunner:
                 "child_runner_mark_failed_failed",
                 extra={"child_id": str(child_id)},
             )
+        else:
+            # PR 2: eager parent promotion runs ONLY when fail()
+            # succeeds (try/except/else). If fail itself failed, the
+            # row is in indeterminate state and the lazy promotion in
+            # get_scan_order_status will catch up next user poll.
+            await self._try_promote_parent_for_child(child_id=child_id)
 
 
 def _appearance_to_annotated_window(

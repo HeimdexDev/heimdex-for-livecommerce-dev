@@ -408,6 +408,74 @@ class ProductScanJobRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def try_promote_parent_if_all_children_terminal(
+        self,
+        *,
+        parent_job_id: UUID,
+    ) -> ProductScanJob | None:
+        """Atomic check-and-promote.
+
+        If every render_child of ``parent_job_id`` is in a terminal
+        stage AND the parent is currently ``fanned_out``, transition
+        the parent to ``committed`` (terminal) in a single
+        UPDATE-with-NOT-EXISTS. Otherwise return None.
+
+        Idempotent: two concurrent callers (e.g. the last child
+        finishing eagerly + a wizard poll calling the lazy promotion
+        in ``get_scan_order_status``) race the atomic UPDATE; exactly
+        one wins and returns the transitioned row, the other gets None.
+
+        Defense-in-depth checks:
+
+        * ``stage = SCAN_STAGE_FANNED_OUT`` — won't override a
+          user-cancelled or already-committed parent.
+        * ``mode = SCAN_MODE_SCAN_ORDER`` — wrong-mode rows can't be
+          promoted via this path.
+        * NOT EXISTS subquery scoped to ``mode = SCAN_MODE_RENDER_CHILD``
+          — defensive even though ``ck_psj_parent_child`` enforces
+          ``parent_job_id IS NOT NULL IFF mode = render_child``.
+
+        See ``.claude/plans/shorts-auto-product-cap-stuck-fix.md`` (PR 2).
+        Paired with ``ChildRunner._try_promote_parent_for_child`` which
+        invokes this on every child terminal transition. The lazy block
+        in ``service.py::get_scan_order_status`` stays as
+        belt-and-suspenders.
+        """
+        from app.modules.shorts_auto_product.models import (
+            SCAN_MODE_SCAN_ORDER,
+            SCAN_STAGE_COMMITTED,
+            SCAN_STAGE_FANNED_OUT,
+        )
+
+        non_terminal_child = (
+            select(ProductScanJob.id)
+            .where(
+                ProductScanJob.parent_job_id == parent_job_id,
+                ProductScanJob.mode == SCAN_MODE_RENDER_CHILD,
+                ProductScanJob.stage.notin_(list(TERMINAL_SCAN_STAGES)),
+            )
+            .exists()
+        )
+
+        now = datetime.now(timezone.utc)
+        stmt = (
+            update(ProductScanJob)
+            .where(
+                ProductScanJob.id == parent_job_id,
+                ProductScanJob.stage == SCAN_STAGE_FANNED_OUT,
+                ProductScanJob.mode == SCAN_MODE_SCAN_ORDER,
+                ~non_terminal_child,
+            )
+            .values(
+                stage=SCAN_STAGE_COMMITTED,
+                progress_pct=100,
+                completed_at=now,
+                last_heartbeat_at=now,
+            )
+            .returning(ProductScanJob)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def transition_parent_to_fanned_out_unclaimed(
         self,
         *,
