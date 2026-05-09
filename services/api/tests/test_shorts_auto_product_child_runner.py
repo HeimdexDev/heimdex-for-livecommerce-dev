@@ -37,12 +37,17 @@ def _settings_stub(
     poll_seconds: float = 0.05,
     lease_seconds: int = 300,
     enabled: bool = True,
+    eager_promotion_enabled: bool = True,
 ):
     s = MagicMock()
     s.auto_shorts_product_v2_child_runner_max_concurrency = max_concurrency
     s.auto_shorts_product_v2_child_runner_poll_seconds = poll_seconds
     s.auto_shorts_product_v2_child_lease_seconds = lease_seconds
     s.auto_shorts_product_v2_child_runner_enabled = enabled
+    # PR 2: eager parent promotion flag. Defaults true to match the
+    # config default and let existing tests run the new code path
+    # transparently (the helper is no-op'd via AsyncMocks below).
+    s.auto_shorts_product_v2_eager_parent_promotion_enabled = eager_promotion_enabled
     return s
 
 
@@ -86,6 +91,15 @@ def _build_runner(monkeypatch, *, settings=None, fake_repo=None,
     fake_repo.claim = AsyncMock(return_value=MagicMock())
     fake_repo.complete_tracking = AsyncMock(return_value=MagicMock())
     fake_repo.fail = AsyncMock()
+    # PR 2: the runner now calls _try_promote_parent_for_child after
+    # every child terminal transition. The helper opens a session and
+    # calls these two repo methods; mock both so existing tests don't
+    # trip on awaiting MagicMocks. Tests that care about promotion
+    # behaviour override these per-case.
+    fake_repo.get_internal = AsyncMock(return_value=None)
+    fake_repo.try_promote_parent_if_all_children_terminal = AsyncMock(
+        return_value=None,
+    )
     _patch_repo(monkeypatch, fake_repo)
     return ChildRunner(
         settings=settings,
@@ -402,3 +416,164 @@ async def test_stop_is_idempotent(monkeypatch):
     await asyncio.sleep(0.01)
     await runner.stop(drain_timeout_seconds=0.5)
     await runner.stop(drain_timeout_seconds=0.5)  # second call no-ops
+
+
+# ======================================================================
+# eager parent promotion (_try_promote_parent_for_child) — PR 2
+# ======================================================================
+#
+# Plan ref: .claude/plans/shorts-auto-product-cap-stuck-fix.md (PR 2 of 3).
+# The helper fires after every child terminal transition. Tests cover:
+#   * flag-off short-circuits before any DB activity
+#   * parent_id_hint skips the get_internal lookup
+#   * no hint → look up child to find parent_job_id
+#   * defensive paths: missing child, child without parent
+#   * exceptions are swallowed (the child's terminal write is durable;
+#     a promotion error must NEVER raise back to the caller)
+#   * scan_order_parent_auto_promoted log only fires on success
+
+
+class TestTryPromoteParentForChild:
+    @pytest.mark.asyncio
+    async def test_disabled_via_flag_returns_immediately(self, monkeypatch):
+        """When the kill switch is off, the helper does NOT touch the
+        DB at all — no session opened, no repo methods called. This
+        is the emergency-disable path documented in the plan.
+        """
+        s = _settings_stub(eager_promotion_enabled=False)
+        runner, fake_repo = _build_runner(monkeypatch, settings=s)
+
+        await runner._try_promote_parent_for_child(
+            child_id=uuid4(), parent_id_hint=uuid4(),
+        )
+
+        fake_repo.try_promote_parent_if_all_children_terminal.assert_not_awaited()
+        fake_repo.get_internal.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_uses_parent_id_hint_skipping_lookup(self, monkeypatch):
+        """Hot-path optimization: when the caller has parent_id loaded
+        already (success paths in _process_child_payload /
+        _process_child_stt), skip the redundant get_internal call.
+        """
+        runner, fake_repo = _build_runner(monkeypatch)
+        parent_id = uuid4()
+        await runner._try_promote_parent_for_child(
+            child_id=uuid4(), parent_id_hint=parent_id,
+        )
+        fake_repo.get_internal.assert_not_awaited()
+        fake_repo.try_promote_parent_if_all_children_terminal.assert_awaited_once_with(
+            parent_job_id=parent_id,
+        )
+
+    @pytest.mark.asyncio
+    async def test_looks_up_parent_when_no_hint(self, monkeypatch):
+        """Cold-path fallback: catch-all failure callers
+        (_complete_no_render / _mark_child_failed) don't have parent
+        loaded; the helper does ONE extra get_internal lookup.
+        """
+        runner, fake_repo = _build_runner(monkeypatch)
+        parent_id = uuid4()
+        child_id = uuid4()
+        child = MagicMock()
+        child.parent_job_id = parent_id
+        fake_repo.get_internal = AsyncMock(return_value=child)
+
+        await runner._try_promote_parent_for_child(child_id=child_id)
+
+        fake_repo.get_internal.assert_awaited_once_with(job_id=child_id)
+        fake_repo.try_promote_parent_if_all_children_terminal.assert_awaited_once_with(
+            parent_job_id=parent_id,
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_child_missing(self, monkeypatch):
+        """Defensive: if the child row vanished between terminal
+        write and promotion attempt, do nothing rather than crashing
+        the caller (which has already committed)."""
+        runner, fake_repo = _build_runner(monkeypatch)
+        fake_repo.get_internal = AsyncMock(return_value=None)
+
+        await runner._try_promote_parent_for_child(child_id=uuid4())
+
+        fake_repo.try_promote_parent_if_all_children_terminal.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_child_has_no_parent(self, monkeypatch):
+        """Defensive: schema invariant says render_child rows always
+        have parent_job_id, but if the row was somehow corrupted, the
+        helper bails rather than promote with a None parent_id."""
+        runner, fake_repo = _build_runner(monkeypatch)
+        child = MagicMock()
+        child.parent_job_id = None
+        fake_repo.get_internal = AsyncMock(return_value=child)
+
+        await runner._try_promote_parent_for_child(child_id=uuid4())
+
+        fake_repo.try_promote_parent_if_all_children_terminal.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_swallows_exception_from_repo(self, monkeypatch):
+        """A promotion error MUST NOT raise back to the caller — the
+        caller has already committed the child's terminal stage. If
+        promotion fails, the lazy block in get_scan_order_status is
+        the safety net.
+        """
+        runner, fake_repo = _build_runner(monkeypatch)
+        fake_repo.try_promote_parent_if_all_children_terminal = AsyncMock(
+            side_effect=RuntimeError("DB transient"),
+        )
+
+        # MUST NOT raise.
+        await runner._try_promote_parent_for_child(
+            child_id=uuid4(), parent_id_hint=uuid4(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_logs_when_promotion_succeeds(self, monkeypatch, caplog):
+        """The scan_order_parent_auto_promoted log line is the
+        observability hook for plan §Validation gate 1.E (eager
+        dominates lazy)."""
+        import logging
+
+        runner, fake_repo = _build_runner(monkeypatch)
+        fake_repo.try_promote_parent_if_all_children_terminal = AsyncMock(
+            return_value=MagicMock(),  # truthy = promoted
+        )
+
+        with caplog.at_level(
+            logging.INFO,
+            logger="app.modules.shorts_auto_product.children.runner",
+        ):
+            await runner._try_promote_parent_for_child(
+                child_id=uuid4(), parent_id_hint=uuid4(),
+            )
+
+        assert any(
+            "scan_order_parent_auto_promoted" in r.message for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_log_when_promotion_returns_none(self, monkeypatch, caplog):
+        """When the atomic UPDATE returns no row (parent already
+        terminal, race-loss, etc.) we MUST NOT log the
+        scan_order_parent_auto_promoted event — that would mislead
+        metrics by counting non-promotions."""
+        import logging
+
+        runner, fake_repo = _build_runner(monkeypatch)
+        fake_repo.try_promote_parent_if_all_children_terminal = AsyncMock(
+            return_value=None,
+        )
+
+        with caplog.at_level(
+            logging.INFO,
+            logger="app.modules.shorts_auto_product.children.runner",
+        ):
+            await runner._try_promote_parent_for_child(
+                child_id=uuid4(), parent_id_hint=uuid4(),
+            )
+
+        assert not any(
+            "scan_order_parent_auto_promoted" in r.message for r in caplog.records
+        )

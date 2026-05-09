@@ -900,6 +900,16 @@ class ProductScanService:
                 job_id=parent.id,
             )
             if transitioned is not None:
+                # parent_promoted_lazy distinguishes this poll-driven
+                # backstop from the runner's eager
+                # scan_order_parent_auto_promoted (PR 2). Volume here
+                # should drift to ~zero once eager promotion is healthy
+                # in prod — see plan §Validation gates 1.E.
+                logger.info(
+                    "parent_promoted_lazy",
+                    parent_id=str(parent.id),
+                    children_count=len(children),
+                )
                 parent = transitioned
 
         # Batch-load the underlying ShortsRenderJob statuses so the

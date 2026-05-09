@@ -159,3 +159,132 @@ class TestCountActiveForOrg:
         assert str(org_id) in sql, (
             f"org_id {org_id} not present in compiled SQL:\n{sql}"
         )
+
+
+# ---------- try_promote_parent_if_all_children_terminal (PR 2) ----------
+
+
+def _make_update_result(returning_value) -> MagicMock:
+    """Build a mock SQLAlchemy Result whose ``.scalar_one_or_none()``
+    returns the value passed (a mock Job for success, None for
+    no-match). Mirrors the .returning(ProductScanJob) shape on the
+    UPDATE statement.
+    """
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=returning_value)
+    return result
+
+
+class TestTryPromoteParentIfAllChildrenTerminal:
+    """The atomic check-and-promote method.
+
+    Tests the SQL composition: WHERE includes ``stage='fanned_out'``,
+    ``mode='scan_order'``, and a NOT EXISTS subquery scoped to
+    ``mode='render_child'`` and non-terminal stages.
+
+    Plan: .claude/plans/shorts-auto-product-cap-stuck-fix.md (PR 2).
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_atomic_update_matches_no_row(
+        self, repo, session,
+    ):
+        """The single UPDATE-with-NOT-EXISTS returns None when the
+        parent is already terminal, not in fanned_out, not a
+        scan_order, OR some child is non-terminal."""
+        session.execute = AsyncMock(return_value=_make_update_result(None))
+
+        out = await repo.try_promote_parent_if_all_children_terminal(
+            parent_job_id=uuid4(),
+        )
+        assert out is None
+        session.execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_promoted_row_on_match(self, repo, session):
+        """Successful promotion returns the transitioned row."""
+        promoted = MagicMock()
+        session.execute = AsyncMock(
+            return_value=_make_update_result(promoted),
+        )
+
+        out = await repo.try_promote_parent_if_all_children_terminal(
+            parent_job_id=uuid4(),
+        )
+        assert out is promoted
+
+    @pytest.mark.asyncio
+    async def test_where_clause_targets_fanned_out_stage(self, repo, session):
+        """Defense in depth: the UPDATE refuses to override a
+        cancelled or already-committed parent."""
+        session.execute = AsyncMock(return_value=_make_update_result(None))
+
+        await repo.try_promote_parent_if_all_children_terminal(
+            parent_job_id=uuid4(),
+        )
+        sql = _compile(session.execute.await_args.args[0])
+        assert "'fanned_out'" in sql, (
+            f"Promotion query must guard on stage='fanned_out':\n{sql}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_where_clause_targets_scan_order_mode(self, repo, session):
+        """Defense in depth: enumerate / render_child rows can't be
+        promoted via this method."""
+        session.execute = AsyncMock(return_value=_make_update_result(None))
+
+        await repo.try_promote_parent_if_all_children_terminal(
+            parent_job_id=uuid4(),
+        )
+        sql = _compile(session.execute.await_args.args[0])
+        assert "'scan_order'" in sql, (
+            f"Promotion query must guard on mode='scan_order':\n{sql}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_uses_not_exists_subquery_for_atomic_correctness(
+        self, repo, session,
+    ):
+        """The atomic correctness — parent only promotes when NO
+        sibling render_child is non-terminal. Without the NOT EXISTS,
+        a race between the last-child terminal and a poll could
+        promote prematurely.
+        """
+        session.execute = AsyncMock(return_value=_make_update_result(None))
+
+        await repo.try_promote_parent_if_all_children_terminal(
+            parent_job_id=uuid4(),
+        )
+        sql = _compile(session.execute.await_args.args[0])
+
+        # The compiled UPDATE includes a NOT (EXISTS (...)) subquery
+        # against product_scan_jobs filtered to render_child + non-
+        # terminal stages.
+        assert "NOT (EXISTS" in sql or "NOT EXISTS" in sql, (
+            f"Expected NOT EXISTS atomicity guard:\n{sql}"
+        )
+        assert "'render_child'" in sql, (
+            f"Subquery must scope to render_child rows:\n{sql}"
+        )
+        # The subquery filters NON-terminal stages, so terminal stage
+        # literals should appear (in a NOT IN list).
+        for terminal in ("'done'", "'committed'", "'failed'", "'cancelled'"):
+            assert terminal in sql, (
+                f"Expected {terminal} in NOT IN list of subquery:\n{sql}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_targets_correct_parent_id(self, repo, session):
+        """The parent_job_id parameter must scope both the parent
+        UPDATE target AND the NOT EXISTS subquery's parent_job_id
+        comparison. Otherwise we'd promote arbitrary parents."""
+        session.execute = AsyncMock(return_value=_make_update_result(None))
+
+        parent_id = uuid4()
+        await repo.try_promote_parent_if_all_children_terminal(
+            parent_job_id=parent_id,
+        )
+        sql = _compile(session.execute.await_args.args[0])
+        assert str(parent_id) in sql, (
+            f"parent_job_id {parent_id} must appear in SQL:\n{sql}"
+        )

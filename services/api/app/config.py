@@ -466,6 +466,17 @@ class Settings(BaseSettings):
     # debugging a render-side incident).
     auto_shorts_product_v2_child_runner_enabled: bool = True
 
+    # Eager parent promotion: after every child terminal transition,
+    # the runner immediately atomically promotes
+    # ``fanned_out → committed`` if all siblings are terminal.
+    # Eliminates the "user closed browser before last child finished →
+    # parent stuck forever" failure mode that the lazy block in
+    # ``service.py::get_scan_order_status`` was the only safety net for.
+    # Default ON; flag exists for emergency disable per
+    # .claude/plans/shorts-auto-product-cap-stuck-fix.md (PR 2). The
+    # lazy block stays as belt-and-suspenders regardless of this flag.
+    auto_shorts_product_v2_eager_parent_promotion_enabled: bool = True
+
     # Wizard idempotency window. Same shape as the legacy
     # ``auto_shorts_product_v2_scan_idempotency_seconds`` but keyed on
     # the canonical-JSON ``settings_hash`` so two different sets of
