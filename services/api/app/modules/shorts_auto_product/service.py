@@ -146,6 +146,16 @@ class ProductScanService:
     async def _require_concurrency_slot(self, org_id: UUID) -> None:
         active = await self.job_repo.count_active_for_org(org_id=org_id)
         cap = self.settings.auto_shorts_product_v2_max_concurrent_per_org
+        # Telemetry: surface cap pressure per org so we can tune the cap
+        # value (see .claude/plans/shorts-auto-product-cap-stuck-fix.md
+        # Gate 1.C — operators read this to confirm 429s correlate with
+        # actual usage, not accumulated corpse rows).
+        logger.info(
+            "product_v2_cap_check",
+            org_id=str(org_id),
+            active=active,
+            cap=cap,
+        )
         if active >= cap:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,

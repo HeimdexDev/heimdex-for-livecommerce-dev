@@ -172,11 +172,26 @@ class ProductScanJobRepository:
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def count_active_for_org(self, *, org_id: UUID) -> int:
+        """Counts user-initiated work units, NOT every active row.
+
+        A wizard scan_order with ``requested_count=N`` creates 1 parent +
+        N children. The user's intent is a single work unit; the
+        children are the parent's fan-out. Excluding ``mode='render_child'``
+        from this count makes the cap match user intent and matches the
+        partial index ``ix_product_scan_jobs_active``'s predicate
+        exactly (which already excludes render_child by design).
+
+        Counted: ``mode IN ('enumerate', 'scan_order')``
+        Not counted: ``mode = 'render_child'``
+
+        See ``.claude/plans/shorts-auto-product-cap-stuck-fix.md`` (PR 1).
+        """
         stmt = (
             select(func.count(ProductScanJob.id))
             .where(
                 ProductScanJob.org_id == org_id,
                 ProductScanJob.stage.in_(list(ACTIVE_SCAN_STAGES)),
+                ProductScanJob.mode != SCAN_MODE_RENDER_CHILD,
             )
         )
         return int((await self.session.execute(stmt)).scalar_one() or 0)
