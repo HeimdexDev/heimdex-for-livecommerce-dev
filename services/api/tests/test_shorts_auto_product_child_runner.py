@@ -85,13 +85,31 @@ def _patch_repo(monkeypatch, fake_repo):
 def _build_runner(monkeypatch, *, settings=None, fake_repo=None,
                   process_child_fn=None, instance_id="test-replica"):
     """Construct a ChildRunner with all deps mocked."""
+    from datetime import datetime, timezone
+
     settings = settings or _settings_stub()
     fake_repo = fake_repo or MagicMock()
     fake_repo.find_queued_render_children = AsyncMock(return_value=[])
-    fake_repo.claim = AsyncMock(return_value=MagicMock())
+    # PR 3: the runner's _poll_and_dispatch branches on the self-heal
+    # flag and calls find_claimable_render_children when on. Mock
+    # both so existing tests don't depend on which branch runs.
+    fake_repo.find_claimable_render_children = AsyncMock(return_value=[])
+
+    # PR 3: the runner reads claimed.started_at and claimed.claimed_at
+    # to detect re-claim of expired lease (started_at < claimed_at).
+    # Provide real datetime values so the comparison doesn't raise on
+    # MagicMock (Python 3.11 disallows ordered comparison between
+    # bare MagicMocks). Equal values = "fresh claim" — suppresses the
+    # re-claim warning for tests that don't care.
+    _now = datetime.now(timezone.utc)
+    _claimed_default = MagicMock()
+    _claimed_default.started_at = _now
+    _claimed_default.claimed_at = _now
+    fake_repo.claim = AsyncMock(return_value=_claimed_default)
+
     fake_repo.complete_tracking = AsyncMock(return_value=MagicMock())
     fake_repo.fail = AsyncMock()
-    # PR 2: the runner now calls _try_promote_parent_for_child after
+    # PR 2: the runner calls _try_promote_parent_for_child after
     # every child terminal transition. The helper opens a session and
     # calls these two repo methods; mock both so existing tests don't
     # trip on awaiting MagicMocks. Tests that care about promotion
@@ -392,6 +410,14 @@ async def test_start_then_stop_drains_inflight(monkeypatch):
     )
     queued = [uuid4(), uuid4(), uuid4()]
     # First poll returns 3 candidates; subsequent polls return [].
+    # PR 3: the default self-heal-on path uses
+    # ``find_claimable_render_children`` instead of the legacy
+    # ``find_queued_render_children``. Mock both so this test stays
+    # consistent regardless of which branch the runner takes (and the
+    # legacy mock keeps working if a future revert flips the flag off).
+    fake_repo.find_claimable_render_children = AsyncMock(
+        side_effect=[queued, [], [], [], []],
+    )
     fake_repo.find_queued_render_children = AsyncMock(
         side_effect=[queued, [], [], [], []],
     )
@@ -577,3 +603,140 @@ class TestTryPromoteParentForChild:
         assert not any(
             "scan_order_parent_auto_promoted" in r.message for r in caplog.records
         )
+
+
+# ======================================================================
+# self-healing runner — PR 3
+# ======================================================================
+#
+# Plan ref: .claude/plans/shorts-auto-product-cap-stuck-fix.md (PR 3 of 3).
+# Tests cover:
+#   * _poll_and_dispatch branches on auto_shorts_product_v2_self_heal_enabled
+#   * Re-claim warning fires when started_at < claimed_at
+#   * Fresh claims (started_at == claimed_at) don't fire the warning
+#   * Defensive isinstance-datetime check tolerates non-datetime values
+
+
+class TestSelfHealingRunner:
+    @pytest.mark.asyncio
+    async def test_self_heal_enabled_polls_claimable(self, monkeypatch):
+        """Default flag-on: poll uses find_claimable_render_children."""
+        s = _settings_stub()  # eager + self_heal both default True
+        runner, fake_repo = _build_runner(monkeypatch, settings=s)
+
+        await runner._poll_and_dispatch()
+
+        fake_repo.find_claimable_render_children.assert_awaited_once()
+        fake_repo.find_queued_render_children.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_self_heal_disabled_falls_back_to_legacy_poll(
+        self, monkeypatch,
+    ):
+        """Flag-off: poll falls back to find_queued_render_children
+        (the legacy queued-only shim)."""
+        s = _settings_stub()
+        s.auto_shorts_product_v2_self_heal_enabled = False
+        runner, fake_repo = _build_runner(monkeypatch, settings=s)
+
+        await runner._poll_and_dispatch()
+
+        fake_repo.find_queued_render_children.assert_awaited_once()
+        fake_repo.find_claimable_render_children.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_re_claim_logs_warning_when_started_at_precedes_claimed_at(
+        self, monkeypatch, caplog,
+    ):
+        """The runner's re-claim detector: claim() preserved
+        started_at on re-claim, so started_at < claimed_at uniquely
+        identifies a re-claim. Verify the warning fires + carries the
+        original timestamp for forensics."""
+        import logging
+        from datetime import datetime, timedelta, timezone
+
+        runner, fake_repo = _build_runner(monkeypatch)
+
+        original_start = datetime.now(timezone.utc) - timedelta(minutes=10)
+        re_claim_now = datetime.now(timezone.utc)
+        claimed = MagicMock()
+        claimed.started_at = original_start
+        claimed.claimed_at = re_claim_now
+        fake_repo.claim = AsyncMock(return_value=claimed)
+
+        # Force the no-render branch — _process_child_payload exits
+        # cleanly after the claim block, which is all we care about.
+        monkeypatch.setattr(
+            runner, "_load_child_context", AsyncMock(return_value=None),
+        )
+
+        with caplog.at_level(
+            logging.WARNING,
+            logger="app.modules.shorts_auto_product.children.runner",
+        ):
+            await runner._process_child_payload(uuid4())
+
+        warnings = [
+            r for r in caplog.records
+            if "child_re_claimed_after_lease_expiry" in r.message
+        ]
+        assert len(warnings) == 1, (
+            f"Expected exactly one re-claim warning, got: {warnings}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fresh_claim_does_not_log_re_claim_warning(
+        self, monkeypatch, caplog,
+    ):
+        """Fresh claim: claim() sets both started_at and claimed_at
+        to NOW. started_at == claimed_at → no `<` → no warning. The
+        equality is a strict-`<` check so we don't get false
+        positives on every fresh claim."""
+        import logging
+        from datetime import datetime, timezone
+
+        runner, fake_repo = _build_runner(monkeypatch)
+
+        same_now = datetime.now(timezone.utc)
+        claimed = MagicMock()
+        claimed.started_at = same_now
+        claimed.claimed_at = same_now
+        fake_repo.claim = AsyncMock(return_value=claimed)
+        monkeypatch.setattr(
+            runner, "_load_child_context", AsyncMock(return_value=None),
+        )
+
+        with caplog.at_level(
+            logging.WARNING,
+            logger="app.modules.shorts_auto_product.children.runner",
+        ):
+            await runner._process_child_payload(uuid4())
+
+        assert not any(
+            "child_re_claimed_after_lease_expiry" in r.message
+            for r in caplog.records
+        )
+
+    @pytest.mark.asyncio
+    async def test_re_claim_check_tolerates_non_datetime_values(
+        self, monkeypatch,
+    ):
+        """Defensive: the runner's isinstance(datetime) guards must
+        absorb non-datetime values (test fakes, unexpected DB shape)
+        without raising. The warning is best-effort observability —
+        it must NEVER crash _process_child_payload."""
+        runner, fake_repo = _build_runner(monkeypatch)
+
+        # Bare MagicMocks — Python 3.11 raises TypeError on `<`
+        # between MagicMocks. Without the isinstance guards this
+        # would crash the runner's claim block.
+        claimed = MagicMock()
+        # Don't override started_at/claimed_at — they default to
+        # MagicMock, which is the failure case we want to absorb.
+        fake_repo.claim = AsyncMock(return_value=claimed)
+        monkeypatch.setattr(
+            runner, "_load_child_context", AsyncMock(return_value=None),
+        )
+
+        # MUST NOT raise.
+        await runner._process_child_payload(uuid4())

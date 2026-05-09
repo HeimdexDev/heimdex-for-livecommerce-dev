@@ -288,3 +288,236 @@ class TestTryPromoteParentIfAllChildrenTerminal:
         assert str(parent_id) in sql, (
             f"parent_job_id {parent_id} must appear in SQL:\n{sql}"
         )
+
+
+# ---------- find_claimable_render_children (PR 3) ----------
+
+
+class TestFindClaimableRenderChildren:
+    """The self-healing runner poll. Returns render_child rows that are
+    EITHER queued OR have an expired-lease assembling/rendering stage
+    beyond the grace margin.
+
+    Plan: .claude/plans/shorts-auto-product-cap-stuck-fix.md (PR 3).
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_id_list_from_scalars(self, repo, session):
+        """The query returns a list of UUIDs from .scalars().all()."""
+        ids = [uuid4(), uuid4()]
+        result = MagicMock()
+        result.scalars = MagicMock(
+            return_value=MagicMock(all=MagicMock(return_value=ids)),
+        )
+        session.execute = AsyncMock(return_value=result)
+
+        out = await repo.find_claimable_render_children(limit=10)
+        assert out == ids
+
+    @pytest.mark.asyncio
+    async def test_where_clause_includes_queued_branch(self, repo, session):
+        """The legacy queued branch is preserved in the widened poll."""
+        result = MagicMock()
+        result.scalars = MagicMock(
+            return_value=MagicMock(all=MagicMock(return_value=[])),
+        )
+        session.execute = AsyncMock(return_value=result)
+
+        await repo.find_claimable_render_children(limit=10)
+        sql = _compile(session.execute.await_args.args[0])
+        assert "'queued'" in sql, (
+            f"Queued branch must remain in the WHERE:\n{sql}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_where_clause_includes_expired_lease_branch(
+        self, repo, session,
+    ):
+        """The new self-heal branch covers expired-lease
+        assembling/rendering rows."""
+        result = MagicMock()
+        result.scalars = MagicMock(
+            return_value=MagicMock(all=MagicMock(return_value=[])),
+        )
+        session.execute = AsyncMock(return_value=result)
+
+        await repo.find_claimable_render_children(limit=10)
+        sql = _compile(session.execute.await_args.args[0])
+        assert "'assembling'" in sql, (
+            f"Self-heal branch must include the 'assembling' stage:\n{sql}"
+        )
+        assert "'rendering'" in sql, (
+            f"Self-heal branch must include the 'rendering' stage:\n{sql}"
+        )
+        assert "lease_expires_at" in sql, (
+            f"Self-heal branch must reference lease_expires_at:\n{sql}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_render_child_mode_filter(self, repo, session):
+        """The query MUST scope to mode='render_child' so it doesn't
+        accidentally return enumerate or scan_order rows."""
+        result = MagicMock()
+        result.scalars = MagicMock(
+            return_value=MagicMock(all=MagicMock(return_value=[])),
+        )
+        session.execute = AsyncMock(return_value=result)
+
+        await repo.find_claimable_render_children(limit=10)
+        sql = _compile(session.execute.await_args.args[0])
+        assert "'render_child'" in sql
+
+    @pytest.mark.asyncio
+    async def test_grace_seconds_overridable(self, repo, session):
+        """The grace argument is plumbed to the WHERE cutoff so
+        callers can tighten or relax it."""
+        result = MagicMock()
+        result.scalars = MagicMock(
+            return_value=MagicMock(all=MagicMock(return_value=[])),
+        )
+        session.execute = AsyncMock(return_value=result)
+
+        # Call with an explicit override; we don't assert the exact
+        # cutoff timestamp (that depends on wall clock), just that
+        # the query was issued — proving the parameter path works.
+        await repo.find_claimable_render_children(limit=10, grace_seconds=300)
+        session.execute.assert_awaited_once()
+
+
+# ---------- claim() widened for re-claim (PR 3) ----------
+
+
+class TestClaimReClaim:
+    """PR 3 widened claim() to accept queued OR expired-lease
+    assembling/rendering. started_at is preserved on re-claim via
+    a CASE expression so the runner can distinguish re-claims from
+    fresh claims (started_at < claimed_at)."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_next_stage(self, repo, session):
+        with pytest.raises(ValueError):
+            await repo.claim(
+                job_id=uuid4(),
+                claimed_by="test",
+                lease_seconds=300,
+                next_stage="not_a_stage",
+            )
+        # Should NOT have hit the DB.
+        session.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_where_clause_accepts_queued_branch(self, repo, session):
+        """Backward-compat: fresh queued claims still match."""
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result)
+
+        await repo.claim(
+            job_id=uuid4(),
+            claimed_by="test",
+            lease_seconds=300,
+            next_stage="assembling",
+        )
+        sql = _compile(session.execute.await_args.args[0])
+        assert "'queued'" in sql
+
+    @pytest.mark.asyncio
+    async def test_where_clause_accepts_expired_lease_branch(
+        self, repo, session,
+    ):
+        """The new re-claim branch matches expired-lease
+        assembling/rendering rows beyond the grace margin."""
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result)
+
+        await repo.claim(
+            job_id=uuid4(),
+            claimed_by="test",
+            lease_seconds=300,
+            next_stage="assembling",
+        )
+        sql = _compile(session.execute.await_args.args[0])
+        assert "'assembling'" in sql
+        assert "'rendering'" in sql
+        assert "lease_expires_at" in sql, (
+            f"Re-claim WHERE must guard on lease_expires_at:\n{sql}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_started_at_preserved_via_case_expression(
+        self, repo, session,
+    ):
+        """Critical for the runner's re-claim warning: started_at is
+        preserved on re-claim. Compiled SQL must contain a CASE
+        expression on started_at, NOT a simple ``started_at = NOW``
+        assignment that would clobber the original timestamp."""
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result)
+
+        await repo.claim(
+            job_id=uuid4(),
+            claimed_by="test",
+            lease_seconds=300,
+            next_stage="assembling",
+        )
+        sql = _compile(session.execute.await_args.args[0])
+        # The CASE expression renders as `CASE WHEN
+        # product_scan_jobs.started_at IS NULL THEN ... ELSE
+        # product_scan_jobs.started_at END`. Look for the structural
+        # markers — `CASE WHEN` + `IS NULL` + the `ELSE …started_at`
+        # branch — to verify the preservation logic landed.
+        assert "CASE WHEN" in sql, (
+            f"started_at SET must use a CASE expression:\n{sql}"
+        )
+        assert "started_at IS NULL" in sql, (
+            f"CASE must check started_at IS NULL:\n{sql}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_grace_seconds_overridable(self, repo, session):
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result)
+
+        await repo.claim(
+            job_id=uuid4(),
+            claimed_by="test",
+            lease_seconds=300,
+            next_stage="assembling",
+            grace_seconds=600,
+        )
+        session.execute.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_claimed_row_on_success(self, repo, session):
+        claimed = MagicMock()
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=claimed)
+        session.execute = AsyncMock(return_value=result)
+
+        out = await repo.claim(
+            job_id=uuid4(),
+            claimed_by="test",
+            lease_seconds=300,
+            next_stage="assembling",
+        )
+        assert out is claimed
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_match(self, repo, session):
+        """Returns None when the row is already claimed by a
+        still-live worker (lease not yet beyond grace), terminal,
+        or non-existent."""
+        result = MagicMock()
+        result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=result)
+
+        out = await repo.claim(
+            job_id=uuid4(),
+            claimed_by="test",
+            lease_seconds=300,
+            next_stage="assembling",
+        )
+        assert out is None

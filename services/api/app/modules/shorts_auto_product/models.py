@@ -565,14 +565,25 @@ class ProductScanJob(Base, UUIDMixin):
             ),
         ),
         # Q1 (codex-revised): the child-runner asyncio loop polls for
-        # queued render_child rows. This partial index keeps the poll
-        # O(1) at table scale while the typical row count of queued
-        # children stays small.
+        # queued render_child rows. PR 3 widens this to also cover
+        # expired-lease assembling/rendering rows so the self-healing
+        # runner can re-claim them via the same partial index. Mirror
+        # of migration 058's predicate — keep both in sync so
+        # alembic --autogenerate doesn't propose a redundant
+        # DROP/CREATE pair on a future revision.
         Index(
             "ix_product_scan_jobs_child_queue",
             "created_at",
             postgresql_where=(
-                (mode == SCAN_MODE_RENDER_CHILD) & (stage == SCAN_STAGE_QUEUED)
+                (mode == SCAN_MODE_RENDER_CHILD) & (
+                    (stage == SCAN_STAGE_QUEUED)
+                    | (
+                        stage.in_([
+                            SCAN_STAGE_ASSEMBLING, SCAN_STAGE_RENDERING,
+                        ])
+                        & lease_expires_at.is_not(None)
+                    )
+                )
             ),
         ),
         # Mirrors of CHECK constraints in migration 052. Keep these in
