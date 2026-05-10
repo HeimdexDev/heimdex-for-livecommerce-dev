@@ -2,43 +2,64 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { WizardStepResult } from "../pages/WizardStepResult";
+import type {
+  JobStatusResponse,
+  ScanOrderStatusResponse,
+  ScanStage,
+} from "@/lib/types/shorts-auto-product-wizard";
 
+const replaceMock = vi.fn();
 const pushMock = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: pushMock }),
+  useRouter: () => ({ replace: replaceMock, push: pushMock }),
 }));
 
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ getAccessToken: vi.fn(async () => "test-token") }),
 }));
 
-// Mock useScanOrder so we feed deterministic status into the page
-// without spinning up the real polling loop.
 const useScanOrderMock = vi.fn();
+const cancelMock = vi.fn(async () => {});
 vi.mock("../hooks/useScanOrder", () => ({
   useScanOrder: (...args: unknown[]) => useScanOrderMock(...args),
 }));
 
-// Mock the shorts-render API so we can assert the right calls without
-// hitting the network. Title edit + composition fetch are the two
-// surfaces this PR adds.
-const updateRenderJobTitleMock = vi.fn();
-const getShortCompositionMock = vi.fn();
-vi.mock("@/lib/api/shorts-render", () => ({
-  updateRenderJobTitle: (...args: unknown[]) =>
-    updateRenderJobTitleMock(...args),
-  getShortComposition: (...args: unknown[]) =>
-    getShortCompositionMock(...args),
-}));
-
 const RENDER_ID = "00000000-0000-0000-0000-000000000aaa";
 
-function makeStatus(overrides?: { title?: string | null }) {
+function makeChild(
+  overrides: Partial<JobStatusResponse> = {},
+): JobStatusResponse {
+  return {
+    job_id: "child-1",
+    kind: "render_child",
+    stage: "done",
+    progress_pct: 100,
+    progress_label: null,
+    completed_at: "2026-05-11T00:00:00Z",
+    failed_at: null,
+    cancelled_at: null,
+    error_code: null,
+    error_message: null,
+    render_job_id: RENDER_ID,
+    render_status: "completed",
+    parent_job_id: "parent-1",
+    shorts_index: 1,
+    cost_usd_estimate: "0.00",
+    ...overrides,
+  };
+}
+
+function makeStatus(
+  parentStage: ScanStage,
+  childrenTotal: number,
+  children: JobStatusResponse[],
+  childrenFailed = 0,
+): ScanOrderStatusResponse {
   return {
     parent: {
       job_id: "parent-1",
       kind: "scan_order",
-      stage: "fanned_out",
+      stage: parentStage,
       progress_pct: 100,
       progress_label: null,
       completed_at: null,
@@ -52,186 +73,269 @@ function makeStatus(overrides?: { title?: string | null }) {
       shorts_index: null,
       cost_usd_estimate: "0.00",
     },
-    children: [
-      {
-        job_id: "child-1",
-        kind: "render_child",
-        stage: "done",
-        progress_pct: 100,
-        progress_label: null,
-        completed_at: "2026-05-03T12:00:00Z",
-        failed_at: null,
-        cancelled_at: null,
-        error_code: null,
-        error_message: null,
-        render_job_id: RENDER_ID,
-        // v0.16.1 — fixture child has its render finished. WizardStepResult
-        // gates the per-card actions (rename, view, edit) on this so the
-        // "ready" UX only appears once the MP4 is actually downloadable.
-        render_status: "completed",
-        parent_job_id: "parent-1",
-        shorts_index: 1,
-        cost_usd_estimate: "0.00",
-      },
-    ],
-    children_complete: 1,
-    children_failed: 0,
-    children_total: 1,
-    _titleHint: overrides?.title, // not consumed by component, just for clarity
+    children,
+    children_complete: children.filter((c) => c.stage === "done").length,
+    children_failed: childrenFailed,
+    children_total: childrenTotal,
   };
 }
 
-describe("WizardStepResult — render actions", () => {
+describe("WizardStepResult — chrome", () => {
   beforeEach(() => {
+    replaceMock.mockReset();
     pushMock.mockReset();
-    updateRenderJobTitleMock.mockReset();
-    getShortCompositionMock.mockReset();
+    cancelMock.mockReset();
     useScanOrderMock.mockReset();
     useScanOrderMock.mockReturnValue({
-      status: makeStatus(),
+      status: makeStatus("fanned_out", 3, []),
       error: null,
-      isPolling: false,
-      cancel: vi.fn(),
+      isPolling: true,
+      cancel: cancelMock,
     });
   });
 
-  it("renders the title-edit + editor + render-result affordances on completed children", () => {
+  it("renders the 2-step breadcrumb at step 2", () => {
     render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
     expect(
-      screen.getByTestId(`child-title-edit-${RENDER_ID}`),
-    ).toBeInTheDocument();
+      screen.getByTestId("inline-wizard-breadcrumb").dataset.variant,
+    ).toBe("two-step");
     expect(
-      screen.getByTestId(`child-view-render-${RENDER_ID}`),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByTestId(`child-open-editor-${RENDER_ID}`),
-    ).toBeInTheDocument();
-  });
-
-  it("inline title edit calls updateRenderJobTitle with the trimmed value", async () => {
-    updateRenderJobTitleMock.mockResolvedValueOnce({});
-    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
-    fireEvent.click(screen.getByTestId(`child-title-edit-${RENDER_ID}`));
-    const input = screen.getByTestId(
-      `child-title-input-${RENDER_ID}`,
-    ) as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "  My Cool Short  " } });
-    fireEvent.click(screen.getByTestId(`child-title-save-${RENDER_ID}`));
-
-    await waitFor(() =>
-      expect(updateRenderJobTitleMock).toHaveBeenCalledWith(
-        RENDER_ID,
-        "My Cool Short",
-        expect.any(Function),
-      ),
-    );
-    // After save, the display reflects the new title.
-    await waitFor(() =>
-      expect(
-        screen.getByTestId(`child-title-display-${RENDER_ID}`).textContent,
-      ).toContain("My Cool Short"),
-    );
-  });
-
-  it("empty title submits null to clear (matches backend semantics)", async () => {
-    updateRenderJobTitleMock.mockResolvedValueOnce({});
-    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
-    fireEvent.click(screen.getByTestId(`child-title-edit-${RENDER_ID}`));
-    fireEvent.change(screen.getByTestId(`child-title-input-${RENDER_ID}`), {
-      target: { value: "   " },
-    });
-    fireEvent.click(screen.getByTestId(`child-title-save-${RENDER_ID}`));
-    await waitFor(() =>
-      expect(updateRenderJobTitleMock).toHaveBeenCalledWith(
-        RENDER_ID,
-        null,
-        expect.any(Function),
-      ),
-    );
-  });
-
-  it("rolls back the displayed title on save failure", async () => {
-    updateRenderJobTitleMock.mockRejectedValueOnce(
-      new Error("server says no"),
-    );
-    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
-    fireEvent.click(screen.getByTestId(`child-title-edit-${RENDER_ID}`));
-    fireEvent.change(screen.getByTestId(`child-title-input-${RENDER_ID}`), {
-      target: { value: "Fragile Title" },
-    });
-    fireEvent.click(screen.getByTestId(`child-title-save-${RENDER_ID}`));
-    await waitFor(() => expect(updateRenderJobTitleMock).toHaveBeenCalled());
-    // Display rolled back to "(제목 없음)" placeholder; the input is closed.
-    await waitFor(() =>
-      expect(
-        screen.queryByTestId(`child-title-input-${RENDER_ID}`),
-      ).not.toBeInTheDocument(),
-    );
-    expect(
-      screen.getByTestId(`child-title-display-${RENDER_ID}`).textContent,
-    ).toContain("(제목 없음)");
-  });
-
-  it("스크립트 편집 routes to inline edit-clips view with the right clip pre-selected", async () => {
-    // The fetch is now a permission probe — composition shape doesn't
-    // gate the route push (the inline editor loads its own per-clip
-    // compositions). What matters: the route + clipIdx query param.
-    getShortCompositionMock.mockResolvedValueOnce({
-      composition: { scene_clips: [{ scene_id: "gd_test_scene_001" }] },
-      source: "render_job",
-    });
-    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
-    fireEvent.click(screen.getByTestId(`child-open-editor-${RENDER_ID}`));
-    await waitFor(() =>
-      expect(getShortCompositionMock).toHaveBeenCalledWith(
-        RENDER_ID,
-        expect.any(Function),
-      ),
-    );
-    await waitFor(() =>
-      // Test fixture's child has shorts_index=1, so clipIdx=0.
-      expect(pushMock).toHaveBeenCalledWith(
-        "/export/shorts/auto/wizard/gd_test/result/parent-1/edit-clips?clipIdx=0",
-      ),
-    );
-  });
-
-  it("surfaces a friendly error if the composition probe 404s", async () => {
-    // Permission probe failure (e.g., the render_job belongs to a
-    // different user) — the inline editor would fail to populate, so
-    // bail early with a Korean message rather than dump the operator
-    // on a broken page.
-    getShortCompositionMock.mockRejectedValueOnce(
-      new Error("Saved short not found"),
-    );
-    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
-    fireEvent.click(screen.getByTestId(`child-open-editor-${RENDER_ID}`));
-    await waitFor(() => expect(getShortCompositionMock).toHaveBeenCalled());
-    expect(
-      await screen.findByText(/Saved short not found/),
-    ).toBeInTheDocument();
-    expect(pushMock).not.toHaveBeenCalled();
-  });
-
-  it("renders the new 3-step breadcrumb at step 3 (D2)", () => {
-    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
-    // The 3-step inline breadcrumb replaces the legacy 4-step WizardLayout
-    // breadcrumb. Step 3 is "AI 쇼츠 생성".
-    expect(
-      screen.getByTestId("inline-wizard-breadcrumb-step-3-circle").dataset
+      screen.getByTestId("inline-wizard-breadcrumb-step-2-circle").dataset
         .active,
     ).toBe("true");
     expect(
-      screen.getByTestId("inline-wizard-breadcrumb-step-1-circle").dataset
-        .active,
-    ).toBe("false");
+      screen.queryByTestId("inline-wizard-breadcrumb-step-3-circle"),
+    ).not.toBeInTheDocument();
   });
 
-  it("back link routes to the inline-wizard view on the detail page (D2)", () => {
+  it("back link points at the inline-wizard view on the detail page", () => {
     render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
-    const back = screen.getByTestId("result-back-link");
-    expect(back.getAttribute("href")).toBe(
-      "/videos/gd_test?view=auto-shorts",
+    expect(
+      screen.getByTestId("result-back-link").getAttribute("href"),
+    ).toBe("/videos/gd_test?view=auto-shorts");
+  });
+});
+
+describe("WizardStepResult — loading state", () => {
+  beforeEach(() => {
+    replaceMock.mockReset();
+    cancelMock.mockReset();
+    useScanOrderMock.mockReset();
+  });
+
+  it("renders the spinner + skeleton with the children_total count while polling", () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("fanned_out", 3, []),
+      error: null,
+      isPolling: true,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(screen.getByTestId("wizard-loading-state")).toBeInTheDocument();
+    expect(screen.getByTestId("loading-shorts-spinner")).toBeInTheDocument();
+    expect(
+      screen.getAllByTestId("loading-shorts-skeleton-card"),
+    ).toHaveLength(3);
+  });
+
+  it("cancel button calls useScanOrder.cancel()", async () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("fanned_out", 2, []),
+      error: null,
+      isPolling: true,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    fireEvent.click(screen.getByTestId("loading-shorts-spinner-cancel"));
+    await waitFor(() => expect(cancelMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("renders skeleton header with 0 when status hasn't loaded yet", () => {
+    useScanOrderMock.mockReturnValue({
+      status: null,
+      error: null,
+      isPolling: true,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(screen.getByTestId("wizard-loading-state")).toBeInTheDocument();
+    expect(
+      screen.queryAllByTestId("loading-shorts-skeleton-card"),
+    ).toHaveLength(0);
+  });
+
+  it("surfaces a polling error inline", () => {
+    useScanOrderMock.mockReturnValue({
+      status: null,
+      error: new Error("network down"),
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(screen.getByTestId("wizard-status-error").textContent).toContain(
+      "network down",
     );
+  });
+});
+
+describe("WizardStepResult — auto-redirect", () => {
+  beforeEach(() => {
+    replaceMock.mockReset();
+    cancelMock.mockReset();
+    useScanOrderMock.mockReset();
+  });
+
+  it("redirects to /edit-clips when parent terminal AND first child render completed", async () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("done", 2, [
+        makeChild({ render_status: "completed" }),
+        makeChild({ job_id: "child-2", shorts_index: 2 }),
+      ]),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenCalledWith(
+        "/export/shorts/auto/wizard/gd_test/result/parent-1/edit-clips",
+      ),
+    );
+  });
+
+  it("does NOT redirect while renders are in-flight", () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("done", 1, [
+        makeChild({ render_status: "rendering" }),
+      ]),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("wizard-loading-state")).toBeInTheDocument();
+  });
+
+  it("does NOT redirect on parent failed", () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("failed", 1, [
+        makeChild({ render_status: "completed" }),
+      ]),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("wizard-failure-state")).toBeInTheDocument();
+  });
+
+  it("does NOT redirect on parent cancelled", () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("cancelled", 1, [
+        makeChild({ render_status: "completed" }),
+      ]),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("wizard-failure-state")).toBeInTheDocument();
+  });
+
+  it("does NOT redirect when all children failed (treats whole-batch failure as failure)", () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus(
+        "done",
+        2,
+        [
+          makeChild({ stage: "failed", render_status: "failed" }),
+          makeChild({
+            job_id: "child-2",
+            shorts_index: 2,
+            stage: "failed",
+            render_status: "failed",
+          }),
+        ],
+        2, // children_failed
+      ),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("wizard-failure-state")).toBeInTheDocument();
+  });
+
+  it("redirect fires at most once even if status reference changes", async () => {
+    const status = makeStatus("done", 1, [
+      makeChild({ render_status: "completed" }),
+    ]);
+    useScanOrderMock.mockReturnValue({
+      status,
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    const { rerender } = render(
+      <WizardStepResult videoId="gd_test" parentJobId="parent-1" />,
+    );
+    await waitFor(() => expect(replaceMock).toHaveBeenCalledTimes(1));
+    // Force a re-render with a different status object reference but the
+    // same redirect-trigger predicate — useEffect would re-run, but the ref
+    // guard should keep replace at exactly 1 call.
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("done", 1, [
+        makeChild({ render_status: "completed" }),
+      ]),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    rerender(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(replaceMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("WizardStepResult — failure state", () => {
+  beforeEach(() => {
+    replaceMock.mockReset();
+    cancelMock.mockReset();
+    useScanOrderMock.mockReset();
+  });
+
+  it("renders friendlyParentError when parent has an error_code", () => {
+    useScanOrderMock.mockReturnValue({
+      status: {
+        ...makeStatus("failed", 0, []),
+        parent: {
+          ...makeStatus("failed", 0, []).parent,
+          error_code: "proxy_missing",
+          error_message: "file_id=foo not transcoded",
+        },
+      },
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    const failure = screen.getByTestId("wizard-failure-state");
+    expect(failure.textContent).toContain("트랜스코딩이 완료되지 않았어요");
+  });
+
+  it("renders a generic message on parent cancelled with no error_code", () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("cancelled", 0, []),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(
+      screen.getByTestId("wizard-failure-state").textContent,
+    ).toContain("취소되었어요");
   });
 });

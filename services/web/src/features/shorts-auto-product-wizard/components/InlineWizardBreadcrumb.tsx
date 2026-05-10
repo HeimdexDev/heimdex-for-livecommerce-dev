@@ -1,39 +1,62 @@
 // ============================================================================
-// 3-step breadcrumb for the inline auto-shorts wizard rendered on the video
-// detail page. Visual model per Figma: filled dark circle for the active or
-// completed step, light circle for upcoming. Stateless — caller passes
-// ``currentStep``.
+// Step breadcrumb for the inline auto-shorts wizard. Two visual variants:
 //
-// Distinct from the legacy 4-step ``WizardLayout`` breadcrumb because:
-//   * inline flow drops "동영상 선택" (videoId is known from page context)
-//   * inline flow stops at "AI 쇼츠 생성" — the result page handles itself
+//   * ``three-step`` (default) — used by criteria + product steps:
+//       1 옵션 설정 › 2 상품 선택 › 3 AI 쇼츠 생성
+//   * ``two-step`` — used by the loading screen + edit-clips chrome:
+//       1 옵션 설정 › 2 AI 쇼츠 생성
+//     The two-step variant collapses criteria + product into the single
+//     "옵션 설정" anchor since by the time the user sees it both choices
+//     are locked in. The label "AI 쇼츠 생성" is preserved across variants.
+//
+// Stateless — caller passes ``currentStep`` (narrowed by variant) and the
+// component renders the breadcrumb. Distinct from the legacy 4-step
+// ``WizardLayout`` breadcrumb (deleted in Phase D3 of the inline-wizard plan).
 // ============================================================================
 
 "use client";
 
 import { cn } from "@/lib/utils";
 
-const STEPS = [
+const STEPS_THREE = [
   { idx: 1 as const, label: "옵션 설정" },
   { idx: 2 as const, label: "상품 선택" },
   { idx: 3 as const, label: "AI 쇼츠 생성" },
 ] as const;
 
-interface Props {
-  currentStep: 1 | 2 | 3;
-  className?: string;
-}
+const STEPS_TWO = [
+  { idx: 1 as const, label: "옵션 설정" },
+  { idx: 2 as const, label: "AI 쇼츠 생성" },
+] as const;
 
-export function InlineWizardBreadcrumb({ currentStep, className }: Props) {
+// Discriminated union keeps strict-mode type safety — callers passing a
+// raw ``currentStep`` literal get the right narrow type for their variant.
+type Props =
+  | {
+      variant?: "three-step";
+      currentStep: 1 | 2 | 3;
+      className?: string;
+    }
+  | {
+      variant: "two-step";
+      currentStep: 1 | 2;
+      className?: string;
+    };
+
+export function InlineWizardBreadcrumb(props: Props) {
+  const variant = props.variant ?? "three-step";
+  const steps = variant === "two-step" ? STEPS_TWO : STEPS_THREE;
+
   return (
     <nav
-      className={cn("flex items-center gap-3 text-sm", className)}
+      className={cn("flex items-center gap-3 text-sm", props.className)}
       aria-label="쇼츠 생성 진행 단계"
       data-testid="inline-wizard-breadcrumb"
+      data-variant={variant}
     >
-      {STEPS.map((step, i) => {
-        const isActive = step.idx === currentStep;
-        const isUpcoming = step.idx > currentStep;
+      {steps.map((step, i) => {
+        const isActive = step.idx === props.currentStep;
+        const isUpcoming = step.idx > props.currentStep;
         return (
           <div key={step.idx} className="flex items-center gap-3">
             <div className="flex items-center gap-2">
@@ -60,7 +83,7 @@ export function InlineWizardBreadcrumb({ currentStep, className }: Props) {
                 {step.label}
               </span>
             </div>
-            {i < STEPS.length - 1 ? (
+            {i < steps.length - 1 ? (
               <span className="text-gray-300" aria-hidden="true">
                 ›
               </span>

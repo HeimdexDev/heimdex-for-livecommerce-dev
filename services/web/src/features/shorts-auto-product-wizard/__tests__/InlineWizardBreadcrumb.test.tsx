@@ -37,3 +37,56 @@ describe("InlineWizardBreadcrumb", () => {
     expect(chevrons).toHaveLength(2);
   });
 });
+
+describe("InlineWizardBreadcrumb — two-step variant", () => {
+  it("renders only two labelled steps (옵션 설정, AI 쇼츠 생성)", () => {
+    render(
+      <InlineWizardBreadcrumb variant="two-step" currentStep={1} />,
+    );
+    expect(screen.getByText("옵션 설정")).toBeInTheDocument();
+    expect(screen.getByText("AI 쇼츠 생성")).toBeInTheDocument();
+    expect(screen.queryByText("상품 선택")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("inline-wizard-breadcrumb-step-3-circle"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("marks only the current step as active", () => {
+    render(
+      <InlineWizardBreadcrumb variant="two-step" currentStep={2} />,
+    );
+    const c1 = screen.getByTestId("inline-wizard-breadcrumb-step-1-circle");
+    const c2 = screen.getByTestId("inline-wizard-breadcrumb-step-2-circle");
+    expect(c1.dataset.active).toBe("false");
+    expect(c2.dataset.active).toBe("true");
+  });
+
+  it("uses gray-900 background only on the active circle", () => {
+    render(
+      <InlineWizardBreadcrumb variant="two-step" currentStep={2} />,
+    );
+    const active = screen.getByTestId("inline-wizard-breadcrumb-step-2-circle");
+    const upcoming = screen.getByTestId(
+      "inline-wizard-breadcrumb-step-1-circle",
+    );
+    expect(active.className).toMatch(/bg-gray-900/);
+    expect(upcoming.className).not.toMatch(/bg-gray-900/);
+  });
+
+  it("renders exactly one chevron between the two steps", () => {
+    const { container } = render(
+      <InlineWizardBreadcrumb variant="two-step" currentStep={1} />,
+    );
+    const chevrons = container.querySelectorAll("[aria-hidden='true']");
+    expect(chevrons).toHaveLength(1);
+  });
+
+  it("exposes the variant on the root for downstream styling/testing", () => {
+    render(
+      <InlineWizardBreadcrumb variant="two-step" currentStep={2} />,
+    );
+    expect(
+      screen.getByTestId("inline-wizard-breadcrumb").dataset.variant,
+    ).toBe("two-step");
+  });
+});
