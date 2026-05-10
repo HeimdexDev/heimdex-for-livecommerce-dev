@@ -48,6 +48,7 @@ import type {
   SubtitleStyle,
 } from "@/features/shorts-editor/lib/types";
 
+import { InlineWizardBreadcrumb } from "../components/InlineWizardBreadcrumb";
 import { SubtitleEditor } from "../components/SubtitleEditor";
 import {
   SubtitleOverlay,
@@ -545,20 +546,17 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
     return <LoadingState />;
   }
 
-  const headerHash = parentJobId.replace(/-/g, "").slice(0, 32);
-
   return (
     <div className="flex h-screen flex-col bg-gray-50">
       <div className="flex items-center justify-between border-b bg-white px-6 py-3">
         <Link
-          href={`/export/shorts/auto/wizard/${videoId}/result/${parentJobId}`}
+          href={`/videos/${encodeURIComponent(videoId)}?view=auto-shorts`}
           className="text-sm text-gray-700 hover:text-indigo-600"
+          data-testid="edit-clips-back-link"
         >
           ← 뒤로가기
         </Link>
-        <div className="text-sm font-medium text-gray-700">
-          Heimdex Mini · {headerHash}
-        </div>
+        <InlineWizardBreadcrumb variant="two-step" currentStep={2} />
         <div className="flex items-center gap-2">
           <Link
             href={`/export/shorts/auto/wizard/${videoId}/select-product?length=60&count=5&distribution=single&language=ko&intent=commit`}
