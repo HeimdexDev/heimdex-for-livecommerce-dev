@@ -488,6 +488,13 @@ class Settings(BaseSettings):
     # .claude/plans/shorts-auto-product-cap-stuck-fix.md (PR 3 of 3).
     auto_shorts_product_v2_self_heal_enabled: bool = True
 
+    # PR 2 of multi-product wizard: when False, the scan-order endpoint
+    # rejects ``len(catalog_entry_ids) > 1`` with 422. Single-pick still
+    # works through either ``catalog_entry_id`` (legacy) or
+    # ``catalog_entry_ids=[X]``. Default ON; emergency disable per
+    # .claude/plans/wizard-multi-product-select.md.
+    auto_shorts_product_v2_multi_select_enabled: bool = True
+
     # Wizard idempotency window. Same shape as the legacy
     # ``auto_shorts_product_v2_scan_idempotency_seconds`` but keyed on
     # the canonical-JSON ``settings_hash`` so two different sets of

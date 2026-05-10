@@ -275,15 +275,32 @@ class ScanOrderCreateRequest(BaseModel):
     product_distribution: ProductDistribution
     language: Language
     intent: ScanIntent = "commit"
-    # Optional pre-tracking product pick. When set, the scan_order is
-    # bound to a single catalog entry (the wizard's product-select
-    # step's output) and the worker filters its catalog fetch to just
-    # this id instead of looping over the whole active catalog. When
-    # NULL, legacy whole-catalog round-robin behavior is preserved.
-    # Service-level validation enforces the entry exists, belongs to
-    # (org, video), and isn't soft-rejected — same pattern as the
-    # legacy ``enqueue_clip`` 404 path.
+    # Optional pre-tracking product pick (legacy single-pick — pre PR 2
+    # of the multi-product wizard). Mutually exclusive with
+    # ``catalog_entry_ids``; the service-layer normalizer rejects
+    # bodies that set both.
+    #
+    # When NULL AND ``catalog_entry_ids`` is empty, legacy
+    # whole-catalog round-robin behavior is preserved.
+    # When set, equivalent to passing ``catalog_entry_ids=[id]``.
     catalog_entry_id: UUID | None = None
+
+    # PR 2 (multi-product wizard): list of catalog entries the user
+    # picked at the wizard's product-select step. Service-layer
+    # validation enforces:
+    #
+    #   * ``1 <= len(catalog_entry_ids) <= requested_count`` (when set)
+    #   * each entry exists, belongs to (org, video), and isn't soft-rejected
+    #   * no duplicates
+    #   * mutually exclusive with the legacy ``catalog_entry_id`` field
+    #   * SAM2 track mode rejects ``len > 1`` (multi-select requires STT mode)
+    #
+    # Children get a round-robin distribution at fan-out: child[i]
+    # receives ``sorted(ids)[i % len(ids)]``. With requested_count=N
+    # and len=K, the first K children get one product each; remaining
+    # N-K rotate through the same K. See
+    # ``.claude/plans/wizard-multi-product-select.md``.
+    catalog_entry_ids: list[UUID] = Field(default_factory=list)
 
 
 class ScanOrderResponse(BaseModel):

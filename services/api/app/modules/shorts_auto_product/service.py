@@ -660,15 +660,49 @@ class ProductScanService:
         # better error messages for the frontend.
         _validate_scan_order_inputs(body=body)
 
-        # If the wizard's product-select step picked a specific entry,
-        # validate it BEFORE allocating a concurrency slot — same shape
-        # as the legacy ``enqueue_clip`` 404 (no-info-leak: cross-org,
-        # missing, and rejected all return the same status). The check
-        # also doubles as a defense against stale catalog ids that
-        # survived a rescan invalidation.
-        if body.catalog_entry_id is not None:
+        # PR 2 (multi-product wizard): canonicalize the wizard's
+        # product picks into a single sorted list. Both
+        # ``catalog_entry_id`` (legacy single-pick) and
+        # ``catalog_entry_ids`` (PR 2 list) reduce to ``selected_ids``;
+        # the normalizer rejects bodies that set both.
+        selected_ids = _normalize_catalog_selection(body=body)
+
+        # PR 2 guards: multi-select needs the feature flag on AND the
+        # STT track mode (SAM2 worker doesn't propagate per-child
+        # catalog_entry_id). Single-pick (len <= 1) bypasses both
+        # guards and stays back-compat.
+        if len(selected_ids) > 1:
+            if not self.settings.auto_shorts_product_v2_multi_select_enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "multi-product selection is currently disabled; "
+                        "pick a single product"
+                    ),
+                )
+            track_mode_for_guard = getattr(
+                self.settings,
+                "auto_shorts_product_v2_track_mode",
+                "sam2",
+            )
+            if track_mode_for_guard == "sam2":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "multi-product selection requires STT track mode "
+                        "(set AUTO_SHORTS_PRODUCT_V2_TRACK_MODE=stt)"
+                    ),
+                )
+
+        # Membership validation: each selected entry must exist, belong
+        # to (org, video), and not be soft-rejected. Same shape as the
+        # legacy ``enqueue_clip`` 404 (no-info-leak: cross-org, missing,
+        # and rejected all return the same status). Doubles as a
+        # defense against stale catalog ids that survived a rescan
+        # invalidation. Validated BEFORE concurrency-slot allocation.
+        for entry_id in selected_ids:
             entry = await self.catalog_repo.get(
-                org_id=org_id, entry_id=body.catalog_entry_id,
+                org_id=org_id, entry_id=entry_id,
             )
             if (
                 entry is None
@@ -703,10 +737,8 @@ class ProductScanService:
             enumeration_prompt_version=(
                 self.settings.auto_shorts_product_v2_enumeration_prompt_version
             ),
-            selected_catalog_entry_id=(
-                str(body.catalog_entry_id)
-                if body.catalog_entry_id is not None
-                else None
+            selected_catalog_entry_ids=(
+                [str(uid) for uid in selected_ids] if selected_ids else None
             ),
         )
 
@@ -725,6 +757,17 @@ class ProductScanService:
 
         await self._require_concurrency_slot(org_id)
 
+        # PR 2: ``parent.catalog_entry_id`` preserves legacy single-pick
+        # semantics — set when exactly one product was picked, NULL
+        # otherwise. The SAM2 worker callback path reads this column
+        # to filter its catalog fetch; len>1 is rejected for SAM2 by
+        # the guard above, so this code only sees len in {0, 1, >1
+        # via STT}. STT path doesn't read parent.catalog_entry_id; it
+        # uses per-child catalog_entry_assignments via PR 1's plumbing.
+        parent_legacy_pick: UUID | None = (
+            selected_ids[0] if len(selected_ids) == 1 else None
+        )
+
         parent = await self.job_repo.create_scan_order_parent(
             org_id=org_id,
             video_id=video_id,
@@ -737,7 +780,7 @@ class ProductScanService:
             language=body.language,
             intent=body.intent,
             settings_hash=settings_hash,
-            catalog_entry_id=body.catalog_entry_id,
+            catalog_entry_id=parent_legacy_pick,
         )
         await self.session.flush()
 
@@ -757,19 +800,22 @@ class ProductScanService:
             self.settings, "auto_shorts_product_v2_track_mode", "sam2",
         )
         if track_mode == "stt":
-            # PR 1 (multi-product wizard): when the user picked a
-            # specific catalog_entry_id at the wizard's product-select
-            # step, propagate it to EVERY child so the runner honors
-            # the selection. Without this, children get
-            # catalog_entry_id=None and the runner round-robins across
-            # the whole catalog — silently ignoring the user's pick
-            # (the latent bug fixed by this PR). Empty / None body
-            # field stays at the legacy whole-catalog round-robin.
-            assignments: list[UUID | None] | None = (
-                [body.catalog_entry_id] * body.requested_count
-                if body.catalog_entry_id is not None
-                else None
-            )
+            # PR 2 (multi-product wizard): round-robin distribute the
+            # user's picks across ``requested_count`` children. Each
+            # picked product gets at least one short (validation
+            # enforced 1 <= len(selected_ids) <= requested_count); the
+            # remaining shorts cycle through the same set in sorted
+            # order so the assignment is deterministic. Empty list →
+            # legacy whole-catalog mode (children stay NULL → runner
+            # round-robins via the picker).
+            assignments: list[UUID | None] | None
+            if selected_ids:
+                assignments = [
+                    selected_ids[i % len(selected_ids)]
+                    for i in range(body.requested_count)
+                ]
+            else:
+                assignments = None
             await self.job_repo.create_render_children(
                 parent=parent,
                 count=body.requested_count,
@@ -824,7 +870,12 @@ class ProductScanService:
                     # entry. ``duration_preset_sec`` stays omitted —
                     # scan_order uses ``length_seconds`` not the legacy
                     # preset.
-                    catalog_entry_id=body.catalog_entry_id,
+                    #
+                    # PR 2: ``parent_legacy_pick`` is the user's single
+                    # catalog id (or None). Multi-select submissions
+                    # are rejected at the guard above for SAM2 mode,
+                    # so len(selected_ids) is in {0, 1} here.
+                    catalog_entry_id=parent_legacy_pick,
                 )
             except Exception:
                 logger.exception(
@@ -1044,7 +1095,7 @@ def compute_settings_hash(
     active_catalog_entry_ids: list[str],
     tracker_version: str,
     enumeration_prompt_version: str,
-    selected_catalog_entry_id: str | None = None,
+    selected_catalog_entry_ids: list[str] | None = None,
 ) -> str:
     """Canonical-JSON SHA256 of every wizard input that should
     discriminate "same intent" from "different intent" for the 60s
@@ -1072,6 +1123,14 @@ def compute_settings_hash(
     unicode differences. NEVER change the hash composition without
     bumping this function's name; otherwise rolling deploys would
     miss caches across replicas mid-deploy.
+
+    PR 2 of the multi-product wizard plan widened the picked-products
+    field from ``selected_catalog_entry_id: str | None`` (singular) to
+    ``selected_catalog_entry_ids: list[str]`` (sorted list). The
+    deploy-window edge case is documented in the plan: a same-content
+    submission across the rollout boundary may hash differently and
+    miss idempotency dedupe (60s window, low probability). See
+    ``.claude/plans/wizard-multi-product-select.md``.
     """
     payload: dict[str, Any] = {
         "video_id": str(video_id),
@@ -1087,13 +1146,14 @@ def compute_settings_hash(
         "tracker_version": tracker_version,
         "enumeration_prompt_version": enumeration_prompt_version,
     }
-    # Only include the user's pick when set, so the no-pick path
-    # preserves the original hash composition. Different picks for the
-    # same video naturally get different hashes; flipping from no-pick
-    # to a specific pick also re-hashes (intentional — semantically
-    # different jobs).
-    if selected_catalog_entry_id is not None:
-        payload["selected_catalog_entry_id"] = selected_catalog_entry_id
+    # Only include the user's pick when populated — preserves the
+    # whole-catalog hash composition (no-pick parents hash like
+    # pre-PR-2). Different picks naturally hash differently; flipping
+    # from no-pick to picked also re-hashes (semantically different
+    # jobs). Always-sorted list so input-order cosmetics don't break
+    # idempotency.
+    if selected_catalog_entry_ids:
+        payload["selected_catalog_entry_ids"] = sorted(selected_catalog_entry_ids)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -1109,6 +1169,10 @@ def _validate_scan_order_inputs(*, body: ScanOrderCreateRequest) -> None:
       * aggregate output cap (count * length <= 1800)
       * time-range sanity: each short has at least its length in
         source range
+      * (PR 2) catalog_entry_ids list shape: cap at requested_count,
+        no duplicates. Pure body shape validation — membership
+        (entry exists, belongs to org/video, not rejected) is
+        validated in the service caller because it requires DB access.
     """
     aggregate_output_seconds = body.requested_count * body.length_seconds
     if aggregate_output_seconds > 1800:
@@ -1146,6 +1210,77 @@ def _validate_scan_order_inputs(*, body: ScanOrderCreateRequest) -> None:
                     f"each short needs at least {required_per_short_ms}ms of source"
                 ),
             )
+
+    # PR 2 (multi-product wizard): catalog_entry_ids list shape
+    # validation. Membership/existence is validated in the service
+    # caller (needs DB access).
+    if body.catalog_entry_ids:
+        if len(body.catalog_entry_ids) > body.requested_count:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"catalog_entry_ids has {len(body.catalog_entry_ids)} items "
+                    f"but requested_count is {body.requested_count} — "
+                    f"each picked product must get at least one short"
+                ),
+            )
+        if len(set(body.catalog_entry_ids)) != len(body.catalog_entry_ids):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="catalog_entry_ids must not contain duplicates",
+            )
+
+
+def _normalize_catalog_selection(*, body: ScanOrderCreateRequest) -> list[UUID]:
+    """Resolve the wizard's product picks into a single canonical list.
+
+    PR 2 of the multi-product wizard plan introduced the
+    ``catalog_entry_ids: list[UUID]`` field on the body. This helper
+    normalizes the two accepted shapes into one:
+
+      * ``catalog_entry_ids=[X, Y]`` (new) → returns sorted, deduped list
+      * ``catalog_entry_id=X`` (legacy) → returns ``[X]``
+      * neither set → returns ``[]`` (whole-catalog mode)
+
+    Raises 422 when BOTH fields are populated — that's an ambiguous
+    body shape we can't safely interpret. Returning silently with one
+    side winning would let buggy clients drift over time.
+
+    Pure function (no DB access, no side effects). All membership /
+    rejection / cap validation lives in the caller alongside the
+    other ``_validate_scan_order_inputs`` checks. Keeps loose coupling:
+    no imports from other ``app.modules.*`` packages, no settings
+    access — just body shape massaging.
+
+    See ``.claude/plans/wizard-multi-product-select.md`` (PR 2 of 3).
+    """
+    has_legacy = body.catalog_entry_id is not None
+    has_list = bool(body.catalog_entry_ids)
+
+    if has_legacy and has_list:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "send either catalog_entry_id (legacy) or catalog_entry_ids "
+                "(list), not both"
+            ),
+        )
+
+    if has_list:
+        # Dedupe while preserving the user's intent that *every* listed
+        # id appears at least once. The sort is for hash stability —
+        # see compute_settings_hash. Set semantics handle duplicates;
+        # an explicit 422 for caller-supplied dupes is in
+        # ``_validate_scan_order_inputs`` (the user's intent should be
+        # explicit, not silently deduped).
+        return sorted(set(body.catalog_entry_ids))
+
+    if has_legacy:
+        # body.catalog_entry_id is not None per the has_legacy guard.
+        return [body.catalog_entry_id]  # type: ignore[list-item]
+
+    return []
+
 
 def _job_to_status_response(
     job: ProductScanJob,
