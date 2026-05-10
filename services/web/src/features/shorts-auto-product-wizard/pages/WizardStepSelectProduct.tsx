@@ -81,6 +81,12 @@ function parseCriteriaFromUrl(
   const endRaw = params.get("end");
   const start = startRaw && startRaw !== "" ? Number(startRaw) : null;
   const end = endRaw && endRaw !== "" ? Number(endRaw) : null;
+  // Backend XOR-validates the pair: both-or-neither. A URL with exactly
+  // one side set is malformed (the criteria step blocks this, but a
+  // hand-edited URL or stale tab could still produce it). Reject so
+  // the caller redirects back to the criteria step instead of letting
+  // the user submit and get a 422 mid-flow.
+  if ((start === null) !== (end === null)) return null;
   return {
     length_seconds: length,
     requested_count: count,

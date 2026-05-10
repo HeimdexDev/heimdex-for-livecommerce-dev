@@ -307,6 +307,46 @@ describe("InlineWizardProductPanel", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
+  it("normalizes XOR-mismatched time range at submit (belt-and-braces)", async () => {
+    // The slider already emits both-or-neither, but if criteria arrives
+    // here with one side null and the other set (e.g. a future caller
+    // that bypasses the slider, or stale persisted state), the submit
+    // path must still produce a backend-valid body. The unmoved side
+    // gets backfilled from videoDurationMs (end) or 0 (start).
+    triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
+    getProductCatalogMock.mockResolvedValue({
+      video_id: "gd_test",
+      products: SAMPLE_ENTRIES,
+      scan_status: "complete",
+    });
+    createScanOrderMock.mockResolvedValue({
+      parent_job_id: "00000000-0000-0000-0000-000000000999",
+      run_id: "run-1",
+    });
+    renderPanel({
+      criteria: {
+        length_seconds: 60,
+        requested_count: 2,
+        time_range_start_ms: 60_000,
+        time_range_end_ms: null, // ← XOR mismatch
+        product_distribution: "single",
+      },
+    });
+    await waitFor(() => screen.getByTestId("inline-product-grid"));
+    fireEvent.click(screen.getAllByTestId("inline-product-card")[0]!);
+    fireEvent.click(screen.getByTestId("inline-product-next"));
+    await waitFor(() => {
+      expect(createScanOrderMock).toHaveBeenCalledWith(
+        "gd_test",
+        expect.objectContaining({
+          time_range_start_ms: 60_000,
+          time_range_end_ms: FIVE_MIN_MS,
+        }),
+        expect.any(Function),
+      );
+    });
+  });
+
   it("summary chip renders distribution + range + length + count", async () => {
     triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
     getProductCatalogMock.mockResolvedValue({

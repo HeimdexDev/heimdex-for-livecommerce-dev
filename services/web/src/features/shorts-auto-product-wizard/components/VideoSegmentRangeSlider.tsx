@@ -6,13 +6,16 @@
 //
 // Semantics:
 //   * ``startMs === null && endMs === null`` ⇒ user hasn't constrained the
-//     range; UI shows handles at the extremes (0 and durationMs) but the
-//     onChange payload preserves null so the criteria step submits "no
-//     range constraint" (whole video).
-//   * Once a handle is dragged or keyboard-nudged, the corresponding side
-//     becomes a real number. Resetting both back to null is allowed via
-//     the ``onReset`` callback (caller's responsibility — the slider just
-//     respects whatever it's told).
+//     range; UI shows handles at the extremes (0 and durationMs) and the
+//     onChange payload also keeps both null so the criteria step submits
+//     "no range constraint" (whole video).
+//   * Once a handle is dragged or keyboard-nudged, BOTH sides become real
+//     numbers in the onChange payload — the unmoved side is backfilled to
+//     its effective extreme (start → 0, end → durationMs). The wizard
+//     submits to a backend that XOR-validates the pair (both-or-neither),
+//     so emitting ``{number, null}`` would 422 the user. Callers can still
+//     reset both sides back to null themselves; the slider just refuses to
+//     produce the asymmetric shape.
 //   * Handles maintain ``MIN_SEPARATION_MS`` between them so the criteria
 //     step's aggregate-cap warning doesn't trip on a degenerate 0-length
 //     range.
@@ -52,6 +55,25 @@ interface Props {
 
 function clamp(value: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, value));
+}
+
+/**
+ * Belt-and-braces normalization at submit time. The slider itself already
+ * emits both-or-neither, but if any future caller mutates the criteria
+ * draft outside the slider (or a malformed cache state arrives), this
+ * function guarantees the API body stays XOR-valid: both null OR both
+ * real numbers, never one of each. Pure — safe to call from any submit
+ * site that has the video duration in scope.
+ */
+export function normalizeTimeRangeForSubmit(
+  startMs: number | null,
+  endMs: number | null,
+  durationMs: number,
+): { startMs: number | null; endMs: number | null } {
+  if (startMs === null && endMs === null) {
+    return { startMs: null, endMs: null };
+  }
+  return { startMs: startMs ?? 0, endMs: endMs ?? durationMs };
 }
 
 /**
@@ -111,14 +133,18 @@ export function VideoSegmentRangeSlider({
         ? snapToNearest(ms, snapTargetsMs, snapRadiusMs)
         : ms;
       const clampedToDuration = clamp(snapped, 0, durationMs);
+      // Backfill the unmoved side to its effective extreme so the wizard
+      // never submits {number, null} (backend XOR-validates the pair).
+      // Without this, dragging only one handle from the default
+      // {null, null} state produces a 422 on submit.
       if (handle === "start") {
         const ceiling = (endMs ?? durationMs) - MIN_SEPARATION_MS;
         const next = clamp(clampedToDuration, 0, Math.max(0, ceiling));
-        onChange({ startMs: next, endMs });
+        onChange({ startMs: next, endMs: endMs ?? durationMs });
       } else {
         const floor = (startMs ?? 0) + MIN_SEPARATION_MS;
         const next = clamp(clampedToDuration, Math.min(floor, durationMs), durationMs);
-        onChange({ startMs, endMs: next });
+        onChange({ startMs: startMs ?? 0, endMs: next });
       }
     },
     [durationMs, endMs, startMs, onChange, snapTargetsMs, snapRadiusMs],

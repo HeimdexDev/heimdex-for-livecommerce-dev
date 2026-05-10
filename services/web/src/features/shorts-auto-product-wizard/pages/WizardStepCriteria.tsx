@@ -65,6 +65,21 @@ export function WizardStepCriteria({ videoId }: Props) {
   const aggregateSeconds = lengthSeconds * requestedCount;
   const exceedsAggregateCap = aggregateSeconds > 1800;
 
+  // Range XOR validation: backend requires both-or-neither
+  // (``time_range_start_ms`` and ``time_range_end_ms`` must be set or
+  // null together). Surface this as an inline form error so the user
+  // fixes it here rather than getting a 422 from createScanOrder on
+  // the next step. ``parseMmSsToMs`` returns null for empty AND
+  // malformed input — either case is "user has not committed a real
+  // value", so the rule is symmetric.
+  const startMsParsed = parseMmSsToMs(rangeStartRaw);
+  const endMsParsed = parseMmSsToMs(rangeEndRaw);
+  const hasStartText = rangeStartRaw.trim() !== "";
+  const hasEndText = rangeEndRaw.trim() !== "";
+  const rangePartial =
+    (hasStartText || hasEndText) &&
+    (startMsParsed === null) !== (endMsParsed === null);
+
   // Phase B: criteria step is no longer a submission point — it just
   // collects inputs and forwards them to the product-select step via
   // URL search params. The actual createScanOrder call happens AFTER
@@ -72,8 +87,6 @@ export function WizardStepCriteria({ videoId }: Props) {
   // gets ``catalog_entry_id`` baked in. Validation errors (422 / 402 /
   // 429 / 404) surface on the select-product step instead.
   const handleNext = () => {
-    const startMs = parseMmSsToMs(rangeStartRaw);
-    const endMs = parseMmSsToMs(rangeEndRaw);
     const params = new URLSearchParams({
       length: String(lengthSeconds),
       count: String(requestedCount),
@@ -81,14 +94,14 @@ export function WizardStepCriteria({ videoId }: Props) {
       language,
       intent: "commit",
     });
-    if (startMs !== null) params.set("start", String(startMs));
-    if (endMs !== null) params.set("end", String(endMs));
+    if (startMsParsed !== null) params.set("start", String(startMsParsed));
+    if (endMsParsed !== null) params.set("end", String(endMsParsed));
     router.push(
       `/export/shorts/auto/wizard/${encodeURIComponent(videoId)}/select-product?${params.toString()}`,
     );
   };
 
-  const canSubmit = !exceedsAggregateCap;
+  const canSubmit = !exceedsAggregateCap && !rangePartial;
 
   return (
     <WizardLayout
@@ -133,6 +146,14 @@ export function WizardStepCriteria({ videoId }: Props) {
           <p className="text-xs text-gray-500">
             드래그 가능한 슬라이더는 다음 PR에서 추가됩니다.
           </p>
+          {rangePartial ? (
+            <p
+              className="rounded-md bg-amber-50 p-2 text-xs text-amber-800"
+              data-testid="range-pair-warning"
+            >
+              시작과 종료 시간을 모두 입력하거나 모두 비워 주세요.
+            </p>
+          ) : null}
         </div>
 
         <CountSelector value={requestedCount} onChange={setRequestedCount} />

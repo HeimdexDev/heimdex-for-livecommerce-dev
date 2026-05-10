@@ -169,6 +169,49 @@ describe("WizardStepSelectProduct", () => {
     expect(getProductCatalogMock).not.toHaveBeenCalled();
   });
 
+  it("redirects to /criteria when only one of start/end is present", () => {
+    // Backend XOR-validates the time-range pair. A URL with exactly one
+    // side set is malformed (the criteria step blocks this, but a
+    // hand-edited URL or stale tab could still produce it). The page
+    // must redirect rather than letting the user submit and 422.
+    mockSearchParams = new URLSearchParams({
+      length: "60",
+      count: "5",
+      distribution: "single",
+      language: "ko",
+      intent: "commit",
+      start: "60000", // start set, end missing → XOR mismatch
+    });
+    render(<WizardStepSelectProduct videoId="gd_test" />);
+    expect(replaceMock).toHaveBeenCalledWith(
+      "/export/shorts/auto/wizard/gd_test/criteria",
+    );
+    expect(triggerEnumerationMock).not.toHaveBeenCalled();
+    expect(getProductCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts both-set start/end without redirecting", async () => {
+    mockSearchParams = new URLSearchParams({
+      length: "60",
+      count: "5",
+      distribution: "single",
+      language: "ko",
+      intent: "commit",
+      start: "60000",
+      end: "240000",
+    });
+    triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
+    getProductCatalogMock.mockResolvedValue({
+      video_id: "gd_test",
+      products: [],
+    });
+    render(<WizardStepSelectProduct videoId="gd_test" />);
+    await waitFor(() =>
+      expect(triggerEnumerationMock).toHaveBeenCalledTimes(1),
+    );
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
   it("trigger failure does NOT block access to cached catalog entries", async () => {
     // Codex P2 fix: a transient triggerEnumeration failure must not
     // strand the user — if a prior wizard run already populated the

@@ -56,8 +56,13 @@ describe("WizardStepCriteria", () => {
     fireEvent.click(screen.getByTestId("length-preset-30"));
     fireEvent.click(screen.getByTestId("count-preset-10"));
     fireEvent.click(screen.getByTestId("language-en"));
+    // Both range fields filled: backend XOR-validates the pair, and
+    // the criteria step now blocks "다음" when only one side is filled.
     fireEvent.change(screen.getByTestId("range-start-input"), {
       target: { value: "1:30" },
+    });
+    fireEvent.change(screen.getByTestId("range-end-input"), {
+      target: { value: "5:00" },
     });
 
     fireEvent.click(screen.getByTestId("wizard-next"));
@@ -76,8 +81,7 @@ describe("WizardStepCriteria", () => {
     expect(url.searchParams.get("distribution")).toBe("single");
     expect(url.searchParams.get("intent")).toBe("commit");
     expect(url.searchParams.get("start")).toBe("90000"); // 1:30 → 90 000ms
-    // Empty range-end stays absent (vs serialized as empty string).
-    expect(url.searchParams.has("end")).toBe(false);
+    expect(url.searchParams.get("end")).toBe("300000"); // 5:00 → 300 000ms
   });
 
   it("omits start/end params when range fields are blank", () => {
@@ -87,5 +91,45 @@ describe("WizardStepCriteria", () => {
     const url = new URL(`http://x${target}`);
     expect(url.searchParams.has("start")).toBe(false);
     expect(url.searchParams.has("end")).toBe(false);
+  });
+
+  it("blocks Next + shows warning when only the start range is filled", () => {
+    // Backend XOR-validates the time-range pair; surface the rule here
+    // so the user fixes it before getting a 422 on the next step.
+    render(<WizardStepCriteria videoId="gd_test" />);
+    fireEvent.change(screen.getByTestId("range-start-input"), {
+      target: { value: "1:30" },
+    });
+    expect(screen.getByTestId("range-pair-warning")).toBeInTheDocument();
+    const next = screen.getByTestId("wizard-next") as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+    fireEvent.click(next);
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks Next when only the end range is filled", () => {
+    render(<WizardStepCriteria videoId="gd_test" />);
+    fireEvent.change(screen.getByTestId("range-end-input"), {
+      target: { value: "5:00" },
+    });
+    expect(screen.getByTestId("range-pair-warning")).toBeInTheDocument();
+    const next = screen.getByTestId("wizard-next") as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+  });
+
+  it("clears the warning + re-enables Next when the missing side is filled", () => {
+    render(<WizardStepCriteria videoId="gd_test" />);
+    fireEvent.change(screen.getByTestId("range-start-input"), {
+      target: { value: "1:30" },
+    });
+    expect(screen.getByTestId("range-pair-warning")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("range-end-input"), {
+      target: { value: "5:00" },
+    });
+    expect(
+      screen.queryByTestId("range-pair-warning"),
+    ).not.toBeInTheDocument();
+    const next = screen.getByTestId("wizard-next") as HTMLButtonElement;
+    expect(next.disabled).toBe(false);
   });
 });

@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 
 import { InlineWizardBreadcrumb } from "./InlineWizardBreadcrumb";
 import type { WizardCriteriaDraft } from "./InlineWizardCriteriaPanel";
+import { normalizeTimeRangeForSubmit } from "./VideoSegmentRangeSlider";
 
 const POLL_INTERVAL_MS = 5_000;
 const POLL_TIMEOUT_MS = 180_000;
@@ -165,13 +166,21 @@ export function InlineWizardProductPanel({
       // (PR 2's settings_hash sorts the list before hashing); two
       // submissions with the same set in different click orders
       // dedupe correctly within the 60s idempotency window.
+      // Belt-and-braces XOR normalization: the slider already emits
+      // both-or-neither, but this guards against any future criteria
+      // mutation path that bypasses the slider.
+      const range = normalizeTimeRangeForSubmit(
+        criteria.time_range_start_ms,
+        criteria.time_range_end_ms,
+        videoDurationMs,
+      );
       const response = await createScanOrder(
         videoId,
         {
           length_seconds: criteria.length_seconds,
           requested_count: criteria.requested_count,
-          time_range_start_ms: criteria.time_range_start_ms,
-          time_range_end_ms: criteria.time_range_end_ms,
+          time_range_start_ms: range.startMs,
+          time_range_end_ms: range.endMs,
           product_distribution: criteria.product_distribution,
           language: "ko", // Hardcoded — inline UI drops the toggle (Decision #1 surroundings)
           intent: "commit",
@@ -194,7 +203,7 @@ export function InlineWizardProductPanel({
       }
       setSubmitting(false);
     }
-  }, [criteria, selectedIds, videoId, getAccessToken, onSubmitOrder]);
+  }, [criteria, selectedIds, videoId, videoDurationMs, getAccessToken, onSubmitOrder]);
 
   const handleRetry = () => {
     startedAtRef.current = Date.now();

@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 
 import {
   VideoSegmentRangeSlider,
+  normalizeTimeRangeForSubmit,
   snapToNearest,
 } from "../components/VideoSegmentRangeSlider";
 
@@ -146,7 +147,11 @@ describe("VideoSegmentRangeSlider", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("preserves null on the side that wasn't moved", () => {
+  it("backfills the unmoved end side when start is moved from null", () => {
+    // Backend XOR-validates the pair (both-or-neither). Emitting
+    // {number, null} would 422 the user on submit. The slider backfills
+    // the unmoved side to its effective extreme so the wizard never
+    // builds an asymmetric body.
     const onChange = vi.fn();
     render(
       <VideoSegmentRangeSlider
@@ -159,9 +164,63 @@ describe("VideoSegmentRangeSlider", () => {
     fireEvent.keyDown(screen.getByTestId("range-handle-start"), {
       key: "ArrowRight",
     });
-    // start moves to 1_000; end stays null (caller decides whether to
-    // synthesize a value at submit time)
-    expect(onChange).toHaveBeenCalledWith({ startMs: 1_000, endMs: null });
+    expect(onChange).toHaveBeenCalledWith({
+      startMs: 1_000,
+      endMs: FIVE_MIN,
+    });
+  });
+
+  it("backfills the unmoved start side when end is moved from null", () => {
+    const onChange = vi.fn();
+    render(
+      <VideoSegmentRangeSlider
+        durationMs={FIVE_MIN}
+        startMs={null}
+        endMs={null}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("range-handle-end"), {
+      key: "ArrowLeft",
+    });
+    expect(onChange).toHaveBeenCalledWith({
+      startMs: 0,
+      endMs: FIVE_MIN - 1_000,
+    });
+  });
+});
+
+describe("normalizeTimeRangeForSubmit", () => {
+  const FIVE_MIN_MS = 300_000;
+
+  it("passes through both-null untouched (whole-video mode)", () => {
+    expect(normalizeTimeRangeForSubmit(null, null, FIVE_MIN_MS)).toEqual({
+      startMs: null,
+      endMs: null,
+    });
+  });
+
+  it("passes through both-numbers untouched", () => {
+    expect(
+      normalizeTimeRangeForSubmit(60_000, 240_000, FIVE_MIN_MS),
+    ).toEqual({
+      startMs: 60_000,
+      endMs: 240_000,
+    });
+  });
+
+  it("backfills end with durationMs when start is set but end is null", () => {
+    expect(normalizeTimeRangeForSubmit(60_000, null, FIVE_MIN_MS)).toEqual({
+      startMs: 60_000,
+      endMs: FIVE_MIN_MS,
+    });
+  });
+
+  it("backfills start with 0 when end is set but start is null", () => {
+    expect(normalizeTimeRangeForSubmit(null, 240_000, FIVE_MIN_MS)).toEqual({
+      startMs: 0,
+      endMs: 240_000,
+    });
   });
 });
 
