@@ -62,8 +62,13 @@ class MentionedScene:
     # ``ocr_text`` carries the scene's ``ocr_text_raw`` so the
     # storyboard picker / eval harness can see WHAT on-screen text
     # contributed to the BM25 score. Empty string when:
-    #   - OCR re-rank flag is OFF (mention_extractor doesn't pull the field)
     #   - Scene has no keyframe OR PaddleOCR found no text
+    #   - OS index doesn't have the field for this scene
+    # NOTE: ``ocr_text_raw`` is pulled UNCONDITIONALLY by
+    # ``find_mentioned_scenes`` (even when the OCR re-rank flag is
+    # OFF) so eval can compare flag-on/flag-off without a re-query.
+    # The flag only controls whether OCR contributes to the BM25
+    # SCORE, not whether the field is fetched.
     #
     # ``ocr_match`` is True when at least one of (llm_label,
     # spoken_aliases) substring-matches ``ocr_text`` (case-folded).

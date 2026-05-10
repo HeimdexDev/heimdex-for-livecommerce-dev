@@ -60,6 +60,17 @@ _ALIAS_TAIL_BOOST = 0.4
 # but more direct than caption (LVM-paraphrased, may drift).
 # Multiplied by the per-call ``ocr_boost`` setting (default 0.6) so
 # OCR's net contribution per matched clause = ~60% of transcript's.
+#
+# Per-clause math: ``_OCR_FIELD_BASE_BOOST × ocr_boost × per-token``.
+# At default ocr_boost=0.6 and label boost (2.0): 2.0 × 0.6 × 2.0 = 2.4,
+# safely below the transcript label clause (3.0 × 2.0 = 6.0).
+#
+# CAVEAT: at higher ocr_boost values (>= 0.8), a scene matching the
+# label + multiple aliases ONLY in OCR can outrank a scene matching
+# the label ONLY in transcript. This is BY DESIGN — a product
+# repeatedly named on screen IS strong evidence the scene is about it.
+# But if the eval shows OCR-only-matched scenes dominating the
+# storyboard picks (silent shorts), tune ocr_boost back DOWN.
 _OCR_FIELD_BASE_BOOST = 2.0
 
 # Aliases shorter than this are SKIPPED on the OCR side (still kept

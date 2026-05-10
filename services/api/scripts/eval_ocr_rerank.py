@@ -153,7 +153,21 @@ async def _load_catalog_probes(org_slug: str) -> list[CatalogProbe]:
 async def _build_os_client():
     """Construct an AsyncOpenSearch client from app config — same
     factory ``app.modules.search.client`` uses but lazy-imported here
-    to keep this script's import surface narrow."""
+    to keep this script's import surface narrow.
+
+    NOTE on the loose-coupling rule: CLAUDE.md forbids
+    ``shorts_auto_product`` from cross-importing other ``app.modules.*``
+    packages. This script lives at ``services/api/scripts/`` (NOT inside
+    ``app/modules/shorts_auto_product/``), so the rule applies to
+    PRODUCTION module code that gets loaded by the API process — not
+    to one-shot eval scripts run via ``python -m scripts.foo``.
+
+    The production module ``track_stt/mention_extractor.py`` correctly
+    constructs its OS client INLINE (see its module docstring) per the
+    rule. This script's import of the same factory mirrors the
+    ``eval_storyboard.py`` precedent and is acceptable as
+    eval-tooling-only coupling.
+    """
     from app.modules.search.client import get_opensearch_client  # noqa
 
     return get_opensearch_client()
