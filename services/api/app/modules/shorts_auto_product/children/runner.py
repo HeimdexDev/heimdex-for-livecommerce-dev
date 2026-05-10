@@ -754,6 +754,20 @@ class ChildRunner:
                         "auto_shorts_product_v2_storyboard_shadow_mode",
                         False,
                     ),
+                    # OCR re-rank (per
+                    # ``.claude/plans/ocr-mention-extractor-rerank.md``).
+                    # Default-OFF; flip per-org once the OCR backfill
+                    # has populated v5 for that org's videos.
+                    ocr_rerank_enabled=getattr(
+                        self.settings,
+                        "auto_shorts_product_v2_ocr_rerank_enabled",
+                        False,
+                    ),
+                    ocr_boost=getattr(
+                        self.settings,
+                        "auto_shorts_product_v2_ocr_boost",
+                        0.6,
+                    ),
                 )
             except NoMentionsFoundError as e:
                 logger.info(

@@ -779,3 +779,261 @@ class TestHitToScene:
         scene = _hit_to_scene(hit, "transcript", [])
         assert scene.transcript_text == "this is the transcript"
         assert scene.caption_text == "this is the caption"
+
+
+# ---------- mention_extractor OCR re-rank (2026-05-10) ----------
+#
+# Plan: ``.claude/plans/ocr-mention-extractor-rerank.md``
+#
+# These tests cover the OCR-side additions to ``_build_bm25_query`` and
+# ``_hit_to_scene``. Strict-additive guarantee: with
+# ``ocr_rerank_enabled=False``, the query body is byte-identical to the
+# pre-OCR shape (the ``TestMentionExtractorQuery`` class above already
+# exercises that path without setting the flag).
+
+
+class TestMentionExtractorQueryOCR:
+    """OCR-clause behavior in ``_build_bm25_query``."""
+
+    def test_flag_off_byte_identical_to_pre_ocr(self):
+        """Strict-additive: flag off → query has zero ocr_text_norm clauses."""
+        q = _build_bm25_query(
+            org_id=uuid4(),
+            video_id="gd_x",
+            llm_label="달심",
+            spoken_aliases=["DALSIM", "이 주스"],
+            ocr_rerank_enabled=False,
+        )
+        clauses = q["bool"]["should"]
+        ocr_clauses = [
+            c for c in clauses if "match" in c and "ocr_text_norm" in c["match"]
+        ]
+        assert ocr_clauses == [], (
+            "Flag off MUST produce zero OCR clauses (strict-additive)"
+        )
+        # Sanity: existing transcript+caption clauses still there.
+        non_ocr = [
+            c for c in clauses
+            if "match" in c and ("transcript_raw" in c["match"] or "scene_caption" in c["match"])
+        ]
+        assert len(non_ocr) == len(clauses)
+
+    def test_flag_on_adds_ocr_clauses_for_label(self):
+        q = _build_bm25_query(
+            org_id=uuid4(),
+            video_id="gd_x",
+            llm_label="달심 ABC 주스",
+            spoken_aliases=[],
+            ocr_rerank_enabled=True,
+        )
+        ocr_clauses = [
+            c for c in q["bool"]["should"]
+            if "match" in c and "ocr_text_norm" in c["match"]
+        ]
+        # Label only → 1 OCR clause for the label.
+        assert len(ocr_clauses) == 1
+        assert ocr_clauses[0]["match"]["ocr_text_norm"]["query"] == "달심 ABC 주스"
+        # Boost > 0.
+        assert ocr_clauses[0]["match"]["ocr_text_norm"]["boost"] > 0
+
+    def test_flag_on_adds_ocr_clauses_for_label_plus_long_aliases(self):
+        q = _build_bm25_query(
+            org_id=uuid4(),
+            video_id="gd_x",
+            llm_label="밀레니즈 루프",
+            spoken_aliases=["스포츠 루프", "마플 워치", "이 시계"],
+            ocr_rerank_enabled=True,
+        )
+        ocr_clauses = [
+            c for c in q["bool"]["should"]
+            if "match" in c and "ocr_text_norm" in c["match"]
+        ]
+        # Label + 3 long aliases (each ≥3 chars) = 4 OCR clauses.
+        # All non-trivial, all aliases.
+        assert len(ocr_clauses) == 4
+        ocr_queries = sorted(c["match"]["ocr_text_norm"]["query"] for c in ocr_clauses)
+        assert ocr_queries == sorted([
+            "밀레니즈 루프", "스포츠 루프", "마플 워치", "이 시계",
+        ])
+
+    def test_flag_on_skips_short_aliases_on_ocr_side_only(self):
+        """Aliases shorter than _OCR_ALIAS_MIN_LENGTH (3 chars) are
+        skipped on OCR side but kept on transcript/caption side."""
+        q = _build_bm25_query(
+            org_id=uuid4(),
+            video_id="gd_x",
+            llm_label="달심",  # 2 chars — also short!
+            spoken_aliases=["바", "이", "쿠키", "abc"],
+            ocr_rerank_enabled=True,
+        )
+        clauses = q["bool"]["should"]
+        ocr_clauses = [
+            c for c in clauses
+            if "match" in c and "ocr_text_norm" in c["match"]
+        ]
+        # OCR side: label "달심" (2 chars) is the LABEL — kept regardless
+        # of length (label is the canonical search term, not subject
+        # to alias-length filter). Aliases: '바' (1), '이' (1) skipped;
+        # '쿠키' (2) skipped; 'abc' (3) kept. So OCR has label + 'abc' = 2.
+        ocr_queries = sorted(c["match"]["ocr_text_norm"]["query"] for c in ocr_clauses)
+        assert ocr_queries == ["abc", "달심"]
+
+        # Transcript+caption side: ALL aliases kept. Label + 4 aliases
+        # = 5 terms × 2 fields = 10 transcript/caption clauses.
+        non_ocr_clauses = [
+            c for c in clauses
+            if "match" in c and ("transcript_raw" in c["match"] or "scene_caption" in c["match"])
+        ]
+        assert len(non_ocr_clauses) == 10
+
+    def test_ocr_boost_scales_clause_weight(self):
+        """ocr_boost=0.0 should produce zero-weighted (effectively
+        no-op) OCR clauses; ocr_boost=1.0 should produce clauses at
+        full _OCR_FIELD_BASE_BOOST × per-token boost weight."""
+        q_low = _build_bm25_query(
+            org_id=uuid4(),
+            video_id="gd_x",
+            llm_label="달심",
+            spoken_aliases=[],
+            ocr_rerank_enabled=True,
+            ocr_boost=0.0,
+        )
+        q_high = _build_bm25_query(
+            org_id=uuid4(),
+            video_id="gd_x",
+            llm_label="달심",
+            spoken_aliases=[],
+            ocr_rerank_enabled=True,
+            ocr_boost=1.0,
+        )
+        ocr_low = [
+            c for c in q_low["bool"]["should"]
+            if "match" in c and "ocr_text_norm" in c["match"]
+        ]
+        ocr_high = [
+            c for c in q_high["bool"]["should"]
+            if "match" in c and "ocr_text_norm" in c["match"]
+        ]
+        assert len(ocr_low) == 1 and len(ocr_high) == 1
+        # ocr_boost=1.0 gives 1.67x the boost of 0.6 (default), and
+        # 0.0 gives literally zero weight.
+        assert ocr_low[0]["match"]["ocr_text_norm"]["boost"] == 0.0
+        assert ocr_high[0]["match"]["ocr_text_norm"]["boost"] > 0.0
+
+    def test_ocr_boost_default_is_lower_than_transcript(self):
+        """The default ocr_boost=0.6 keeps OCR contribution proportional
+        but not dominant — a single OCR-clause match should not
+        outscore a single transcript-clause match for the same token."""
+        q = _build_bm25_query(
+            org_id=uuid4(),
+            video_id="gd_x",
+            llm_label="달심",
+            spoken_aliases=[],
+            ocr_rerank_enabled=True,
+        )
+        clauses = q["bool"]["should"]
+        transcript = next(
+            c for c in clauses
+            if "match" in c and "transcript_raw" in c["match"]
+        )
+        ocr = next(
+            c for c in clauses
+            if "match" in c and "ocr_text_norm" in c["match"]
+        )
+        t_boost = transcript["match"]["transcript_raw"]["boost"]
+        o_boost = ocr["match"]["ocr_text_norm"]["boost"]
+        assert o_boost < t_boost, (
+            f"OCR boost ({o_boost}) must be < transcript boost ({t_boost}) "
+            f"so transcript stays the primary intent signal"
+        )
+
+
+class TestHitToSceneOCR:
+    """OCR field population in ``_hit_to_scene``."""
+
+    def _hit_with_ocr(
+        self,
+        *,
+        transcript: str = "",
+        caption: str = "",
+        ocr: str = "",
+        sid: str = "x",
+        score: float = 1.0,
+    ):
+        return {
+            "_score": score,
+            "_source": {
+                "scene_id": sid,
+                "start_ms": 0,
+                "end_ms": 1_000,
+                "transcript_raw": transcript,
+                "scene_caption": caption,
+                "ocr_text_raw": ocr,
+            },
+        }
+
+    def test_ocr_text_carried_through(self):
+        hit = self._hit_with_ocr(transcript="", ocr="달심 SLDR 클래스가다른")
+        scene = _hit_to_scene(hit, "달심", [])
+        assert scene.ocr_text == "달심 SLDR 클래스가다른"
+        assert scene.ocr_match is True
+
+    def test_ocr_match_false_when_label_not_in_ocr(self):
+        hit = self._hit_with_ocr(transcript="달심 mention", ocr="entirely unrelated text")
+        scene = _hit_to_scene(hit, "달심", [])
+        assert scene.ocr_match is False
+        # Transcript path still works.
+        assert scene.matched_field == "transcript_raw"
+
+    def test_ocr_match_via_alias(self):
+        hit = self._hit_with_ocr(transcript="", ocr="DALSIM은 좋은 브랜드")
+        scene = _hit_to_scene(hit, "달심", ["DALSIM"])
+        assert scene.ocr_match is True
+
+    def test_ocr_only_match_does_not_change_matched_field(self):
+        """Backward compat: matched_field semantics preserved.
+        OCR-only match ⇒ matched_field falls back to caption (existing
+        fallback), with ocr_match=True surfacing the on-screen evidence."""
+        hit = self._hit_with_ocr(
+            transcript="unrelated audio",
+            caption="unrelated caption",
+            ocr="달심 packaging visible",
+        )
+        scene = _hit_to_scene(hit, "달심", [])
+        assert scene.ocr_match is True
+        # matched_field stays in the {transcript_raw, scene_caption, both}
+        # set. OCR-only matches don't extend the literal.
+        assert scene.matched_field in {"transcript_raw", "scene_caption", "both"}
+
+    def test_no_ocr_field_in_source_yields_empty_ocr_text(self):
+        """Backward compat: if OS doesn't return ocr_text_raw (older
+        index, projection oversight) the dataclass defaults apply."""
+        hit = {
+            "_score": 1.0,
+            "_source": {
+                "scene_id": "x",
+                "start_ms": 0,
+                "end_ms": 1_000,
+                "transcript_raw": "달심 mention",
+                "scene_caption": "",
+                # ocr_text_raw missing
+            },
+        }
+        scene = _hit_to_scene(hit, "달심", [])
+        assert scene.ocr_text == ""
+        assert scene.ocr_match is False
+        # Transcript path unaffected.
+        assert scene.matched_field == "transcript_raw"
+
+    def test_matched_aliases_includes_ocr_only_hits(self):
+        """If an alias appears ONLY in OCR (not in transcript or
+        caption), it should still surface in matched_aliases for the
+        debug surface — the alias DID appear, the rendered short
+        SHOULD show the product."""
+        hit = self._hit_with_ocr(
+            transcript="some unrelated audio",
+            caption="some unrelated caption",
+            ocr="DALSIM brand visible",
+        )
+        scene = _hit_to_scene(hit, "달심", ["DALSIM"])
+        assert "DALSIM" in scene.matched_aliases

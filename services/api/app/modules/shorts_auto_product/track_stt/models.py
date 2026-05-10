@@ -56,6 +56,31 @@ class MentionedScene:
     # appear AS the host speaks instead of distributed uniformly.
     speaker_transcript: str = ""
 
+    # OCR re-rank fields (added 2026-05-10 per
+    # ``.claude/plans/ocr-mention-extractor-rerank.md``).
+    #
+    # ``ocr_text`` carries the scene's ``ocr_text_raw`` so the
+    # storyboard picker / eval harness can see WHAT on-screen text
+    # contributed to the BM25 score. Empty string when:
+    #   - OCR re-rank flag is OFF (mention_extractor doesn't pull the field)
+    #   - Scene has no keyframe OR PaddleOCR found no text
+    #
+    # ``ocr_match`` is True when at least one of (llm_label,
+    # spoken_aliases) substring-matches ``ocr_text`` (case-folded).
+    # This is the on-screen-evidence signal: True means "this
+    # product's name is visibly on screen during this scene".
+    # Used by debug telemetry + downstream picker hints. Default
+    # False so callers checking the flag don't false-positive when
+    # the OCR re-rank feature is disabled.
+    #
+    # ``matched_field`` semantics PRESERVED — still
+    # ``"transcript_raw" | "scene_caption" | "both"``. OCR-only
+    # matches surface via ``ocr_match=True`` rather than expanding
+    # the Literal so existing downstream code that branches on
+    # matched_field doesn't need to change.
+    ocr_text: str = ""
+    ocr_match: bool = False
+
 
 # ---------- segment_assembler output ----------
 
