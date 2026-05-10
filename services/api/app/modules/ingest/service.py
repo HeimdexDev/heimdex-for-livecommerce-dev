@@ -20,6 +20,7 @@ Embedding text construction (AD-2):
   caption (full) + transcript (first 500 chars) + ocr (first 200 chars)
   See ``build_embedding_text()`` for details.
 """
+import asyncio
 import time as _time
 from datetime import datetime, timezone
 from typing import Any
@@ -177,7 +178,11 @@ class SceneIngestService:
         embeddings: dict[int, list[float]] = {}
         if texts_to_embed:
             texts = [t for _, t in texts_to_embed]
-            vectors = get_passage_embeddings_batch(texts)
+            # Run on a worker thread — get_passage_embeddings_batch is CPU-bound
+            # (model.encode) and blocks the asyncio event loop for tens of
+            # seconds per batch. Without to_thread every concurrent request
+            # 504s while embedding runs (loop frozen).
+            vectors = await asyncio.to_thread(get_passage_embeddings_batch, texts)
             for (idx, _), vec in zip(texts_to_embed, vectors):
                 embeddings[idx] = vec
         t_after_embedding = _time.monotonic()
@@ -398,7 +403,11 @@ class SceneIngestService:
         t_after_prepare = _time.monotonic()
         if embedding_inputs:
             texts = [text for _, text in embedding_inputs]
-            vectors = get_passage_embeddings_batch(texts)
+            # Run on a worker thread — get_passage_embeddings_batch is CPU-bound
+            # (model.encode) and blocks the asyncio event loop for tens of
+            # seconds per batch. Without to_thread every concurrent request
+            # 504s while embedding runs (loop frozen).
+            vectors = await asyncio.to_thread(get_passage_embeddings_batch, texts)
             for (idx, _), vec in zip(embedding_inputs, vectors):
                 partial_updates[idx][1]["embedding_vector"] = vec
 
