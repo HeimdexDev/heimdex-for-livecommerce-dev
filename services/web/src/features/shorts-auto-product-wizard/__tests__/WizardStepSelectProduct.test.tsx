@@ -109,7 +109,7 @@ describe("WizardStepSelectProduct", () => {
     expect(card.textContent).toContain("테스트 가방");
   });
 
-  it("submits createScanOrder with catalog_entry_id when Next clicked", async () => {
+  it("submits createScanOrder with catalog_entry_ids when Next clicked", async () => {
     triggerEnumerationMock.mockResolvedValue({
       job_id: "j1",
       deduped: true,
@@ -148,7 +148,8 @@ describe("WizardStepSelectProduct", () => {
       product_distribution: "single",
       language: "ko",
       intent: "commit",
-      catalog_entry_id: SAMPLE_ENTRY.catalog_entry_id,
+      // PR 3: list shape replaces the legacy singular field.
+      catalog_entry_ids: [SAMPLE_ENTRY.catalog_entry_id],
     });
     await waitFor(() =>
       expect(pushMock).toHaveBeenCalledWith(

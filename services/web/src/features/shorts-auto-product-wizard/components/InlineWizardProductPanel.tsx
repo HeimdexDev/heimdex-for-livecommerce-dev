@@ -4,10 +4,12 @@
 // (intentionally duplicated; the legacy file stays alive for the route-based
 // flow until Phase D3 deletion).
 //
-// Single-select under the hood (Decision #1) — multi-select UI lands in a
-// follow-up once backend supports ``catalog_entry_ids: string[]``. The
-// checkmark-only visual matches Figma #13; clicking a different card just
-// replaces the selection.
+// PR 3 of the multi-product wizard plan: multi-select UI. Backend (PR 2)
+// accepts ``catalog_entry_ids: string[]`` with validation
+// ``1 <= len <= requested_count``. Cap is enforced client-side: clicking
+// a non-selected card at the cap is silently ignored (the K/N counter
+// makes the cap visible). See
+// ``.claude/plans/wizard-multi-product-select.md`` (PR 3 of 3).
 // ============================================================================
 
 "use client";
@@ -78,7 +80,12 @@ export function InlineWizardProductPanel({
   const [entries, setEntries] = useState<CatalogProductSummary[]>([]);
   const [pollState, setPollState] = useState<PollState>("enumerating");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // PR 3: multi-select state. Set membership = card selected. Clicking
+  // an unselected card when ``size === requested_count`` is silently
+  // ignored (the K/N counter is the visible affordance).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [submitting, setSubmitting] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const startedAtRef = useRef<number>(Date.now());
@@ -149,10 +156,15 @@ export function InlineWizardProductPanel({
   }, [videoId, getAccessToken, retryCount]);
 
   const handleSubmit = useCallback(async () => {
-    if (!selectedId) return;
+    if (selectedIds.size === 0) return;
     setErrorMessage(null);
     setSubmitting(true);
     try {
+      // PR 3: submit the new ``catalog_entry_ids`` list. Sorted
+      // client-side so it matches the server's canonical hash form
+      // (PR 2's settings_hash sorts the list before hashing); two
+      // submissions with the same set in different click orders
+      // dedupe correctly within the 60s idempotency window.
       const response = await createScanOrder(
         videoId,
         {
@@ -163,7 +175,7 @@ export function InlineWizardProductPanel({
           product_distribution: criteria.product_distribution,
           language: "ko", // Hardcoded — inline UI drops the toggle (Decision #1 surroundings)
           intent: "commit",
-          catalog_entry_id: selectedId,
+          catalog_entry_ids: Array.from(selectedIds).sort(),
         },
         getAccessToken,
       );
@@ -182,18 +194,37 @@ export function InlineWizardProductPanel({
       }
       setSubmitting(false);
     }
-  }, [criteria, selectedId, videoId, getAccessToken, onSubmitOrder]);
+  }, [criteria, selectedIds, videoId, getAccessToken, onSubmitOrder]);
 
   const handleRetry = () => {
     startedAtRef.current = Date.now();
     setEntries([]);
-    setSelectedId(null);
+    setSelectedIds(new Set());
     setErrorMessage(null);
     setPollState("enumerating");
     setRetryCount((n) => n + 1);
   };
 
-  const selectedCount = selectedId ? 1 : 0;
+  const selectedCount = selectedIds.size;
+  const cap = criteria.requested_count;
+  const atCap = selectedCount >= cap;
+
+  // PR 3: card click toggles membership. At-cap clicks on unselected
+  // cards are silently ignored (the K/N counter is the visible cue).
+  // De-selecting is always allowed regardless of cap.
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      if (prev.has(id)) {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      }
+      if (prev.size >= cap) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -215,7 +246,7 @@ export function InlineWizardProductPanel({
             <h2 className="text-base font-semibold text-gray-900">
               상품 선택{" "}
               <span className="text-sm font-normal text-gray-500">
-                {entries.length}개 중 {selectedCount}개 선택
+                {entries.length}개 중 {selectedCount}/{cap}개 선택
               </span>
             </h2>
           </div>
@@ -229,7 +260,11 @@ export function InlineWizardProductPanel({
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={!selectedId || submitting || pollState !== "ready"}
+              disabled={
+                selectedIds.size === 0 ||
+                submitting ||
+                pollState !== "ready"
+              }
               className="rounded-md bg-gray-900 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-gray-800 disabled:bg-gray-300 disabled:text-gray-500"
               data-testid="inline-product-next"
             >
@@ -304,17 +339,20 @@ export function InlineWizardProductPanel({
             data-testid="inline-product-grid"
           >
             {entries.map((entry) => {
-              const isSelected = entry.catalog_entry_id === selectedId;
+              const isSelected = selectedIds.has(entry.catalog_entry_id);
+              const disabled = !isSelected && atCap;
               return (
                 <button
                   key={entry.catalog_entry_id}
                   type="button"
-                  onClick={() => setSelectedId(entry.catalog_entry_id)}
+                  onClick={() => toggleSelect(entry.catalog_entry_id)}
+                  disabled={disabled}
                   className={cn(
                     "group relative overflow-hidden rounded-lg border bg-white text-left transition",
                     isSelected
                       ? "border-gray-900 ring-2 ring-gray-900"
                       : "border-gray-200 hover:border-gray-400",
+                    disabled && "cursor-not-allowed opacity-50",
                   )}
                   data-testid="inline-product-card"
                   data-selected={isSelected}

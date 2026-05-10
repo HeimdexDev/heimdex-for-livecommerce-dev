@@ -53,11 +53,20 @@ export interface ScanOrderCreateRequest {
   product_distribution: ProductDistribution;
   language: Language;
   intent: ScanIntent;
-  // Optional pre-tracking pick from the wizard's product-select step.
-  // When set, the worker filters its catalog fetch to this single
-  // entry instead of looping over the whole active catalog. NULL =
-  // legacy whole-catalog round-robin.
+  // Legacy single-pick (PR 1 of multi-product wizard backend). Mutually
+  // exclusive with ``catalog_entry_ids``; the server normalizer 422s
+  // when both are populated. Kept for back-compat with any external
+  // caller; the wizard sends ``catalog_entry_ids`` exclusively.
   catalog_entry_id?: string | null;
+  // PR 2 of multi-product wizard: list of catalog entries the user
+  // picked at the product-select step. Server validates:
+  //   * 1 <= length <= requested_count (when populated)
+  //   * each id exists, belongs to (org, video), not soft-rejected
+  //   * no duplicates
+  // Children get a deterministic round-robin distribution at fan-out:
+  // child[i] = sorted(ids)[i % len(ids)]. Empty list = legacy
+  // whole-catalog round-robin.
+  catalog_entry_ids?: string[];
 }
 
 // ----------------------------------------------------------------------

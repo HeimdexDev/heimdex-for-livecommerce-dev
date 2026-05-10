@@ -109,25 +109,95 @@ describe("InlineWizardProductPanel", () => {
     expect(screen.getAllByTestId("inline-product-card")).toHaveLength(2);
   });
 
-  it("clicking a card selects it (single-select); clicking another replaces", async () => {
+  it("clicking cards toggles multi-select; both can be on", async () => {
     triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
     getProductCatalogMock.mockResolvedValue({
       video_id: "gd_test",
       products: SAMPLE_ENTRIES,
       scan_status: "complete",
     });
-    renderPanel();
+    renderPanel({ criteria: { requested_count: 2 } });
     await waitFor(() => screen.getByTestId("inline-product-grid"));
     const cards = screen.getAllByTestId("inline-product-card");
     fireEvent.click(cards[0]!);
     expect(cards[0]!.dataset.selected).toBe("true");
     expect(cards[1]!.dataset.selected).toBe("false");
+    // PR 3: clicking another card ADDS to the set (multi-select),
+    // doesn't replace.
     fireEvent.click(cards[1]!);
-    expect(cards[0]!.dataset.selected).toBe("false");
+    expect(cards[0]!.dataset.selected).toBe("true");
     expect(cards[1]!.dataset.selected).toBe("true");
   });
 
-  it("submits with hardcoded language=ko + intent=commit + selected catalog_entry_id", async () => {
+  it("re-clicking a selected card deselects it", async () => {
+    triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
+    getProductCatalogMock.mockResolvedValue({
+      video_id: "gd_test",
+      products: SAMPLE_ENTRIES,
+      scan_status: "complete",
+    });
+    renderPanel({ criteria: { requested_count: 2 } });
+    await waitFor(() => screen.getByTestId("inline-product-grid"));
+    const card = screen.getAllByTestId("inline-product-card")[0]!;
+    fireEvent.click(card);
+    expect(card.dataset.selected).toBe("true");
+    fireEvent.click(card);
+    expect(card.dataset.selected).toBe("false");
+  });
+
+  it("clicking a 3rd card at cap=2 is silently ignored", async () => {
+    // 3 sample entries, cap=2: the third click should be ignored
+    // (cap enforcement on the client side).
+    const THREE_ENTRIES = [
+      ...SAMPLE_ENTRIES,
+      {
+        catalog_entry_id: "00000000-0000-0000-0000-000000000ccc",
+        label: "Three",
+        canonical_crop_url: null,
+        enumeration_confidence: 0.7,
+        prominence_score: null,
+        has_track_data: false,
+        appearance_count: null,
+        total_appearance_seconds: null,
+        enumeration_source: "vision",
+        first_mention_ms: null,
+        example_quote: null,
+      },
+    ];
+    triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
+    getProductCatalogMock.mockResolvedValue({
+      video_id: "gd_test",
+      products: THREE_ENTRIES,
+      scan_status: "complete",
+    });
+    renderPanel({ criteria: { requested_count: 2 } });
+    await waitFor(() => screen.getByTestId("inline-product-grid"));
+    const cards = screen.getAllByTestId("inline-product-card");
+    fireEvent.click(cards[0]!);
+    fireEvent.click(cards[1]!);
+    fireEvent.click(cards[2]!);
+    expect(cards[0]!.dataset.selected).toBe("true");
+    expect(cards[1]!.dataset.selected).toBe("true");
+    expect(cards[2]!.dataset.selected).toBe("false");
+    // The at-cap card is also disabled visually (button.disabled).
+    expect((cards[2]! as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("counter renders K/N format", async () => {
+    triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
+    getProductCatalogMock.mockResolvedValue({
+      video_id: "gd_test",
+      products: SAMPLE_ENTRIES,
+      scan_status: "complete",
+    });
+    renderPanel({ criteria: { requested_count: 4 } });
+    await waitFor(() => screen.getByTestId("inline-product-grid"));
+    expect(screen.getByText(/2개 중 0\/4개 선택/)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByTestId("inline-product-card")[0]!);
+    expect(screen.getByText(/2개 중 1\/4개 선택/)).toBeInTheDocument();
+  });
+
+  it("submits with hardcoded language=ko + intent=commit + sorted catalog_entry_ids", async () => {
     triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
     getProductCatalogMock.mockResolvedValue({
       video_id: "gd_test",
@@ -148,7 +218,11 @@ describe("InlineWizardProductPanel", () => {
       },
     });
     await waitFor(() => screen.getByTestId("inline-product-grid"));
-    fireEvent.click(screen.getAllByTestId("inline-product-card")[0]!);
+    // Click both cards (multi-select). Click order: bbb first, then aaa
+    // — the submit body should still be sorted (aaa, bbb).
+    const cards = screen.getAllByTestId("inline-product-card");
+    fireEvent.click(cards[1]!); // bbb
+    fireEvent.click(cards[0]!); // aaa
     fireEvent.click(screen.getByTestId("inline-product-next"));
     await waitFor(() => {
       expect(createScanOrderMock).toHaveBeenCalledWith(
@@ -161,7 +235,11 @@ describe("InlineWizardProductPanel", () => {
           product_distribution: "multi",
           language: "ko",
           intent: "commit",
-          catalog_entry_id: SAMPLE_ENTRIES[0]!.catalog_entry_id,
+          // Sorted client-side to match the server's canonical hash form.
+          catalog_entry_ids: [
+            SAMPLE_ENTRIES[0]!.catalog_entry_id,
+            SAMPLE_ENTRIES[1]!.catalog_entry_id,
+          ].sort(),
         },
         expect.any(Function),
       );

@@ -109,7 +109,12 @@ export function WizardStepSelectProduct({ videoId }: Props) {
     "enumerating" | "ready" | "no_products" | "error"
   >("enumerating");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // PR 3 of multi-product wizard: multi-select state. See
+  // .claude/plans/wizard-multi-product-select.md and the parallel
+  // implementation in InlineWizardProductPanel.tsx.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [submitting, setSubmitting] = useState(false);
   // Bumped by the "다시 시도" button to re-enter the effect — without
   // this, retry would only reset local state and the polling closure
@@ -214,13 +219,19 @@ export function WizardStepSelectProduct({ videoId }: Props) {
   }, [videoId, getAccessToken, router, retryCount]);
 
   const handleSubmit = useCallback(async () => {
-    if (!criteria || !selectedId) return;
+    if (!criteria || selectedIds.size === 0) return;
     setErrorMessage(null);
     setSubmitting(true);
     try {
+      // PR 3: submit ``catalog_entry_ids`` (sorted client-side to
+      // match the server's canonical hash form for idempotency
+      // dedupe). See parallel implementation in InlineWizardProductPanel.
       const response = await createScanOrder(
         videoId,
-        { ...criteria, catalog_entry_id: selectedId },
+        {
+          ...criteria,
+          catalog_entry_ids: Array.from(selectedIds).sort(),
+        },
         getAccessToken,
       );
       router.push(
@@ -240,7 +251,7 @@ export function WizardStepSelectProduct({ videoId }: Props) {
       }
       setSubmitting(false);
     }
-  }, [criteria, selectedId, videoId, getAccessToken, router]);
+  }, [criteria, selectedIds, videoId, getAccessToken, router]);
 
   // Pass criteria back through to /criteria so the user can adjust
   // without losing it. Same URL params shape this page reads on mount.
@@ -255,7 +266,10 @@ export function WizardStepSelectProduct({ videoId }: Props) {
       next={{
         label: submitting ? "생성 중..." : "다음 >",
         onClick: handleSubmit,
-        disabled: !selectedId || submitting || pollState !== "ready",
+        disabled:
+          selectedIds.size === 0 ||
+          submitting ||
+          pollState !== "ready",
       }}
       backHref={backHref}
     >
@@ -306,7 +320,7 @@ export function WizardStepSelectProduct({ videoId }: Props) {
             onClick={() => {
               startedAtRef.current = Date.now();
               setEntries([]);
-              setSelectedId(null);
+              setSelectedIds(new Set());
               setErrorMessage(null);
               setPollState("enumerating");
               // Bumps the effect's deps → re-fires triggerEnumeration +
@@ -325,24 +339,41 @@ export function WizardStepSelectProduct({ videoId }: Props) {
       {pollState === "ready" ? (
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            아래 제품 중 하나를 클릭해 선택하세요.
+            아래 제품을 최대 {criteria?.requested_count}개까지 선택할 수 있어요.
+            ({selectedIds.size}/{criteria?.requested_count} 선택)
           </p>
           <div
             className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4"
             data-testid="product-grid"
           >
             {entries.map((entry) => {
-              const isSelected = entry.catalog_entry_id === selectedId;
+              const isSelected = selectedIds.has(entry.catalog_entry_id);
+              const cap = criteria?.requested_count ?? 0;
+              const disabled = !isSelected && selectedIds.size >= cap;
               return (
                 <button
                   key={entry.catalog_entry_id}
                   type="button"
-                  onClick={() => setSelectedId(entry.catalog_entry_id)}
+                  disabled={disabled}
+                  onClick={() => {
+                    setSelectedIds((prev) => {
+                      if (prev.has(entry.catalog_entry_id)) {
+                        const next = new Set(prev);
+                        next.delete(entry.catalog_entry_id);
+                        return next;
+                      }
+                      if (prev.size >= cap) return prev;
+                      const next = new Set(prev);
+                      next.add(entry.catalog_entry_id);
+                      return next;
+                    });
+                  }}
                   className={[
                     "group flex flex-col gap-2 rounded-lg border bg-white p-3 text-left transition",
                     isSelected
                       ? "border-indigo-500 ring-2 ring-indigo-200"
                       : "border-gray-200 hover:border-indigo-300",
+                    disabled ? "cursor-not-allowed opacity-50" : "",
                   ].join(" ")}
                   data-testid="product-card"
                   data-selected={isSelected}
