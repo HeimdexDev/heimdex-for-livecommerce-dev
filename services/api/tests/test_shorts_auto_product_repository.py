@@ -521,3 +521,137 @@ class TestClaimReClaim:
             next_stage="assembling",
         )
         assert out is None
+
+
+# ---------- create_render_children (PR 1 of multi-product wizard) -----
+
+
+class TestCreateRenderChildren:
+    """Bulk insert of render_child rows.
+
+    PR 1 of the multi-product wizard plan added the
+    ``catalog_entry_assignments`` parameter so wizard fan-out can
+    pre-assign products to specific shorts. The runner reads each
+    child's ``catalog_entry_id`` directly when set; ``None`` preserves
+    legacy whole-catalog round-robin via the picker.
+
+    See ``.claude/plans/wizard-multi-product-select.md`` (PR 1 of 3).
+    """
+
+    def _make_parent(self, **overrides):
+        from app.modules.shorts_auto_product.models import (
+            SCAN_MODE_SCAN_ORDER,
+            ProductScanJob,
+        )
+        defaults = {
+            "id": uuid4(),
+            "org_id": uuid4(),
+            "video_id": uuid4(),
+            "requested_by_user_id": uuid4(),
+            "mode": SCAN_MODE_SCAN_ORDER,
+            "length_seconds": 60,
+        }
+        defaults.update(overrides)
+        parent = MagicMock(spec=ProductScanJob)
+        for k, v in defaults.items():
+            setattr(parent, k, v)
+        return parent
+
+    @pytest.mark.asyncio
+    async def test_legacy_no_assignments_keeps_null(self, repo, session):
+        """Default behavior: every child has ``catalog_entry_id=None``,
+        identical to pre-PR-1 — preserves the runner's whole-catalog
+        round-robin fallback path."""
+        session.add_all = MagicMock()
+        parent = self._make_parent()
+        await repo.create_render_children(parent=parent, count=3)
+
+        session.add_all.assert_called_once()
+        children = session.add_all.call_args.args[0]
+        assert len(children) == 3
+        for child in children:
+            assert child.catalog_entry_id is None
+
+    @pytest.mark.asyncio
+    async def test_uniform_assignments_propagate_per_child(
+        self, repo, session,
+    ):
+        """Single-pick wizard scenario: every child gets the same
+        catalog_entry_id (the user's pick), so the runner honors the
+        selection on every short instead of round-robin."""
+        session.add_all = MagicMock()
+        parent = self._make_parent()
+        target = uuid4()
+        await repo.create_render_children(
+            parent=parent,
+            count=3,
+            catalog_entry_assignments=[target, target, target],
+        )
+        children = session.add_all.call_args.args[0]
+        assert all(c.catalog_entry_id == target for c in children)
+        assert [c.shorts_index for c in children] == [1, 2, 3]
+
+    @pytest.mark.asyncio
+    async def test_mixed_assignments_round_robin_pattern(self, repo, session):
+        """Multi-product case (PR 2 will use this): 2 products selected,
+        5 shorts requested → service computes ``[A, B, A, B, A]``.
+        Each child carries the right product."""
+        session.add_all = MagicMock()
+        parent = self._make_parent()
+        a, b = uuid4(), uuid4()
+        await repo.create_render_children(
+            parent=parent,
+            count=5,
+            catalog_entry_assignments=[a, b, a, b, a],
+        )
+        children = session.add_all.call_args.args[0]
+        assert [c.catalog_entry_id for c in children] == [a, b, a, b, a]
+        assert [c.shorts_index for c in children] == [1, 2, 3, 4, 5]
+
+    @pytest.mark.asyncio
+    async def test_assignments_can_have_none_entries(self, repo, session):
+        """Defensive: mixed list with None entries → those children
+        get ``catalog_entry_id=None`` (whole-catalog fallback for
+        that specific child). Validates the list semantics rather
+        than treating None as a signal to skip the parameter
+        entirely."""
+        session.add_all = MagicMock()
+        parent = self._make_parent()
+        target = uuid4()
+        await repo.create_render_children(
+            parent=parent,
+            count=3,
+            catalog_entry_assignments=[target, None, target],
+        )
+        children = session.add_all.call_args.args[0]
+        assert children[0].catalog_entry_id == target
+        assert children[1].catalog_entry_id is None
+        assert children[2].catalog_entry_id == target
+
+    @pytest.mark.asyncio
+    async def test_assignments_length_mismatch_raises(self, repo, session):
+        """Defense: caller bug surfaces as ValueError before any DB
+        interaction. Better than silent fan-out with a misaligned
+        list shape."""
+        parent = self._make_parent()
+        with pytest.raises(ValueError, match="must match count"):
+            await repo.create_render_children(
+                parent=parent,
+                count=3,
+                catalog_entry_assignments=[uuid4(), uuid4()],  # len=2
+            )
+
+    @pytest.mark.asyncio
+    async def test_count_must_be_positive(self, repo, session):
+        """Existing guard preserved by PR 1."""
+        parent = self._make_parent()
+        with pytest.raises(ValueError, match="count must be"):
+            await repo.create_render_children(parent=parent, count=0)
+
+    @pytest.mark.asyncio
+    async def test_non_scan_order_parent_raises(self, repo, session):
+        """Existing guard preserved by PR 1."""
+        from app.modules.shorts_auto_product.models import SCAN_MODE_ENUMERATE
+        parent = self._make_parent(mode=SCAN_MODE_ENUMERATE)
+        with pytest.raises(ValueError, match="non-scan_order"):
+            await repo.create_render_children(parent=parent, count=3)

@@ -740,3 +740,189 @@ class TestSelfHealingRunner:
 
         # MUST NOT raise.
         await runner._process_child_payload(uuid4())
+
+
+# ======================================================================
+# PR 1 of multi-product wizard — pre-assigned catalog_entry_id is honored
+# ======================================================================
+#
+# Pre-PR-1 latent bug: parent.catalog_entry_id was set on single-pick
+# wizard submissions but the api-process runner ignored it and
+# round-robined across the whole catalog. PR 1 propagates the pick to
+# each child at fan-out (in service.py) and the runner now reads
+# child.catalog_entry_id directly when set.
+#
+# Plan: ``.claude/plans/wizard-multi-product-select.md`` (PR 1 of 3).
+
+
+class TestPreAssignedCatalogEntryId:
+    """Verify the runner honors child.catalog_entry_id when set,
+    and falls back to the picker when it's None or stale."""
+
+    def _make_parent_and_child(self, *, child_catalog_id, lookup):
+        """Build a (child, parent, catalog_label_lookup) tuple for
+        ``_load_child_context`` to return, plus the fake child that
+        repo.claim returns."""
+        from datetime import datetime, timezone
+
+        from app.modules.shorts_auto_product.models import (
+            PRODUCT_DISTRIBUTION_SINGLE,
+        )
+
+        now = datetime.now(timezone.utc)
+        parent = MagicMock()
+        parent.id = uuid4()
+        parent.org_id = uuid4()
+        parent.video_id = uuid4()
+        parent.length_seconds = 60
+        parent.duration_preset_sec = 60
+        parent.requested_by_user_id = uuid4()
+        parent.product_distribution = PRODUCT_DISTRIBUTION_SINGLE
+
+        child = MagicMock()
+        child.id = uuid4()
+        child.parent_job_id = parent.id
+        child.shorts_index = 1
+        child.catalog_entry_id = child_catalog_id
+        child.started_at = now
+        child.claimed_at = now
+        return child, parent, lookup
+
+    @pytest.mark.asyncio
+    async def test_pre_assigned_id_used_when_in_active_catalog(
+        self, monkeypatch,
+    ):
+        """Wizard single-pick: child has catalog_entry_id=X, the active
+        catalog contains X. Runner uses X directly and does NOT
+        round-robin via the picker."""
+        s = _settings_stub()
+        s.auto_shorts_product_v2_track_mode = "sam2"  # exercise SAM2 picker path
+        runner, fake_repo = _build_runner(monkeypatch, settings=s)
+
+        target_id = uuid4()
+        other_id = uuid4()
+        # Lookup contains BOTH the pre-assigned id and another, so a
+        # picker round-robin would have a chance to pick the wrong one.
+        lookup = {target_id: "Product Target", other_id: "Product Other"}
+        child, parent, _ = self._make_parent_and_child(
+            child_catalog_id=target_id, lookup=lookup,
+        )
+        fake_repo.claim = AsyncMock(return_value=child)
+
+        monkeypatch.setattr(
+            runner,
+            "_load_child_context",
+            AsyncMock(return_value=(child, parent, lookup)),
+        )
+
+        # Capture which catalog_entry_id reaches _load_appearances_for_catalog.
+        # Empty appearances → clean exit via _complete_no_render.
+        captured = {}
+
+        async def fake_load(*, org_id, catalog_entry_id):
+            captured["catalog_entry_id"] = catalog_entry_id
+            return []
+        monkeypatch.setattr(
+            runner, "_load_appearances_for_catalog", AsyncMock(side_effect=fake_load),
+        )
+
+        await runner._process_child_payload(child.id)
+
+        assert captured.get("catalog_entry_id") == target_id, (
+            f"Expected runner to honor pre-assigned id {target_id}, "
+            f"got {captured.get('catalog_entry_id')} instead"
+        )
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_picker_when_pre_assigned_id_was_rejected(
+        self, monkeypatch, caplog,
+    ):
+        """Defensive: if a catalog entry was soft-rejected between
+        fan-out and runner pickup, the lookup no longer contains it.
+        Runner must fall back to the picker round-robin so the user
+        gets *some* short instead of stalling."""
+        import logging
+
+        s = _settings_stub()
+        s.auto_shorts_product_v2_track_mode = "sam2"
+        runner, fake_repo = _build_runner(monkeypatch, settings=s)
+
+        stale_id = uuid4()  # was assigned at fan-out
+        other_id = uuid4()  # only this one is in the active catalog now
+        lookup = {other_id: "Only Survivor"}
+        child, parent, _ = self._make_parent_and_child(
+            child_catalog_id=stale_id, lookup=lookup,
+        )
+        fake_repo.claim = AsyncMock(return_value=child)
+
+        monkeypatch.setattr(
+            runner,
+            "_load_child_context",
+            AsyncMock(return_value=(child, parent, lookup)),
+        )
+
+        captured = {}
+
+        async def fake_load(*, org_id, catalog_entry_id):
+            captured["catalog_entry_id"] = catalog_entry_id
+            return []
+        monkeypatch.setattr(
+            runner, "_load_appearances_for_catalog", AsyncMock(side_effect=fake_load),
+        )
+
+        with caplog.at_level(
+            logging.WARNING,
+            logger="app.modules.shorts_auto_product.children.runner",
+        ):
+            await runner._process_child_payload(child.id)
+
+        # Picker fallback ran — captured id is the survivor (only key
+        # in the lookup), NOT the stale pre-assigned id.
+        assert captured.get("catalog_entry_id") == other_id, (
+            f"Expected fallback to surviving id {other_id}, got {captured.get('catalog_entry_id')}"
+        )
+        # Warning logged so we can quantify staleness in prod.
+        assert any(
+            "child_pre_assigned_catalog_entry_unavailable" in r.message
+            for r in caplog.records
+        ), "Expected staleness warning to be logged"
+
+    @pytest.mark.asyncio
+    async def test_legacy_no_pre_assignment_uses_picker(self, monkeypatch):
+        """Whole-catalog mode (legacy default): child.catalog_entry_id
+        is None → runner uses the picker round-robin. No regression
+        for existing wizards that didn't pick a product."""
+        s = _settings_stub()
+        s.auto_shorts_product_v2_track_mode = "sam2"
+        runner, fake_repo = _build_runner(monkeypatch, settings=s)
+
+        a, b = uuid4(), uuid4()
+        lookup = {a: "A", b: "B"}
+        child, parent, _ = self._make_parent_and_child(
+            child_catalog_id=None,  # legacy mode
+            lookup=lookup,
+        )
+        fake_repo.claim = AsyncMock(return_value=child)
+
+        monkeypatch.setattr(
+            runner,
+            "_load_child_context",
+            AsyncMock(return_value=(child, parent, lookup)),
+        )
+
+        captured = {}
+
+        async def fake_load(*, org_id, catalog_entry_id):
+            captured["catalog_entry_id"] = catalog_entry_id
+            return []
+        monkeypatch.setattr(
+            runner, "_load_appearances_for_catalog", AsyncMock(side_effect=fake_load),
+        )
+
+        await runner._process_child_payload(child.id)
+
+        # Picker chose one of {a, b}. We don't assert which (picker is
+        # deterministic on shorts_index but that's an implementation
+        # detail) — the contract is that SOME id from the lookup is
+        # used, NOT None.
+        assert captured.get("catalog_entry_id") in {a, b}

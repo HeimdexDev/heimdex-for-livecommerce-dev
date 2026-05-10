@@ -492,9 +492,23 @@ async def complete(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="parent transition failed; lease lost or cancelled",
                 )
+            # PR 1 (multi-product wizard): mirror the STT inline path
+            # in service.py — when the parent has a single
+            # catalog_entry_id, propagate it to every child so the
+            # SAM2 worker (and the api-process runner, after it picks
+            # up child.catalog_entry_id) honors the user's selection.
+            # ``transitioned.catalog_entry_id`` was set on the parent
+            # at scan_order create time. Empty/None preserves legacy
+            # whole-catalog mode.
+            sam2_assignments: list[UUID | None] | None = (
+                [transitioned.catalog_entry_id] * transitioned.requested_count
+                if transitioned.catalog_entry_id is not None
+                else None
+            )
             children = await job_repo.create_render_children(
                 parent=transitioned,
                 count=transitioned.requested_count,
+                catalog_entry_assignments=sam2_assignments,
             )
             logger.info(
                 "product_v2_scan_order_fanned_out",

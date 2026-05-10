@@ -757,8 +757,23 @@ class ProductScanService:
             self.settings, "auto_shorts_product_v2_track_mode", "sam2",
         )
         if track_mode == "stt":
+            # PR 1 (multi-product wizard): when the user picked a
+            # specific catalog_entry_id at the wizard's product-select
+            # step, propagate it to EVERY child so the runner honors
+            # the selection. Without this, children get
+            # catalog_entry_id=None and the runner round-robins across
+            # the whole catalog — silently ignoring the user's pick
+            # (the latent bug fixed by this PR). Empty / None body
+            # field stays at the legacy whole-catalog round-robin.
+            assignments: list[UUID | None] | None = (
+                [body.catalog_entry_id] * body.requested_count
+                if body.catalog_entry_id is not None
+                else None
+            )
             await self.job_repo.create_render_children(
-                parent=parent, count=body.requested_count,
+                parent=parent,
+                count=body.requested_count,
+                catalog_entry_assignments=assignments,
             )
             await self.job_repo.transition_parent_to_fanned_out_unclaimed(
                 job_id=parent.id,

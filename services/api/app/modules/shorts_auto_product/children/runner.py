@@ -447,19 +447,53 @@ class ChildRunner:
                 f"implemented (Phase 5 deliverable)"
             )
 
-        try:
-            catalog_pick = SingleProductSubsetPicker().pick_catalog(
-                catalog_ids=list(catalog_label_lookup.keys()),
-                shorts_index=child.shorts_index or 1,
-            )
-        except ValueError:
-            await self._complete_no_render(
-                child_id=child_id,
-                reason="picker_value_error",
-            )
-            return
+        # PR 1 (multi-product wizard): when the wizard's product-select
+        # step propagated a specific catalog_entry_id onto each child
+        # at fan-out time, honor it directly and skip the round-robin
+        # picker. This both implements multi-product support and fixes
+        # the latent single-pick bug where parent.catalog_entry_id was
+        # set but the api-process runner ignored it.
+        #
+        # Defensive fallbacks to the picker:
+        #   * child.catalog_entry_id is None  → legacy whole-catalog mode
+        #   * pre-assigned id NOT in active catalog → entry was
+        #     soft-rejected since fan-out; revert to picker so the user
+        #     gets *some* short instead of no_render.
+        # See ``.claude/plans/wizard-multi-product-select.md`` (PR 1 of 3).
+        chosen_catalog_id: UUID
+        if (
+            child.catalog_entry_id is not None
+            and child.catalog_entry_id in catalog_label_lookup
+        ):
+            chosen_catalog_id = child.catalog_entry_id
+        else:
+            if (
+                child.catalog_entry_id is not None
+                and child.catalog_entry_id not in catalog_label_lookup
+            ):
+                # Pre-assigned but stale — log for observability so we
+                # can quantify how often this happens in prod.
+                logger.warning(
+                    "child_pre_assigned_catalog_entry_unavailable",
+                    extra={
+                        "child_id": str(child_id),
+                        "pre_assigned": str(child.catalog_entry_id),
+                        "instance_id": self.instance_id,
+                    },
+                )
+            try:
+                catalog_pick = SingleProductSubsetPicker().pick_catalog(
+                    catalog_ids=list(catalog_label_lookup.keys()),
+                    shorts_index=child.shorts_index or 1,
+                )
+            except ValueError:
+                await self._complete_no_render(
+                    child_id=child_id,
+                    reason="picker_value_error",
+                )
+                return
+            chosen_catalog_id = catalog_pick.catalog_entry_id
 
-        chosen_catalog_id = catalog_pick.catalog_entry_id
         catalog_label = catalog_label_lookup.get(chosen_catalog_id)
 
         # ── 3.5. Track-mode branch ────────────────────────────────

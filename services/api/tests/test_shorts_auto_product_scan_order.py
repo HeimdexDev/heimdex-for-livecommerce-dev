@@ -596,3 +596,111 @@ async def test_commit_scan_order_returns_501():
         )
     assert exc.value.status_code == 501
     assert "Phase 6" in exc.value.detail
+
+
+# ======================================================================
+# PR 1 of multi-product wizard — single-pick propagation to children
+# ======================================================================
+#
+# The pre-PR-1 behavior: parent.catalog_entry_id was set when the user
+# picked a product, but the api-process runner ignored it (latent bug).
+# PR 1 propagates the pick to every child at fan-out time so the runner
+# honors it. These tests verify the propagation in the STT-mode service
+# path; the actual runner-side use is tested in
+# ``test_shorts_auto_product_child_runner.py``.
+#
+# Plan: ``.claude/plans/wizard-multi-product-select.md`` (PR 1 of 3).
+
+
+def _stt_settings(**overrides):
+    """Settings stub configured for the STT inline fan-out path."""
+    return _settings_stub(
+        auto_shorts_product_v2_track_mode="stt",
+        auto_shorts_product_v2_publish_scan_order_enabled=False,
+        **overrides,
+    )
+
+
+def _stt_service():
+    """Service with STT-mode settings + a fake parent factory wired so
+    enqueue_scan_order's STT branch fans out without raising."""
+    svc = _build_service(settings=_stt_settings())
+    fake_parent = MagicMock(id=uuid4(), requested_count=5)
+    svc.job_repo.create_scan_order_parent = AsyncMock(return_value=fake_parent)
+    svc.job_repo.create_render_children = AsyncMock(return_value=[])
+    svc.job_repo.transition_parent_to_fanned_out_unclaimed = AsyncMock()
+    # Wizard's product-select prerequisite: catalog must contain the picked entry.
+    # Mocked at body-validation time via catalog_repo.get returning a non-rejected entry.
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=None,  # set per-test if a body has video_id check
+        rejected_at=None,
+    ))
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_stt_fanout_no_pick_passes_no_assignments():
+    """Whole-catalog mode (legacy default): body.catalog_entry_id=None
+    → ``create_render_children`` is called WITHOUT
+    ``catalog_entry_assignments`` (or with None). Children stay NULL,
+    runner falls back to picker round-robin (preserved behavior)."""
+    svc = _stt_service()
+    body = _scan_order_body(catalog_entry_id=None)
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=uuid4(), user_id=uuid4(), body=body,
+    )
+
+    svc.job_repo.create_render_children.assert_awaited_once()
+    call_kwargs = svc.job_repo.create_render_children.await_args.kwargs
+    assert call_kwargs.get("catalog_entry_assignments") is None, (
+        f"Expected no assignments for whole-catalog mode, got: {call_kwargs}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stt_fanout_single_pick_propagates_to_every_child():
+    """Single-pick wizard: body.catalog_entry_id=X, requested_count=5
+    → ``catalog_entry_assignments=[X, X, X, X, X]`` so each child
+    carries the pick. Fixes the latent single-pick bug — without this,
+    children get NULL and the runner round-robins across the whole
+    catalog."""
+    svc = _stt_service()
+    picked = uuid4()
+    video_id = uuid4()
+    # catalog_repo.get must return a row that matches video_id and is not rejected.
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=video_id, rejected_at=None,
+    ))
+    body = _scan_order_body(catalog_entry_id=picked, requested_count=5)
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+    )
+
+    svc.job_repo.create_render_children.assert_awaited_once()
+    call_kwargs = svc.job_repo.create_render_children.await_args.kwargs
+    assignments = call_kwargs.get("catalog_entry_assignments")
+    assert assignments == [picked] * 5, (
+        f"Expected uniform [X]*5 assignment for single-pick body, got: {assignments}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stt_fanout_single_pick_count_matches_requested_count():
+    """Edge: requested_count=1 → single-element list of one. Confirms
+    no off-by-one in the propagation."""
+    svc = _stt_service()
+    picked = uuid4()
+    video_id = uuid4()
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=video_id, rejected_at=None,
+    ))
+    body = _scan_order_body(catalog_entry_id=picked, requested_count=1)
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+    )
+
+    call_kwargs = svc.job_repo.create_render_children.await_args.kwargs
+    assert call_kwargs.get("catalog_entry_assignments") == [picked]

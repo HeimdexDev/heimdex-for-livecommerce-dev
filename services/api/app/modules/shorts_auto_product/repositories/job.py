@@ -747,6 +747,7 @@ class ProductScanJobRepository:
         *,
         parent: ProductScanJob,
         count: int,
+        catalog_entry_assignments: list[UUID | None] | None = None,
     ) -> list[ProductScanJob]:
         """Bulk insert N child rows for a scan_order parent.
 
@@ -754,6 +755,17 @@ class ProductScanJobRepository:
         ``requested_by_user_id``, and ``length_seconds`` from the
         parent. Each carries its own ``shorts_index`` (1..count) which
         the picker uses to spread products across shorts.
+
+        ``catalog_entry_assignments`` (PR 1 of multi-product wizard):
+        when provided, must be a list of length ``count`` whose entries
+        each become the corresponding child's ``catalog_entry_id``.
+        Use this to pre-assign products at fan-out time so the runner
+        can skip the picker round-robin and honor the user's selection.
+        ``None`` entries (or the whole arg being ``None``) preserve
+        the legacy whole-catalog fallback (children stay NULL → runner
+        uses ``SingleProductSubsetPicker`` round-robin).
+
+        See ``.claude/plans/wizard-multi-product-select.md`` (PR 1 of 3).
         """
         if parent.mode != SCAN_MODE_SCAN_ORDER:
             raise ValueError(
@@ -762,12 +774,24 @@ class ProductScanJobRepository:
             )
         if count < 1:
             raise ValueError(f"count must be >= 1, got {count!r}")
+        if (
+            catalog_entry_assignments is not None
+            and len(catalog_entry_assignments) != count
+        ):
+            raise ValueError(
+                f"catalog_entry_assignments length ({len(catalog_entry_assignments)}) "
+                f"must match count ({count})"
+            )
         children = [
             ProductScanJob(
                 org_id=parent.org_id,
                 video_id=parent.video_id,
                 requested_by_user_id=parent.requested_by_user_id,
-                catalog_entry_id=None,
+                catalog_entry_id=(
+                    catalog_entry_assignments[i - 1]
+                    if catalog_entry_assignments is not None
+                    else None
+                ),
                 duration_preset_sec=parent.length_seconds,
                 mode=SCAN_MODE_RENDER_CHILD,
                 parent_job_id=parent.id,
