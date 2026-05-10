@@ -53,6 +53,34 @@ _LABEL_BOOST = 2.0
 _ALIAS_HEAD_BOOST = 1.0
 _ALIAS_TAIL_BOOST = 0.4
 
+# OCR re-rank field boost (added 2026-05-10 per
+# ``.claude/plans/ocr-mention-extractor-rerank.md``). Lower than
+# ``_TRANSCRIPT_BOOST`` (3.0) and ``_CAPTION_BOOST`` (1.5) — OCR is
+# noisier than transcript (PaddleOCR misreads, no word boundaries)
+# but more direct than caption (LVM-paraphrased, may drift).
+# Multiplied by the per-call ``ocr_boost`` setting (default 0.6) so
+# OCR's net contribution per matched clause = ~60% of transcript's.
+#
+# Per-clause math: ``_OCR_FIELD_BASE_BOOST × ocr_boost × per-token``.
+# At default ocr_boost=0.6 and label boost (2.0): 2.0 × 0.6 × 2.0 = 2.4,
+# safely below the transcript label clause (3.0 × 2.0 = 6.0).
+#
+# CAVEAT: at higher ocr_boost values (>= 0.8), a scene matching the
+# label + multiple aliases ONLY in OCR can outrank a scene matching
+# the label ONLY in transcript. This is BY DESIGN — a product
+# repeatedly named on screen IS strong evidence the scene is about it.
+# But if the eval shows OCR-only-matched scenes dominating the
+# storyboard picks (silent shorts), tune ocr_boost back DOWN.
+_OCR_FIELD_BASE_BOOST = 2.0
+
+# Aliases shorter than this are SKIPPED on the OCR side (still kept
+# on the transcript/caption side). Reason: short Korean tokens like
+# "바", "이", "요" false-positive on OCR's noisy output even with
+# nori IDF down-weighting (validated 2026-05-10 against staging
+# devorg catalog videos). The transcript path keeps them because
+# speech-side context disambiguates.
+_OCR_ALIAS_MIN_LENGTH = 3
+
 
 async def find_mentioned_scenes(
     *,
@@ -63,6 +91,8 @@ async def find_mentioned_scenes(
     llm_label: str,
     spoken_aliases: list[str],
     result_cap: int = _DEFAULT_RESULT_CAP,
+    ocr_rerank_enabled: bool = False,
+    ocr_boost: float = 0.6,
 ) -> list[MentionedScene]:
     """Run a single BM25 query and return matched scenes.
 
@@ -94,7 +124,32 @@ async def find_mentioned_scenes(
         video_id=video_id,
         llm_label=llm_label,
         spoken_aliases=spoken_aliases,
+        ocr_rerank_enabled=ocr_rerank_enabled,
+        ocr_boost=ocr_boost,
     )
+
+    # Source projection: ``ocr_text_raw`` is included unconditionally
+    # (cheap — single short string field) so downstream eval/telemetry
+    # can see what OCR text was on each scene even when the OCR
+    # re-rank flag is OFF. The re-rank flag only controls whether OCR
+    # contributes to the BM25 SCORE, not whether the field is fetched.
+    source_fields = [
+        "scene_id",
+        "start_ms",
+        "end_ms",
+        "transcript_raw",
+        "scene_caption",
+        # v0.16.2 — pulled so composition_builder can
+        # time-align subtitles to speaker turns instead
+        # of distributing uniformly. Backwards compatible:
+        # missing/empty value falls back to uniform.
+        "speaker_transcript",
+        # OCR re-rank (2026-05-10): always pulled so MentionedScene's
+        # ``ocr_text`` + ``ocr_match`` populate even when the boost
+        # flag is off. Useful for offline eval comparing flag-on vs
+        # flag-off without a re-query.
+        "ocr_text_raw",
+    ]
 
     try:
         response = await os_client.search(
@@ -102,18 +157,7 @@ async def find_mentioned_scenes(
             body={
                 "size": result_cap,
                 "query": query,
-                "_source": [
-                    "scene_id",
-                    "start_ms",
-                    "end_ms",
-                    "transcript_raw",
-                    "scene_caption",
-                    # v0.16.2 — pulled so composition_builder can
-                    # time-align subtitles to speaker turns instead
-                    # of distributing uniformly. Backwards compatible:
-                    # missing/empty value falls back to uniform.
-                    "speaker_transcript",
-                ],
+                "_source": source_fields,
                 "sort": [{"_score": "desc"}],
             },
         )
@@ -140,6 +184,8 @@ async def find_mentioned_scenes(
             "alias_count": len(spoken_aliases),
             "scene_count": len(scenes),
             "max_score": scenes[0].score if scenes else 0.0,
+            "ocr_rerank_enabled": ocr_rerank_enabled,
+            "ocr_match_count": sum(1 for s in scenes if s.ocr_match),
         },
     )
     return scenes
@@ -154,11 +200,24 @@ def _build_bm25_query(
     video_id: str,
     llm_label: str,
     spoken_aliases: list[str],
+    ocr_rerank_enabled: bool = False,
+    ocr_boost: float = 0.6,
 ) -> dict[str, Any]:
-    """Build the OS query body. Pure function — easy to test."""
+    """Build the OS query body. Pure function — easy to test.
+
+    When ``ocr_rerank_enabled=True``, parallel ``ocr_text_norm`` clauses
+    are added at boost ``_OCR_FIELD_BASE_BOOST × ocr_boost × <per-clause boost>``
+    so on-screen-text matches contribute to the BM25 score alongside
+    transcript and caption matches. Aliases shorter than
+    ``_OCR_ALIAS_MIN_LENGTH`` are skipped on the OCR side only (kept on
+    transcript/caption) to avoid false positives on noisy short tokens.
+
+    When ``ocr_rerank_enabled=False``, the OS query body is byte-identical
+    to the pre-OCR shape — strict additive guarantee.
+    """
     should_clauses: list[dict[str, Any]] = []
 
-    # ---- canonical label, both fields ----
+    # ---- canonical label, both fields (transcript + caption) ----
     label_clean = (llm_label or "").strip()
     if label_clean:
         should_clauses.append({
@@ -207,6 +266,45 @@ def _build_bm25_query(
             }
         })
 
+    # ---- OCR re-rank (gated; strict additive when off) ----
+    if ocr_rerank_enabled:
+        # Effective per-clause boost = base × ocr_boost × per-token boost
+        # (same per-token decay as transcript/caption).
+        ocr_field_weight = _OCR_FIELD_BASE_BOOST * float(ocr_boost)
+
+        if label_clean:
+            should_clauses.append({
+                "match": {
+                    "ocr_text_norm": {
+                        "query": label_clean,
+                        "boost": ocr_field_weight * _LABEL_BOOST,
+                    }
+                }
+            })
+
+        seen_for_ocr: set[str] = {label_clean.casefold()} if label_clean else set()
+        for idx, raw_alias in enumerate(spoken_aliases or []):
+            alias = (raw_alias or "").strip()
+            if not alias:
+                continue
+            key = alias.casefold()
+            if key in seen_for_ocr:
+                continue
+            seen_for_ocr.add(key)
+            # OCR-side: skip very short aliases (false-positive risk
+            # on noisy OCR output even with nori IDF down-weighting).
+            if len(alias) < _OCR_ALIAS_MIN_LENGTH:
+                continue
+            per_alias_boost = _ALIAS_HEAD_BOOST if idx == 0 else _ALIAS_TAIL_BOOST
+            should_clauses.append({
+                "match": {
+                    "ocr_text_norm": {
+                        "query": alias,
+                        "boost": ocr_field_weight * per_alias_boost,
+                    }
+                }
+            })
+
     return {
         "bool": {
             "must": [
@@ -231,6 +329,17 @@ def _hit_to_scene(
     per-clause-match data from OS without explain mode, so we re-run
     a substring check locally — cheap, deterministic, and good enough
     for the debug surface.
+
+    ``ocr_text`` and ``ocr_match`` are populated from ``ocr_text_raw``
+    in the OS source (always pulled, even when OCR re-rank is off — see
+    ``find_mentioned_scenes`` source projection). ``ocr_match`` uses
+    the same substring re-check as transcript/caption.
+
+    NOTE on ``matched_field``: kept as ``transcript_raw | scene_caption | both``
+    even when OCR matches. OCR-only matches surface via ``ocr_match=True``
+    with ``matched_field`` falling back to caption (the existing
+    fallback). Downstream code that branches on ``matched_field``
+    keeps working unchanged.
     """
     src = hit.get("_source", {}) or {}
     scene_id = str(src.get("scene_id", ""))
@@ -241,11 +350,19 @@ def _hit_to_scene(
     transcript = (src.get("transcript_raw") or "").strip()
     caption = (src.get("scene_caption") or "").strip()
     speaker_transcript = (src.get("speaker_transcript") or "").strip()
+    ocr_text = (src.get("ocr_text_raw") or "").strip()
 
     # Build the alias-set for substring re-check.
     tokens = [t for t in [llm_label, *spoken_aliases] if t]
     transcript_match = any(_contains_ci(transcript, t) for t in tokens)
     caption_match = any(_contains_ci(caption, t) for t in tokens)
+    # ``ocr_match`` re-uses the same tokens as transcript/caption (NOT
+    # the OCR-side filtered list with ``_OCR_ALIAS_MIN_LENGTH``) —
+    # this is a substring presence check, not the BM25 query. A short
+    # alias DID appear on screen iff its substring is in the OCR text;
+    # we only suppress short aliases on the QUERY side to avoid noisy
+    # BM25 scoring.
+    ocr_match = bool(ocr_text) and any(_contains_ci(ocr_text, t) for t in tokens)
 
     if transcript_match and caption_match:
         matched_field: str = "both"
@@ -255,11 +372,14 @@ def _hit_to_scene(
         matched_field = "scene_caption"
     else:
         # OS scored it >0 (probably via nori stemming on a partial
-        # token); we can't pin it to a specific field. Bias to
-        # caption since transcript false-stems are rarer in practice.
+        # token, OR via the OCR clause when ocr_rerank_enabled=True);
+        # we can't pin it to a specific field. Bias to caption since
+        # transcript false-stems are rarer in practice. Downstream
+        # code reading ``matched_field`` is unchanged; ocr_match
+        # carries the on-screen-evidence signal separately.
         matched_field = "scene_caption"
 
-    matched_aliases = [t for t in tokens if _contains_ci(transcript + " " + caption, t)]
+    matched_aliases = [t for t in tokens if _contains_ci(transcript + " " + caption + " " + ocr_text, t)]
 
     return MentionedScene(
         scene_id=scene_id,
@@ -271,6 +391,8 @@ def _hit_to_scene(
         transcript_text=transcript,
         caption_text=caption,
         speaker_transcript=speaker_transcript,
+        ocr_text=ocr_text,
+        ocr_match=ocr_match,
     )
 
 

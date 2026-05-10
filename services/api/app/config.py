@@ -579,6 +579,33 @@ class Settings(BaseSettings):
     # ``auto_shorts_product_v2_storyboard_mode_enabled`` is True.
     auto_shorts_product_v2_storyboard_shadow_mode: bool = False
 
+    # --- Auto-shorts: OCR re-rank in mention_extractor ---
+    # Plan: ``.claude/plans/ocr-mention-extractor-rerank.md``.
+    #
+    # When True, the mention_extractor BM25 query adds parallel clauses
+    # against ``ocr_text_norm`` (Nori-tokenized OS field) so scenes with
+    # on-screen product text are surfaced in addition to scenes with
+    # audio-mention matches. Default False so the feature ships dark and
+    # is enabled per-org once the OCR backfill has populated v5 for that
+    # org's videos.
+    #
+    # Strict additive semantics: when False, the BM25 query is
+    # byte-identical to today's transcript+caption-only shape. When True
+    # but the index has no OCR data, the OCR clauses simply don't match
+    # any docs — no regression possible. Verified empirically on the
+    # 22 devorg catalog videos (2026-05-10): BM25-with-OCR recall = 93%
+    # vs substring-only = 48%.
+    auto_shorts_product_v2_ocr_rerank_enabled: bool = False
+    # Boost multiplier for OCR clauses RELATIVE to the existing
+    # transcript/caption clauses (which use the module's own
+    # ``_TRANSCRIPT_BOOST`` × ``_LABEL_BOOST`` etc.). 0.6 means each OCR
+    # clause carries 60% of the equivalent transcript clause's weight.
+    # Rationale: OCR is noisier than transcript (PaddleOCR misreads,
+    # word-boundary drift); transcript is the primary intent signal,
+    # OCR complements. Tune after the eval pass — likely range
+    # 0.4-0.8 depending on per-org category mix.
+    auto_shorts_product_v2_ocr_boost: float = 0.6
+
     # --- Auto-shorts: storyboard Tier C (LLM director) ---
     # Plan: ``.claude/plans/storyboard-tier-c-llm-picker-2026-05-07.md``.
     # Activated by setting

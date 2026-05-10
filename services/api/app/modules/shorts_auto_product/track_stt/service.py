@@ -81,6 +81,8 @@ async def assemble_stt_clip(
     legacy_os_subtitles_enabled: bool = False,
     storyboard_picker: StoryboardPicker | None = None,
     storyboard_shadow_mode: bool = False,
+    ocr_rerank_enabled: bool = False,
+    ocr_boost: float = 0.6,
 ) -> SttClipResult:
     """End-to-end STT pipeline. Returns the render_job_id wrapped in
     :class:`SttClipResult`.
@@ -124,6 +126,8 @@ async def assemble_stt_clip(
         video_id=os_video_id,
         llm_label=llm_label,
         spoken_aliases=spoken_aliases,
+        ocr_rerank_enabled=ocr_rerank_enabled,
+        ocr_boost=ocr_boost,
     )
     if not mentioned:
         logger.info(

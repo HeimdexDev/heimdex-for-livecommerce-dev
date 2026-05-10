@@ -182,6 +182,14 @@ services:
       - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_DETAIL_MS=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_DETAIL_MS:-25000}
       - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_CTA_MS=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_CTA_MS:-8000}
       - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_SHADOW_MODE=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_SHADOW_MODE:-false}
+      # Auto-shorts: OCR re-rank in mention_extractor. Plan
+      # `.claude/plans/ocr-mention-extractor-rerank.md`. Default OFF; flip
+      # per-org once OCR backfill has populated v5 for that org's videos.
+      # Without these passthrough lines, setting the env vars in `.env`
+      # is a no-op inside the container (allowlist-based per
+      # `feedback_compose_env_passthrough_required.md`).
+      - AUTO_SHORTS_PRODUCT_V2_OCR_RERANK_ENABLED=${AUTO_SHORTS_PRODUCT_V2_OCR_RERANK_ENABLED:-false}
+      - AUTO_SHORTS_PRODUCT_V2_OCR_BOOST=${AUTO_SHORTS_PRODUCT_V2_OCR_BOOST:-0.6}
       # Auto-shorts storyboard Tier C (LLM director). Plan
       # `.claude/plans/storyboard-tier-c-llm-picker-2026-05-07.md`.
       # Activated by AUTO_SHORTS_PRODUCT_V2_STORYBOARD_PICKER=llm
