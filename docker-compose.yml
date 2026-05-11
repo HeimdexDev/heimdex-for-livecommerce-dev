@@ -247,9 +247,9 @@ services:
       - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
       - GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET:-}
       - GOOGLE_OAUTH_REDIRECT_URI=${GOOGLE_OAUTH_REDIRECT_URI:-}
-      # Closed-vocabulary VMD search (sidecar container on localhost:8080)
+      # Closed-vocabulary VMD search
       - CLOSED_VOCAB_ENABLED=${CLOSED_VOCAB_ENABLED:-false}
-      - CLOSED_VOCAB_SERVICE_URL=${CLOSED_VOCAB_SERVICE_URL:-}
+      - CLOSED_VOCAB_SERVICE_URL=${CLOSED_VOCAB_SERVICE_URL:-http://closed-vocab-search:8080}
       - CLOSED_VOCAB_TIMEOUT_MS=${CLOSED_VOCAB_TIMEOUT_MS:-1000}
       # Visual embedding (SigLIP2 query-time text encoder)
       - VISUAL_EMBEDDING_ENABLED=${VISUAL_EMBEDDING_ENABLED:-false}
@@ -1092,6 +1092,17 @@ services:
       - "9325:9325"
     volumes:
       - ./elasticmq.conf:/opt/elasticmq.conf
+
+  closed-vocab-search:
+    image: dev-heimdex-for-livecommerce-closed-vocab-search:v0.1.0
+    container_name: dev-heimdex-for-livecommerce-closed-vocab-search
+    mem_limit: 512m
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
 volumes:
   postgres_data:

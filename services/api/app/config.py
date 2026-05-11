@@ -256,7 +256,7 @@ class Settings(BaseSettings):
 
     # --- Closed-vocabulary VMD search (sidecar container) ---
     closed_vocab_enabled: bool = False
-    closed_vocab_service_url: str = ""
+    closed_vocab_service_url: str = "http://closed-vocab-search:8080"
     closed_vocab_timeout_ms: int = 1000
 
     # --- PII blur (user-triggered, see app/modules/blur/) ---
