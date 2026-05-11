@@ -108,6 +108,7 @@ jobs:
             tests/test_render_idempotency_key.py \
             tests/test_requeue_stale_renders.py \
             tests/test_ingest_event_loop_regression.py \
+            tests/test_closed_vocab_startup.py \
             --tb=short
 
           # NOTE: shorts_auto tests are deliberately NOT in the CI

@@ -255,6 +255,12 @@ class Settings(BaseSettings):
     aircloud_cooldown_checks: int = 3           # 3 × 5 min = 15 min idle before stop
 
     # --- Closed-vocabulary VMD search (sidecar container) ---
+    # Service URL is wired via the compose env-passthrough fallback
+    # (``CLOSED_VOCAB_SERVICE_URL=${CLOSED_VOCAB_SERVICE_URL:-http://closed-vocab-search:8080}``).
+    # The code default stays empty so any non-compose runtime (CI tests,
+    # production overlay where this sidecar isn't deployed, etc.) is forced
+    # to opt in explicitly and the ``classify()`` short-circuit at
+    # ``closed_vocab.py:52`` fires without touching the network.
     closed_vocab_enabled: bool = False
     closed_vocab_service_url: str = ""
     closed_vocab_timeout_ms: int = 1000

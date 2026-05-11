@@ -92,6 +92,17 @@ async def lifespan(app: FastAPI):
     await _startup_scene_search_checks(scene_opensearch_client)
     await _ensure_search_event_partitions(engine)
     await _ensure_worker_event_partitions(engine)
+    # Closed-vocab sidecar reachability probe. Logs ERROR (not raises) if
+    # the flag is on but the service is unreachable — without this the
+    # only signal is a per-query WARNING that's easy to miss in noise.
+    # See feedback_external_lib_eager_init_fail_loud.md memory + the
+    # silent-fail-open pattern tracked in pr-patterns.json.
+    #
+    # Imported lazily so importing the helper from a test doesn't pull in
+    # this module's eager ``setup_logging()`` (which reconfigures structlog
+    # and breaks sibling tests that capture via stdout/stderr).
+    from app.modules.search.closed_vocab import startup_closed_vocab_check
+    await startup_closed_vocab_check(settings)
 
     # Phase 4 wizard child runner — picks up queued ``mode='render_child'``
     # rows produced by the parent fan-out hook in
