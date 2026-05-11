@@ -27,12 +27,8 @@ import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "r
 import {
   getRenderJob,
   getShortComposition,
-  RenderRateLimitError,
 } from "@/lib/api/shorts-render";
-import {
-  rerenderFromEdits,
-  type SubtitleEdit,
-} from "@/lib/api/highlight-reel";
+import type { SubtitleEdit } from "@/lib/api/highlight-reel";
 import { getVideoScenes } from "@/lib/api/videos";
 import type { VideoScene, VideoScenesResponse } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
@@ -48,13 +44,28 @@ import type {
   SubtitleStyle,
 } from "@/features/shorts-editor/lib/types";
 
+import { ExportShortsButton } from "../components/ExportShortsButton";
 import { InlineWizardBreadcrumb } from "../components/InlineWizardBreadcrumb";
-import { SubtitleEditor } from "../components/SubtitleEditor";
+import {
+  RightPanelTabs,
+  type RightPanelTab,
+} from "../components/RightPanelTabs";
+import { StyleTab } from "../components/StyleTab";
+import type { SubtitleEditorHandle } from "../components/SubtitleEditor";
+import { SubtitlesTab } from "../components/SubtitlesTab";
 import {
   SubtitleOverlay,
   type SubtitleOverlayCue,
 } from "../components/SubtitleOverlay";
+import { useExportBatch } from "../hooks/useExportBatch";
 import { useScanOrder } from "../hooks/useScanOrder";
+import {
+  applyGlobalStyleToCues,
+  deriveGlobalStyle,
+  makeDefaultStyle,
+  mergeStyle,
+  type SubtitleStyleDraft,
+} from "../lib/global-style";
 
 interface Props {
   videoId: string;
@@ -128,12 +139,25 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
   const [liveCuesByRender, setLiveCuesByRender] = useState<
     Record<string, SubtitleEdit[]>
   >({});
-  const [exportError, setExportError] = useState<string | null>(null);
-  const [exportInFlight, setExportInFlight] = useState(false);
-  const [exportSuccess, setExportSuccess] = useState<{ jobId: string; downloadUrl: string | null } | null>(null);
+  const [activeTab, setActiveTab] = useState<RightPanelTab>("subtitles");
+  // Page-owned controlled search query for the 자막 tab. Reset on clip
+  // switch so a query that filtered Clip 1's cues to zero matches doesn't
+  // greet the operator with an empty Clip 2.
+  const [subtitleSearchQuery, setSubtitleSearchQuery] = useState("");
+  // Page-owned global subtitle style draft (Phase C). ``null`` means the
+  // current clip's cues have mixed styles — StyleTab surfaces a
+  // "혼합됨" banner with an Apply-to-all affordance.
+  const [styleDraft, setStyleDraft] = useState<SubtitleStyleDraft | null>(
+    null,
+  );
+  // Imperative bridge to SubtitleEditor so style writes flow through the
+  // SAME debounced PATCH the text editor uses. Avoids racing writers on
+  // the same endpoint.
+  const subtitleEditorRef = useRef<SubtitleEditorHandle | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [playheadMs, setPlayheadMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const exportBatch = useExportBatch(getAccessToken);
 
   // Fetch scenes once for the page.
   useEffect(() => {
@@ -485,56 +509,98 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
     }
   }, []);
 
-  const onRerenderRequested = useCallback(async () => {
-    if (!effectiveRenderJobId) return;
-    setExportError(null);
-    setExportSuccess(null);
-    setExportInFlight(true);
-    try {
-      // The SubtitleEditor's debounced auto-save has already pushed
-      // the operator's edits into ``input_spec.subtitles`` via PATCH
-      // /subtitles (the editor's render button is disabled while a
-      // save is in flight or pending, so by the time we get here the
-      // backend state is consistent). The /rerender endpoint reads
-      // the parent's current input_spec server-side — no body needed.
-      // Targeting the EFFECTIVE render id (Whisper-refined child if
-      // present, else the original parent) preserves the manual-
-      // edit chain: the rerender's grandchild inherits the operator's
-      // PATCH'd subtitles and the ``manual_edit`` guard prevents
-      // Whisper from running again over hand-tuned cues.
-      const child = await rerenderFromEdits(
-        effectiveRenderJobId,
-        getAccessToken,
-      );
-      setExportSuccess({ jobId: child.id, downloadUrl: child.download_url });
-      // Poll the new child until completed, then surface its
-      // presigned download URL. The page does NOT swap the video
-      // preview mid-edit (would be disorienting); operator clicks
-      // the success-banner link to download the refined MP4.
-      const pollId = window.setInterval(async () => {
-        try {
-          const fresh = await getRenderJob(child.id, getAccessToken);
-          if (fresh.status === "completed" || fresh.status === "failed") {
-            window.clearInterval(pollId);
-            setExportSuccess({
-              jobId: child.id,
-              downloadUrl: fresh.download_url,
-            });
-          }
-        } catch {
-          window.clearInterval(pollId);
-        }
-      }, 3000);
-    } catch (err) {
-      if (err instanceof RenderRateLimitError) {
-        setExportError("잠시 후 다시 시도해주세요. (요청이 많습니다)");
-      } else {
-        setExportError(err instanceof Error ? err.message : "다시 렌더링에 실패했습니다.");
-      }
-    } finally {
-      setExportInFlight(false);
+  // Phase A note: when the operator hits "쇼츠 내보내기" the SubtitleEditor's
+  // debounced PATCH may be in flight. Server-side /rerender reads the
+  // parent's current input_spec, so a half-saved edit may be missed by the
+  // immediate /rerender. The race is small (debounce ~500ms; the dropdown
+  // submit takes longer than that in practice) and surfaces as "the
+  // rendered clip is missing my last sentence" — operator retries. Phase E
+  // proposes wiring SubtitleEditor's flushNow up through a ref bridge so
+  // export awaits a guaranteed save first.
+  const handleExportBatch = useCallback(
+    (jobIds: string[]) => {
+      void exportBatch.start(jobIds);
+    },
+    [exportBatch],
+  );
+
+  // Reset to the subtitles tab when the operator switches clips so a clip
+  // change doesn't leave the user staring at a style draft they applied to
+  // a different clip (Q9 in the plan). Also clears the search query — a
+  // filter that hid all cues on Clip 1 shouldn't blank-out Clip 2.
+  useEffect(() => {
+    setActiveTab("subtitles");
+    setSubtitleSearchQuery("");
+    setStyleDraft(null);
+  }, [effectiveRenderJobId]);
+
+  // Whenever the current clip's cues land (or refresh after a PATCH),
+  // re-derive the global style from the wire-shape ``editorCues`` (which
+  // already mirrors ``composition.subtitles`` 1:1 in snake_case). Editor's
+  // internal ``EditorSubtitle`` uses camelCase and would need conversion
+  // — using editorCues keeps a single source of truth.
+  useEffect(() => {
+    if (!currentClip || currentClip.loading) return;
+    setStyleDraft(deriveGlobalStyle(editorCues));
+  }, [currentClip?.composition, currentClip?.loading, currentClip, editorCues]);
+
+  const handleStyleChange = useCallback(
+    (next: SubtitleStyleDraft) => {
+      setStyleDraft(next);
+      // Push the new style through SubtitleEditor's hook so the same
+      // debounced PATCH /subtitles owns the write. The hook's debounce
+      // coalesces multiple rapid field tweaks into one PATCH.
+      const handle = subtitleEditorRef.current;
+      if (!handle) return;
+      const currentCues = handle.getCues();
+      handle.replaceCuesAndSave(applyGlobalStyleToCues(currentCues, next));
+    },
+    [],
+  );
+
+  const handleApplyStyleToAll = useCallback(() => {
+    // From the mixed state — promote whatever the operator was visualising
+    // (or the layout default if nothing edited yet) to every cue.
+    const handle = subtitleEditorRef.current;
+    if (!handle) return;
+    const promote = styleDraft ?? makeDefaultStyle();
+    const currentCues = handle.getCues();
+    handle.replaceCuesAndSave(applyGlobalStyleToCues(currentCues, promote));
+    setStyleDraft(promote);
+  }, [styleDraft]);
+
+  // Derive the scene-clip list for the current composition so SubtitlesTab
+  // can group cues by scene. The composition's ``scene_clips`` is opaque
+  // (Record<string, unknown>) — extract just the fields the grouper needs.
+  const subtitleSceneClips = useMemo(() => {
+    const comp = currentClip?.composition;
+    if (!comp || typeof comp !== "object") return undefined;
+    const raw = (comp as { scene_clips?: unknown }).scene_clips;
+    if (!Array.isArray(raw)) return undefined;
+    const out: Array<{
+      scene_id: string;
+      start_ms: number;
+      end_ms: number;
+      timeline_start_ms?: number;
+    }> = [];
+    for (const sc of raw) {
+      if (typeof sc !== "object" || sc === null) continue;
+      const r = sc as Record<string, unknown>;
+      const sceneId = typeof r.scene_id === "string" ? r.scene_id : null;
+      const startMs = typeof r.start_ms === "number" ? r.start_ms : null;
+      const endMs = typeof r.end_ms === "number" ? r.end_ms : null;
+      if (sceneId === null || startMs === null || endMs === null) continue;
+      const timelineStart =
+        typeof r.timeline_start_ms === "number" ? r.timeline_start_ms : undefined;
+      out.push({
+        scene_id: sceneId,
+        start_ms: startMs,
+        end_ms: endMs,
+        timeline_start_ms: timelineStart,
+      });
     }
-  }, [effectiveRenderJobId, getAccessToken]);
+    return out;
+  }, [currentClip?.composition]);
 
   if (scanOrder.error) {
     return <ErrorState message={`클립 정보를 불러올 수 없습니다: ${scanOrder.error.message}`} />;
@@ -594,47 +660,63 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
           )}
         </div>
 
-        <div className="w-[420px] overflow-y-auto border-l bg-white p-4">
-          {effectiveRenderJobId && currentClip && !currentClip.loading ? (
-            <SubtitleEditor
-              // Force remount when cues land: useSubtitleEditorState
-              // re-keys on `renderId` only, so a 0 → N transition
-              // (Whisper-driven cue arrival on the parent) wouldn't
-              // otherwise propagate into the editor's internal state.
-              // ``editorCues.length > 0`` partitions the lifecycle
-              // cleanly: empty parent → editor mounted with []; once
-              // cues arrive, editor remounts with full cue list.
-              key={`${effectiveRenderJobId}:${editorCues.length > 0 ? "has" : "empty"}`}
-              renderId={effectiveRenderJobId}
-              initialCues={editorCues}
-              getToken={getAccessToken}
-              refinementSource={currentClip.refinementSource}
-              onRerenderRequested={onRerenderRequested}
-              isRendering={exportInFlight}
-              onCuesChange={handleCuesChange}
+        <div className="flex w-[420px] flex-col overflow-hidden border-l bg-white">
+          <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 pt-2">
+            <RightPanelTabs activeTab={activeTab} onTabChange={setActiveTab} />
+            <ExportShortsButton
+              children={sortedChildren}
+              activeJobId={effectiveRenderJobId}
+              exportState={exportBatch.state}
+              onExport={handleExportBatch}
+              isRunning={exportBatch.isRunning}
+              progressLabel={exportBatch.progressLabel}
+              className="shrink-0 pb-2"
             />
-          ) : (
-            <p className="text-xs text-gray-500">로딩 중...</p>
-          )}
-          {exportError ? (
-            <p className="mt-3 rounded bg-red-50 p-2 text-xs text-red-700">{exportError}</p>
-          ) : null}
-          {exportSuccess ? (
-            <div className="mt-3 rounded bg-green-50 p-2 text-xs text-green-800">
-              {exportSuccess.downloadUrl ? (
-                <a
-                  href={exportSuccess.downloadUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-medium underline"
-                >
-                  렌더링 완료 — 다운로드
-                </a>
-              ) : (
-                <>렌더링 중... ({exportSuccess.jobId.slice(0, 8)})</>
-              )}
-            </div>
-          ) : null}
+          </div>
+          <div className="flex-1 overflow-y-auto p-4">
+            {/*
+              Mount SubtitlesTab as long as we have a clip — but visually
+              hide it when on the style tab. Unmounting would lose the
+              editor's auto-save state and (worse) drop the
+              ``subtitleEditorRef`` the style tab depends on to write
+              style updates through the same hook.
+             */}
+            {effectiveRenderJobId && currentClip && !currentClip.loading ? (
+              <div
+                className={activeTab === "subtitles" ? "" : "hidden"}
+                data-testid="subtitles-tab-shell"
+              >
+                <SubtitlesTab
+                  // Force remount when cues land: useSubtitleEditorState
+                  // re-keys on `renderId` only, so a 0 → N transition
+                  // (Whisper-driven cue arrival on the parent) wouldn't
+                  // otherwise propagate into the editor's internal state.
+                  // ``editorCues.length > 0`` partitions the lifecycle
+                  // cleanly: empty parent → editor mounted with []; once
+                  // cues arrive, editor remounts with full cue list.
+                  key={`${effectiveRenderJobId}:${editorCues.length > 0 ? "has" : "empty"}`}
+                  ref={subtitleEditorRef}
+                  renderId={effectiveRenderJobId}
+                  initialCues={editorCues}
+                  getToken={getAccessToken}
+                  refinementSource={currentClip.refinementSource}
+                  onCuesChange={handleCuesChange}
+                  searchQuery={subtitleSearchQuery}
+                  onSearchQueryChange={setSubtitleSearchQuery}
+                  sceneClips={subtitleSceneClips}
+                />
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500">로딩 중...</p>
+            )}
+            {activeTab === "style" ? (
+              <StyleTab
+                currentStyle={styleDraft}
+                onStyleChange={handleStyleChange}
+                onApplyToAll={handleApplyStyleToAll}
+              />
+            ) : null}
+          </div>
         </div>
       </div>
 

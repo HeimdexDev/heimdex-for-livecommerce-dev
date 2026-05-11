@@ -67,6 +67,12 @@ export interface UseSubtitleEditorStateResult {
    * page-level reload (e.g., a refined child landed and the page
    * passes fresh cues down). Does NOT auto-save — caller decides. */
   replaceCues: (cues: SubtitleEdit[]) => void;
+  /**
+   * Bulk replace + dirty + schedule a debounced save. Use for
+   * page-level style updates that overwrite every cue at once
+   * (Phase C of edit-clips-right-panel-tabs).
+   */
+  replaceCuesAndSave: (cues: SubtitleEdit[]) => void;
   saveStatus: SaveStatus;
   saveError: Error | null;
   /** True once any edit has fired since the last successful save. */
@@ -190,6 +196,16 @@ export function useSubtitleEditorState({
     // Caller-driven reset; not an edit, so don't mark dirty or save.
   }, []);
 
+  const replaceCuesAndSave = useCallback(
+    (next: SubtitleEdit[]) => {
+      setCues(next);
+      pendingCuesRef.current = next;
+      setHasUnsavedEdits(true);
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
   const flushNow = useCallback(async (): Promise<void> => {
     if (debounceTimerRef.current !== null) {
       clearTimeout(debounceTimerRef.current);
@@ -207,6 +223,7 @@ export function useSubtitleEditorState({
     cues,
     updateCue,
     replaceCues,
+    replaceCuesAndSave,
     saveStatus,
     saveError,
     hasUnsavedEdits,

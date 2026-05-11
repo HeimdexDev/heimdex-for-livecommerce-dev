@@ -18,7 +18,17 @@
 //     plan doc's open-questions section.
 // ============================================================================
 
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ForwardedRef,
+} from "react";
 
 import {
   useSubtitleEditorState,
@@ -30,6 +40,13 @@ import {
   type SubtitleDownloadFormat,
   type SubtitleEdit,
 } from "@/lib/api/highlight-reel";
+
+import {
+  groupCuesByScene,
+  type SceneClipForGrouping,
+} from "../lib/scene-grouping";
+import { SubtitleSceneHeader } from "./SubtitleSceneHeader";
+import { SubtitleSearchInput } from "./SubtitleSearchInput";
 
 type TokenGetter = () => Promise<string | null>;
 
@@ -52,14 +69,22 @@ export interface SubtitleEditorProps {
    * pending edits, then (b) calling ``rerenderFromEdits``, then (c)
    * pivoting the parent's polling target to the returned child id.
    * The component just signals intent.
+   *
+   * **Phase A of edit-clips-right-panel-tabs**: callers may omit this
+   * prop entirely. When undefined, the footer render button is hidden
+   * — the page-level ``ExportShortsButton`` owns the render trigger
+   * instead. The legacy in-editor button is preserved for backward
+   * compatibility with any caller that still supplies the prop, but
+   * is no longer used by the auto-shorts wizard surface.
    */
-  onRerenderRequested: () => Promise<void>;
+  onRerenderRequested?: () => Promise<void>;
   /**
    * True while a re-render is in flight. The component disables the
    * button and shows progress copy. Source of truth: the page's
    * ``useRefinedRenderChain`` hook (``stage === 'polling_child'``).
+   * Ignored when ``onRerenderRequested`` is undefined.
    */
-  isRendering: boolean;
+  isRendering?: boolean;
   /**
    * Optional. Fires whenever the editor's internal cue list changes
    * — including the initial replay on mount + after each
@@ -68,6 +93,22 @@ export interface SubtitleEditorProps {
    * paying for a re-render.
    */
   onCuesChange?: (cues: SubtitleEdit[]) => void;
+  /**
+   * Optional controlled search query. When supplied, the search input
+   * renders above the cue list and cues are filtered by case-insensitive
+   * substring match on ``text``. Phase B of edit-clips-right-panel-tabs.
+   */
+  searchQuery?: string;
+  /** Pair with ``searchQuery``. Fires after IME-safe commit. */
+  onSearchQueryChange?: (query: string) => void;
+  /**
+   * Optional scene clips for grouping. When supplied, the cue list is
+   * partitioned by scene and a ``SubtitleSceneHeader`` renders above each
+   * scene's cues. Cues whose ``start_ms`` lies outside every scene's
+   * timeline range surface in a synthetic "이외" group banner so any
+   * misalignment is loud.
+   */
+  sceneClips?: SceneClipForGrouping[];
 }
 
 /** Display ``mm:ss.cs`` for a millisecond timestamp. */
@@ -94,18 +135,39 @@ function saveStatusLabel(status: SaveStatus): string {
   }
 }
 
-export function SubtitleEditor({
-  renderId,
-  initialCues,
-  getToken,
-  refinementSource,
-  onRerenderRequested,
-  isRendering,
-  onCuesChange,
-}: SubtitleEditorProps) {
+/**
+ * Imperative handle exposed to the page so style edits performed outside
+ * this component still flow through the SAME debounced PATCH the text
+ * editor uses (avoids racing writers to the same endpoint).
+ */
+export interface SubtitleEditorHandle {
+  /** Returns the latest in-memory cue list (text + style as-edited). */
+  getCues: () => SubtitleEdit[];
+  /** Bulk-replace cues + auto-save. Used by the page's style tab. */
+  replaceCuesAndSave: (cues: SubtitleEdit[]) => void;
+  /** Force any pending debounced save to flush immediately. */
+  flushNow: () => Promise<void>;
+}
+
+export const SubtitleEditor = forwardRef(function SubtitleEditor(
+  {
+    renderId,
+    initialCues,
+    getToken,
+    refinementSource,
+    onRerenderRequested,
+    isRendering,
+    onCuesChange,
+    searchQuery,
+    onSearchQueryChange,
+    sceneClips,
+  }: SubtitleEditorProps,
+  ref: ForwardedRef<SubtitleEditorHandle>,
+) {
   const {
     cues,
     updateCue,
+    replaceCuesAndSave,
     saveStatus,
     saveError,
     hasUnsavedEdits,
@@ -128,6 +190,24 @@ export function SubtitleEditor({
     onCuesChangeRef.current?.(cues);
   }, [cues]);
 
+  // Latest-cue ref so the imperative handle's ``getCues()`` always reads
+  // the freshest in-memory state, not whatever closure was captured at
+  // handle-creation time.
+  const cuesRef = useRef(cues);
+  useEffect(() => {
+    cuesRef.current = cues;
+  }, [cues]);
+
+  useImperativeHandle<SubtitleEditorHandle, SubtitleEditorHandle>(
+    ref,
+    () => ({
+      getCues: () => cuesRef.current,
+      replaceCuesAndSave,
+      flushNow,
+    }),
+    [replaceCuesAndSave, flushNow],
+  );
+
   const [downloadStatus, setDownloadStatus] = useState<
     "idle" | "downloading" | "error"
   >("idle");
@@ -145,10 +225,14 @@ export function SubtitleEditor({
   // we're not already in flight. Saving=true also disables it so the
   // user doesn't fire rerender against pre-save state.
   const renderDisabled =
-    isRendering || saveStatus === "saving" || hasUnsavedEdits || cues.length === 0;
+    Boolean(isRendering) ||
+    saveStatus === "saving" ||
+    hasUnsavedEdits ||
+    cues.length === 0;
 
   async function handleRerenderClick() {
     if (renderDisabled) return;
+    if (!onRerenderRequested) return;
     // Defensive flush — even though the button is disabled while
     // hasUnsavedEdits, a stale save error could leave dirty state.
     if (hasUnsavedEdits) {
@@ -226,6 +310,13 @@ export function SubtitleEditor({
         </div>
       ) : null}
 
+      {typeof searchQuery === "string" && onSearchQueryChange ? (
+        <SubtitleSearchInput
+          query={searchQuery}
+          onQueryChange={onSearchQueryChange}
+        />
+      ) : null}
+
       {cues.length === 0 ? (
         // Two empty-state branches:
         //   * Parent waiting for Whisper post-render — auto-shorts
@@ -251,16 +342,13 @@ export function SubtitleEditor({
           </div>
         )
       ) : (
-        <div className="grid gap-2 overflow-y-auto pr-1">
-          {cues.map((cue, index) => (
-            <SubtitleEditorRow
-              key={`${renderId}-${index}`}
-              index={index}
-              cue={cue}
-              onTextChange={(text) => updateCue(index, { text })}
-            />
-          ))}
-        </div>
+        <CueListBody
+          renderId={renderId}
+          cues={cues}
+          updateCue={updateCue}
+          searchQuery={searchQuery ?? ""}
+          sceneClips={sceneClips}
+        />
       )}
 
       {saveError ? (
@@ -294,23 +382,25 @@ export function SubtitleEditor({
         >
           {downloadStatus === "downloading" ? "다운로드 중..." : "자막 다운로드 (.srt)"}
         </button>
-        <button
-          type="button"
-          data-testid="subtitle-editor-rerender-button"
-          onClick={handleRerenderClick}
-          disabled={renderDisabled}
-          className={
-            renderDisabled
-              ? "rounded bg-neutral-200 px-4 py-2 text-sm text-neutral-500"
-              : "rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700"
-          }
-        >
-          {isRendering ? "렌더링 중..." : "내 편집으로 다시 렌더링 (~30초)"}
-        </button>
+        {onRerenderRequested ? (
+          <button
+            type="button"
+            data-testid="subtitle-editor-rerender-button"
+            onClick={handleRerenderClick}
+            disabled={renderDisabled}
+            className={
+              renderDisabled
+                ? "rounded bg-neutral-200 px-4 py-2 text-sm text-neutral-500"
+                : "rounded bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-700"
+            }
+          >
+            {isRendering ? "렌더링 중..." : "내 편집으로 다시 렌더링 (~30초)"}
+          </button>
+        ) : null}
       </div>
     </section>
   );
-}
+});
 
 interface SubtitleEditorRowProps {
   index: number;
@@ -361,5 +451,133 @@ function SubtitleEditorRow({ index, cue, onTextChange }: SubtitleEditorRowProps)
         className="grow resize-none rounded border border-neutral-200 px-2 py-1 text-sm focus:border-neutral-500 focus:outline-none"
       />
     </label>
+  );
+}
+
+// ============================================================================
+// CueListBody — handles search filtering + optional scene grouping. Pure
+// presentational; receives the cue array (already managed by
+// useSubtitleEditorState) and emits per-cue text edits via ``updateCue``.
+// ============================================================================
+
+interface CueListBodyProps {
+  renderId: string;
+  cues: SubtitleEdit[];
+  updateCue: (index: number, partial: Partial<SubtitleEdit>) => void;
+  searchQuery: string;
+  sceneClips?: SceneClipForGrouping[];
+}
+
+function CueListBody({
+  renderId,
+  cues,
+  updateCue,
+  searchQuery,
+  sceneClips,
+}: CueListBodyProps) {
+  const normalisedQuery = searchQuery.trim().toLowerCase();
+
+  // Map cue → original index BEFORE filtering so ``updateCue`` writes to
+  // the right slot regardless of what's rendered.
+  const cuesWithOriginalIndex = useMemo(
+    () => cues.map((cue, index) => ({ cue, index })),
+    [cues],
+  );
+
+  const matchesQuery = (cue: SubtitleEdit) =>
+    normalisedQuery.length === 0
+      ? true
+      : cue.text.toLowerCase().includes(normalisedQuery);
+
+  const filtered = cuesWithOriginalIndex.filter(({ cue }) => matchesQuery(cue));
+
+  if (sceneClips && sceneClips.length > 0) {
+    const { groups, outOfBounds } = groupCuesByScene(cues, sceneClips);
+    return (
+      <div
+        className="flex flex-col gap-3 overflow-y-auto pr-1"
+        data-testid="cue-list-body"
+      >
+        {groups.map((group) => {
+          const groupMatches = group.cues.filter((cue) =>
+            matchesQuery(cue),
+          );
+          // Hide the entire group when the search filter excludes all its
+          // cues — keeps the panel tight under a meaningful query.
+          if (normalisedQuery.length > 0 && groupMatches.length === 0) {
+            return null;
+          }
+          return (
+            <section
+              key={group.sceneId}
+              data-testid={`cue-list-scene-${group.sceneIndex}`}
+              className="flex flex-col gap-2"
+            >
+              <SubtitleSceneHeader
+                sceneIndex={group.sceneIndex}
+                startMs={group.startMs}
+                endMs={group.endMs}
+                cueCount={groupMatches.length}
+              />
+              {groupMatches.map((cue) => {
+                const originalIndex = cues.indexOf(cue);
+                return (
+                  <SubtitleEditorRow
+                    key={`${renderId}-${originalIndex}`}
+                    index={originalIndex}
+                    cue={cue}
+                    onTextChange={(text) =>
+                      updateCue(originalIndex, { text })
+                    }
+                  />
+                );
+              })}
+            </section>
+          );
+        })}
+        {outOfBounds.length > 0 ? (
+          <section
+            className="flex flex-col gap-2"
+            data-testid="cue-list-out-of-bounds"
+          >
+            <div className="rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              장면 범위에 속하지 않은 자막 ({outOfBounds.length})
+            </div>
+            {outOfBounds
+              .filter((cue) => matchesQuery(cue))
+              .map((cue) => {
+                const originalIndex = cues.indexOf(cue);
+                return (
+                  <SubtitleEditorRow
+                    key={`${renderId}-oob-${originalIndex}`}
+                    index={originalIndex}
+                    cue={cue}
+                    onTextChange={(text) =>
+                      updateCue(originalIndex, { text })
+                    }
+                  />
+                );
+              })}
+          </section>
+        ) : null}
+      </div>
+    );
+  }
+
+  // No scenes — flat list with optional filter.
+  return (
+    <div
+      className="grid gap-2 overflow-y-auto pr-1"
+      data-testid="cue-list-body"
+    >
+      {filtered.map(({ cue, index }) => (
+        <SubtitleEditorRow
+          key={`${renderId}-${index}`}
+          index={index}
+          cue={cue}
+          onTextChange={(text) => updateCue(index, { text })}
+        />
+      ))}
+    </div>
   );
 }
