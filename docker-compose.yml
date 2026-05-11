@@ -1093,9 +1093,17 @@ services:
     volumes:
       - ./elasticmq.conf:/opt/elasticmq.conf
 
+  # Closed-vocabulary VMD search sidecar. Hosts ~162 product/brand terms +
+  # precomputed SigLIP2 prompt embeddings for direct kNN lookups, bypassing
+  # the normal semantic pipeline. Opt-in via the ``closed-vocab`` profile so
+  # daily ``docker compose up -d`` doesn't pay the 512MB / 1 CPU cost when
+  # the feature is off. To bring it up: ``docker compose --profile closed-vocab up -d``
+  # (or ``COMPOSE_PROFILES=closed-vocab docker compose up -d``).
+  # Image source + protocol: see .claude/docs/closed-vocab-search.md.
   closed-vocab-search:
-    image: dev-heimdex-for-livecommerce-closed-vocab-search:v0.1.0
-    container_name: dev-heimdex-for-livecommerce-closed-vocab-search
+    image: ghcr.io/5sudeng/heimdex-closed-vocab-search:v0.1.0
+    profiles: ["closed-vocab"]
+    restart: unless-stopped
     mem_limit: 512m
     cpus: "1.0"
     healthcheck:

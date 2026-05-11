@@ -92,6 +92,12 @@ async def lifespan(app: FastAPI):
     await _startup_scene_search_checks(scene_opensearch_client)
     await _ensure_search_event_partitions(engine)
     await _ensure_worker_event_partitions(engine)
+    # Closed-vocab sidecar reachability probe. Logs ERROR (not raises) if
+    # the flag is on but the service is unreachable — without this the
+    # only signal is a per-query WARNING that's easy to miss in noise.
+    # See feedback_external_lib_eager_init_fail_loud.md memory + the
+    # silent-fail-open pattern tracked in pr-patterns.json.
+    await _startup_closed_vocab_check(settings)
 
     # Phase 4 wizard child runner — picks up queued ``mode='render_child'``
     # rows produced by the parent fan-out hook in
@@ -230,6 +236,56 @@ async def _startup_scene_search_checks(client):
             "startup_scene_search_check_failed",
             error=str(e),
             message="Scene search infrastructure check failed. Scene search may not work.",
+        )
+
+
+async def _startup_closed_vocab_check(settings) -> None:
+    """
+    Probe the closed-vocab-search sidecar's /health on boot.
+
+    Runs only when ``CLOSED_VOCAB_ENABLED=true``. Logs ``ERROR`` if the
+    service is unreachable so operators see the issue at startup rather
+    than discovering it post-deploy via degraded search and a per-query
+    ``closed_vocab_service_error`` WARNING that's easy to miss.
+
+    Does NOT raise. ``ClosedVocabClient.classify`` is intentionally
+    fail-open — if the sidecar is down, semantic search continues to
+    work via the pure pipeline. The loud startup signal exists so
+    that "search degraded" incidents have a single clear breadcrumb.
+    """
+    if not settings.closed_vocab_enabled:
+        return
+    base_url = settings.closed_vocab_service_url
+    if not base_url:
+        logger.error(
+            "closed_vocab_startup_misconfigured",
+            message="CLOSED_VOCAB_ENABLED=true but CLOSED_VOCAB_SERVICE_URL is empty. "
+                    "Every classify() call will short-circuit to None and search "
+                    "will silently fall through to the pure pipeline.",
+        )
+        return
+    try:
+        import httpx
+
+        timeout = httpx.Timeout(settings.closed_vocab_timeout_ms / 1000)
+        async with httpx.AsyncClient(base_url=base_url, timeout=timeout) as client:
+            response = await client.get("/health")
+            response.raise_for_status()
+            payload = response.json() if response.content else {}
+            logger.info(
+                "closed_vocab_startup_ok",
+                base_url=base_url,
+                vocab_size=payload.get("vocab_size"),
+                status=payload.get("status"),
+            )
+    except Exception as exc:
+        logger.error(
+            "closed_vocab_startup_unreachable",
+            base_url=base_url,
+            error=str(exc),
+            message="Sidecar is unreachable but CLOSED_VOCAB_ENABLED=true. "
+                    "Search will silently fall through to the pure pipeline "
+                    "and per-query WARNING logs will accumulate.",
         )
 
 
