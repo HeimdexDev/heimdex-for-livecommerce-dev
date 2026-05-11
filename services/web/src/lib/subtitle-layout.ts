@@ -110,6 +110,196 @@ export function computeCharsPerLine(args: {
  * input already fits on one line. Caps at `MAX_SUBTITLE_LINES`; overflow is
  * appended to the last line (defensive — never truncate operator words).
  */
+// ============================================================================
+// Per-cue style resolver — used by <SubtitleOverlay> to honor
+// operator-set SubtitleStyleSpec values while preserving the default
+// auto-shorts pill when no per-cue style is present.
+//
+// Plan: .claude/plans/wysiwyg-subtitle-overlay-2026-05-11.md (Phase 1)
+//
+// SubtitleCueStyle mirrors `heimdex_media_contracts.composition.SubtitleStyleSpec`
+// 1:1. Tolerant of partial input: every field is independently fallbacked
+// onto `buildAutoShortsSubtitleStyle(canvasHeight)` + sane defaults.
+//
+// Canvas vs rendered:
+//   - Style fields are CANVAS pixels (output.height, default 720).
+//   - The <video> preview is rendered at CSS pixels.
+//   - `scale = renderedHeight / canvasHeight` scales font_size_px,
+//     background_padding, stroke_width, shadow_offset_*.
+//   - When `canvasWidth/canvasHeight` are omitted, the resolver treats
+//     the rendered video AS the canvas (scale=1). That preserves
+//     today's <SubtitleOverlay> behavior for callers that haven't
+//     plumbed canvas dims yet.
+// ============================================================================
+
+export interface SubtitleCueStyle {
+  font_family: string;
+  font_size_px: number;
+  font_color: string;
+  font_weight: number;
+  text_align: "left" | "center" | "right";
+  line_height: number;
+  letter_spacing: number;
+  position_x: number;
+  position_y: number;
+  background_color: string | null;
+  background_padding: number;
+  background_opacity: number;
+  stroke_color: string | null;
+  stroke_width: number;
+  shadow_enabled: boolean;
+  shadow_color: string | null;
+  shadow_offset_x: number;
+  shadow_offset_y: number;
+}
+
+export interface ResolvedOverlayStyle {
+  /** Full CSS font-family stack, ready to drop into ``style``. */
+  fontFamily: string;
+  /** Rendered-pixel font size. */
+  fontSizePx: number;
+  fontWeight: number;
+  fontColor: string;
+  textAlign: "left" | "center" | "right";
+  /** CSS line-height (unitless). */
+  lineHeight: number;
+  /** Horizontal padding in rendered pixels. Vertical padding is a
+   * presentation choice in the overlay component (currently ~0.6× H). */
+  paddingPx: number;
+  /** ``rgba(...)`` string or null when no background should render. */
+  background: string | null;
+  /** ``-webkit-text-stroke`` value or null when no stroke should render. */
+  webkitTextStroke: string | null;
+  /** ``text-shadow`` value or null when no shadow should render. */
+  textShadow: string | null;
+  /** Normalized horizontal position [0, 1]. */
+  positionX: number;
+  /** Normalized vertical position [0, 1]. */
+  positionY: number;
+  /** Chars-per-line budget for ``wrapKoreanSubtitleLines`` — computed
+   * from CANVAS dims so the wrap matches what FFmpeg drawtext would
+   * wrap (if it wrapped — drawtext draws verbatim; the wrap is what
+   * Whisper/operator-edits should target). */
+  charsPerLine: number;
+}
+
+interface ResolveArgs {
+  cueStyle: Partial<SubtitleCueStyle> | null | undefined;
+  /** Composition canvas width (CompositionSpec.output.width). Defaults
+   * to ``renderedWidth`` (legacy "treat rendered as canvas" behavior). */
+  canvasWidth?: number | null;
+  /** Composition canvas height (CompositionSpec.output.height). Defaults
+   * to ``renderedHeight``. */
+  canvasHeight?: number | null;
+  /** Actual video element dimensions in CSS pixels. */
+  renderedWidth: number;
+  renderedHeight: number;
+}
+
+const DEFAULT_LINE_HEIGHT = 1.2;
+const FALLBACK_FONT_FAMILY = "Pretendard";
+
+export function resolveOverlayStyle(args: ResolveArgs): ResolvedOverlayStyle {
+  const renderedW = Math.max(1, args.renderedWidth);
+  const renderedH = Math.max(1, args.renderedHeight);
+  const canvasW =
+    args.canvasWidth && args.canvasWidth > 0 ? args.canvasWidth : renderedW;
+  const canvasH =
+    args.canvasHeight && args.canvasHeight > 0 ? args.canvasHeight : renderedH;
+  const scale = renderedH / canvasH;
+
+  const defaults = buildAutoShortsSubtitleStyle(canvasH);
+  const cue = args.cueStyle ?? null;
+
+  const canvasFontSize = cue?.font_size_px ?? defaults.font_size_px;
+  const fontSizePx = Math.max(1, Math.round(canvasFontSize * scale));
+  const fontWeight = cue?.font_weight ?? defaults.font_weight;
+  const fontColor = cue?.font_color ?? defaults.font_color;
+  const textAlign = cue?.text_align ?? "center";
+  const lineHeight = cue?.line_height ?? DEFAULT_LINE_HEIGHT;
+  const canvasPadding = cue?.background_padding ?? defaults.background_padding;
+  const paddingPx = Math.max(0, Math.round(canvasPadding * scale));
+  const positionX = cue?.position_x ?? 0.5;
+  const positionY = cue?.position_y ?? defaults.position_y;
+
+  // Background: explicit null (operator turned bg off) yields no
+  // render. Missing field on a cue → fall back to the default pill.
+  const bgColor =
+    cue && "background_color" in cue
+      ? cue.background_color
+      : defaults.background_color;
+  const bgOpacity = cue?.background_opacity ?? defaults.background_opacity;
+  const background =
+    bgColor != null ? hexToRgba(bgColor, bgOpacity) : null;
+
+  // Stroke: rendered only when both color and a positive width are set.
+  // Mirrors drawtext's `has_stroke` semantics.
+  const strokeColor = cue?.stroke_color ?? null;
+  const strokeWidthRendered = Math.max(
+    0,
+    Math.round((cue?.stroke_width ?? 0) * scale),
+  );
+  const webkitTextStroke =
+    strokeColor && strokeWidthRendered > 0
+      ? `${strokeWidthRendered}px ${strokeColor}`
+      : null;
+
+  // Shadow: rendered only when enabled AND a color is set. Mirrors
+  // drawtext's `has_shadow` semantics. Blur is 0 (drawtext has no blur).
+  const shadowEnabled = cue?.shadow_enabled ?? false;
+  const shadowColor = cue?.shadow_color ?? null;
+  const shadowDx = Math.round((cue?.shadow_offset_x ?? 0) * scale);
+  const shadowDy = Math.round((cue?.shadow_offset_y ?? 0) * scale);
+  const textShadow =
+    shadowEnabled && shadowColor
+      ? `${shadowDx}px ${shadowDy}px 0 ${shadowColor}`
+      : null;
+
+  const charsPerLine = computeCharsPerLine({
+    canvasWidth: canvasW,
+    fontSizePx: canvasFontSize,
+    padding: canvasPadding,
+  });
+
+  return {
+    fontFamily: formatFontFamily(cue?.font_family),
+    fontSizePx,
+    fontWeight,
+    fontColor,
+    textAlign,
+    lineHeight,
+    paddingPx,
+    background,
+    webkitTextStroke,
+    textShadow,
+    positionX,
+    positionY,
+    charsPerLine,
+  };
+}
+
+function formatFontFamily(name: string | null | undefined): string {
+  const family = name && name.length > 0 ? name : FALLBACK_FONT_FAMILY;
+  return `"${family}", system-ui, -apple-system, sans-serif`;
+}
+
+/**
+ * Parse a hex color (``#RRGGBB`` or ``#RRGGBBAA``; alpha ignored — callers
+ * pass opacity separately) into an ``rgba(r, g, b, opacity)`` string.
+ * Returns ``rgba(255, 255, 255, opacity)`` for malformed input so the
+ * overlay always has something to render.
+ */
+function hexToRgba(hex: string, opacity: number): string {
+  const match = /^#([0-9a-fA-F]{6})(?:[0-9a-fA-F]{2})?$/.exec(hex);
+  if (!match) {
+    return `rgba(255, 255, 255, ${opacity})`;
+  }
+  const r = parseInt(match[1].slice(0, 2), 16);
+  const g = parseInt(match[1].slice(2, 4), 16);
+  const b = parseInt(match[1].slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+}
+
 export function wrapKoreanSubtitleLines(
   text: string,
   charsPerLine: number,
