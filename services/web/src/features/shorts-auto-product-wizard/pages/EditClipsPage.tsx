@@ -29,6 +29,7 @@ import {
   getShortComposition,
 } from "@/lib/api/shorts-render";
 import type { SubtitleEdit } from "@/lib/api/highlight-reel";
+import type { SubtitleCueStyle } from "@/lib/subtitle-layout";
 import { getVideoScenes } from "@/lib/api/videos";
 import type { VideoScene, VideoScenesResponse } from "@/lib/types";
 import { useAuth } from "@/lib/auth";
@@ -488,15 +489,35 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
     setLiveCuesByRender((prev) => ({ ...prev, [effectiveRenderJobId]: cues }));
   }, [effectiveRenderJobId]);
 
-  // Cue payload handed to <SubtitleOverlay>. The overlay reads
-  // (text, start_ms, end_ms) and ignores per-cue style — styling
-  // comes from the centralized subtitle-layout constants. Memoised
-  // by reference to keep the overlay's useMemo cheap.
+  // Cue payload handed to <SubtitleOverlay>. Carries per-cue style
+  // through so the preview is WYSIWYG — operator StyleTab edits
+  // (font/color/bg/stroke/shadow/position) reflect live. Source-side
+  // JSONB was validated against contracts ``SubtitleSpec.style`` on
+  // the server (PATCH /api/shorts/render/{id}/subtitles), so the
+  // runtime shape is trusted; the cast widens the opaque
+  // ``Record<string, unknown>`` SubtitleEdit holds into the typed
+  // ``Partial<SubtitleCueStyle>`` the overlay expects. Memoised by
+  // reference to keep the overlay's useMemo cheap.
   const overlayCues: SubtitleOverlayCue[] = useMemo(
     () => liveCues.map((c) => ({
-      text: c.text, start_ms: c.start_ms, end_ms: c.end_ms,
+      text: c.text,
+      start_ms: c.start_ms,
+      end_ms: c.end_ms,
+      style: c.style as Partial<SubtitleCueStyle> | undefined,
     })),
     [liveCues],
+  );
+
+  // Composition canvas dims drive the canvas→rendered pixel scale in
+  // <SubtitleOverlay>. Style fields (font_size_px, padding, stroke,
+  // shadow offsets) are in canvas pixels and need scaling by
+  // (renderedHeight / canvasHeight) so a 40px canvas font shows up at
+  // the right size in the smaller preview <video>. When the
+  // composition hasn't loaded (or lacks output dims), passes null and
+  // the overlay falls back to "rendered is canvas" behavior.
+  const canvasDims = useMemo(
+    () => extractCanvasDims(currentClip?.composition),
+    [currentClip?.composition],
   );
 
   const onTogglePlay = useCallback(() => {
@@ -654,6 +675,8 @@ export function EditClipsPage({ videoId, parentJobId }: Props) {
               playheadMs={playheadMs}
               onPlayheadChange={setPlayheadMs}
               onPlayingChange={setIsPlaying}
+              canvasWidth={canvasDims?.width ?? null}
+              canvasHeight={canvasDims?.height ?? null}
             />
           ) : (
             <div className="text-sm text-gray-500">렌더 결과가 아직 준비되지 않았습니다.</div>
@@ -808,6 +831,25 @@ function extractCompositionSubtitles(comp: unknown): CompSubtitleShape[] {
   return out;
 }
 
+/**
+ * Pull canvas dims off the composition's ``output`` block. Defaults
+ * to null (no dims known) so <SubtitleOverlay> can fall back to its
+ * "rendered is canvas" legacy behavior — important for the first
+ * paint before the composition has loaded.
+ */
+function extractCanvasDims(
+  comp: unknown,
+): { width: number; height: number } | null {
+  if (!comp || typeof comp !== "object") return null;
+  const output = (comp as { output?: unknown }).output;
+  if (!output || typeof output !== "object") return null;
+  const w = (output as { width?: unknown }).width;
+  const h = (output as { height?: unknown }).height;
+  if (typeof w !== "number" || typeof h !== "number") return null;
+  if (w <= 0 || h <= 0) return null;
+  return { width: w, height: h };
+}
+
 function makeSubtitleId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -823,11 +865,25 @@ interface ClipPreviewProps {
   playheadMs: number;
   onPlayheadChange: (ms: number) => void;
   onPlayingChange: (playing: boolean) => void;
+  /** Composition canvas dims (output.width/height) — drives the
+   * canvas→rendered scale in <SubtitleOverlay>. ``null`` falls the
+   * overlay back to "rendered is canvas" (scale=1) for backward
+   * compatibility. */
+  canvasWidth: number | null;
+  canvasHeight: number | null;
 }
 
 const ClipPreview = forwardRef<HTMLVideoElement, ClipPreviewProps>(
   function ClipPreview(
-    { src, cues, playheadMs, onPlayheadChange, onPlayingChange },
+    {
+      src,
+      cues,
+      playheadMs,
+      onPlayheadChange,
+      onPlayingChange,
+      canvasWidth,
+      canvasHeight,
+    },
     ref,
   ) {
     // Capture the rendered video dims so the overlay sizes itself
@@ -870,6 +926,8 @@ const ClipPreview = forwardRef<HTMLVideoElement, ClipPreviewProps>(
           currentTimeMs={playheadMs}
           videoWidth={videoSize.w || null}
           videoHeight={videoSize.h || null}
+          canvasWidth={canvasWidth}
+          canvasHeight={canvasHeight}
         />
       </div>
     );
