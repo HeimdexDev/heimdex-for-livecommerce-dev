@@ -17,10 +17,13 @@ POSTGRES_HOST=${POSTGRES_HOST}
 POSTGRES_PORT=${POSTGRES_PORT}
 POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_DB=${POSTGRES_DB}
+DATABASE_URL=__SSM__
+DATABASE_URL_SYNC=__SSM__
 
 # ── OpenSearch ───────────────────────────────────────────────────
 OPENSEARCH_INDEX_PREFIX=${OPENSEARCH_INDEX_PREFIX}
 OPENSEARCH_JAVA_OPTS=${OPENSEARCH_JAVA_OPTS}
+OPENSEARCH_URL=__SSM__
 
 # ── Auth / JWT ───────────────────────────────────────────────────
 AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE}
@@ -28,6 +31,8 @@ AUTH_COOKIE_SAMESITE=${AUTH_COOKIE_SAMESITE}
 AUTH_COOKIE_DOMAIN=${AUTH_COOKIE_DOMAIN}
 JWT_ALGORITHM=${JWT_ALGORITHM}
 JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS}
+JWT_SECRET_KEY=__SSM__
+DEVICE_SECRET_PEPPER=__SSM__
 
 # ── Auth0 ────────────────────────────────────────────────────────
 AUTH0_ENABLED=${AUTH0_ENABLED}
@@ -35,6 +40,9 @@ AUTH0_DOMAIN=${AUTH0_DOMAIN}
 AUTH0_AUDIENCE=${AUTH0_AUDIENCE}
 AUTH0_ALGORITHMS=${AUTH0_ALGORITHMS}
 AUTH0_ORG_CLAIM=${AUTH0_ORG_CLAIM}
+GOOGLE_OAUTH_CLIENT_ID=__SSM__
+GOOGLE_OAUTH_CLIENT_SECRET=__SSM__
+GOOGLE_OAUTH_REDIRECT_URI=__SSM__
 
 # ── CORS ─────────────────────────────────────────────────────────
 CORS_ALLOW_ORIGIN_REGEX=${CORS_ALLOW_ORIGIN_REGEX}
@@ -43,6 +51,8 @@ CORS_EXTRA_ORIGINS=${CORS_EXTRA_ORIGINS}
 # ── S3 / MinIO ───────────────────────────────────────────────────
 MINIO_ENDPOINT=${MINIO_ENDPOINT}
 MINIO_SECURE=${MINIO_SECURE}
+MINIO_ACCESS_KEY=__SSM__
+MINIO_SECRET_KEY=__SSM__
 DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET}
 S3_REGION=${S3_REGION}
 
@@ -69,16 +79,39 @@ SQS_ENABLED=${SQS_ENABLED}
 SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL}
 SQS_REGION=${SQS_REGION}
 SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED}
+SQS_PROCESSING_QUEUE_URL=__SSM__
+SQS_CAPTION_QUEUE_URL=__SSM__
+SQS_STT_QUEUE_URL=__SSM__
+SQS_OCR_QUEUE_URL=__SSM__
+SQS_TRANSCODE_QUEUE_URL=__SSM__
+SQS_FACE_QUEUE_URL=__SSM__
+SQS_VISUAL_EMBED_QUEUE_URL=__SSM__
+SQS_EXPORT_QUEUE_URL=__SSM__
+SQS_SHORTS_RENDER_QUEUE_URL=__SSM__
+SQS_BLUR_QUEUE_URL=__SSM__
+SQS_PRODUCT_ENUMERATE_QUEUE_URL=__SSM__
+SQS_PRODUCT_TRACK_QUEUE_URL=__SSM__
 
 # ── Aircloud GPU ─────────────────────────────────────────────────
 AIRCLOUD_ENABLED=${AIRCLOUD_ENABLED}
 AIRCLOUD_WAKE_DEBOUNCE_SECONDS=${AIRCLOUD_WAKE_DEBOUNCE_SECONDS}
 AIRCLOUD_COOLDOWN_CHECKS=${AIRCLOUD_COOLDOWN_CHECKS}
+AIRCLOUD_API_KEY=__SSM__
+AIRCLOUD_ENDPOINT_TRANSCODE=__SSM__
+AIRCLOUD_ENDPOINT_CAPTION=__SSM__
+AIRCLOUD_ENDPOINT_STT=__SSM__
+AIRCLOUD_ENDPOINT_OCR=__SSM__
+AIRCLOUD_ENDPOINT_FACE=__SSM__
+AIRCLOUD_ENDPOINT_VISUAL_EMBED=__SSM__
+AIRCLOUD_ENDPOINT_BLUR=__SSM__
+AIRCLOUD_ENDPOINT_PRODUCT_ENUMERATE=__SSM__
+AIRCLOUD_ENDPOINT_PRODUCT_TRACK=__SSM__
 
 # ── Reranker ─────────────────────────────────────────────────────
 RERANKER_ENABLED=${RERANKER_ENABLED}
 RERANKER_TIMEOUT_MS=${RERANKER_TIMEOUT_MS}
 RERANKER_USE_MOCK=${RERANKER_USE_MOCK}
+RERANKER_SERVICE_URL=__SSM__
 
 # ── Closed Vocab ─────────────────────────────────────────────────
 CLOSED_VOCAB_ENABLED=${CLOSED_VOCAB_ENABLED}
@@ -105,6 +138,8 @@ DRIVE_PROXY_BUFSIZE=${DRIVE_PROXY_BUFSIZE}
 IMAGE_PROCESSING_ENABLED=${IMAGE_PROCESSING_ENABLED}
 DRIVE_TRANSCODE_MODE=${DRIVE_TRANSCODE_MODE}
 DRIVE_API_BASE_URL=${DRIVE_API_BASE_URL}
+DRIVE_INTERNAL_API_KEY=__SSM__
+DRIVE_SA_ENCRYPTION_KEY=__SSM__
 
 # ── Drive STT ────────────────────────────────────────────────────
 DRIVE_STT_MODEL=${DRIVE_STT_MODEL}
@@ -155,6 +190,7 @@ IMAGE_CAPTION_TIMEOUT_S=${IMAGE_CAPTION_TIMEOUT_S}
 IMAGE_CAPTION_DAILY_BUDGET_USD=${IMAGE_CAPTION_DAILY_BUDGET_USD}
 IMAGE_CAPTION_ESTIMATED_COST_PER_CALL_USD=${IMAGE_CAPTION_ESTIMATED_COST_PER_CALL_USD}
 IMAGE_CAPTION_PROMPT_VERSION=${IMAGE_CAPTION_PROMPT_VERSION}
+OPENAI_API_KEY=__SSM__
 
 # ── Auto Shorts ──────────────────────────────────────────────────
 AUTO_SHORTS_ENABLED=${AUTO_SHORTS_ENABLED}
@@ -248,6 +284,7 @@ USE_GPU=${USE_GPU}
 
 # ── Agent ────────────────────────────────────────────────────────
 AGENT_INGEST_ENABLED=${AGENT_INGEST_ENABLED}
+AGENT_API_KEY=__SSM__
 AGENT_API_KEY_MODE=${AGENT_API_KEY_MODE}
 AGENT_INGEST_MAX_SCENES=${AGENT_INGEST_MAX_SCENES}
 AGENT_INGEST_MAX_TRANSCRIPT_CHARS=${AGENT_INGEST_MAX_TRANSCRIPT_CHARS}
@@ -311,6 +348,7 @@ IMAGE_TAG=${IMAGE_TAG}
 
 # ── HuggingFace ──────────────────────────────────────────────────
 HF_HOME=${HF_HOME}
+HF_ACCESS_TOKEN=__SSM__
 
 # ── Worker Threading ─────────────────────────────────────────────
 OMP_NUM_THREADS=${OMP_NUM_THREADS}
