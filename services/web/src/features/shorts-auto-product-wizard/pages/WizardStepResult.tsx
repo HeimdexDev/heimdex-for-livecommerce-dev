@@ -3,20 +3,16 @@
 //
 // Subscribes to the parent job's aggregate status via useScanOrder (3s
 // polling) and presents a friendly skeleton-rail + spinner UI while
-// renders are in flight. As soon as the parent reaches a terminal-success
-// stage AND at least one child render completes, the page redirects the
-// operator straight to the inline subtitle editor (/edit-clips). On
-// failure (parent failed/cancelled, or every child failed) the page
-// surfaces ``friendlyParentError`` and a back link.
+// renders are in flight. As soon as ANY child render reaches
+// ``render_status === "completed"`` the page redirects to /edit-clips —
+// regardless of parent stage. EditClipsPage owns its own useScanOrder
+// instance and continues polling for late-arriving siblings.
 //
-// The legacy per-child cards (title edit, render-result link, script
-// editor link) are intentionally gone — auto-redirect makes them
-// unreachable in the success path, and the inline editor at /edit-clips
-// already owns those affordances.
-//
-// Loose-coupling: this page does NOT import from features/shorts-render
-// or features/shorts-editor. Navigation flows via Next ``router.replace``
-// URL strings only.
+// Why not wait for parent terminal: parent stage only flips to
+// ``committed`` after *every* child reaches a terminal stage. In a
+// 1-of-N success scenario (one render finishes far ahead of its
+// siblings) the old "parent terminal AND any completed" predicate
+// stalled — the user had to reload to see results.
 // ============================================================================
 
 "use client";
@@ -53,32 +49,45 @@ const FAILURE_STAGES: ReadonlySet<ScanStage> = new Set<ScanStage>([
 ]);
 
 interface DerivedState {
-  /** All children failed, OR parent stage itself is failure-terminal. */
+  /** Parent stage is failure-terminal, OR parent reached success-terminal
+   *  with every child in failed/cancelled state. */
   failure: boolean;
-  /** Parent reached success-terminal AND ≥1 child render completed. */
+  /** At least one child has ``render_status === "completed"`` — an MP4
+   *  is viewable in /edit-clips regardless of parent stage. */
   redirectable: boolean;
 }
 
 function deriveState(status: ScanOrderStatusResponse | null): DerivedState {
   if (!status) return { failure: false, redirectable: false };
   const parentStage = status.parent.stage;
+  // Parent explicitly failed or cancelled — no MP4 will ever land.
   if (FAILURE_STAGES.has(parentStage)) {
     return { failure: true, redirectable: false };
   }
-  // Whole-batch failure: parent looks "done" but every child failed. Without
-  // this branch the user lands on /edit-clips with nothing to edit.
+  // Any child render produced an MP4 → redirect immediately. Parent
+  // stage is intentionally ignored: in a 1-of-N success scenario the
+  // parent sits at ``fanned_out`` until every sibling reaches a
+  // terminal stage, which can be tens of seconds after the first
+  // render lands.
+  const anyRenderCompleted = status.children.some(
+    (c: JobStatusResponse) => c.render_status === "completed",
+  );
+  if (anyRenderCompleted) {
+    return { failure: false, redirectable: true };
+  }
+  // Whole-batch failure: parent reached terminal-success AND every
+  // child settled into a failed/cancelled stage. Without this branch
+  // the user stares at the spinner after a total wipeout.
   if (
     SUCCESS_STAGES.has(parentStage) &&
     status.children_total > 0 &&
-    status.children_failed === status.children_total
+    status.children.length === status.children_total &&
+    status.children.every(
+      (c: JobStatusResponse) =>
+        c.stage === "failed" || c.stage === "cancelled",
+    )
   ) {
     return { failure: true, redirectable: false };
-  }
-  const anyCompleted = status.children.some(
-    (c: JobStatusResponse) => c.render_status === "completed",
-  );
-  if (SUCCESS_STAGES.has(parentStage) && anyCompleted) {
-    return { failure: false, redirectable: true };
   }
   return { failure: false, redirectable: false };
 }

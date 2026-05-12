@@ -203,13 +203,80 @@ describe("WizardStepResult — auto-redirect", () => {
     );
   });
 
-  it("does NOT redirect while renders are in-flight", () => {
+  it("redirects as soon as ≥1 child render completes even while parent fanned_out", async () => {
+    // 1-of-3 success: one render landed, two siblings still in flight.
+    // Old predicate stalled here because parent.stage="fanned_out".
     useScanOrderMock.mockReturnValue({
-      status: makeStatus("done", 1, [
-        makeChild({ render_status: "rendering" }),
+      status: makeStatus("fanned_out", 3, [
+        makeChild({ render_status: "completed" }),
+        makeChild({
+          job_id: "child-2",
+          shorts_index: 2,
+          stage: "rendering",
+          render_status: "rendering",
+          completed_at: null,
+        }),
+        makeChild({
+          job_id: "child-3",
+          shorts_index: 3,
+          stage: "rendering",
+          render_status: "queued",
+          completed_at: null,
+        }),
       ]),
       error: null,
-      isPolling: false,
+      isPolling: true,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenCalledWith(
+        "/export/shorts/auto/wizard/gd_test/result/parent-1/edit-clips",
+      ),
+    );
+  });
+
+  it("redirects when one child completes and another already failed", async () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus(
+        "fanned_out",
+        2,
+        [
+          makeChild({ render_status: "completed" }),
+          makeChild({
+            job_id: "child-2",
+            shorts_index: 2,
+            stage: "failed",
+            render_status: "failed",
+            completed_at: null,
+            failed_at: "2026-05-12T00:00:00Z",
+          }),
+        ],
+        1,
+      ),
+      error: null,
+      isPolling: true,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenCalledWith(
+        "/export/shorts/auto/wizard/gd_test/result/parent-1/edit-clips",
+      ),
+    );
+  });
+
+  it("does NOT redirect while no render has produced an MP4 yet", () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("fanned_out", 1, [
+        makeChild({
+          stage: "rendering",
+          render_status: "rendering",
+          completed_at: null,
+        }),
+      ]),
+      error: null,
+      isPolling: true,
       cancel: cancelMock,
     });
     render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
