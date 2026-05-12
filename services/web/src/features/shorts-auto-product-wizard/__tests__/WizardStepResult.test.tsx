@@ -123,7 +123,7 @@ describe("WizardStepResult — loading state", () => {
     useScanOrderMock.mockReset();
   });
 
-  it("renders the spinner + skeleton with the children_total count while polling", () => {
+  it("renders the progress bar + skeleton once fan-out lands (children_total > 0)", () => {
     useScanOrderMock.mockReturnValue({
       status: makeStatus("fanned_out", 3, []),
       error: null,
@@ -132,15 +132,45 @@ describe("WizardStepResult — loading state", () => {
     });
     render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
     expect(screen.getByTestId("wizard-loading-state")).toBeInTheDocument();
-    expect(screen.getByTestId("loading-shorts-spinner")).toBeInTheDocument();
+    expect(screen.getByTestId("loading-shorts-progress")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("loading-shorts-spinner"),
+    ).not.toBeInTheDocument();
     expect(
       screen.getAllByTestId("loading-shorts-skeleton-card"),
     ).toHaveLength(3);
   });
 
-  it("cancel button calls useScanOrder.cancel()", async () => {
+  it("renders the indeterminate spinner before fan-out (children_total = 0)", () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("queued", 0, []),
+      error: null,
+      isPolling: true,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(screen.getByTestId("wizard-loading-state")).toBeInTheDocument();
+    expect(screen.getByTestId("loading-shorts-spinner")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("loading-shorts-progress"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("cancel button calls useScanOrder.cancel() (progress mode)", async () => {
     useScanOrderMock.mockReturnValue({
       status: makeStatus("fanned_out", 2, []),
+      error: null,
+      isPolling: true,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    fireEvent.click(screen.getByTestId("loading-shorts-progress-cancel"));
+    await waitFor(() => expect(cancelMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("cancel button calls useScanOrder.cancel() (spinner mode, pre-fan-out)", async () => {
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("queued", 0, []),
       error: null,
       isPolling: true,
       cancel: cancelMock,

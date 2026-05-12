@@ -2,7 +2,7 @@
 // Auto-shorts wizard — loading screen.
 //
 // Subscribes to the parent job's aggregate status via useScanOrder (3s
-// polling) and presents a friendly skeleton-rail + spinner UI while
+// polling) and presents a progress bar + per-child status chips while
 // renders are in flight. As soon as ANY child render reaches
 // ``render_status === "completed"`` the page redirects to /edit-clips —
 // regardless of parent stage. EditClipsPage owns its own useScanOrder
@@ -29,6 +29,7 @@ import type {
 import { useAuth } from "@/lib/auth";
 
 import { InlineWizardBreadcrumb } from "../components/InlineWizardBreadcrumb";
+import { LoadingShortsProgress } from "../components/LoadingShortsProgress";
 import { LoadingShortsSkeleton } from "../components/LoadingShortsSkeleton";
 import { LoadingShortsSpinner } from "../components/LoadingShortsSpinner";
 import { useScanOrder } from "../hooks/useScanOrder";
@@ -145,6 +146,7 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
       ) : (
         <LoadingState
           count={status?.children_total ?? 0}
+          childJobs={status?.children ?? []}
           // Cancellation is meaningful only while we're actually loading.
           // Once redirect has fired the page is about to unmount; hide the
           // button to avoid a doomed POST race.
@@ -198,10 +200,17 @@ function FailureState({ status }: FailureStateProps) {
 
 interface LoadingStateProps {
   count: number;
+  childJobs: JobStatusResponse[];
   onCancel?: () => void;
 }
 
-function LoadingState({ count, onCancel }: LoadingStateProps) {
+function LoadingState({ count, childJobs, onCancel }: LoadingStateProps) {
+  // Before fan-out lands ``children_total`` is 0 — no per-clip data to
+  // show, so render the indeterminate spinner. Once the parent's
+  // children fan out we have a concrete N and live per-child stages,
+  // which the progress component visualizes as a determinate bar +
+  // chips.
+  const hasChildren = count > 0;
   return (
     <div
       className="grid gap-6 md:grid-cols-[260px_1fr]"
@@ -209,7 +218,15 @@ function LoadingState({ count, onCancel }: LoadingStateProps) {
     >
       <LoadingShortsSkeleton count={count} />
       <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-gray-200 bg-white">
-        <LoadingShortsSpinner onCancel={onCancel} />
+        {hasChildren ? (
+          <LoadingShortsProgress
+            children={childJobs}
+            childrenTotal={count}
+            onCancel={onCancel}
+          />
+        ) : (
+          <LoadingShortsSpinner onCancel={onCancel} />
+        )}
       </div>
     </div>
   );
