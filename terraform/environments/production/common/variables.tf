@@ -8,3 +8,9 @@ variable "subnet_id" {
   default     = "subnet-0ccc47ab2301c638c" # ap-northeast-2d
   description = "Primary subnet for production workloads"
 }
+
+variable "db_password" {
+  type      = string
+  sensitive = true
+  default   = "placeholder-managed-externally"
+}

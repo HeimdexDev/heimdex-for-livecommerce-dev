@@ -147,7 +147,7 @@ resource "aws_db_instance" "main" {
 
   db_name  = "heimdex"
   username = "heimdex"
-  password = "placeholder-managed-externally"
+  password = var.db_password
 
   allocated_storage  = 20
   storage_type       = "gp3"
