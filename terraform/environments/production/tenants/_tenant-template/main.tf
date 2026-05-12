@@ -11,7 +11,7 @@ data "terraform_remote_state" "common" {
 }
 
 # ============================================
-# envs.yaml -> .env conversion
+# envs.yaml -> .env conversion (via shared template)
 # ============================================
 locals {
   env_vars    = yamldecode(file("${path.module}/envs.yaml"))
@@ -34,7 +34,7 @@ locals {
     "MINIO_SECRET_KEY",
     "HF_ACCESS_TOKEN",
 
-    # Service URLs (kept in SSM to prevent exposure)
+    # Service URLs
     "OPENSEARCH_URL",
     "RERANKER_SERVICE_URL",
     "GOOGLE_OAUTH_REDIRECT_URI",
@@ -63,34 +63,34 @@ locals {
 }
 
 # ============================================
-# EC2 — new instance (no import target)
+# EC2
 # ============================================
 module "ec2" {
   source = "../../../../modules/ec2-instance"
 
-  ami                  = "ami-0ac22ed9e7ba4d3bd"
-  instance_type        = "t3.large"
+  ami                  = "ami-0ac22ed9e7ba4d3bd" # TODO: 최신 AMI 확인
+  instance_type        = "t3.large"              # TODO: 고객사 규모에 맞게 조정
   key_name             = "livenow-prod-key"
   subnet_id            = data.terraform_remote_state.common.outputs.subnet_id
   security_group_ids   = [data.terraform_remote_state.common.outputs.ec2_security_group_id]
   iam_instance_profile = "livenow-prod-ec2-profile"
 
-  root_volume_size = 80
+  root_volume_size = 80 # TODO: 고객사 데이터 규모에 맞게 조정
   environment      = "production"
-  client_name      = "ebs"
+  client_name      = "CHANGEME" # TODO: 고객사명
 
   user_data = templatefile("${path.module}/../../../../modules/ec2-instance/templates/user_data.sh.tpl", {
-    client_name     = "ebs"
+    client_name     = "CHANGEME" # TODO: 고객사명
     env_content     = local.env_content
     ssm_param_names = local.ssm_param_names
-    ssm_prefix      = "/heimdex/prod/tenants/ebs"
+    ssm_prefix      = "/heimdex/prod/tenants/CHANGEME" # TODO: 고객사명
     region          = "ap-northeast-2"
     git_repo        = "git@github.com:jlee-heimdex/heimdex-for-livecommerce-dev.git"
     git_branch      = "main"
   })
 
   extra_tags = {
-    ClientDomain = "ebsdemo.app.heimdex.co"
+    ClientDomain = "CHANGEME.app.heimdexdemo.dev" # TODO: 고객사 도메인
   }
 }
 
@@ -101,8 +101,8 @@ resource "aws_eip" "this" {
   domain = "vpc"
 
   tags = {
-    Name        = "heimdex-prod-ebs"
-    Client      = "ebs"
+    Name        = "heimdex-prod-CHANGEME" # TODO: 고객사명
+    Client      = "CHANGEME"              # TODO: 고객사명
     Environment = "production"
     ManagedBy   = "terraform"
   }
@@ -114,10 +114,10 @@ resource "aws_eip_association" "this" {
 }
 
 # ============================================
-# EC2 IP -> SSM auto-registration (for GitHub Actions deploy)
+# EC2 IP -> SSM auto-registration
 # ============================================
 resource "aws_ssm_parameter" "ec2_host" {
-  name  = "/heimdex/prod/tenants/ebs/EC2_HOST"
+  name  = "/heimdex/prod/tenants/CHANGEME/EC2_HOST" # TODO: 고객사명
   type  = "String"
   value = aws_eip.this.public_ip
 

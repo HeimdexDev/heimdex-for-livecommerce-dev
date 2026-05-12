@@ -10,7 +10,30 @@ data "aws_subnet" "primary" {
 }
 
 # ============================================
-# Security Group — EC2 (import target: sg-0d417a7b3765d4a76)
+# Import blocks — existing AWS resources
+# ============================================
+import {
+  to = aws_security_group.ec2
+  id = "sg-0d417a7b3765d4a76"
+}
+
+import {
+  to = aws_security_group.rds
+  id = "sg-01509b6b518637bfd"
+}
+
+import {
+  to = aws_db_subnet_group.main
+  id = "livenow-prod-subnet-group"
+}
+
+import {
+  to = aws_db_instance.main
+  id = "livenow-prod"
+}
+
+# ============================================
+# Security Group — EC2
 # Description must exactly match AWS value (mismatch causes SG recreation)
 # ============================================
 resource "aws_security_group" "ec2" {

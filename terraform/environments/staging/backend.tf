@@ -9,7 +9,8 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "heimdex-terraform-state"     key            = "staging/common/terraform.tfstate"
+    bucket         = "heimdex-terraform-state"
+    key            = "staging/terraform.tfstate"
     region         = "ap-northeast-2"
     dynamodb_table = "heimdex-terraform-lock"
     encrypt        = true

@@ -1,13 +1,16 @@
 # ============================================
-# Common state reference (VPC, SG)
+# VPC / Subnet / SG — data source (prod common에서 관리)
 # ============================================
-data "terraform_remote_state" "common" {
-  backend = "s3"
-  config = {
-    bucket = "heimdex-terraform-state"
-    key    = "staging/common/terraform.tfstate"
-    region = "ap-northeast-2"
-  }
+data "aws_vpc" "main" {
+  id = "vpc-03c117173408533fd"
+}
+
+data "aws_subnet" "primary" {
+  id = "subnet-0ccc47ab2301c638c" # ap-northeast-2d
+}
+
+data "aws_security_group" "ec2" {
+  id = "sg-0d417a7b3765d4a76"
 }
 
 # ============================================
@@ -15,7 +18,7 @@ data "terraform_remote_state" "common" {
 # ============================================
 locals {
   env_vars    = yamldecode(file("${path.module}/envs.yaml"))
-  env_content = join("\n", [for k, v in local.env_vars : "${k}=${v}"])
+  env_content = templatefile("${path.module}/../../templates/env.tpl", local.env_vars)
 
   ssm_param_names = [
     # Secrets
@@ -33,8 +36,8 @@ locals {
     "MINIO_ACCESS_KEY",
     "MINIO_SECRET_KEY",
     "HF_ACCESS_TOKEN",
-    "LLAMA_CAPTION_API_KEY",
-    # Service URLs (kept in SSM to prevent exposure)
+
+    # Service URLs
     "OPENSEARCH_URL",
     "RERANKER_SERVICE_URL",
     "GOOGLE_OAUTH_REDIRECT_URI",
@@ -49,6 +52,7 @@ locals {
     "SQS_SHORTS_RENDER_QUEUE_URL",
     "SQS_BLUR_QUEUE_URL",
     "SQS_PRODUCT_ENUMERATE_QUEUE_URL",
+    "SQS_PRODUCT_TRACK_QUEUE_URL",
     "AIRCLOUD_ENDPOINT_TRANSCODE",
     "AIRCLOUD_ENDPOINT_CAPTION",
     "AIRCLOUD_ENDPOINT_STT",
@@ -57,31 +61,45 @@ locals {
     "AIRCLOUD_ENDPOINT_VISUAL_EMBED",
     "AIRCLOUD_ENDPOINT_BLUR",
     "AIRCLOUD_ENDPOINT_PRODUCT_ENUMERATE",
+    "AIRCLOUD_ENDPOINT_PRODUCT_TRACK",
   ]
 }
 
 # ============================================
-# EC2 — import target: i-0aed1a453c71eac46
+# Import blocks — existing AWS resources
+# ============================================
+import {
+  to = module.ec2.aws_instance.this
+  id = "i-0aed1a453c71eac46"
+}
+
+import {
+  to = aws_eip.this
+  id = "eipalloc-0c6ecac37479aa1e3"
+}
+
+# ============================================
+# EC2
 # ============================================
 module "ec2" {
-  source = "../../../../modules/ec2-instance"
+  source = "../../modules/ec2-instance"
 
   ami                  = "ami-0dec6548c7c0d0a96"
   instance_type        = "t3.xlarge"
   key_name             = "heimdex-staging-key"
-  subnet_id            = data.terraform_remote_state.common.outputs.subnet_id
-  security_group_ids   = [data.terraform_remote_state.common.outputs.ec2_security_group_id]
+  subnet_id            = data.aws_subnet.primary.id
+  security_group_ids   = [data.aws_security_group.ec2.id]
   iam_instance_profile = "heimdex-staging-ec2"
 
   root_volume_size = 200
   environment      = "staging"
-  client_name      = "livenow"
+  client_name      = "staging"
 
-  user_data = templatefile("${path.module}/../../../../modules/ec2-instance/templates/user_data.sh.tpl", {
-    client_name     = "livenow"
+  user_data = templatefile("${path.module}/../../modules/ec2-instance/templates/user_data.sh.tpl", {
+    client_name     = "staging"
     env_content     = local.env_content
     ssm_param_names = local.ssm_param_names
-    ssm_prefix      = "/heimdex/staging/tenants/livenow"
+    ssm_prefix      = "/heimdex/staging"
     region          = "ap-northeast-2"
     git_repo        = "git@github.com:jlee-heimdex/heimdex-for-livecommerce-dev.git"
     git_branch      = "main"
@@ -95,8 +113,7 @@ resource "aws_eip" "this" {
   domain = "vpc"
 
   tags = {
-    Name        = "heimdex-staging-livenow"
-    Client      = "livenow"
+    Name        = "heimdex-staging"
     Environment = "staging"
     ManagedBy   = "terraform"
   }
@@ -112,10 +129,10 @@ resource "aws_eip_association" "this" {
 }
 
 # ============================================
-# EC2 IP -> SSM auto-registration (for GitHub Actions deploy)
+# EC2 IP -> SSM auto-registration
 # ============================================
 resource "aws_ssm_parameter" "ec2_host" {
-  name  = "/heimdex/staging/tenants/livenow/EC2_HOST"
+  name  = "/heimdex/staging/EC2_HOST"
   type  = "String"
   value = aws_eip.this.public_ip
 

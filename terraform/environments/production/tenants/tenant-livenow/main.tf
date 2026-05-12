@@ -15,7 +15,7 @@ data "terraform_remote_state" "common" {
 # ============================================
 locals {
   env_vars    = yamldecode(file("${path.module}/envs.yaml"))
-  env_content = join("\n", [for k, v in local.env_vars : "${k}=${v}"])
+  env_content = templatefile("${path.module}/../../../../templates/env.tpl", local.env_vars)
 
   ssm_param_names = [
     # Secrets
@@ -33,7 +33,7 @@ locals {
     "MINIO_ACCESS_KEY",
     "MINIO_SECRET_KEY",
     "HF_ACCESS_TOKEN",
-    "LLAMA_CAPTION_API_KEY",
+
     # Service URLs (kept in SSM to prevent exposure)
     "OPENSEARCH_URL",
     "RERANKER_SERVICE_URL",
@@ -49,6 +49,7 @@ locals {
     "SQS_SHORTS_RENDER_QUEUE_URL",
     "SQS_BLUR_QUEUE_URL",
     "SQS_PRODUCT_ENUMERATE_QUEUE_URL",
+    "SQS_PRODUCT_TRACK_QUEUE_URL",
     "AIRCLOUD_ENDPOINT_TRANSCODE",
     "AIRCLOUD_ENDPOINT_CAPTION",
     "AIRCLOUD_ENDPOINT_STT",
@@ -57,11 +58,25 @@ locals {
     "AIRCLOUD_ENDPOINT_VISUAL_EMBED",
     "AIRCLOUD_ENDPOINT_BLUR",
     "AIRCLOUD_ENDPOINT_PRODUCT_ENUMERATE",
+    "AIRCLOUD_ENDPOINT_PRODUCT_TRACK",
   ]
 }
 
 # ============================================
-# EC2 — import target: i-02f0e86a7a50b283b
+# Import blocks — existing AWS resources
+# ============================================
+import {
+  to = module.ec2.aws_instance.this
+  id = "i-02f0e86a7a50b283b"
+}
+
+import {
+  to = aws_eip.this
+  id = "eipalloc-00a0a51f6461da26f"
+}
+
+# ============================================
+# EC2
 # ============================================
 module "ec2" {
   source = "../../../../modules/ec2-instance"

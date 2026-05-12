@@ -23,9 +23,23 @@ fi
 # ── Create directories ──────────────────────────────────
 mkdir -p /opt/heimdex/logs
 
-# ── Git clone ────────────────────────────────────────────
+# ── Git clone (app + sibling libraries used via editable mounts) ─
+CONTRACTS_DIR=/opt/heimdex/heimdex-media-contracts
+PIPELINES_DIR=/opt/heimdex/heimdex-media-pipelines
+
 if [ ! -d "$APP_DIR/.git" ]; then
-  git clone -b ${git_branch} ${git_repo} $APP_DIR
+  rm -rf "$APP_DIR"
+  git clone -b ${git_branch} ${git_repo} "$APP_DIR"
+fi
+
+if [ ! -d "$CONTRACTS_DIR/.git" ]; then
+  rm -rf "$CONTRACTS_DIR"
+  git clone -b main https://github.com/jlee-heimdex/heimdex-media-contracts.git "$CONTRACTS_DIR"
+fi
+
+if [ ! -d "$PIPELINES_DIR/.git" ]; then
+  rm -rf "$PIPELINES_DIR"
+  git clone -b main https://github.com/jlee-heimdex/heimdex-media-pipelines.git "$PIPELINES_DIR"
 fi
 
 # ── Generate .env (config values + SSM params) ──────────

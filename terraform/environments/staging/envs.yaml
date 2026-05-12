@@ -1,54 +1,53 @@
 # ============================================
-# Heimdex Production — tenant-ebs
+# Heimdex Staging — 통합 테스트 환경 (모든 기능 ON)
 # Non-secret config values only
 # Secrets + service URLs are in SSM Parameter Store
-# AI/Aircloud settings use staging values per 장원님
 # ============================================
 
 # ── Basic ────────────────────────────────────
-ENVIRONMENT: production
+ENVIRONMENT: staging
 LOG_LEVEL: INFO
-ALLOWED_HOSTS: "*.ebsdemo.app.heimdex.co,localhost"
-ENABLE_DEV_REFRESH: "false"
+ALLOWED_HOSTS: "*.app.heimdexdemo.dev,localhost"
+ENABLE_DEV_REFRESH: "true"
 
 # ── Domain / TLS ─────────────────────────────
-DOMAIN: ebsdemo.app.heimdex.co
-WILDCARD_DOMAIN: "*.ebsdemo.app.heimdex.co"
-CERTBOT_EMAIL: infra@heimdex.co
+DOMAIN: app.heimdexdemo.dev
+WILDCARD_DOMAIN: "*.app.heimdexdemo.dev"
+CERTBOT_EMAIL: infra@heimdexdemo.dev
 
 # ── Postgres ─────────────────────────────────
-POSTGRES_HOST: livenow-prod.cx0qyecu0g4m.ap-northeast-2.rds.amazonaws.com
-POSTGRES_PORT: "5432"
+POSTGRES_HOST: ""
+POSTGRES_PORT: ""
 POSTGRES_USER: heimdex
 POSTGRES_DB: heimdex
 
-# ── OpenSearch ───────────────────────────────
+# ── OpenSearch (Docker) ──────────────────────
 # OPENSEARCH_URL is in SSM
 OPENSEARCH_INDEX_PREFIX: heimdex
-OPENSEARCH_JAVA_OPTS: ""
+OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
 
 # ── Auth / JWT ───────────────────────────────
 AUTH_COOKIE_SECURE: "true"
 AUTH_COOKIE_SAMESITE: lax
-AUTH_COOKIE_DOMAIN: ".ebsdemo.app.heimdex.co"
+AUTH_COOKIE_DOMAIN: ".app.heimdexdemo.dev"
 JWT_ALGORITHM: HS256
 JWT_EXPIRATION_HOURS: "24"
 
 # ── Auth0 ────────────────────────────────────
 AUTH0_ENABLED: "true"
 AUTH0_DOMAIN: heimdex.jp.auth0.com
-AUTH0_AUDIENCE: "https://api.heimdex.co"
+AUTH0_AUDIENCE: "https://api.staging.heimdexdemo.dev"
 AUTH0_ALGORITHMS: RS256
 AUTH0_ORG_CLAIM: "https://heimdex.io/org_id"
 
 # ── CORS ─────────────────────────────────────
-CORS_ALLOW_ORIGIN_REGEX: "https?://.*\\.ebsdemo\\.app\\.heimdex\\.co"
+CORS_ALLOW_ORIGIN_REGEX: "https?://.*\\.app\\.heimdexdemo\\.dev"
 CORS_EXTRA_ORIGINS: ""
 
 # ── S3 / MinIO ───────────────────────────────
 MINIO_ENDPOINT: ""
 MINIO_SECURE: "false"
-DRIVE_S3_BUCKET: "livenow-media-prod"
+DRIVE_S3_BUCKET: "heimdex-drive-staging"
 S3_REGION: ap-northeast-2
 
 # ── Embedding ────────────────────────────────
@@ -63,7 +62,7 @@ SEARCH_VECTOR_TOP_K: "100"
 SEARCH_RRF_K: "60"
 SEARCH_MAX_SCENES_PER_VIDEO: "50"
 SEARCH_PAGE_SIZE: "20"
-SEARCH_DEFAULT_MODE: scenes
+SEARCH_DEFAULT_MODE: hybrid
 OCR_SEARCH_ENABLED: "true"
 OCR_BM25_BOOST: "1.5"
 SEARCH_RATE_LIMIT_MAX_REQUESTS: "60"
@@ -77,20 +76,20 @@ SQS_REGION: ap-northeast-2
 SQS_CONSUMER_ENABLED: "true"
 
 # ── Aircloud GPU ─────────────────────────────
-# Endpoint URLs are in SSM (staging endpoints)
+# Endpoint URLs are in SSM
 AIRCLOUD_ENABLED: "true"
 AIRCLOUD_WAKE_DEBOUNCE_SECONDS: "300"
 AIRCLOUD_COOLDOWN_CHECKS: "3"
 
 # ── Reranker ─────────────────────────────────
 # RERANKER_SERVICE_URL is in SSM
-RERANKER_ENABLED: "false"
+RERANKER_ENABLED: "true"
 RERANKER_TIMEOUT_MS: "5000"
 RERANKER_USE_MOCK: "false"
 
 # ── Closed Vocab ─────────────────────────────
 CLOSED_VOCAB_ENABLED: "false"
-CLOSED_VOCAB_SERVICE_URL: ""
+CLOSED_VOCAB_SERVICE_URL: "http://localhost:8080"
 CLOSED_VOCAB_TIMEOUT_MS: "1000"
 
 # ── Drive Worker ─────────────────────────────
@@ -98,11 +97,11 @@ DRIVE_CONNECTOR_ENABLED: "true"
 DRIVE_ENRICHMENT_ENABLED: "true"
 DRIVE_OCR_ENABLED: "true"
 DRIVE_STT_ENABLED: "true"
-FOLDER_SYNC_V2_ENABLED: "false"
+FOLDER_SYNC_V2_ENABLED: "true"
 DRIVE_WORKER_POLL_INTERVAL_SECONDS: "30"
-DRIVE_WORKER_GLOBAL_CONCURRENCY: "4"
-DRIVE_WORKER_PER_ORG_CONCURRENCY: "3"
-DRIVE_TEMP_DISK_BUDGET_GB: "70"
+DRIVE_WORKER_GLOBAL_CONCURRENCY: "2"
+DRIVE_WORKER_PER_ORG_CONCURRENCY: "2"
+DRIVE_TEMP_DISK_BUDGET_GB: "90"
 DRIVE_TEMP_DIR: /data/drive-tmp
 DRIVE_PROXY_MAX_HEIGHT: "720"
 DRIVE_PROXY_CRF: "23"
@@ -120,7 +119,7 @@ DRIVE_STT_LANGUAGE: ko
 DRIVE_STT_BACKEND: faster-whisper
 DRIVE_STT_CONCURRENCY: "1"
 DRIVE_STT_MAX_AUDIO_SECONDS: "3600"
-DRIVE_STT_DIARIZATION_ENABLED: "false"
+DRIVE_STT_DIARIZATION_ENABLED: "true"
 DRIVE_STT_DIARIZATION_MODEL: "pyannote/speaker-diarization-3.1"
 DRIVE_STT_MIN_SPEAKERS: "1"
 DRIVE_STT_MAX_SPEAKERS: "4"
@@ -142,9 +141,9 @@ VLM_TAGS_ENABLED: "true"
 AI_TAGS_ENABLED: "true"
 DRIVE_SPEECH_SPLIT_ENABLED: "true"
 FACE_THUMBNAIL_S3_PRIMARY: "true"
-HIGHLIGHT_REEL_ENABLED: "false"
-VIDEO_SUMMARY_ENABLED: "false"
-YOUTUBE_ENABLED: "false"
+HIGHLIGHT_REEL_ENABLED: "true"
+VIDEO_SUMMARY_ENABLED: "true"
+YOUTUBE_ENABLED: "true"
 
 # ── Visual Embedding Worker ──────────────────
 SIGLIP2_MODEL_ID: "google/siglip2-base-patch16-256"
@@ -155,7 +154,7 @@ VISUAL_EMBED_CONCURRENCY: "1"
 FACE_MATCH_THRESHOLD: "0.55"
 
 # ── Image Caption ────────────────────────────
-IMAGE_CAPTION_ENABLED: "false"
+IMAGE_CAPTION_ENABLED: "true"
 IMAGE_CAPTION_MODEL: gpt-4o
 IMAGE_CAPTION_IMAGE_DETAIL: low
 IMAGE_CAPTION_MAX_CONCURRENCY: "4"
@@ -177,27 +176,27 @@ AUTO_SHORTS_LLM_TIMEOUT_SEC: "8.0"
 AUTO_SHORTS_LLM_ROLLOUT_PCT: "100"
 AUTO_SHORTS_LLM_PROMPT_VERSION: "2026-04-24-v1"
 
-# ── Auto Shorts Product V2 (not on prod) ────
-AUTO_SHORTS_PRODUCT_V2_ENABLED: "false"
-AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT: "0"
+# ── Auto Shorts Product V2 ──────────────────
+AUTO_SHORTS_PRODUCT_V2_ENABLED: "true"
+AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT: "100"
 AUTO_SHORTS_PRODUCT_V2_MAX_CONCURRENT_PER_ORG: "10"
-AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED: "false"
+AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED: "true"
 AUTO_SHORTS_PRODUCT_V2_TRACK_MODE: stt
-AUTO_SHORTS_PRODUCT_V2_STT_ENUM_ENABLED: "false"
+AUTO_SHORTS_PRODUCT_V2_STT_ENUM_ENABLED: "true"
 AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MODEL: gpt-4o-mini
 AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_CONCURRENCY: "4"
 AUTO_SHORTS_PRODUCT_V2_STT_ENUM_PROMPT_VERSION: "v1.0"
 AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_TRANSCRIPT_TOKENS: "80000"
 AUTO_SHORTS_PRODUCT_V2_STT_ENUM_TIMEOUT_S: "90"
-AUTO_SHORTS_PRODUCT_V2_WHISPER_REFINE_ENABLED: "false"
-AUTO_SHORTS_PRODUCT_V2_WHISPER_ROLLOUT_PCT: "0"
+AUTO_SHORTS_PRODUCT_V2_WHISPER_REFINE_ENABLED: "true"
+AUTO_SHORTS_PRODUCT_V2_WHISPER_ROLLOUT_PCT: "100"
 AUTO_SHORTS_PRODUCT_V2_WHISPER_MODEL: whisper-1
 AUTO_SHORTS_PRODUCT_V2_WHISPER_LANGUAGE: ko
 AUTO_SHORTS_PRODUCT_V2_WHISPER_DAILY_BUDGET_USD: "5.0"
 AUTO_SHORTS_PRODUCT_V2_WHISPER_TIMEOUT_S: "60"
 AUTO_SHORTS_PRODUCT_V2_WHISPER_S3_DOWNLOAD_TIMEOUT_S: "30"
-AUTO_SHORTS_PRODUCT_V2_OVERLAY_MODE_ENABLED: "false"
-AUTO_SHORTS_PRODUCT_V2_STORYBOARD_MODE_ENABLED: "false"
+AUTO_SHORTS_PRODUCT_V2_OVERLAY_MODE_ENABLED: "true"
+AUTO_SHORTS_PRODUCT_V2_STORYBOARD_MODE_ENABLED: "true"
 AUTO_SHORTS_PRODUCT_V2_STORYBOARD_PICKER: llm
 AUTO_SHORTS_PRODUCT_V2_STORYBOARD_HOOK_MS: "8000"
 AUTO_SHORTS_PRODUCT_V2_STORYBOARD_INTRO_MS: "12000"
@@ -208,7 +207,7 @@ AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_MODEL: gpt-4o-mini
 AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_TIMEOUT_S: "30.0"
 AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_DAILY_BUDGET_USD: "5.0"
 AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_PROMPT_VERSION: "v2"
-AUTO_SHORTS_PRODUCT_V2_OCR_RERANK_ENABLED: "false"
+AUTO_SHORTS_PRODUCT_V2_OCR_RERANK_ENABLED: "true"
 AUTO_SHORTS_PRODUCT_V2_OCR_BOOST: "0.6"
 
 # ── Product V2 Enumerate Worker ──────────────
@@ -242,8 +241,8 @@ PRODUCT_TRACK_SERVICE_ID: ""
 PRODUCT_TRACK_WORKER_LEASE_SECONDS: "1800"
 
 # ── Blur ─────────────────────────────────────
-BLUR_ENABLED: "false"
-BLUR_EXPORT_ENABLED: "false"
+BLUR_ENABLED: "true"
+BLUR_EXPORT_ENABLED: "true"
 BLUR_MAX_ACTIVE_PER_ORG: "5"
 BLUR_LEASE_SECONDS: "1800"
 BLUR_DAILY_BUDGET_USD_PER_ORG: "50.0"
@@ -256,7 +255,7 @@ USE_GPU: "false"
 
 # ── Agent ────────────────────────────────────
 AGENT_INGEST_ENABLED: "true"
-AGENT_API_KEY_MODE: per-device
+AGENT_API_KEY_MODE: single
 AGENT_INGEST_MAX_SCENES: "500"
 AGENT_INGEST_MAX_TRANSCRIPT_CHARS: "100000"
 PAIRING_CODE_TTL_MINUTES: "10"
@@ -279,8 +278,8 @@ EXPORT_EXPIRY_DAYS: "3"
 
 # ── Analytics ────────────────────────────────
 ANALYTICS_ENABLED: "true"
-ANALYTICS_EXPORT_ENABLED: "false"
-ANALYTICS_S3_BUCKET: "livenow-media-prod"
+ANALYTICS_EXPORT_ENABLED: "true"
+ANALYTICS_S3_BUCKET: "heimdex-drive-staging"
 ANALYTICS_S3_PREFIX: analytics
 ANALYTICS_BQ_ENABLED: "false"
 ANALYTICS_BQ_PROJECT: ""
@@ -289,7 +288,7 @@ GOOGLE_APPLICATION_CREDENTIALS: ""
 AWS_REGION: ap-northeast-2
 
 # ── YouTube ──────────────────────────────────
-YOUTUBE_S3_BUCKET: ""
+YOUTUBE_S3_BUCKET: "heimdex-drive-staging"
 YOUTUBE_SYNC_INTERVAL_SECONDS: "21600"
 YOUTUBE_DOWNLOAD_FORMAT: "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]"
 YOUTUBE_RATE_LIMIT_SLEEP: "3"
@@ -297,8 +296,8 @@ YOUTUBE_RATE_LIMIT_MAX_SLEEP: "8"
 YOUTUBE_MAX_CONCURRENT_DOWNLOADS: "2"
 YOUTUBE_AUTO_DELETE_ORIGINALS: "true"
 YOUTUBE_ORIGINAL_TTL_DAYS: "7"
-YOUTUBE_COOKIES_PATH: ""
-YOUTUBE_COOKIES_HOST_DIR: ""
+YOUTUBE_COOKIES_PATH: /data/youtube-tmp/cookies.txt
+YOUTUBE_COOKIES_HOST_DIR: /opt/heimdex/secrets/youtube
 YOUTUBE_ORG_ID: ""
 YOUTUBE_POT_PROVIDER_URL: "http://bgutil-provider:4416"
 
@@ -306,7 +305,7 @@ YOUTUBE_POT_PROVIDER_URL: "http://bgutil-provider:4416"
 NEXT_PUBLIC_API_URL: ""
 NEXT_PUBLIC_AUTH0_ENABLED: "true"
 NEXT_PUBLIC_AUTH0_DOMAIN: heimdex.jp.auth0.com
-NEXT_PUBLIC_AUTH0_AUDIENCE: "https://api.heimdex.co"
+NEXT_PUBLIC_AUTH0_AUDIENCE: "https://api.staging.heimdexdemo.dev"
 NEXT_PUBLIC_AUTH0_CLIENT_ID: ""
 NEXT_PUBLIC_AUTH0_ORGANIZATION: ""
 NEXT_PUBLIC_GA_MEASUREMENT_ID: ""
@@ -318,7 +317,7 @@ REGISTRY: "ghcr.io/heimdex"
 IMAGE_TAG: latest
 
 # ── HuggingFace ──────────────────────────────
-HF_HOME: /home/appuser/.cache/huggingface
+HF_HOME: /root/.cache/huggingface
 
 # ── Worker Threading ─────────────────────────
 OMP_NUM_THREADS: "2"

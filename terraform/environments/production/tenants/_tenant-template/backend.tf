@@ -9,7 +9,8 @@ terraform {
   }
 
   backend "s3" {
-    bucket         = "heimdex-terraform-state"     key            = "staging/tenants/tenant-livenow/terraform.tfstate"
+    bucket         = "heimdex-terraform-state"
+    key            = "production/tenants/tenant-CHANGEME/terraform.tfstate" # TODO: 고객사명으로 변경
     region         = "ap-northeast-2"
     dynamodb_table = "heimdex-terraform-lock"
     encrypt        = true

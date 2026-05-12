@@ -76,7 +76,40 @@ resource "aws_dynamodb_table" "tflock" {
 }
 
 # ============================================
-# S3 Buckets (6 import targets)
+# Import blocks — existing AWS resources
+# ============================================
+import {
+  to = aws_s3_bucket.livenow_media_prod
+  id = "livenow-media-prod"
+}
+
+import {
+  to = aws_s3_bucket.drive_staging
+  id = "heimdex-drive-staging"
+}
+
+import {
+  to = aws_s3_bucket.playground
+  id = "heimdex-playground"
+}
+
+import {
+  to = aws_s3_bucket.agent_releases
+  id = "heimdex-agent-releases-dc7445ef"
+}
+
+import {
+  to = aws_s3_bucket.video_archive
+  id = "heimdex-video-archive-raw"
+}
+
+import {
+  to = aws_s3_bucket.face_profiles_test
+  id = "heimdex-face-profiles-test-20260325-5lpsbh"
+}
+
+# ============================================
+# S3 Buckets
 # ============================================
 resource "aws_s3_bucket" "livenow_media_prod" {
   bucket        = "livenow-media-prod"
