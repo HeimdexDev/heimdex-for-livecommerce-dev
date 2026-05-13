@@ -120,7 +120,7 @@ function AgentPageContent() {
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
             <p>{error}</p>
             <a
-              href="https://github.com/jlee-heimdex/heimdex-agent/releases"
+              href="https://github.com/HeimdexDev/heimdex-agent/releases"
               target="_blank"
               rel="noopener noreferrer"
               className="mt-1 inline-block text-amber-800 underline"

@@ -24,7 +24,7 @@ export async function GET() {
     return NextResponse.json(
       {
         error: "에이전트 업데이트 정보를 가져올 수 없습니다.",
-        fallback_url: "https://github.com/jlee-heimdex/heimdex-agent/releases",
+        fallback_url: "https://github.com/HeimdexDev/heimdex-agent/releases",
       },
       { status: 503 },
     );
