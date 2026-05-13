@@ -34,7 +34,12 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository_owner }}/heimdex
+  # IMAGE_PREFIX is computed per-job by the "Normalize image prefix" step below.
+  # OCI / Docker registry refs require all-lowercase repository names, but
+  # `github.repository_owner` preserves the org's mixed-case form (e.g. HeimdexDev).
+  # Pre-2026-05-13 the owner was already lowercase (`jlee-heimdex`) so a static env
+  # worked; post-org-migration we lowercase it dynamically so future owner renames
+  # don't silently break the build.
 
 jobs:
   # ── Step 1: Detect which workers actually changed ─────────────────────────
@@ -119,6 +124,10 @@ jobs:
         worker: ${{ fromJSON(needs.detect-changes.outputs.workers) }}
       fail-fast: false
     steps:
+      - name: Normalize image prefix
+        # OCI refs must be lowercase; `github.repository_owner` may be mixed-case.
+        run: echo "IMAGE_PREFIX=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/heimdex" >> "$GITHUB_ENV"
+
       # Checkout ALL repos (SaaS + contracts + pipelines) into correct layout
       - name: Checkout SaaS repo
         uses: actions/checkout@v4
