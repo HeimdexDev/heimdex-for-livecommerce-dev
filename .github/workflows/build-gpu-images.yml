@@ -128,7 +128,7 @@ jobs:
       - name: Checkout media-contracts
         uses: actions/checkout@v4
         with:
-          repository: jlee-heimdex/heimdex-media-contracts
+          repository: HeimdexDev/heimdex-media-contracts
           path: heimdex-media-contracts
           # ``contracts_ref`` defaults to ``main``. Override via
           # workflow_dispatch when building against an unmerged
