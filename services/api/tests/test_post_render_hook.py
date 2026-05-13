@@ -18,6 +18,13 @@ def _settings(*, enabled=True, rollout_pct=100):
     )
 
 
+def _captured_log_text(
+    caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> str:
+    captured = capsys.readouterr()
+    return caplog.text + captured.out + captured.err
+
+
 @pytest.fixture
 def schedule_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     """Spy on ``refinement_service.schedule_refinement``."""
@@ -102,6 +109,7 @@ class TestErrorContract:
         monkeypatch: pytest.MonkeyPatch,
         schedule_calls: list[tuple],
         caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         caplog.set_level(logging.ERROR)
 
@@ -115,12 +123,13 @@ class TestErrorContract:
             parent_job_id=uuid4(), org_id=uuid4()
         )
         assert schedule_calls == []
-        assert "whisper_refine_hook_failed" in caplog.text
+        assert "whisper_refine_hook_failed" in _captured_log_text(caplog, capsys)
 
     def test_schedule_call_failure_logged_not_raised(
         self,
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         caplog.set_level(logging.ERROR)
         monkeypatch.setattr(
@@ -140,4 +149,4 @@ class TestErrorContract:
         post_render_hook.schedule_refinement_if_eligible(
             parent_job_id=uuid4(), org_id=uuid4()
         )
-        assert "whisper_refine_hook_failed" in caplog.text
+        assert "whisper_refine_hook_failed" in _captured_log_text(caplog, capsys)
