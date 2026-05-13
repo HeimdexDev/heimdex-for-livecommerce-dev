@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
       {
         error: "다운로드 정보를 가져올 수 없습니다. 잠시 후 다시 시도해주세요.",
         fallback_url:
-          "https://github.com/jlee-heimdex/heimdex-agent/releases",
+          "https://github.com/HeimdexDev/heimdex-agent/releases",
       },
       { status: 503 },
     );
