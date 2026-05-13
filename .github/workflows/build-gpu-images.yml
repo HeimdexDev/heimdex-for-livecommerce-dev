@@ -138,7 +138,7 @@ jobs:
       - name: Checkout media-pipelines
         uses: actions/checkout@v4
         with:
-          repository: jlee-heimdex/heimdex-media-pipelines
+          repository: HeimdexDev/heimdex-media-pipelines
           path: heimdex-media-pipelines
           # ``pipelines_ref`` defaults to ``main``. Override via
           # workflow_dispatch for cross-repo feature work — e.g.,
