@@ -318,6 +318,14 @@ services:
       - ANALYTICS_BQ_ENABLED=${ANALYTICS_BQ_ENABLED:-false}
       - ANALYTICS_BQ_PROJECT=${ANALYTICS_BQ_PROJECT:-}
       - ANALYTICS_BQ_DATASET=${ANALYTICS_BQ_DATASET:-search_analytics}
+      # BigQuery WIF credentials. ADC reads GOOGLE_APPLICATION_CREDENTIALS,
+      # the file is mounted via volumes below from GCP_CREDENTIALS_HOST_PATH.
+      # AWS_REGION is required because google-auth's AWS provider hits the
+      # IMDS region URL on every token refresh — without it the BQ load
+      # silently fails with "Unable to retrieve AWS region" and the
+      # try/except in export_worker_events.py:253 swallows it.
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-/secrets/gcp-credentials.json}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
       - YOUTUBE_ENABLED=${YOUTUBE_ENABLED:-false}
       - YOUTUBE_S3_BUCKET=${YOUTUBE_S3_BUCKET:-}
       - HF_HOME=/home/appuser/.cache/huggingface
@@ -331,6 +339,10 @@ services:
       - huggingface_cache:/home/appuser/.cache/huggingface
       # Persistent storage for uploaded scene/face thumbnails
       - ./thumbnails:/data/thumbnails
+      # GCP WIF external_account JSON for BigQuery analytics export.
+      # Host path is configurable so non-prod hosts can override; the path
+      # is also referenced by GOOGLE_APPLICATION_CREDENTIALS env above.
+      - ${GCP_CREDENTIALS_HOST_PATH:-/opt/heimdex/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy
