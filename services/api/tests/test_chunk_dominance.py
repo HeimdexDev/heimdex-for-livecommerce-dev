@@ -145,3 +145,18 @@ async def test_heuristic_fallback_default_match_one():
     # heuristic baseline = match 1.0 -> passes threshold 0.5 -> survives
     assert len(chunks) == 1
     assert chunks[0].score.primary_catalog_match == 1.0
+
+
+def test_settings_chunk_catalog_match_default():
+    from app.config import Settings
+    s = Settings(_env_file=None)
+    assert s.auto_shorts_product_v2_chunk_catalog_match_threshold == 0.0
+
+
+def test_settings_chunk_catalog_match_env_override(monkeypatch):
+    monkeypatch.setenv(
+        "AUTO_SHORTS_PRODUCT_V2_CHUNK_CATALOG_MATCH_THRESHOLD", "0.6"
+    )
+    from app.config import Settings
+    s = Settings(_env_file=None)
+    assert s.auto_shorts_product_v2_chunk_catalog_match_threshold == 0.6
