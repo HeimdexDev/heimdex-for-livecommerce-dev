@@ -54,6 +54,8 @@ function makeJob(overrides: Partial<api.RenderJobResponse> = {}): api.RenderJobR
     refined_from_render_job_id: null,
     refinement_source: null,
     effective_render_job_id: null,
+    summary: null,
+    summary_generated_at: null,
     ...overrides,
   };
 }
@@ -260,6 +262,8 @@ describe("schema mirror", () => {
       refined_from_render_job_id: null,
       refinement_source: null,
       effective_render_job_id: null,
+      summary: null,
+      summary_generated_at: null,
     };
     expect(job.replaced_by_render_job_id).toBeNull();
     expect(job.refined_from_render_job_id).toBeNull();

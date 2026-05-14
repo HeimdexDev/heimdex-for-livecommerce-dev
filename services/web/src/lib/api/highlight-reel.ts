@@ -61,6 +61,13 @@ export interface RenderJobResponse {
   // editor URL pointing at a now-superseded render); the FE
   // redirects onto this id to land on the current canonical row.
   effective_render_job_id: string | null;
+  // Per-short Korean summary (migration 059). Persisted on the row by
+  // POST /api/shorts/render/{id}/summary so the saved-shorts list and
+  // preview cards display it without an OpenAI call per card. ``null``
+  // means "not yet generated" — the FE shows a 요약 생성 button for
+  // those rows. ``summary_generated_at`` is an ISO timestamp string.
+  summary: string | null;
+  summary_generated_at: string | null;
 }
 
 // Subset of heimdex_media_contracts.composition.SubtitleSpec sent by the

@@ -49,6 +49,8 @@ function makeRender(overrides: Record<string, unknown> = {}) {
     refined_from_render_job_id: null,
     refinement_source: null,
     effective_render_job_id: null,
+    summary: null,
+    summary_generated_at: null,
     ...overrides,
   };
 }

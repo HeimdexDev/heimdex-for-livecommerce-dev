@@ -11,6 +11,7 @@ import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { ExportModal } from "@/features/basket/ExportModal";
 import type { BasketItem } from "@/features/basket/useSceneBasket";
 import { getRenderJobStatus, type RenderJobResponse } from "@/lib/api/highlight-reel";
+import { generateRenderJobSummary } from "@/lib/api/shorts-render";
 import { Pagination } from "@/components/ui/Pagination";
 
 interface SavedShort {
@@ -42,6 +43,9 @@ interface DisplayItem {
   output_size_bytes?: number | null;
   render_time_ms?: number | null;
   error?: string | null;
+  // Per-short Korean summary (migration 059). ``null`` → not yet
+  // generated; the card shows a 요약 생성 button. Render items only.
+  summary?: string | null;
 }
 
 function BackArrowIcon() {
@@ -249,6 +253,7 @@ export function SavedShortsPage() {
         output_size_bytes: r.output_size_bytes,
         render_time_ms: r.render_time_ms,
         error: r.error,
+        summary: r.summary,
       });
     }
 
@@ -261,6 +266,56 @@ export function SavedShortsPage() {
   );
 
   const [isDownloading, setIsDownloading] = useState(false);
+
+  // Per-card summary generation state. ``summarizingIds`` tracks
+  // in-flight POST /summary calls; ``summaryErrors`` holds the last
+  // failure message per render job so the card can show it without
+  // a global toast. Both keyed by render job id.
+  const [summarizingIds, setSummarizingIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [summaryErrors, setSummaryErrors] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+
+  const handleGenerateSummary = useCallback(
+    async (jobId: string) => {
+      setSummarizingIds((prev) => new Set(prev).add(jobId));
+      setSummaryErrors((prev) => {
+        const next = new Map(prev);
+        next.delete(jobId);
+        return next;
+      });
+      try {
+        const result = await generateRenderJobSummary(jobId, getAccessToken);
+        // Patch the summary onto the render job so the merged
+        // DisplayItem re-derives with the new text. The persisted
+        // column means a page reload would carry it too — this just
+        // avoids the round trip.
+        setRenderJobs((prev) =>
+          prev.map((job) =>
+            job.id === jobId ? { ...job, summary: result.summary } : job,
+          ),
+        );
+      } catch (err) {
+        setSummaryErrors((prev) => {
+          const next = new Map(prev);
+          next.set(
+            jobId,
+            err instanceof Error ? err.message : "요약 생성 실패",
+          );
+          return next;
+        });
+      } finally {
+        setSummarizingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(jobId);
+          return next;
+        });
+      }
+    },
+    [getAccessToken],
+  );
 
   const handleClipDownload = useCallback(async () => {
     setShowExportMenu(false);
@@ -579,6 +634,37 @@ export function SavedShortsPage() {
                     </button>
                   </div>
                 </div>
+
+                {/* Per-short summary (migration 059). Render items
+                    only, once the render is completed. ``summary``
+                    is persisted on the row, so it's eager-loaded with
+                    the render list — the button only appears when the
+                    summary hasn't been generated yet. */}
+                {item.type === "render" && isCompleted(item) && (
+                  <div className="mt-1.5" data-testid="saved-shorts-summary">
+                    {item.summary ? (
+                      <p className="line-clamp-3 text-xs leading-snug text-gray-500">
+                        {item.summary}
+                      </p>
+                    ) : summarizingIds.has(item.id) ? (
+                      <p className="text-xs text-gray-400">요약 생성 중...</p>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleGenerateSummary(item.id)}
+                        className="text-xs text-indigo-500 transition-colors hover:text-indigo-600"
+                        data-testid="saved-shorts-generate-summary"
+                      >
+                        요약 생성
+                      </button>
+                    )}
+                    {summaryErrors.has(item.id) && (
+                      <p className="mt-0.5 text-xs text-red-500">
+                        {summaryErrors.get(item.id)}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

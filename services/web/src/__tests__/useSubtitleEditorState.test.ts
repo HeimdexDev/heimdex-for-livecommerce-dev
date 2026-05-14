@@ -49,6 +49,8 @@ function makeRenderResponse(overrides: Partial<api.RenderJobResponse> = {}): api
     refined_from_render_job_id: null,
     refinement_source: "manual_edit",
     effective_render_job_id: null,
+    summary: null,
+    summary_generated_at: null,
     ...overrides,
   };
 }

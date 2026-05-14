@@ -29,6 +29,22 @@ export interface CompositionResponse {
   source: "render_job" | "generated";
 }
 
+/**
+ * Mirror of services/api/app/modules/shorts_render/schemas.py::ShortsSummaryResponse.
+ * Returned by POST /api/shorts/render/{job_id}/summary. The summary is
+ * also persisted on the render row (migration 059), so a subsequent
+ * GET /api/shorts/render carries it on RenderJobResponse.summary —
+ * the endpoint is a generate/regenerate trigger, not the read path.
+ */
+export interface ShortsSummaryResponse {
+  render_job_id: string;
+  summary: string;
+  prompt_version: string;
+  model: string;
+  cost_usd: number;
+  generated_at: string;
+}
+
 async function authHeaders(getToken: TokenGetter): Promise<Record<string, string>> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   try {
@@ -163,6 +179,43 @@ export async function deleteRenderJob(
   if (!res.ok && res.status !== 204 && res.status !== 404) {
     throw new Error(`Failed to delete render job (${res.status})`);
   }
+}
+
+/**
+ * Generate (or regenerate) the per-short Korean summary for a
+ * completed render. Backend ``POST /api/shorts/render/{job_id}/summary``
+ * runs a text-only gpt-4o-mini call over the source video's scene
+ * signals, persists the result onto the render row (migration 059),
+ * and returns it. Owner-scoped on the server.
+ *
+ * Errors surfaced as a generic ``Error`` with the backend detail:
+ *   - 404 — job not found / not owned, or no scene signals available
+ *   - 409 — render not yet completed
+ *   - 503 — feature flag off, or the OpenAI call failed
+ * The caller (saved-shorts card) shows a short failure label and
+ * keeps the 요약 생성 button so the operator can retry.
+ */
+export async function generateRenderJobSummary(
+  jobId: string,
+  getToken: TokenGetter,
+  maxSentences?: number,
+): Promise<ShortsSummaryResponse> {
+  const headers = await authHeaders(getToken);
+  const body =
+    maxSentences != null
+      ? JSON.stringify({ max_sentences: maxSentences })
+      : undefined;
+  const res = await fetch(
+    `${getApiBaseUrl()}/api/shorts/render/${jobId}/summary`,
+    { method: "POST", headers, body },
+  );
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(
+      detail.detail || `Failed to generate summary (${res.status})`,
+    );
+  }
+  return res.json();
 }
 
 /**
