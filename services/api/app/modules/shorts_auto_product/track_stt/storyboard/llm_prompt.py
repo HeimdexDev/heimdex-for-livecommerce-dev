@@ -40,6 +40,20 @@ from app.modules.shorts_auto_product.track_stt.storyboard.types import (
 # on this. Mirror the bump in
 # ``app.config.Settings.auto_shorts_product_v2_storyboard_llm_prompt_version``.
 #
+# v4 (2026-05-13, evergreen CLOSER):
+#   * CTA slot definition rewritten — no longer "purchase prompt
+#     / urgency". Now an EVERGREEN closing beat: verdict / demo
+#     result / use case. Time-sensitive promotions are AVOIDED.
+#     Shorts are watched weeks-months after the live stream;
+#     "오늘만 / 매진 / 할인" loses meaning over time.
+#   * Wire role name kept as "cta" (schema + Pydantic Literal +
+#     dispatch dict) — semantic-only change. Renaming to "closer"
+#     is a follow-up if v4 evals positive.
+#   * Rule #3 tightened: CTA must be evergreen. Rule #6 expanded:
+#     CTA must not duplicate INTRO content.
+#
+# v3 ()
+#
 # v2 (2026-05-08, PR 9):
 #   * `build_user_prompt` accepts ``small_chunk_hint`` to nudge the
 #     LLM toward 1× DETAIL when chunk_count < 5 (otherwise the schema
@@ -49,34 +63,56 @@ from app.modules.shorts_auto_product.track_stt.storyboard.types import (
 #     the prompt no longer scales with source-video duration.
 # v1: initial.
 # ====================================================================
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
 
 
-_SYSTEM_PROMPT = """You are a livecommerce shorts director. Pick chunks from \
-the provided transcript to fill 4 narrative slots:
+_SYSTEM_PROMPT = """You are a livecommerce shorts director. Pick chunks \
+from the provided transcript to fill 4 narrative slots:
 
 - HOOK (5-10s): grabs attention, sets up curiosity, opens with energy.
 - INTRO (8-15s): names the product, frames the value proposition.
-- DETAIL (15-25s, 1-2 chunks): demonstration, mechanism, evidence, comparison.
-- CTA (5-10s): purchase prompt, urgency, or closer.
+- DETAIL (15-25s, 1-2 chunks): demonstration, mechanism, evidence, \
+comparison.
+- CTA (5-10s): the CLOSING BEAT of the short — an EVERGREEN payoff \
+that delivers what the HOOK promised. Pick ONE of these patterns:
+    (a) VERDICT — speaker's conclusion or evaluation \
+(e.g., "써본 결과 진짜 좋아요", "정리하면 ~인 제품이에요", \
+"저는 만족하면서 쓰고 있어요").
+    (b) DEMO RESULT — visible or sensory reveal of the outcome \
+(e.g., "보세요, 이렇게 부드러워요", "차이 느껴지죠", "윤기가 나요").
+    (c) USE CASE — who this is for or when to use it \
+(e.g., "이런 분께 추천드려요", "이럴 때 쓰기 좋아요").
+
+  IMPORTANT — the CTA slot is NOT a hard purchase prompt. Shorts are \
+watched weeks or months AFTER the live stream, so time-bound or \
+inventory-bound language LOSES MEANING or becomes misleading over time. \
+AVOID phrases like: "오늘만", "이번 주", "마감", "마지막 기회", "매진", \
+"품절", "한정", "할인", "쿠폰", "특가", "지금 주문", "지금 클릭", \
+"장바구니", "결제". Pick an evergreen statement instead, even if it \
+sits slightly earlier in the source than the loudest live-only call.
 
 Rules:
 
-1. Use each chunk at most once. Return chunk_index from the provided list.
+1. Use each chunk at most once. Return chunk_index from the provided \
+list. The role string in the JSON response is "cta" (lowercase) — \
+schema-locked.
 2. The HOOK chunk must come from the FIRST third of the source video.
-3. The CTA chunk must come from the LAST half of the source video. \
-Korean livecommerce CTAs often land mid-stream (50-70%); picking earlier \
-than that breaks the closer beat.
+3. The CTA chunk must come from the LAST half of the source video AND \
+must be EVERGREEN (verdict / demo result / use case). If the only \
+candidates in the last half are time-sensitive promotions, prefer a \
+slightly earlier evergreen chunk over a late live-only one.
 4. DETAIL fragments play in source-time order among themselves.
-5. Prefer narrative coherence over per-chunk scores: a chunk that
-   answers the HOOK's question is better than the highest-hook chunk
-   in isolation.
-6. Avoid repetition: if HOOK and INTRO would say similar things, pick
-   a different INTRO.
+5. Prefer narrative coherence over per-chunk scores: a chunk that \
+answers the HOOK's question is better than the highest-hook chunk in \
+isolation.
+6. Avoid repetition. HOOK should not echo INTRO. The CTA chunk must \
+deliver NEW information (a verdict, a result, or a use-case framing) \
+— it must NOT merely restate the INTRO.
 
-Return exactly one HOOK, one INTRO, one CTA, and 1-2 DETAIL fragments.
-For each fragment provide a one-sentence rationale in English explaining
-WHY this chunk fits this slot. Also provide a global_rationale (one
+Return exactly one HOOK, one INTRO, one CTA, and 1-2 DETAIL fragments. \
+For each fragment provide a one-sentence rationale in English explaining \
+WHY this chunk fits this slot (for CTA, the rationale should make the \
+evergreen reasoning explicit). Also provide a global_rationale (one \
 sentence) explaining the overall narrative arc you chose.
 
 Be deterministic. Do not infer facts not present in the transcript."""
