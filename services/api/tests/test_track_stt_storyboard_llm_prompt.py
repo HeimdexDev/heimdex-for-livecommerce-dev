@@ -37,7 +37,10 @@ class TestPromptVersion:
         # Bumped v2 → v3 2026-05-13 (CTA position rule relaxed from
         # "last third" to "last half" to match Korean livecommerce
         # CTAs that empirically land at 50-65% of source).
-        assert PROMPT_VERSION == "v3"
+        # Bumped v3 → v4 2026-05-13 (CTA slot redefined as evergreen
+        # CLOSER — verdict/demo result/use case; live-only urgency
+        # avoided).
+        assert PROMPT_VERSION == "v4"
 
     def test_system_prompt_non_empty(self):
         assert len(_SYSTEM_PROMPT) > 100
