@@ -138,6 +138,8 @@ async def assemble_stt_clip(
     ocr_rerank_enabled: bool = False,
     ocr_boost: float = 0.6,
     live_only: bool = False,
+    other_aliases_groups: list[list[str]] | None = None,
+    mention_dominance_threshold: float = 0.0,
 ) -> SttClipResult:
     """End-to-end STT pipeline. Returns the render_job_id wrapped in
     :class:`SttClipResult`.
@@ -166,6 +168,11 @@ async def assemble_stt_clip(
             a live block are eligible for mention extraction. Default
             ``False`` for back-compat — caller passes
             ``settings.auto_shorts_product_v2_live_only_enabled``.
+        other_aliases_groups: Wave 2.2 dominance filter. List per OTHER
+            selected catalog entry of ``[llm_label, *spoken_aliases]``.
+            None or empty = no-op.
+        mention_dominance_threshold: 0.0 (default) = filter OFF.
+            Typical staging value 0.3-0.5.
 
     Raises:
         :class:`NoMentionsFoundError`: BM25 found no qualifying
@@ -242,6 +249,16 @@ async def assemble_stt_clip(
         ocr_boost=ocr_boost,
         scene_id_allowlist=scene_id_allowlist,
     )
+    # No-op when threshold<=0.0 or no other_aliases_groups.
+    # Drops scenes where other selected catalogs' aliases outweigh
+    # the primary catalog's in transcript + caption + ocr.
+    if other_aliases_groups:
+        mentioned = mention_extractor.filter_by_dominance(
+            mentioned,
+            primary_aliases=[llm_label, *spoken_aliases],
+            other_aliases_groups=other_aliases_groups,
+            threshold=mention_dominance_threshold,
+        )
     if not mentioned:
         logger.info(
             "stt_pipeline_no_mentions",
