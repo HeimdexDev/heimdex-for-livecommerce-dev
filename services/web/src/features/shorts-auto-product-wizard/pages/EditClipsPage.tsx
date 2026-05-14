@@ -344,10 +344,16 @@ export function EditClipsPage(props: Props) {
           }
         }
 
-        const totalDurationMs = editorClips.reduce(
-          (acc, c) => acc + (c.trimEndMs - c.trimStartMs),
-          0,
-        );
+        // Mirror ``CompositionSpec.total_duration_ms`` from
+        // heimdex-media-contracts: the rendered MP4 holds frames to
+        // cover whichever ends latest among scene_clips, subtitles, and
+        // overlays. Summing ``(trim_end - trim_start)`` only works when
+        // clips are contiguous AND no captions/overlays extend past the
+        // last clip — Whisper post-render captions routinely run a few
+        // seconds past, which is what made the footer disagree with the
+        // <video controls> readout even after start_ms/end_ms were
+        // wired through.
+        const totalDurationMs = extractTotalDurationMs(compositionSpec);
 
         setClipStates((prev) => ({
           ...prev,
@@ -866,6 +872,59 @@ function extractSceneClips(comp: unknown): ExtractedSceneClip[] {
       },
     ];
   });
+}
+
+/**
+ * Mirror of ``CompositionSpec.total_duration_ms`` from
+ * heimdex-media-contracts (``composition/schemas.py``). The rendered
+ * MP4 length is the max of:
+ *   - last ``scene_clip.timeline_end_ms`` (= timeline_start_ms + (end_ms - start_ms))
+ *   - last ``subtitle.end_ms``
+ *   - last ``overlay.end_ms``
+ * Keep this in lockstep with the contracts property. ``EditorClip``
+ * trim fields aren't enough on their own: Whisper post-render captions
+ * (and any future overlay that extends past the last cut) push the
+ * actual rendered length out.
+ */
+function extractTotalDurationMs(comp: unknown): number {
+  if (typeof comp !== "object" || comp === null) return 0;
+  const r = comp as Record<string, unknown>;
+
+  let clipEnd = 0;
+  if (Array.isArray(r.scene_clips)) {
+    for (const c of r.scene_clips) {
+      if (typeof c !== "object" || c === null) continue;
+      const cc = c as Record<string, unknown>;
+      const tStart = typeof cc.timeline_start_ms === "number" ? cc.timeline_start_ms : 0;
+      const sStart = typeof cc.start_ms === "number" ? cc.start_ms : null;
+      const sEnd = typeof cc.end_ms === "number" ? cc.end_ms : null;
+      if (sStart === null || sEnd === null) continue;
+      const tEnd = tStart + (sEnd - sStart);
+      if (tEnd > clipEnd) clipEnd = tEnd;
+    }
+  }
+
+  let subEnd = 0;
+  if (Array.isArray(r.subtitles)) {
+    for (const s of r.subtitles) {
+      if (typeof s !== "object" || s === null) continue;
+      const ss = s as Record<string, unknown>;
+      const e = typeof ss.end_ms === "number" ? ss.end_ms : 0;
+      if (e > subEnd) subEnd = e;
+    }
+  }
+
+  let ovlEnd = 0;
+  if (Array.isArray(r.overlays)) {
+    for (const o of r.overlays) {
+      if (typeof o !== "object" || o === null) continue;
+      const oo = o as Record<string, unknown>;
+      const e = typeof oo.end_ms === "number" ? oo.end_ms : 0;
+      if (e > ovlEnd) ovlEnd = e;
+    }
+  }
+
+  return Math.max(clipEnd, subEnd, ovlEnd);
 }
 
 function extractTitle(comp: unknown): string | null {
