@@ -713,6 +713,17 @@ class Settings(BaseSettings):
     # at the feature level. Drives BOTH the refinement-write path AND
     # the rerender-link skip — single switch, both behaviors cohere.
     auto_shorts_product_v2_overlay_mode_enabled: bool = False
+    
+    # --- Shorts render: per-short summary generation ---
+    # 1-2 sentence Korean summary for a completed render. Uses existing
+    # multi-worker signals (STT + scene_caption + OCR + speaker) via
+    # text-only gpt-4o-mini. Separate budget bucket per the existing
+    # convention.
+    shorts_render_summary_enabled: bool = True
+    shorts_render_summary_llm_model: str = "gpt-4o-mini"
+    shorts_render_summary_llm_timeout_s: float = 8.0
+    shorts_render_summary_llm_daily_budget_usd: float = 5.0
+    shorts_render_summary_prompt_version: str = "v1"
 
     # --- CORS ---
     cors_allow_origin_regex: str = (
