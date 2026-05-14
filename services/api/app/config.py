@@ -638,7 +638,7 @@ class Settings(BaseSettings):
     # between this env var and the module constant is a misconfig
     # signal — the picker logs a WARNING and continues with the
     # module's value.
-    auto_shorts_product_v2_storyboard_llm_prompt_version: str = "v3"
+    auto_shorts_product_v2_storyboard_llm_prompt_version: str = "v4"
     # Fraction of source duration after which the CTA chunk is allowed
     # (0.0–1.0). 0.667 = last third (original strict rule), 0.5 = last
     # half (more permissive, matches Korean livecommerce CTAs that
