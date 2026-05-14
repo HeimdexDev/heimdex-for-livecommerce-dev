@@ -371,6 +371,13 @@ class Settings(BaseSettings):
     # multiple products in the same window).
     auto_shorts_product_v2_mention_dominance_threshold: float = 0.0
 
+    # --- chunk-level LLM catalog match ---
+    # threshold=0.0 means OFF (back-compat). Typical staging: 0.5-0.7.
+    # chunk_scorer's LLM emits primary_catalog_match (0~1); chunks with
+    # match < threshold are rejected before clip_selector.
+    # Same LLM call as before — no extra OpenAI request added.
+    auto_shorts_product_v2_chunk_catalog_match_threshold: float = 0.0
+
     # Concurrency cap. (N+1)-th in-flight scan from the same org
     # returns 429. Counts rows across all modes (scan_order,
     # enumerate, render_child) in ACTIVE_SCAN_STAGES — see
