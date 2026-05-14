@@ -17,8 +17,16 @@ from app.modules.shorts_render.schemas import (
     RenderJobTitleUpdate,
     SubtitleSuggestion,
     SubtitleSuggestions,
+    ShortsSummaryRequest,
+    ShortsSummaryResponse,
 )
 from app.modules.shorts_render.service import ShortsRenderService
+from app.modules.shorts_render.summary_service import (
+    ShortsRenderSummaryService,
+    SummaryError,
+    SummaryNotReadyError,
+    SummaryUnavailableError,
+)
 from app.modules.tenancy.context import OrgContext
 from app.modules.tenancy.middleware import get_current_org
 from app.modules.users.models import User
@@ -434,3 +442,96 @@ async def get_subtitle_suggestions(
             suggestions.append(SubtitleSuggestion(text=truncated, source="transcript"))
 
     return SubtitleSuggestions(suggestions=suggestions)
+
+
+@router.post(
+    "/{job_id}/summary",
+    response_model=ShortsSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def generate_render_job_summary(
+    job_id: UUID,
+    body: ShortsSummaryRequest | None = None,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)] = ...,
+    user: Annotated[User, Depends(get_current_user)] = ...,
+    service: Annotated[
+        ShortsRenderService, Depends(get_shorts_render_service)
+    ] = ...,
+    os_client: Annotated[
+        Any, Depends(get_scene_opensearch_client)
+    ] = ...,
+):
+    """Generate a 1-2 sentence Korean summary for a completed render.
+
+    Reuses existing scene signals (STT + scene_caption + OCR + speaker)
+    from the source video. No frame extraction.
+    """
+    from app.config import get_settings
+    from openai import AsyncOpenAI
+
+    user_id = cast(UUID, user.id)
+    settings = get_settings()
+
+    if not settings.shorts_render_summary_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="shorts_render_summary disabled",
+        )
+
+    api_key = (settings.openai_api_key or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="openai api key not configured",
+        )
+
+    # Owner-scoped fetch — 404 when not owned by caller
+    render_job = await service.get_render_job_orm(
+        org_ctx.org_id, user_id, job_id,
+    )
+    if render_job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="render job not found",
+        )
+
+    max_sentences = body.max_sentences if body else 2
+
+    summary_service = ShortsRenderSummaryService(
+        openai_client=AsyncOpenAI(api_key=api_key),
+        os_client=os_client,
+        model=settings.shorts_render_summary_llm_model,
+        timeout_s=settings.shorts_render_summary_llm_timeout_s,
+        prompt_version=settings.shorts_render_summary_prompt_version,
+    )
+
+    try:
+        result = await summary_service.generate(
+            org_id=org_ctx.org_id,
+            render_job=render_job,
+            max_sentences=max_sentences,
+        )
+    except SummaryNotReadyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+    except SummaryUnavailableError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except SummaryError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(e),
+        )
+
+    return ShortsSummaryResponse(
+        render_job_id=result.render_job_id,
+        summary=result.summary,
+        prompt_version=result.prompt_version,
+        model=result.model,
+        cost_usd=result.cost_usd,
+        generated_at=result.generated_at,
+    )
