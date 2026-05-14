@@ -163,3 +163,7 @@ e2e/premiere-export.spec.ts
 
 # Analytics seed generator output (local Parquet, uploaded to S3 manually)
 scripts/seed_output/
+
+# Storyboard eval local outputs
+services/api/reports/
+services/api/tests/shorts_auto_product/eval/llm_cache/
