@@ -120,3 +120,16 @@ class SubtitleSuggestion(BaseModel):
 
 class SubtitleSuggestions(BaseModel):
     suggestions: list[SubtitleSuggestion]
+
+
+class ShortsSummaryRequest(BaseModel):
+    max_sentences: int = Field(default=2, ge=1, le=4)
+
+
+class ShortsSummaryResponse(BaseModel):
+    render_job_id: UUID
+    summary: str
+    prompt_version: str
+    model: str
+    cost_usd: float
+    generated_at: datetime
