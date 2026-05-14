@@ -85,6 +85,8 @@ _SYSTEM_PROMPT = (
     "- urgency\n"
     "- sales language\n"
     "- emotional impact\n"
+    "- whether the chunk is genuinely about the PRIMARY catalog "
+    "vs OTHER selected catalogs\n"
     "\n"
     "Return strict JSON through the provided tool with exactly one "
     "score object per input chunk, in the same order.\n"
@@ -93,7 +95,8 @@ _SYSTEM_PROMPT = (
     "{\n"
     "  \"hook_score\": float between 0 and 1,\n"
     "  \"has_cta\": boolean,\n"
-    "  \"importance_score\": float between 0 and 1\n"
+    "  \"importance_score\": float between 0 and 1,\n"
+    "  \"primary_catalog_match\": float between 0 and 1\n"
     "}\n"
     "\n"
     "Scoring guidance:\n"
@@ -106,6 +109,13 @@ _SYSTEM_PROMPT = (
     "  introduces the product/category, explains benefits, "
     "  demonstrates usage, compares value, includes a natural "
     "  transition, or gives purchase motivation.\n"
+    "\n"
+    "- primary_catalog_match: 1.0 means this chunk is entirely "
+    "  about the primary catalog (the one provided in the user "
+    "  message's 'primary_catalog'). 0.0 means it's about a "
+    "  different selected catalog (one of 'other_catalogs'). "
+    "  0.5 means mixed mentions. When 'primary_catalog' is not "
+    "  provided in the user message, return 1.0.\n"
     "\n"
     "Be deterministic. Do not infer facts not present in the "
     "transcript."
@@ -125,7 +135,7 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["hook_score", "has_cta", "importance_score"],
+                    "required": ["hook_score", "has_cta", "importance_score", "primary_catalog_match"],
                     "properties": {
                         "hook_score": {
                             "type": "number",
@@ -134,6 +144,11 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
                         },
                         "has_cta": {"type": "boolean"},
                         "importance_score": {
+                            "type": "number",
+                            "minimum": 0.0,
+                            "maximum": 1.0,
+                        },
+                        "primary_catalog_match": {
                             "type": "number",
                             "minimum": 0.0,
                             "maximum": 1.0,
@@ -150,6 +165,10 @@ class _ChunkScoreItem(BaseModel):
     hook_score: float = Field(ge=0.0, le=1.0)
     has_cta: bool
     importance_score: float = Field(ge=0.0, le=1.0)
+    # default 1.0 keeps back-compat — if LLM somehow omits
+    # the field (shouldn't happen given strict schema), score defaults
+    # to "fully matches primary".
+    primary_catalog_match: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class _ChunkScoreBatch(BaseModel):
@@ -175,6 +194,11 @@ async def score_segment_chunks(
     model: str = "gpt-4o-mini",
     timeout_s: float = 15.0,
     chunk_size_ms: int = 20_000,
+    # chunk-level LLM catalog match
+    primary_catalog_name: str | None = None,
+    primary_aliases: list[str] | None = None,
+    other_catalog_names: list[str] | None = None,
+    catalog_match_threshold: float = 0.0,
 ) -> list[ScoredChunk]:
     """Slice a segment into chunks, score each via gpt-4o-mini.
 
@@ -202,11 +226,14 @@ async def score_segment_chunks(
                 openai_client=openai_client,
                 model=model,
                 timeout_s=timeout_s,
+                primary_catalog_name=primary_catalog_name,
+                primary_aliases=primary_aliases or [],
+                other_catalog_names=other_catalog_names or [],
             )
         )
 
     assert len(scores) == len(chunk_inputs)  # invariant of _score_one_batch
-    return [
+    scored = [
         ScoredChunk(
             start_ms=chunk.start_ms,
             end_ms=chunk.end_ms,
@@ -215,6 +242,22 @@ async def score_segment_chunks(
         )
         for chunk, score in zip(chunk_inputs, scores, strict=True)
     ]
+    # threshold-based chunk reject. No-op when threshold <= 0.
+    if catalog_match_threshold > 0.0:
+        before_count = len(scored)
+        scored = [
+            sc for sc in scored
+            if sc.score.primary_catalog_match >= catalog_match_threshold
+        ]
+        logger.info(
+            "stt_chunk_catalog_match_filter",
+            extra={
+                "threshold": catalog_match_threshold,
+                "kept": len(scored),
+                "dropped": before_count - len(scored),
+            },
+        )
+    return scored
 
 
 # ---------- internals ----------
@@ -266,6 +309,9 @@ async def _score_one_batch(
     openai_client: Any,
     model: str,
     timeout_s: float,
+    primary_catalog_name: str | None = None,
+    primary_aliases: list[str] | None = None,
+    other_catalog_names: list[str] | None = None,
 ) -> list[ChunkScore]:
     """One LLM call. Returns one ChunkScore per input chunk. On any
     defect, returns heuristic scores so the caller can keep going.
@@ -281,6 +327,14 @@ async def _score_one_batch(
         }
         for c in chunks
     ]
+    payload: dict[str, Any] = {"chunks": payload_chunks}
+    if primary_catalog_name:
+        payload["primary_catalog"] = {
+            "name": primary_catalog_name,
+            "aliases": list(primary_aliases or []),
+        }
+    if other_catalog_names:
+        payload["other_catalogs"] = list(other_catalog_names)
 
     try:
         response = await openai_client.chat.completions.create(
@@ -289,7 +343,7 @@ async def _score_one_batch(
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": json.dumps(payload_chunks, ensure_ascii=False),
+                    "content": json.dumps(payload, ensure_ascii=False),
                 },
             ],
             response_format={
@@ -354,22 +408,24 @@ def _parse_or_fallback(
             hook_score=item.hook_score,
             has_cta=item.has_cta,
             importance_score=item.importance_score,
+            primary_catalog_match=item.primary_catalog_match,
         )
         for item in batch.scores
     ]
 
 
 def _heuristic_batch(count: int) -> list[ChunkScore]:
-    """Deterministic baseline. Lets the pipeline produce output even
-    when the LLM is unavailable. Plain 0.5 / False / 0.5 because we
-    have no per-chunk signal without the LLM — the clip selector
-    will then fall back to chronological-first selection.
+    """Deterministic baseline. ``primary_catalog_match=1.0`` so 
+    the threshold filter doesn't reject heuristic chunks — when
+    the LLM is down we don't have a catalog signal anyway, and
+    keeping chunks lets the pipeline produce output.
     """
     return [
         ChunkScore(
             hook_score=_HEURISTIC_HOOK,
             has_cta=_HEURISTIC_HAS_CTA,
             importance_score=_HEURISTIC_IMPORTANCE,
+            primary_catalog_match=1.0,
         )
         for _ in range(count)
     ]
