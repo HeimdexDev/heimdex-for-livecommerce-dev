@@ -122,6 +122,12 @@ class ChunkScore:
     hook_score: float
     has_cta: bool
     importance_score: float
+    # LLM semantic judgment — "does this chunk genuinely
+    # talk about the primary catalog vs other selected catalogs?"
+    # 0.0 = unrelated, 1.0 = entirely about primary, 0.5 = mixed.
+    # default 1.0 keeps existing callers / tests / heuristic fallback
+    # unchanged (filter is back-compat OFF until threshold > 0).
+    primary_catalog_match: float = 1.0
 
 
 @dataclass(frozen=True)
