@@ -282,7 +282,7 @@ async def test_render_enqueue_skipped_when_child_lease_lost(monkeypatch):
     monkeypatch.setattr(
         runner,
         "_load_child_context",
-        AsyncMock(return_value=(child, parent, {catalog_id: "Product"})),
+        AsyncMock(return_value=(child, parent, {catalog_id: "Product"}, {catalog_id: ["Product"]})),
     )
 
     appearance = MagicMock()
@@ -898,7 +898,7 @@ class TestPreAssignedCatalogEntryId:
         monkeypatch.setattr(
             runner,
             "_load_child_context",
-            AsyncMock(return_value=(child, parent, lookup)),
+            AsyncMock(return_value=(child, parent, lookup, {k: [v] for k, v in lookup.items()})),
         )
 
         # Capture which catalog_entry_id reaches _load_appearances_for_catalog.
@@ -944,7 +944,7 @@ class TestPreAssignedCatalogEntryId:
         monkeypatch.setattr(
             runner,
             "_load_child_context",
-            AsyncMock(return_value=(child, parent, lookup)),
+            AsyncMock(return_value=(child, parent, lookup, {k: [v] for k, v in lookup.items()})),
         )
 
         captured = {}
@@ -993,7 +993,7 @@ class TestPreAssignedCatalogEntryId:
         monkeypatch.setattr(
             runner,
             "_load_child_context",
-            AsyncMock(return_value=(child, parent, lookup)),
+            AsyncMock(return_value=(child, parent, lookup, {k: [v] for k, v in lookup.items()})),
         )
 
         captured = {}
