@@ -56,6 +56,11 @@ def _make_job(
     job.refinement_source = refinement_source
     job.replaced_by_render_job_id = None
     job.refined_from_render_job_id = None
+    # Migration 059 — explicit None so _to_response gets real values
+    # rather than auto-created MagicMock attributes.
+    job.summary = None
+    job.summary_prompt_version = None
+    job.summary_generated_at = None
     return job
 
 

@@ -119,6 +119,9 @@ def _make_existing_job(composition_hash: str, age_seconds: int = 5):
     job.replaced_by_render_job_id = None
     job.refined_from_render_job_id = None
     job.refinement_source = None
+    job.summary = None
+    job.summary_prompt_version = None
+    job.summary_generated_at = None
     return job
 
 
@@ -359,6 +362,9 @@ def _make_completed_job(title: str = "Original", *, with_output: bool = False):
     job.replaced_by_render_job_id = None
     job.refined_from_render_job_id = None
     job.refinement_source = None
+    job.summary = None
+    job.summary_prompt_version = None
+    job.summary_generated_at = None
     return job
 
 

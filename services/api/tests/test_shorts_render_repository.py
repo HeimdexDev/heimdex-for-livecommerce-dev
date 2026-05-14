@@ -46,6 +46,10 @@ def _make_job(**overrides):
         replaced_by_render_job_id=None,
         refined_from_render_job_id=None,
         refinement_source=None,
+        # Per-short summary (migration 059).
+        summary=None,
+        summary_prompt_version=None,
+        summary_generated_at=None,
     )
     defaults.update(overrides)
     job = MagicMock(spec=ShortsRenderJob)

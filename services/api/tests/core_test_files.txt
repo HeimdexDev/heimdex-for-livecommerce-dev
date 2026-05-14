@@ -82,6 +82,7 @@ tests/test_shorts_render_hardening.py
 tests/test_shorts_render_internal_router.py
 tests/test_shorts_render_subtitles_download.py
 tests/test_shorts_render_subtitles_patch.py
+tests/test_shorts_render_summary.py
 tests/test_single_product_picker.py
 tests/test_subtitle_chunking_chunker.py
 tests/test_subtitle_chunking_regression.py

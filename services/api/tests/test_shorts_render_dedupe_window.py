@@ -55,6 +55,9 @@ def _make_service():
     fake_job.replaced_by_render_job_id = None
     fake_job.refined_from_render_job_id = None
     fake_job.refinement_source = None
+    fake_job.summary = None
+    fake_job.summary_prompt_version = None
+    fake_job.summary_generated_at = None
     repo.create = AsyncMock(return_value=fake_job)
     repo.update_status = AsyncMock()
     # service.create_render_job calls ``repository.session.commit()``

@@ -60,6 +60,9 @@ def _make_job(
         replaced_by_render_job_id=None,
         refined_from_render_job_id=None,
         refinement_source=None,
+        summary=None,
+        summary_prompt_version=None,
+        summary_generated_at=None,
     )
     return job
 

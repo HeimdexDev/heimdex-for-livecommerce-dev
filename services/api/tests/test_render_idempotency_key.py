@@ -72,6 +72,9 @@ def _make_existing_job(*, idempotency_key=None):
     job.replaced_by_render_job_id = None
     job.refined_from_render_job_id = None
     job.refinement_source = None
+    job.summary = None
+    job.summary_prompt_version = None
+    job.summary_generated_at = None
     return job
 
 

@@ -105,6 +105,15 @@ class RenderJobResponse(BaseModel):
     # only to surface the leaf's id for navigation.
     effective_render_job_id: UUID | None = None
 
+    # Per-short Korean summary — added by migration 059. Persisted by
+    # ``POST /api/shorts/render/{job_id}/summary`` so the saved-shorts
+    # list and preview cards can display it WITHOUT an OpenAI call per
+    # card. ``None`` means "not yet generated" — the FE shows a
+    # 요약 생성 button for those rows. ``summary_generated_at`` is
+    # surfaced so the FE can show staleness / sort if needed.
+    summary: str | None = None
+    summary_generated_at: datetime | None = None
+
     model_config = ConfigDict(from_attributes=True)
 
 

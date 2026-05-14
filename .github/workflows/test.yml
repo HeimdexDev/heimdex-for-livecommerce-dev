@@ -103,6 +103,7 @@ jobs:
             tests/test_shorts_render_subtitles_patch.py \
             tests/test_subtitles_export.py \
             tests/test_shorts_render_subtitles_download.py \
+            tests/test_shorts_render_summary.py \
             tests/test_rerender_from_edits.py \
             tests/test_refinement_overlay_mode.py \
             tests/test_rerender_overlay_mode.py \

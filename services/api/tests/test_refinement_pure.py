@@ -44,6 +44,9 @@ def _parent(
         refinement_source=refinement_source,
         replaced_by_render_job_id=replaced_by,
         refined_from_render_job_id=refined_from,
+        summary=None,
+        summary_prompt_version=None,
+        summary_generated_at=None,
         output_s3_key=output_s3_key,
         input_spec=spec,
     )

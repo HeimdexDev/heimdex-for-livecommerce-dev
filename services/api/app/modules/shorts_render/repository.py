@@ -317,6 +317,41 @@ class ShortsRenderJobRepository:
         await self.session.flush()
         return await self._get_by_id_internal(job_id)
 
+    async def persist_summary(
+        self,
+        org_id: UUID,
+        user_id: UUID,
+        job_id: UUID,
+        *,
+        summary: str,
+        prompt_version: str,
+        generated_at: datetime,
+    ) -> ShortsRenderJob | None:
+        """Persist a freshly generated per-short summary (migration 059).
+
+        Scoped to org + user — same guard as ``update_title`` so a
+        guessed job UUID can't write into another user's row. Returns
+        the refreshed job, or ``None`` when the job doesn't exist or
+        isn't owned by ``(org_id, user_id)``. Overwrites any existing
+        summary: a regenerate (prompt-version bump or an explicit
+        re-request) replaces the canonical column.
+        """
+        job = await self.get_by_id(org_id, user_id, job_id)
+        if job is None:
+            return None
+        await self.session.execute(
+            update(ShortsRenderJob)
+            .where(ShortsRenderJob.id == job_id)
+            .values(
+                summary=summary,
+                summary_prompt_version=prompt_version,
+                summary_generated_at=generated_at,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        await self.session.flush()
+        return await self._get_by_id_internal(job_id)
+
     async def create_rerender_child(
         self,
         *,

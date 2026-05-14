@@ -312,6 +312,11 @@ def _to_response(
         # get on a leaf passes None through). Populated by callers
         # who fetched an intermediate row and resolved its chain.
         effective_render_job_id=effective_render_job_id,
+        # Per-short summary (migration 059). Read straight off the ORM
+        # row — nullable columns, so legacy rows pass None through and
+        # the FE shows a 요약 생성 button for them.
+        summary=job.summary,
+        summary_generated_at=job.summary_generated_at,
     )
 
 
@@ -529,17 +534,32 @@ class ShortsRenderService:
             effective_render_job_id=cast(UUID, leaf.id),
         )
     
-    async def get_render_job_orm(
+    async def persist_summary(
         self,
         org_id: UUID,
         user_id: UUID,
         job_id: UUID,
-    ):
-        """Return the ORM row (or None) — used by callers that need
-        fields not exposed in RenderJobResponse (e.g., input_spec).
+        *,
+        summary: str,
+        prompt_version: str,
+        generated_at: datetime,
+    ) -> None:
+        """Persist a freshly generated per-short summary onto the row
+        (migration 059). Org + user scoped. No-op return — the caller
+        already holds the ``SummaryResult`` it needs for the response;
+        this just writes the cache column so future ``GET`` /
+        list calls carry the summary without an OpenAI round trip.
+
+        The request-scoped session (``get_db_session``) commits on
+        success, so the repository ``flush`` is enough here.
         """
-        return await self.repository.get_by_id_for_user(
-            org_id, user_id, job_id,
+        await self.repository.persist_summary(
+            org_id,
+            user_id,
+            job_id,
+            summary=summary,
+            prompt_version=prompt_version,
+            generated_at=generated_at,
         )
 
     async def update_render_job_title(

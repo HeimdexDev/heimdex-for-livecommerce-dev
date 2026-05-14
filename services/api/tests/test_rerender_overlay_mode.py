@@ -74,6 +74,9 @@ def _make_parent(
     job.refinement_source = refinement_source
     job.replaced_by_render_job_id = None
     job.refined_from_render_job_id = None
+    job.summary = None
+    job.summary_prompt_version = None
+    job.summary_generated_at = None
     return job
 
 
@@ -98,6 +101,9 @@ def _make_child(parent):
     child.refinement_source = parent.refinement_source
     child.replaced_by_render_job_id = None
     child.refined_from_render_job_id = parent.id
+    child.summary = None
+    child.summary_prompt_version = None
+    child.summary_generated_at = None
     return child
 
 

@@ -45,6 +45,14 @@ class SummaryUnavailableError(SummaryError):
     """No usable scene signals were found for the clip."""
 
 
+# Defensive cap on the source-video scene pagination. Korean
+# livecommerce VODs run ~500 scenes at the high end (observed max on
+# staging: 525); 5000 leaves 10x headroom without risking a runaway
+# fetch on a malformed video_id.
+_SCENE_FETCH_CAP = 5000
+_SCENE_PAGE_SIZE = 200
+
+
 @dataclass(frozen=True)
 class SummaryResult:
     render_job_id: UUID
@@ -53,6 +61,10 @@ class SummaryResult:
     model: str
     cost_usd: float
     generated_at: datetime
+    # True when the summary came from the persisted column rather than
+    # a fresh OpenAI call. The router uses this to skip the DB write
+    # on a cache hit (and to know the call cost nothing).
+    from_cache: bool = False
 
 
 @dataclass
@@ -79,6 +91,37 @@ class ShortsRenderSummaryService:
                 f"render_job {render_job.id} status={render_job.status}"
             )
 
+        # 0. Cache hit — a summary already persisted for the CURRENT
+        # prompt version. Return it without an OpenAI call. A
+        # prompt-version bump (or a NULL version on a legacy row)
+        # falls through to regeneration; ``max_sentences`` is NOT part
+        # of the cache key (the persisted summary is the canonical one
+        # regardless of what length a re-request asks for — callers
+        # wanting a different length re-trigger explicitly and the
+        # router overwrites the column).
+        cached = (getattr(render_job, "summary", None) or "").strip()
+        cached_version = getattr(render_job, "summary_prompt_version", None)
+        if cached and cached_version == self.prompt_version:
+            logger.info(
+                "shorts_summary_cache_hit",
+                extra={
+                    "render_job_id": str(render_job.id),
+                    "prompt_version": cached_version,
+                },
+            )
+            return SummaryResult(
+                render_job_id=render_job.id,
+                summary=cached,
+                prompt_version=cached_version,
+                model=self.model,
+                cost_usd=0.0,
+                generated_at=(
+                    getattr(render_job, "summary_generated_at", None)
+                    or datetime.now(timezone.utc)
+                ),
+                from_cache=True,
+            )
+
         # 1. Extract source video_id + time windows from input_spec
         spec = render_job.input_spec or {}
         scene_clips = spec.get("scene_clips") or []
@@ -96,13 +139,14 @@ class ShortsRenderSummaryService:
         ]
         total_duration_ms = sum(end - start for start, end in windows)
 
-        # 2. Fetch all scenes of the source video, filter to windows
-        scenes_doc = await self.os_client.get_video_scenes(
-            org_id=str(org_id),
-            video_id=source_video_id,
-            page_size=200,  # generous cap; full-video scene count is bounded
+        # 2. Fetch ALL scenes of the source video, filter to windows.
+        # Must paginate — a clip can be sourced from late in an
+        # 80-minute VOD, and a single capped page would silently
+        # truncate those scenes, producing a summary off the wrong
+        # (or empty) signal set.
+        all_scenes = await _fetch_all_video_scenes(
+            self.os_client, org_id=org_id, video_id=source_video_id
         )
-        all_scenes = scenes_doc.get("scenes") or scenes_doc.get("results") or []
         scenes_in_clip = _filter_scenes_by_windows(all_scenes, windows)
         if not scenes_in_clip:
             raise SummaryUnavailableError(
@@ -174,7 +218,39 @@ class ShortsRenderSummaryService:
             model=self.model,
             cost_usd=cost,
             generated_at=datetime.now(timezone.utc),
+            from_cache=False,
         )
+
+
+async def _fetch_all_video_scenes(
+    os_client: Any,
+    *,
+    org_id: UUID,
+    video_id: str,
+) -> list[dict[str, Any]]:
+    """Page through every scene of a source video.
+
+    ``get_video_scenes`` is page-capped; a clip sourced from late in a
+    long VOD would be missed by a single page. Loop on ``offset``
+    until a short page (or the defensive ``_SCENE_FETCH_CAP``).
+    """
+    out: list[dict[str, Any]] = []
+    offset = 0
+    while offset < _SCENE_FETCH_CAP:
+        doc = await os_client.get_video_scenes(
+            org_id=str(org_id),
+            video_id=video_id,
+            page_size=_SCENE_PAGE_SIZE,
+            offset=offset,
+        )
+        batch = doc.get("scenes") or doc.get("results") or []
+        if not batch:
+            break
+        out.extend(batch)
+        if len(batch) < _SCENE_PAGE_SIZE:
+            break
+        offset += len(batch)
+    return out
 
 
 def _filter_scenes_by_windows(

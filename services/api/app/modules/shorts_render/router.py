@@ -485,8 +485,10 @@ async def generate_render_job_summary(
             detail="openai api key not configured",
         )
 
-    # Owner-scoped fetch — 404 when not owned by caller
-    render_job = await service.get_render_job_orm(
+    # Owner-scoped fetch — 404 when not owned by caller. Returns the
+    # raw ORM row so the summary service can read input_spec + the
+    # persisted summary cache columns (migration 059).
+    render_job = await service.get_render_job_record(
         org_ctx.org_id, user_id, job_id,
     )
     if render_job is None:
@@ -525,6 +527,21 @@ async def generate_render_job_summary(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(e),
+        )
+
+    # Persist freshly generated summaries onto the render row so the
+    # saved-shorts list + preview cards read it from the column on
+    # next load — no OpenAI call per card. Cache hits skip the write
+    # (the column already holds this exact value). The request-scoped
+    # session commits on success.
+    if not result.from_cache:
+        await service.persist_summary(
+            org_ctx.org_id,
+            user_id,
+            job_id,
+            summary=result.summary,
+            prompt_version=result.prompt_version,
+            generated_at=result.generated_at,
         )
 
     return ShortsSummaryResponse(
