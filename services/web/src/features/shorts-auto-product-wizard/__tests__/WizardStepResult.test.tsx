@@ -435,4 +435,132 @@ describe("WizardStepResult — failure state", () => {
       screen.getByTestId("wizard-failure-state").textContent,
     ).toContain("취소되었어요");
   });
+
+  // ─────────────────────────────────────────────────────────────────
+  // No-render failure: every child completed via
+  // ``_complete_no_render`` (stage=done, render_status≠"completed").
+  // Covers the STT pipeline's friendly-failure reasons:
+  // ``stt_no_mentions``, ``stt_transcript_unavailable``, and the
+  // Phase-1 ``stt_live_block_too_short``. Pre-fix, the user stared
+  // at the loading spinner forever.
+  // ─────────────────────────────────────────────────────────────────
+
+  it("surfaces the no-render Korean message when a single child completed with no render", () => {
+    const child = makeChild({
+      stage: "done",
+      render_job_id: null,
+      render_status: null,
+    });
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("committed", 1, [child]),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    const failure = screen.getByTestId("wizard-failure-state");
+    expect(failure.textContent).toContain(
+      "쇼츠를 만들 수 있는 구간을 찾지 못했어요",
+    );
+    // Should NOT incorrectly redirect — there's no MP4 to view.
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the no-render Korean message when ALL children of a multi-product wizard completed with no render", () => {
+    const child1 = makeChild({
+      job_id: "child-1",
+      shorts_index: 1,
+      stage: "done",
+      render_job_id: null,
+      render_status: null,
+    });
+    const child2 = makeChild({
+      job_id: "child-2",
+      shorts_index: 2,
+      stage: "done",
+      render_job_id: null,
+      render_status: null,
+    });
+    const child3 = makeChild({
+      job_id: "child-3",
+      shorts_index: 3,
+      stage: "done",
+      render_job_id: null,
+      render_status: null,
+    });
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("committed", 3, [child1, child2, child3]),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    expect(
+      screen.getByTestId("wizard-failure-state").textContent,
+    ).toContain("쇼츠를 만들 수 있는 구간을 찾지 못했어요");
+  });
+
+  it("does NOT surface the no-render message when one child produced a render and others did not", async () => {
+    // Mixed: one success, one no-render. The success path wins —
+    // user gets redirected to /edit-clips, not the failure state.
+    const success = makeChild({
+      job_id: "child-1",
+      shorts_index: 1,
+      stage: "done",
+      render_job_id: RENDER_ID,
+      render_status: "completed",
+    });
+    const noRender = makeChild({
+      job_id: "child-2",
+      shorts_index: 2,
+      stage: "done",
+      render_job_id: null,
+      render_status: null,
+    });
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("committed", 2, [success, noRender]),
+      error: null,
+      isPolling: false,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    await waitFor(() => expect(replaceMock).toHaveBeenCalled());
+    expect(
+      screen.queryByTestId("wizard-failure-state"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does NOT surface the no-render message while a child is still running", () => {
+    // ``deriveState`` requires all children terminal before flipping
+    // to failure — otherwise we'd race the in-flight scan job and
+    // surface a premature error.
+    const done = makeChild({
+      job_id: "child-1",
+      shorts_index: 1,
+      stage: "done",
+      render_job_id: null,
+      render_status: null,
+    });
+    const running = makeChild({
+      job_id: "child-2",
+      shorts_index: 2,
+      stage: "rendering",
+      render_job_id: null,
+      render_status: null,
+    });
+    useScanOrderMock.mockReturnValue({
+      status: makeStatus("fanned_out", 2, [done, running]),
+      error: null,
+      isPolling: true,
+      cancel: cancelMock,
+    });
+    render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
+    // Stays in loading state — failure UI must NOT appear yet.
+    expect(
+      screen.queryByTestId("wizard-failure-state"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("wizard-loading-state"),
+    ).toBeInTheDocument();
+  });
 });

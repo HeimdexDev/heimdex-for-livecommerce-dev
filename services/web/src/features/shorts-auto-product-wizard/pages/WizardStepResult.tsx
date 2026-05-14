@@ -77,15 +77,24 @@ function deriveState(status: ScanOrderStatusResponse | null): DerivedState {
     return { failure: false, redirectable: true };
   }
   // Whole-batch failure: parent reached terminal-success AND every
-  // child settled into a failed/cancelled stage. Without this branch
-  // the user stares at the spinner after a total wipeout.
+  // child settled into a no-MP4 terminal state. The terminal stages
+  // are ``done | failed | cancelled``; given the early return above
+  // we already know no child reached ``render_status === "completed"``,
+  // so a child stuck at ``done`` here was completed by
+  // ``children/runner.py::_complete_no_render`` (no-mentions /
+  // transcript-unavailable / live-block-too-short). Without this
+  // branch the user stares at the loading spinner forever — there's
+  // nothing for the redirect to point at, but the UI never surfaces
+  // a friendly message either.
   if (
     SUCCESS_STAGES.has(parentStage) &&
     status.children_total > 0 &&
     status.children.length === status.children_total &&
     status.children.every(
       (c: JobStatusResponse) =>
-        c.stage === "failed" || c.stage === "cancelled",
+        c.stage === "done" ||
+        c.stage === "failed" ||
+        c.stage === "cancelled",
     )
   ) {
     return { failure: true, redirectable: false };
@@ -165,18 +174,37 @@ function FailureState({ status }: FailureStateProps) {
   const parentError = status.parent.error_code
     ? friendlyParentError(status.parent.error_code, status.parent.error_message)
     : null;
-  // Three distinct failure shapes — distinguish so the user gets a precise
+  // Distinct failure shapes — distinguish so the user gets a precise
   // explanation rather than a generic "something broke":
   //   1. Parent has an error_code      → friendlyParentError
   //   2. Parent stage = cancelled      → "취소되었어요"
-  //   3. All children failed (rare;    → "생성 요청한 모든 쇼츠가 실패했어요"
+  //   3. All children completed without producing a render — covers
+  //      the ``_complete_no_render`` paths from the STT pipeline
+  //      (no_mentions / transcript_unavailable / live_block_too_short).
+  //      The runner doesn't set error_code on the parent for these,
+  //      so they reach FailureState via ``deriveState``'s
+  //      "all children terminal AND no render produced" predicate.
+  //      → "쇼츠를 만들 수 있는 구간을 찾지 못했어요"
+  //   4. All children failed (rare;    → "생성 요청한 모든 쇼츠가 실패했어요"
   //      parent terminal-success but
   //      children_failed === total)
+  const allChildrenDoneNoRender =
+    status.children_total > 0 &&
+    status.children.length === status.children_total &&
+    status.children.every(
+      (c) =>
+        c.stage === "done" && c.render_status !== "completed",
+    );
+
   let body: string;
   if (parentError) {
     body = parentError;
   } else if (status.parent.stage === "cancelled") {
     body = "취소되었어요.";
+  } else if (allChildrenDoneNoRender) {
+    body =
+      "선택하신 영상에서는 쇼츠를 만들 수 있는 구간을 찾지 못했어요. " +
+      "다른 길이나 다른 영상을 시도해 주세요.";
   } else if (
     status.children_total > 0 &&
     status.children_failed === status.children_total
