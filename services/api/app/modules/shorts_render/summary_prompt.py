@@ -87,7 +87,7 @@ def build_user_prompt(
             lines.append(
                 f"  speaker: {s.speaker_transcript.strip()[:400]}"
             )
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 __all__ = [

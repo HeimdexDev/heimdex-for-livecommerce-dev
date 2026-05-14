@@ -717,12 +717,13 @@ class Settings(BaseSettings):
     # --- Shorts render: per-short summary generation ---
     # 1-2 sentence Korean summary for a completed render. Uses existing
     # multi-worker signals (STT + scene_caption + OCR + speaker) via
-    # text-only gpt-4o-mini. Separate budget bucket per the existing
-    # convention.
-    shorts_render_summary_enabled: bool = True
+    # text-only gpt-4o-mini. Default OFF — flip per-environment after
+    # operator validation. Budget enforcement is a follow-up; until
+    # then the endpoint is gated by ``_enabled`` + the customer
+    # actively calling ``POST /api/shorts/render/{job_id}/summary``.
+    shorts_render_summary_enabled: bool = False
     shorts_render_summary_llm_model: str = "gpt-4o-mini"
     shorts_render_summary_llm_timeout_s: float = 8.0
-    shorts_render_summary_llm_daily_budget_usd: float = 5.0
     shorts_render_summary_prompt_version: str = "v1"
 
     # --- CORS ---
