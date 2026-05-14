@@ -528,6 +528,19 @@ class ShortsRenderService:
             download_url=download_url,
             effective_render_job_id=cast(UUID, leaf.id),
         )
+    
+    async def get_render_job_orm(
+        self,
+        org_id: UUID,
+        user_id: UUID,
+        job_id: UUID,
+    ):
+        """Return the ORM row (or None) — used by callers that need
+        fields not exposed in RenderJobResponse (e.g., input_spec).
+        """
+        return await self.repository.get_by_id_for_user(
+            org_id, user_id, job_id,
+        )
 
     async def update_render_job_title(
         self,
