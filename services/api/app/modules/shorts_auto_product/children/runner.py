@@ -923,6 +923,12 @@ class ChildRunner:
                 storyboard_picker = build_storyboard_picker_from_settings(
                     self.settings,
                 )
+                # build other catalog names for chunk-level LLM judgment
+                other_catalog_names = [
+                    aliases[0]  # first element = llm_label 
+                    for ce_id, aliases in catalog_aliases_lookup.items()
+                    if ce_id != chosen_catalog_id and aliases
+                ]
                 result = await stt_service.assemble_stt_clip(
                     org_id=parent.org_id,
                     catalog_entry_id=chosen_catalog_id,
@@ -978,6 +984,13 @@ class ChildRunner:
                     mention_dominance_threshold=getattr(
                         self.settings,
                         "auto_shorts_product_v2_mention_dominance_threshold",
+                        0.0,
+                    ),
+                    # chunk-level LLM catalog match
+                    other_catalog_names=other_catalog_names,
+                    chunk_catalog_match_threshold=getattr(
+                        self.settings,
+                        "auto_shorts_product_v2_chunk_catalog_match_threshold",
                         0.0,
                     ),
                 )
