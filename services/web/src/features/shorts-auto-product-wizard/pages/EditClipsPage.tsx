@@ -296,6 +296,20 @@ export function EditClipsPage(props: Props) {
           const scene = sceneById.get(sc.scene_id);
           if (!scene) continue;
           const clip = createClipFromScene(scene as VideoScene, videoId, sourceType);
+          // The composition's ``scene_clips[]`` carries the actual cut
+          // window the renderer used (sub-window of the source scene) and
+          // its timeline placement. ``createClipFromScene`` defaults
+          // trim* to the full scene span, which over-counts whenever the
+          // STT / storyboard picker trimmed the scene. Override here so
+          // ``totalDurationMs`` (and any downstream readers of trim*)
+          // match the rendered MP4's duration.
+          if (sc.start_ms !== null && sc.end_ms !== null) {
+            clip.trimStartMs = sc.start_ms;
+            clip.trimEndMs = sc.end_ms;
+          }
+          if (sc.timeline_start_ms !== null) {
+            clip.timelineStartMs = sc.timeline_start_ms;
+          }
           editorClips.push(clip);
         }
 
@@ -821,14 +835,36 @@ function fmtMs(ms: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-function extractSceneClips(comp: unknown): { scene_id: string }[] {
+interface ExtractedSceneClip {
+  scene_id: string;
+  /** Source-video cut start (sub-window inside the scene). ``null`` only
+   * when the composition omitted it — fall back to the full scene span. */
+  start_ms: number | null;
+  /** Source-video cut end. ``null`` → fall back to the full scene span. */
+  end_ms: number | null;
+  /** Placement on the composition timeline. ``null`` → keep
+   * ``createClipFromScene``'s default of 0. */
+  timeline_start_ms: number | null;
+}
+
+function extractSceneClips(comp: unknown): ExtractedSceneClip[] {
   if (typeof comp !== "object" || comp === null) return [];
   const sc = (comp as { scene_clips?: unknown }).scene_clips;
   if (!Array.isArray(sc)) return [];
   return sc.flatMap((c) => {
     if (typeof c !== "object" || c === null) return [];
-    const sceneId = (c as { scene_id?: unknown }).scene_id;
-    return typeof sceneId === "string" ? [{ scene_id: sceneId }] : [];
+    const r = c as Record<string, unknown>;
+    const sceneId = typeof r.scene_id === "string" ? r.scene_id : null;
+    if (sceneId === null) return [];
+    return [
+      {
+        scene_id: sceneId,
+        start_ms: typeof r.start_ms === "number" ? r.start_ms : null,
+        end_ms: typeof r.end_ms === "number" ? r.end_ms : null,
+        timeline_start_ms:
+          typeof r.timeline_start_ms === "number" ? r.timeline_start_ms : null,
+      },
+    ];
   });
 }
 
