@@ -1,0 +1,337 @@
+import {
+  ApiError,
+  BulkDeleteRequest,
+  BulkDeleteResponse,
+  ExcludePreferencesResponse,
+  ExemplarListResponse,
+  LinkPersonVideoResponse,
+  MergePersonRequest,
+  MergePersonResponse,
+  PeopleListResponse,
+  PersonTimelineResponse,
+  PersonVideosResponse,
+  RenamePersonResponse,
+  SimilarPeopleResponse,
+  ThumbnailResponse,
+  VideoExclusionsResponse,
+} from "@/lib/types";
+import { getApiBaseUrl } from "./utils";
+
+type TokenGetter = () => Promise<string | null>;
+
+async function apiRequest<T>(
+  endpoint: string,
+  method: string,
+  getToken?: TokenGetter,
+  body?: unknown,
+): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  if (getToken) {
+    try {
+      const token = await getToken();
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+    } catch (err) {
+      console.warn("[Heimdex] Failed to get access token:", err);
+    }
+  }
+
+  try {
+    const init: RequestInit = { method, headers };
+    if (body !== undefined) {
+      init.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(`${getApiBaseUrl()}${endpoint}`, init);
+
+    if (!response.ok) {
+      const responseBody = await response.json().catch(() => null);
+      throw ApiError.fromResponse(response.status, responseBody);
+    }
+
+    return response.json();
+  } catch (err) {
+    if (err instanceof ApiError) {
+      throw err;
+    }
+    throw new ApiError(
+      "network",
+      0,
+      "Network error. Check your connection and try again.",
+    );
+  }
+}
+
+export async function getPeople(
+  getToken?: TokenGetter,
+  query?: string,
+  options?: { dateFrom?: string | null; dateTo?: string | null },
+): Promise<PeopleListResponse> {
+  const searchParams = new URLSearchParams();
+  if (query) searchParams.set("q", query);
+  if (options?.dateFrom) searchParams.set("date_from", options.dateFrom);
+  if (options?.dateTo) searchParams.set("date_to", options.dateTo);
+  const qs = searchParams.toString();
+  return apiRequest<PeopleListResponse>(`/api/people${qs ? `?${qs}` : ""}`, "GET", getToken);
+}
+
+export async function renamePerson(
+  personClusterId: string,
+  label: string | null,
+  getToken?: TokenGetter,
+): Promise<RenamePersonResponse> {
+  return apiRequest<RenamePersonResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}`,
+    "PATCH",
+    getToken,
+    { label },
+  );
+}
+
+export async function deletePerson(
+  personClusterId: string,
+  getToken?: TokenGetter,
+): Promise<void> {
+  const headers: Record<string, string> = {};
+
+  if (getToken) {
+    try {
+      const token = await getToken();
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+    } catch (err) {
+      console.warn("[Heimdex] Failed to get access token:", err);
+    }
+  }
+
+  try {
+    const response = await fetch(
+      `${getApiBaseUrl()}/api/people/${encodeURIComponent(personClusterId)}`,
+      { method: "DELETE", headers },
+    );
+
+    if (!response.ok && response.status !== 204) {
+      const responseBody = await response.json().catch(() => null);
+      throw ApiError.fromResponse(response.status, responseBody);
+    }
+  } catch (err) {
+    if (err instanceof ApiError) {
+      throw err;
+    }
+    throw new ApiError(
+      "network",
+      0,
+      "Network error. Check your connection and try again.",
+    );
+  }
+}
+
+export async function bulkDeletePeople(
+  request: BulkDeleteRequest,
+  getToken?: TokenGetter,
+): Promise<BulkDeleteResponse> {
+  return apiRequest<BulkDeleteResponse>(
+    "/api/people/bulk-delete",
+    "POST",
+    getToken,
+    request,
+  );
+}
+
+export async function getPersonVideos(
+  personClusterId: string,
+  getToken?: TokenGetter,
+): Promise<PersonVideosResponse> {
+  return apiRequest<PersonVideosResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/videos`,
+    "GET",
+    getToken,
+  );
+}
+
+export async function getPersonTimeline(
+  personClusterId: string,
+  getToken?: TokenGetter,
+): Promise<PersonTimelineResponse> {
+  return apiRequest<PersonTimelineResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/timeline`,
+    "GET",
+    getToken,
+  );
+}
+
+export async function getSimilarPeople(
+  personClusterId: string,
+  getToken?: TokenGetter,
+  options?: { threshold?: number; limit?: number },
+): Promise<SimilarPeopleResponse> {
+  const params = new URLSearchParams();
+  if (options?.threshold != null) params.set("threshold", String(options.threshold));
+  if (options?.limit != null) params.set("limit", String(options.limit));
+  const qs = params.toString();
+  return apiRequest<SimilarPeopleResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/similar${qs ? `?${qs}` : ""}`,
+    "GET",
+    getToken,
+  );
+}
+
+export async function getExcludePreferences(
+  getToken?: TokenGetter,
+): Promise<ExcludePreferencesResponse> {
+  return apiRequest<ExcludePreferencesResponse>(
+    "/api/people/exclude-preferences",
+    "GET",
+    getToken,
+  );
+}
+
+export async function saveExcludePreferences(
+  personClusterIds: string[],
+  getToken?: TokenGetter,
+): Promise<ExcludePreferencesResponse> {
+  return apiRequest<ExcludePreferencesResponse>(
+    "/api/people/exclude-preferences",
+    "PUT",
+    getToken,
+    { person_cluster_ids: personClusterIds },
+  );
+}
+
+export async function getVideoExclusions(
+  personClusterId: string,
+  getToken?: TokenGetter,
+): Promise<VideoExclusionsResponse> {
+  return apiRequest<VideoExclusionsResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/video-exclusions`,
+    "GET",
+    getToken,
+  );
+}
+
+export async function saveVideoExclusions(
+  personClusterId: string,
+  excludedVideoIds: string[],
+  getToken?: TokenGetter,
+): Promise<VideoExclusionsResponse> {
+  return apiRequest<VideoExclusionsResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/video-exclusions`,
+    "PUT",
+    getToken,
+    { excluded_video_ids: excludedVideoIds },
+  );
+}
+
+export async function mergePeople(
+  request: MergePersonRequest,
+  getToken?: TokenGetter,
+): Promise<MergePersonResponse> {
+  return apiRequest<MergePersonResponse>(
+    "/api/people/merge",
+    "POST",
+    getToken,
+    request,
+  );
+}
+
+export async function getExemplars(
+  personClusterId: string,
+  getToken?: TokenGetter,
+): Promise<ExemplarListResponse> {
+  return apiRequest<ExemplarListResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/exemplars`,
+    "GET",
+    getToken,
+  );
+}
+
+export async function selectThumbnailFromExemplar(
+  personClusterId: string,
+  exemplarId: string,
+  getToken?: TokenGetter,
+): Promise<ThumbnailResponse> {
+  return apiRequest<ThumbnailResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/thumbnail`,
+    "PATCH",
+    getToken,
+    { exemplar_id: exemplarId },
+  );
+}
+
+export async function uploadCustomThumbnail(
+  personClusterId: string,
+  file: File,
+  getToken?: TokenGetter,
+): Promise<ThumbnailResponse> {
+  const headers: Record<string, string> = {};
+  if (getToken) {
+    const token = await getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/people/${encodeURIComponent(personClusterId)}/thumbnail`,
+    { method: "POST", headers, body: formData },
+  );
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw ApiError.fromResponse(response.status, body);
+  }
+  return response.json();
+}
+
+export async function resetThumbnail(
+  personClusterId: string,
+  getToken?: TokenGetter,
+): Promise<void> {
+  const headers: Record<string, string> = {};
+  if (getToken) {
+    const token = await getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(
+    `${getApiBaseUrl()}/api/people/${encodeURIComponent(personClusterId)}/thumbnail`,
+    { method: "DELETE", headers },
+  );
+
+  if (!response.ok && response.status !== 204) {
+    const body = await response.json().catch(() => null);
+    throw ApiError.fromResponse(response.status, body);
+  }
+}
+
+export async function unlinkPersonFromVideo(
+  personClusterId: string,
+  videoId: string,
+  getToken?: TokenGetter,
+): Promise<LinkPersonVideoResponse> {
+  return apiRequest<LinkPersonVideoResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/unlink-video`,
+    "POST",
+    getToken,
+    { video_id: videoId },
+  );
+}
+
+export async function linkPersonToVideo(
+  personClusterId: string,
+  videoId: string,
+  getToken?: TokenGetter,
+): Promise<LinkPersonVideoResponse> {
+  return apiRequest<LinkPersonVideoResponse>(
+    `/api/people/${encodeURIComponent(personClusterId)}/link-video`,
+    "POST",
+    getToken,
+    { video_id: videoId },
+  );
+}
