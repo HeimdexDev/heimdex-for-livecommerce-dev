@@ -1,6 +1,9 @@
 "use client";
 
 import { Facets, SearchFilters } from "@/lib/api";
+import { hasTagFilters } from "@/lib/types/search";
+import ColorPicker from "./ColorPicker";
+import { TagFilters } from "./TagFilters";
 
 interface FilterPanelProps {
   facets: Facets | null;
@@ -13,7 +16,7 @@ export function FilterPanel({
   filters,
   onFiltersChange,
 }: FilterPanelProps) {
-  const toggleSourceType = (type: "gdrive" | "removable_disk") => {
+  const toggleSourceType = (type: "gdrive" | "removable_disk" | "local") => {
     const current = filters.source_types || [];
     const updated = current.includes(type)
       ? current.filter((t) => t !== type)
@@ -46,6 +49,17 @@ export function FilterPanel({
     });
   };
 
+  const toggleExcludePerson = (id: string) => {
+    const current = filters.person_cluster_ids_not_in || [];
+    const updated = current.includes(id)
+      ? current.filter((p) => p !== id)
+      : [...current, id];
+    onFiltersChange({
+      ...filters,
+      person_cluster_ids_not_in: updated.length > 0 ? updated : undefined,
+    });
+  };
+
   const clearFilters = () => {
     onFiltersChange({});
   };
@@ -53,7 +67,10 @@ export function FilterPanel({
   const hasFilters =
     (filters.source_types?.length ?? 0) > 0 ||
     (filters.library_ids?.length ?? 0) > 0 ||
-    (filters.person_cluster_ids?.length ?? 0) > 0;
+    (filters.person_cluster_ids?.length ?? 0) > 0 ||
+    (filters.person_cluster_ids_not_in?.length ?? 0) > 0 ||
+    filters.color_family != null ||
+    hasTagFilters(filters);
 
   return (
     <div className="space-y-4">
@@ -70,6 +87,13 @@ export function FilterPanel({
       </div>
 
       <div className="space-y-3">
+        <ColorPicker
+          value={filters.color_family}
+          onChange={(family) =>
+            onFiltersChange({ ...filters, color_family: family })
+          }
+        />
+
         <div>
           <h4 className="text-sm font-medium text-gray-700 mb-2">Source Type</h4>
           <div className="space-y-1">
@@ -81,15 +105,15 @@ export function FilterPanel({
                 <input
                   type="checkbox"
                   checked={filters.source_types?.includes(
-                    item.value as "gdrive" | "removable_disk"
+                    item.value as "gdrive" | "removable_disk" | "local"
                   )}
                   onChange={() =>
-                    toggleSourceType(item.value as "gdrive" | "removable_disk")
+                    toggleSourceType(item.value as "gdrive" | "removable_disk" | "local")
                   }
                   className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 />
                 <span className="text-sm text-gray-600">
-                  {item.value === "gdrive" ? "Google Drive" : "Removable Disk"}
+                  {item.value === "gdrive" ? "Google Drive" : item.value === "removable_disk" ? "Removable Disk" : "Local"}
                 </span>
                 <span className="text-xs text-gray-400">({item.count})</span>
               </label>
@@ -120,27 +144,60 @@ export function FilterPanel({
           </div>
         </div>
 
-        <div>
-          <h4 className="text-sm font-medium text-gray-700 mb-2">People</h4>
-          <div className="space-y-1 max-h-40 overflow-y-auto">
-            {(facets?.people_cluster_ids || []).map((item) => (
-              <label
-                key={item.value}
-                className="flex items-center gap-2 cursor-pointer"
-              >
-                <input
-                  type="checkbox"
-                  checked={filters.person_cluster_ids?.includes(item.value)}
-                  onChange={() => togglePerson(item.value)}
-                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
-                <span className="text-sm text-gray-600 truncate">
-                  {item.label || `Person ${item.value.slice(-4)}`}
-                </span>
-                <span className="text-xs text-gray-400">({item.count})</span>
-              </label>
-            ))}
+        {(facets?.people_cluster_ids || []).length > 0 && (
+          <div>
+            <h4 className="text-sm font-medium text-gray-700 mb-2">People</h4>
+            <div className="space-y-2">
+              <div>
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Include</span>
+                <div className="space-y-1 mt-1 max-h-32 overflow-y-auto">
+                  {(facets?.people_cluster_ids || []).map((item) => (
+                    <label
+                      key={`inc-${item.value}`}
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={filters.person_cluster_ids?.includes(item.value)}
+                        onChange={() => togglePerson(item.value)}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span className="text-sm text-gray-600 truncate">
+                        {item.label || `Person ${item.value.slice(-4)}`}
+                      </span>
+                      <span className="text-xs text-gray-400">({item.count})</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Exclude</span>
+                <div className="space-y-1 mt-1 max-h-32 overflow-y-auto">
+                  {(facets?.people_cluster_ids || []).map((item) => (
+                    <label
+                      key={`exc-${item.value}`}
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={filters.person_cluster_ids_not_in?.includes(item.value)}
+                        onChange={() => toggleExcludePerson(item.value)}
+                        className="rounded border-gray-300 text-red-600 focus:ring-red-500"
+                      />
+                      <span className="text-sm text-gray-600 truncate">
+                        {item.label || `Person ${item.value.slice(-4)}`}
+                      </span>
+                      <span className="text-xs text-gray-400">({item.count})</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
+        )}
+
+        <div className="pt-2 border-t border-gray-200">
+          <TagFilters filters={filters} onFiltersChange={onFiltersChange} />
         </div>
       </div>
     </div>

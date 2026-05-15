@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
 import { Providers } from "./providers";
+import { AppLayout } from "@/components/layout/AppLayout";
+import { SceneBasketProvider } from "@/features/basket/useSceneBasket";
+import { BasketPanel } from "@/features/basket/BasketPanel";
+import { GoogleAnalytics } from "@/components/GoogleAnalytics";
+import { pretendard, notoSansKR } from "./fonts";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -15,9 +20,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${pretendard.variable} ${notoSansKR.variable}`}>
       <body className="bg-gray-50 text-gray-900 antialiased">
-        <Providers>{children}</Providers>
+        <GoogleAnalytics />
+        <Providers>
+          <SceneBasketProvider>
+            <AppLayout>{children}</AppLayout>
+            <BasketPanel />
+          </SceneBasketProvider>
+        </Providers>
       </body>
     </html>
   );

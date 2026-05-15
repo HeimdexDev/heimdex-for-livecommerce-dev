@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import dynamic from "next/dynamic";
 
 const HomeContent = dynamic(
@@ -8,5 +9,9 @@ const HomeContent = dynamic(
 );
 
 export default function Home() {
-  return <HomeContent />;
+  return (
+    <Suspense>
+      <HomeContent />
+    </Suspense>
+  );
 }

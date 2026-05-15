@@ -1,31 +1,34 @@
 "use client";
 
 import { useSearch } from "../hooks/useSearch";
+import { useAgent } from "../hooks/useAgent";
 import { SearchBar } from "./SearchBar";
 import { AlphaSlider } from "./AlphaSlider";
+import { GroupByToggle } from "./GroupByToggle";
 import { FilterPanel } from "./FilterPanel";
 import { SearchResults } from "./SearchResults";
+import { AgentTroubleshooting } from "./AgentTroubleshooting";
 
 export function SearchContainer() {
   const {
     alpha,
+    groupBy,
     filters,
     response,
     isLoading,
     error,
     showDebug,
-    orgSlug,
-    isAuthenticated,
-    authLoading,
-    user,
-    isAuth0Enabled,
+    includeOcr,
     setAlpha,
+    setGroupBy,
     setShowDebug,
+    setIncludeOcr,
     handleSearch,
     handleFiltersChange,
     login,
     logout,
   } = useSearch();
+  const { isAvailable: agentAvailable, isChecking: agentChecking, recheck: agentRecheck } = useAgent();
 
   const renderError = () => {
     if (!error) return null;
@@ -85,82 +88,46 @@ export function SearchContainer() {
 
   return (
     <div className="min-h-screen">
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-primary-600 rounded-lg flex items-center justify-center">
-                <svg
-                  className="w-6 h-6 text-white"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  />
-                </svg>
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-gray-900">Heimdex</h1>
-                <p className="text-xs text-gray-500">Video Search Platform</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-500">
-                Org: <span className="font-medium text-gray-700">{orgSlug || "..."}</span>
-              </span>
-              
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={showDebug}
-                  onChange={(e) => setShowDebug(e.target.checked)}
-                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
-                Debug Mode
-              </label>
-
-              {authLoading ? (
-                <span className="text-sm text-gray-400">Loading...</span>
-              ) : isAuthenticated ? (
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-gray-600">
-                    {user?.email || "User"}
-                  </span>
-                  <button
-                    onClick={logout}
-                    className="px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
-                  >
-                    Logout
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={login}
-                  className="px-4 py-1.5 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-lg transition-colors"
-                >
-                  {isAuth0Enabled ? "Login" : "Dev Login"}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
-
       <main className="max-w-7xl mx-auto px-4 py-6">
         <div className="mb-6 space-y-4">
           <SearchBar onSearch={handleSearch} isLoading={isLoading} />
           
-          <div className="card p-4">
-            <AlphaSlider value={alpha} onChange={setAlpha} />
+          <div className="flex gap-4">
+            <div className="card p-4 flex-1">
+              <AlphaSlider value={alpha} onChange={setAlpha} />
+            </div>
+            <div className="card p-4 w-48 flex-shrink-0">
+              <GroupByToggle value={groupBy} onChange={setGroupBy} />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-6">
+            <label className="flex items-center gap-2 text-sm text-gray-600">
+              <input
+                type="checkbox"
+                checked={includeOcr}
+                onChange={(e) => setIncludeOcr(e.target.checked)}
+                className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              Include on-screen text
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-600">
+              <input
+                type="checkbox"
+                checked={showDebug}
+                onChange={(e) => setShowDebug(e.target.checked)}
+                className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              Debug Mode
+            </label>
           </div>
         </div>
 
         {renderError()}
+
+        {!agentAvailable && !agentChecking && (
+          <AgentTroubleshooting onRetry={agentRecheck} />
+        )}
 
         <div className="flex gap-6">
           <aside className="w-64 flex-shrink-0">
@@ -176,9 +143,9 @@ export function SearchContainer() {
           <div className="flex-1 min-w-0">
             {response ? (
               <SearchResults
-                results={response.results}
-                totalCandidates={response.total_candidates}
+                response={response}
                 showDebug={showDebug}
+                agentAvailable={agentAvailable}
               />
             ) : (
               <div className="text-center py-16 text-gray-500">
