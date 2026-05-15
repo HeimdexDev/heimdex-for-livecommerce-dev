@@ -1,0 +1,934 @@
+from typing import TYPE_CHECKING, Any, cast
+
+from opensearchpy import AsyncOpenSearch
+
+from app.config import Settings
+from app.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
+class SceneFacetsMixin:
+    settings: Settings = cast(Settings, cast(object, None))
+    client: AsyncOpenSearch = cast(AsyncOpenSearch, cast(object, None))
+    alias_name: str = ""
+    index_name: str = ""
+
+    if TYPE_CHECKING:
+        def _build_filter_clauses(
+            self, filters: dict[str, Any],
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]: ...
+
+    async def get_facets(
+        self,
+        org_id: str,
+        filters: dict[str, Any],
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        pos_clauses, must_not_clauses = self._build_filter_clauses(filters)
+        filter_clauses = [{"term": {"org_id": org_id}}] + pos_clauses
+
+        if date_from or date_to:
+            date_range: dict[str, str] = {}
+            if date_from:
+                date_range["gte"] = date_from
+            if date_to:
+                date_range["lte"] = date_to
+            filter_clauses.append({"range": {"capture_time": date_range}})
+
+        bool_query: dict[str, Any] = {"filter": filter_clauses}
+        if must_not_clauses:
+            bool_query["must_not"] = must_not_clauses
+
+        body: dict[str, Any] = {
+            "query": {"bool": bool_query},
+            "size": 0,
+            "aggs": {
+                "libraries": {"terms": {"field": "library_id", "size": self.settings.opensearch_facet_size}},
+                "source_types": {"terms": {"field": "source_type", "size": 10}},
+                "people": {"terms": {"field": "people_cluster_ids", "size": self.settings.opensearch_facet_size}},
+                "content_types": {"terms": {"field": "content_type", "size": 10}},
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+
+        return {
+            "libraries": response["aggregations"]["libraries"]["buckets"],
+            "source_types": response["aggregations"]["source_types"]["buckets"],
+            "people": response["aggregations"]["people"]["buckets"],
+            "content_types": response["aggregations"]["content_types"]["buckets"],
+        }
+
+    async def aggregate_videos(
+        self,
+        org_id: str,
+        *,
+        library_id: str | None = None,
+        source_type: str | None = None,
+        source_types: list[str] | None = None,
+        content_types: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        sort: str = "latest",
+        page_size: int = 20,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        ct = content_types or ["video"]
+        filter_clauses: list[dict[str, Any]] = [
+            {"term": {"org_id": org_id}},
+            {"term": {"content_type": ct[0]}} if len(ct) == 1 else {"terms": {"content_type": ct}},
+        ]
+        if library_id:
+            filter_clauses.append({"term": {"library_id": library_id}})
+        if source_types:
+            if len(source_types) == 1:
+                filter_clauses.append({"term": {"source_type": source_types[0]}})
+            else:
+                filter_clauses.append({"terms": {"source_type": source_types}})
+        elif source_type:
+            filter_clauses.append({"term": {"source_type": source_type}})
+        if date_from or date_to:
+            date_range: dict[str, str] = {}
+            if date_from:
+                date_range["gte"] = date_from
+            if date_to:
+                date_range["lte"] = date_to
+            filter_clauses.append({"bool": {"should": [
+                {"range": {"capture_time": date_range}},
+                {"bool": {"must_not": {"exists": {"field": "capture_time"}}, "filter": {"range": {"ingest_time": date_range}}}},
+            ], "minimum_should_match": 1}})
+
+        _MAX_VIDEO_BUCKETS = 10_000
+
+        aggs: dict[str, Any] = {
+            "videos": {
+                "terms": {
+                    "field": "video_id",
+                    "size": _MAX_VIDEO_BUCKETS,
+                },
+                "aggs": {
+                    "scene_count": {"value_count": {"field": "scene_id"}},
+                    "min_start_ms": {"min": {"field": "start_ms"}},
+                    "max_end_ms": {"max": {"field": "end_ms"}},
+                    "earliest_ingest": {"min": {"field": "ingest_time"}},
+                    "latest_ingest": {"max": {"field": "ingest_time"}},
+                    "min_keyframe_ms": {"min": {"field": "keyframe_timestamp_ms"}},
+                    "library_id": {"terms": {"field": "library_id", "size": 1}},
+                    "video_title": {"terms": {"field": "video_title", "size": 1}},
+                    "source_type": {"terms": {"field": "source_type", "size": 1}},
+                    "required_drive_nickname": {"terms": {"field": "required_drive_nickname", "size": 1}},
+                    "web_view_link": {"terms": {"field": "web_view_link", "size": 1}},
+                    "content_type": {"terms": {"field": "content_type", "size": 1}},
+                    "source_path": {"terms": {"field": "source_path", "size": 1}},
+                    "keyword_tags": {"terms": {"field": "keyword_tags", "size": 10}},
+                    "product_tags": {"terms": {"field": "product_tags", "size": 10}},
+                    "people_count": {"cardinality": {"field": "people_cluster_ids"}},
+                    "earliest_capture": {"min": {"field": "capture_time"}},
+                },
+            },
+            "facet_libraries": {"terms": {"field": "library_id", "size": 100}},
+            "facet_source_types": {"terms": {"field": "source_type", "size": 10}},
+        }
+
+        body: dict[str, Any] = {
+            "query": {"bool": {"filter": filter_clauses}},
+            "size": 0,
+            "aggs": aggs,
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        agg_result = response["aggregations"]
+
+        videos = []
+        for bucket in agg_result["videos"]["buckets"]:
+            video_id = bucket["key"]
+            lib_buckets = bucket["library_id"]["buckets"]
+            title_buckets = bucket["video_title"]["buckets"]
+            src_buckets = bucket["source_type"]["buckets"]
+            drive_buckets = bucket["required_drive_nickname"]["buckets"]
+            web_view_link_buckets = bucket.get("web_view_link", {}).get("buckets", [])
+            ct_buckets = bucket.get("content_type", {}).get("buckets", [])
+            sp_buckets = bucket.get("source_path", {}).get("buckets", [])
+            kw_buckets = bucket["keyword_tags"]["buckets"]
+            pt_buckets = bucket["product_tags"]["buckets"]
+            keyframe_agg = bucket.get("min_keyframe_ms", {})
+            keyframe_ms = int(keyframe_agg.get("value") or 0)
+
+            videos.append({
+                "video_id": video_id,
+                "video_title": title_buckets[0]["key"] if title_buckets else None,
+                "library_id": lib_buckets[0]["key"] if lib_buckets else None,
+                "source_type": src_buckets[0]["key"] if src_buckets else None,
+                "scene_count": int(bucket["scene_count"]["value"]),
+                "first_scene_start_ms": int(bucket["min_start_ms"]["value"] or 0),
+                "last_scene_end_ms": int(bucket["max_end_ms"]["value"] or 0),
+                "earliest_ingest_time": bucket["earliest_ingest"]["value_as_string"] if bucket["earliest_ingest"]["value"] else None,
+                "latest_ingest_time": bucket["latest_ingest"]["value_as_string"] if bucket["latest_ingest"]["value"] else None,
+                "first_scene_keyframe_ms": keyframe_ms,
+                "keyword_tags": [b["key"] for b in kw_buckets],
+                "product_tags": [b["key"] for b in pt_buckets],
+                "people_count": int(bucket["people_count"]["value"]),
+                "required_drive_nickname": drive_buckets[0]["key"] if drive_buckets else None,
+                "web_view_link": web_view_link_buckets[0]["key"] if web_view_link_buckets else None,
+                "content_type": ct_buckets[0]["key"] if ct_buckets else "video",
+                "source_path": sp_buckets[0]["key"] if sp_buckets else None,
+                "capture_time": bucket.get("earliest_capture", {}).get("value_as_string") if bucket.get("earliest_capture", {}).get("value") else None,
+            })
+
+        if sort == "latest":
+            videos.sort(key=lambda v: v["capture_time"] or v["latest_ingest_time"] or "", reverse=True)
+        elif sort == "oldest":
+            videos.sort(key=lambda v: v["capture_time"] or v["latest_ingest_time"] or "")
+        elif sort == "alpha_asc":
+            videos.sort(key=lambda v: (v["video_title"] or "").lower())
+        elif sort == "alpha_desc":
+            videos.sort(key=lambda v: (v["video_title"] or "").lower(), reverse=True)
+        else:
+            videos.sort(key=lambda v: v["capture_time"] or v["latest_ingest_time"] or "", reverse=True)
+
+        total = len(videos)
+        page = videos[offset:offset + page_size]
+        has_more = offset + page_size < total
+        next_cursor = {"offset": offset + page_size} if has_more else None
+
+        return {
+            "videos": page,
+            "total": total,
+            "next_cursor": next_cursor,
+            "facets": {
+                "libraries": agg_result["facet_libraries"]["buckets"],
+                "source_types": agg_result["facet_source_types"]["buckets"],
+            },
+        }
+
+    async def get_video_scenes(
+        self,
+        org_id: str,
+        video_id: str,
+        *,
+        query: str | None = None,
+        page_size: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        filter_clauses: list[dict[str, Any]] = [
+            {"term": {"org_id": org_id}},
+            {"term": {"video_id": video_id}},
+        ]
+
+        if query and query.strip():
+            q = query.strip()
+            should_clauses: list[dict[str, Any]] = [
+                {"match": {"transcript_norm": {"query": q, "operator": "or", "minimum_should_match": "50%"}}},
+                {"match_phrase": {"transcript_norm": {"query": q, "boost": 2.0, "slop": 1}}},
+                {"match": {"scene_caption": {"query": q, "operator": "or", "minimum_should_match": "50%", "boost": 1.0}}},
+                {"match_phrase": {"scene_caption": {"query": q, "boost": 2.0, "slop": 1}}},
+                {"match": {"ocr_text_norm": {"query": q, "operator": "or", "minimum_should_match": "50%", "boost": 0.6}}},
+                {"match": {"speaker_transcript": {"query": q, "operator": "or", "minimum_should_match": "50%", "boost": 0.9}}},
+                {"match_phrase": {"speaker_transcript": {"query": q, "boost": 1.8, "slop": 1}}},
+            ]
+            search_query: dict[str, Any] = {
+                "bool": {
+                    "filter": filter_clauses,
+                    "should": should_clauses,
+                    "minimum_should_match": 1,
+                }
+            }
+            sort_clause: list[dict[str, Any]] = [{"_score": "desc"}, {"start_ms": "asc"}]
+        else:
+            search_query = {"bool": {"filter": filter_clauses}}
+            sort_clause = [{"start_ms": "asc"}]
+
+        body: dict[str, Any] = {
+            "query": search_query,
+            "sort": sort_clause,
+            "from": offset,
+            "size": page_size,
+            "_source": [
+                "scene_id", "start_ms", "end_ms", "transcript_raw",
+                "transcript_char_count", "scene_caption", "keyword_tags", "product_tags",
+                "product_entities", "speech_segment_count",
+                "people_cluster_ids", "ingest_time", "keyframe_timestamp_ms",
+                "speaker_transcript", "speaker_count",
+                "ocr_text_raw", "ocr_char_count",
+                "video_title", "source_type", "source_path", "capture_time",
+                "web_view_link",
+                "library_id",
+            ],
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+
+        scenes = []
+        for hit in response["hits"]["hits"]:
+            src = hit["_source"]
+            scenes.append({
+                "scene_id": src.get("scene_id", hit["_id"]),
+                "start_ms": src.get("start_ms", 0),
+                "end_ms": src.get("end_ms", 0),
+                "transcript_raw": src.get("transcript_raw", ""),
+                "transcript_char_count": src.get("transcript_char_count", 0),
+                "scene_caption": src.get("scene_caption", ""),
+                "keyword_tags": src.get("keyword_tags", []),
+                "product_tags": src.get("product_tags", []),
+                "product_entities": src.get("product_entities", []),
+                "speech_segment_count": src.get("speech_segment_count", 0),
+                "people_cluster_ids": src.get("people_cluster_ids", []),
+                "ingest_time": src.get("ingest_time"),
+                "keyframe_timestamp_ms": src.get("keyframe_timestamp_ms", 0),
+                "speaker_transcript": src.get("speaker_transcript", ""),
+                "speaker_count": src.get("speaker_count", 0),
+                "ocr_text_raw": src.get("ocr_text_raw", ""),
+                "ocr_char_count": src.get("ocr_char_count", 0),
+                "web_view_link": src.get("web_view_link"),
+            })
+
+        total = response["hits"]["total"]
+        total_count = total["value"] if isinstance(total, dict) else total
+
+        video_meta: dict[str, Any] = {}
+        if response["hits"]["hits"]:
+            first_src = response["hits"]["hits"][0]["_source"]
+            video_meta = {
+                "video_title": first_src.get("video_title"),
+                "source_type": first_src.get("source_type"),
+                "source_path": first_src.get("source_path"),
+                "web_view_link": first_src.get("web_view_link"),
+                "capture_time": first_src.get("capture_time"),
+                "library_id": first_src.get("library_id"),
+                "earliest_ingest_time": first_src.get("ingest_time"),
+            }
+
+        return {
+            "scenes": scenes,
+            "total": int(total_count),
+            **video_meta,
+        }
+
+    async def get_video_scenes_with_embeddings(
+        self,
+        org_id: str,
+        video_id: str,
+    ) -> list[dict[str, Any]]:
+        """Fetch ALL scenes for a video including embedding vectors.
+
+        Unlike ``get_video_scenes()`` which excludes embedding fields for
+        bandwidth, this method includes ``embedding_vector`` (1024-dim) and
+        ``visual_embedding`` (768-dim) for server-side grouping computation.
+
+        Paginates internally (200 per page) to handle large videos.
+        Returns scenes sorted by ``start_ms`` ascending.
+        """
+        page_size = 200
+        offset = 0
+        all_scenes: list[dict[str, Any]] = []
+
+        source_fields = [
+            "scene_id", "start_ms", "end_ms", "transcript_raw",
+            "transcript_char_count", "scene_caption", "keyword_tags", "product_tags",
+            "product_entities", "speech_segment_count",
+            "people_cluster_ids", "ingest_time", "keyframe_timestamp_ms",
+            "speaker_transcript", "speaker_count",
+            "ocr_text_raw", "ocr_char_count",
+            "embedding_vector", "visual_embedding",
+        ]
+
+        while True:
+            body: dict[str, Any] = {
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"org_id": org_id}},
+                            {"term": {"video_id": video_id}},
+                        ],
+                    }
+                },
+                "sort": [{"start_ms": "asc"}],
+                "from": offset,
+                "size": page_size,
+                "_source": source_fields,
+            }
+
+            response = await self.client.search(index=self.alias_name, body=body)
+            hits = response["hits"]["hits"]
+
+            for hit in hits:
+                src = hit["_source"]
+                all_scenes.append({
+                    "scene_id": src.get("scene_id", hit["_id"]),
+                    "start_ms": src.get("start_ms", 0),
+                    "end_ms": src.get("end_ms", 0),
+                    "transcript_raw": src.get("transcript_raw", ""),
+                    "transcript_char_count": src.get("transcript_char_count", 0),
+                    "scene_caption": src.get("scene_caption", ""),
+                    "keyword_tags": src.get("keyword_tags", []),
+                    "product_tags": src.get("product_tags", []),
+                    "product_entities": src.get("product_entities", []),
+                    "speech_segment_count": src.get("speech_segment_count", 0),
+                    "people_cluster_ids": src.get("people_cluster_ids", []),
+                    "ingest_time": src.get("ingest_time"),
+                    "keyframe_timestamp_ms": src.get("keyframe_timestamp_ms", 0),
+                    "speaker_transcript": src.get("speaker_transcript", ""),
+                    "speaker_count": src.get("speaker_count", 0),
+                    "ocr_text_raw": src.get("ocr_text_raw", ""),
+                    "ocr_char_count": src.get("ocr_char_count", 0),
+                    "embedding_vector": src.get("embedding_vector"),
+                    "visual_embedding": src.get("visual_embedding"),
+                })
+
+            total_raw = response["hits"]["total"]
+            total_count = (
+                total_raw["value"] if isinstance(total_raw, dict) else total_raw
+            )
+
+            if len(all_scenes) >= int(total_count) or len(hits) < page_size:
+                break
+
+            offset += page_size
+
+        logger.debug(
+            "fetched_scenes_with_embeddings",
+            video_id=video_id,
+            scene_count=len(all_scenes),
+            has_text_embeddings=any(
+                s.get("embedding_vector") for s in all_scenes[:1]
+            ),
+            has_visual_embeddings=any(
+                s.get("visual_embedding") for s in all_scenes[:1]
+            ),
+        )
+
+        return all_scenes
+
+    async def search_people_by_video_title(
+        self,
+        org_id: str,
+        query: str,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, list[str]]:
+        """Find person clusters appearing in videos whose title matches *query*.
+
+        Uses a dual strategy: BM25 on ``video_title.nori`` (works when Nori
+        plugin is installed) OR case-insensitive wildcard on the keyword field
+        (works everywhere, including production where Nori is absent and the
+        fallback analyzer fails to tokenize Korean filenames).
+
+        Returns ``{person_cluster_id: [matched_video_title, …]}``.
+        """
+        escaped = query.replace("\\", "\\\\").replace("*", "\\*").replace("?", "\\?")
+        filter_clauses: list[dict[str, Any]] = [
+            {"term": {"org_id": org_id}},
+            {"term": {"content_type": "video"}},
+            {"exists": {"field": "people_cluster_ids"}},
+        ]
+        if date_from or date_to:
+            dr: dict[str, str] = {}
+            if date_from:
+                dr["gte"] = date_from
+            if date_to:
+                dr["lte"] = date_to
+            filter_clauses.append({"range": {"capture_time": dr}})
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": filter_clauses,
+                    "should": [
+                        {"match": {"video_title.nori": query}},
+                        {"wildcard": {"video_title": {"value": f"*{escaped}*", "case_insensitive": True}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "matching_people": {
+                    "terms": {
+                        "field": "people_cluster_ids",
+                        "size": self.settings.opensearch_facet_size,
+                    },
+                    "aggs": {
+                        "video_titles": {
+                            "terms": {"field": "video_title", "size": 5},
+                        },
+                    },
+                },
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        buckets = response["aggregations"]["matching_people"]["buckets"]
+        return {
+            bucket["key"]: [
+                vt["key"] for vt in bucket["video_titles"]["buckets"]
+            ]
+            for bucket in buckets
+        }
+
+    async def get_videos_by_person(
+        self,
+        org_id: str,
+        person_cluster_id: str,
+    ) -> list[dict[str, Any]]:
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
+                        {"term": {"people_cluster_ids": person_cluster_id}},
+                    ],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "by_video": {
+                    "terms": {"field": "video_id", "size": 200},
+                    "aggs": {
+                        "video_title": {"terms": {"field": "video_title", "size": 1}},
+                        "scene_count": {"value_count": {"field": "scene_id"}},
+                    },
+                },
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        buckets = response["aggregations"]["by_video"]["buckets"]
+
+        return [
+            {
+                "video_id": bucket["key"],
+                "video_title": (
+                    bucket["video_title"]["buckets"][0]["key"]
+                    if bucket["video_title"]["buckets"]
+                    else None
+                ),
+                "scene_count": int(bucket["scene_count"]["value"]),
+            }
+            for bucket in buckets
+        ]
+
+    async def get_people_by_video(
+        self,
+        org_id: str,
+        video_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return person clusters appearing in scenes of a specific video.
+
+        Aggregates ``people_cluster_ids`` across all scenes that belong to
+        *video_id* within the given org. Each bucket contains the cluster
+        ID and the number of scenes (``face_count``) in which that person
+        appears within this video.
+
+        Returns ``[{"person_cluster_id": str, "face_count": int}, ...]``
+        sorted by face_count descending (OpenSearch default for terms agg).
+        """
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"video_id": video_id}},
+                        {"term": {"content_type": "video"}},
+                        {"exists": {"field": "people_cluster_ids"}},
+                    ],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "by_person": {
+                    "terms": {
+                        "field": "people_cluster_ids",
+                        "size": self.settings.opensearch_facet_size,
+                    },
+                },
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        buckets = response["aggregations"]["by_person"]["buckets"]
+
+        return [
+            {
+                "person_cluster_id": bucket["key"],
+                "face_count": int(bucket["doc_count"]),
+            }
+            for bucket in buckets
+        ]
+
+    async def get_person_timeline(
+        self,
+        org_id: str,
+        person_cluster_id: str,
+    ) -> list[dict[str, Any]]:
+        video_id_body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
+                        {"term": {"people_cluster_ids": person_cluster_id}},
+                    ],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "video_ids": {
+                    "terms": {"field": "video_id", "size": 200},
+                },
+            },
+        }
+
+        resp1 = await self.client.search(
+            index=self.alias_name, body=video_id_body,
+        )
+        video_ids = [
+            b["key"]
+            for b in resp1["aggregations"]["video_ids"]["buckets"]
+        ]
+        if not video_ids:
+            return []
+
+        all_scenes_body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
+                        {"terms": {"video_id": video_ids}},
+                    ],
+                }
+            },
+            "size": 10000,
+            "sort": [
+                {"video_id": "asc"},
+                {"start_ms": "asc"},
+            ],
+            "_source": [
+                "scene_id",
+                "video_id",
+                "video_title",
+                "start_ms",
+                "end_ms",
+                "people_cluster_ids",
+            ],
+        }
+
+        resp2 = await self.client.search(
+            index=self.alias_name, body=all_scenes_body,
+        )
+
+        videos_map: dict[str, dict[str, Any]] = {}
+        for hit in resp2["hits"]["hits"]:
+            src = hit["_source"]
+            vid = src["video_id"]
+            cluster_ids = src.get("people_cluster_ids") or []
+
+            if vid not in videos_map:
+                videos_map[vid] = {
+                    "video_id": vid,
+                    "video_title": src.get("video_title"),
+                    "scenes": [],
+                }
+
+            videos_map[vid]["scenes"].append({
+                "scene_id": src["scene_id"],
+                "start_ms": src.get("start_ms", 0),
+                "end_ms": src.get("end_ms", 0),
+                "has_person": person_cluster_id in cluster_ids,
+            })
+
+        return [
+            {**v, "total_scenes": len(v["scenes"])}
+            for v in videos_map.values()
+        ]
+
+    async def get_representative_scenes_for_people(
+        self,
+        org_id: str,
+        person_cluster_ids: list[str],
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> dict[str, dict[str, str]]:
+        if not person_cluster_ids:
+            return {}
+
+        date_filter: list[dict[str, Any]] = []
+        if date_from or date_to:
+            dr: dict[str, str] = {}
+            if date_from:
+                dr["gte"] = date_from
+            if date_to:
+                dr["lte"] = date_to
+            date_filter.append({"range": {"capture_time": dr}})
+
+        body_parts: list[dict[str, Any]] = []
+        for cluster_id in person_cluster_ids:
+            body_parts.append({"index": self.alias_name})
+            body_parts.append({
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"org_id": org_id}},
+                            {"term": {"people_cluster_ids": cluster_id}},
+                            *date_filter,
+                        ],
+                    }
+                },
+                "sort": [{"capture_time": {"order": "desc", "missing": "_last"}}, {"ingest_time": "desc"}],
+                "size": 1,
+                "_source": ["video_id", "scene_id", "ingest_time", "capture_time"],
+            })
+
+        response = await self.client.msearch(body=body_parts)
+
+        result: dict[str, dict[str, str]] = {}
+        for i, resp in enumerate(response["responses"]):
+            hits = resp.get("hits", {}).get("hits", [])
+            if hits:
+                src = hits[0]["_source"]
+                result[person_cluster_ids[i]] = {
+                    "video_id": src["video_id"],
+                    "scene_id": src["scene_id"],
+                    "ingest_time": src.get("ingest_time"),
+                    "capture_time": src.get("capture_time"),
+                }
+
+        return result
+
+    async def remove_person_cluster_id(
+        self,
+        org_id: str,
+        person_cluster_id: str,
+    ) -> int:
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"people_cluster_ids": person_cluster_id}},
+                    ],
+                }
+            },
+            "script": {
+                "source": (
+                    "if (ctx._source.people_cluster_ids != null) {"
+                    "  ctx._source.people_cluster_ids.removeIf("
+                    "    id -> id.equals(params.cluster_id)"
+                    "  );"
+                    "}"
+                ),
+                "lang": "painless",
+                "params": {"cluster_id": person_cluster_id},
+            },
+        }
+
+        response = await self.client.update_by_query(
+            index=self.alias_name,
+            body=body,
+            params={"refresh": "true"},
+        )
+        updated = int(response.get("updated", 0))
+        logger.info(
+            "remove_person_cluster_id_complete",
+            org_id=org_id,
+            person_cluster_id=person_cluster_id,
+            scenes_updated=updated,
+        )
+        return updated
+
+    async def replace_person_cluster_id(
+        self,
+        org_id: str,
+        source_cluster_id: str,
+        target_cluster_id: str,
+    ) -> int:
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"people_cluster_ids": source_cluster_id}},
+                    ],
+                }
+            },
+            "script": {
+                "source": (
+                    "if (ctx._source.people_cluster_ids != null) {"
+                    "  ctx._source.people_cluster_ids.removeIf("
+                    "    id -> id.equals(params.source_id)"
+                    "  );"
+                    "  if (!ctx._source.people_cluster_ids.contains(params.target_id)) {"
+                    "    ctx._source.people_cluster_ids.add(params.target_id);"
+                    "  }"
+                    "}"
+                ),
+                "lang": "painless",
+                "params": {
+                    "source_id": source_cluster_id,
+                    "target_id": target_cluster_id,
+                },
+            },
+        }
+
+        response = await self.client.update_by_query(
+            index=self.alias_name,
+            body=body,
+            params={"refresh": "true"},
+        )
+        updated = int(response.get("updated", 0))
+        logger.info(
+            "replace_person_cluster_id_complete",
+            org_id=org_id,
+            source_cluster_id=source_cluster_id,
+            target_cluster_id=target_cluster_id,
+            scenes_updated=updated,
+        )
+        return updated
+
+    async def remove_person_from_video(
+        self,
+        org_id: str,
+        person_cluster_id: str,
+        video_id: str,
+    ) -> int:
+        """Remove a person from all scenes in a specific video."""
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"video_id": video_id}},
+                        {"term": {"people_cluster_ids": person_cluster_id}},
+                    ],
+                }
+            },
+            "script": {
+                "source": (
+                    "if (ctx._source.people_cluster_ids != null) {"
+                    "  ctx._source.people_cluster_ids.removeIf("
+                    "    id -> id.equals(params.cluster_id)"
+                    "  );"
+                    "}"
+                ),
+                "lang": "painless",
+                "params": {"cluster_id": person_cluster_id},
+            },
+        }
+
+        response = await self.client.update_by_query(
+            index=self.alias_name,
+            body=body,
+            params={"refresh": "true"},
+        )
+        updated = int(response.get("updated", 0))
+        logger.info(
+            "remove_person_from_video_complete",
+            org_id=org_id,
+            person_cluster_id=person_cluster_id,
+            video_id=video_id,
+            scenes_updated=updated,
+        )
+        return updated
+
+    async def add_person_to_video(
+        self,
+        org_id: str,
+        person_cluster_id: str,
+        video_id: str,
+    ) -> int:
+        """Add a person to all scenes in a specific video."""
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"video_id": video_id}},
+                    ],
+                    "must_not": [
+                        {"term": {"people_cluster_ids": person_cluster_id}},
+                    ],
+                }
+            },
+            "script": {
+                "source": (
+                    "if (ctx._source.people_cluster_ids == null) {"
+                    "  ctx._source.people_cluster_ids = [params.cluster_id];"
+                    "} else if (!ctx._source.people_cluster_ids.contains(params.cluster_id)) {"
+                    "  ctx._source.people_cluster_ids.add(params.cluster_id);"
+                    "}"
+                ),
+                "lang": "painless",
+                "params": {"cluster_id": person_cluster_id},
+            },
+        }
+
+        response = await self.client.update_by_query(
+            index=self.alias_name,
+            body=body,
+            params={"refresh": "true"},
+        )
+        updated = int(response.get("updated", 0))
+        logger.info(
+            "add_person_to_video_complete",
+            org_id=org_id,
+            person_cluster_id=person_cluster_id,
+            video_id=video_id,
+            scenes_updated=updated,
+        )
+        return updated
+
+    async def get_video_stats(
+        self,
+        org_id: str,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "query": {
+                "bool": {
+                    "filter": [
+                        {"term": {"org_id": org_id}},
+                        {"term": {"content_type": "video"}},
+                    ],
+                }
+            },
+            "size": 0,
+            "aggs": {
+                "total_videos": {"cardinality": {"field": "video_id", "precision_threshold": 10000}},
+                "total_libraries": {"cardinality": {"field": "library_id", "precision_threshold": 1000}},
+                "source_breakdown": {"terms": {"field": "source_type", "size": 10}},
+                "latest_ingest": {"max": {"field": "ingest_time"}},
+                "latest_capture": {"max": {"field": "capture_time"}},
+                "scenes_last_24h": {
+                    "filter": {"range": {"ingest_time": {"gte": "now-24h"}}},
+                },
+                "scenes_last_7d": {
+                    "filter": {"range": {"ingest_time": {"gte": "now-7d"}}},
+                },
+            },
+        }
+
+        response = await self.client.search(index=self.alias_name, body=body)
+        aggs = response["aggregations"]
+
+        total_scenes = response["hits"]["total"]
+        total_scenes_count = total_scenes["value"] if isinstance(total_scenes, dict) else total_scenes
+
+        source_breakdown = {
+            bucket["key"]: bucket["doc_count"]
+            for bucket in aggs["source_breakdown"]["buckets"]
+        }
+
+        return {
+            "total_videos": int(aggs["total_videos"]["value"]),
+            "total_scenes": int(total_scenes_count),
+            "total_libraries": int(aggs["total_libraries"]["value"]),
+            "source_breakdown": source_breakdown,
+            "latest_ingest_time": aggs["latest_ingest"]["value_as_string"] if aggs["latest_ingest"]["value"] else None,
+            "latest_capture_time": aggs.get("latest_capture", {}).get("value_as_string") if aggs.get("latest_capture", {}).get("value") else None,
+            "scenes_last_24h": int(aggs["scenes_last_24h"]["doc_count"]),
+            "scenes_last_7d": int(aggs["scenes_last_7d"]["doc_count"]),
+        }

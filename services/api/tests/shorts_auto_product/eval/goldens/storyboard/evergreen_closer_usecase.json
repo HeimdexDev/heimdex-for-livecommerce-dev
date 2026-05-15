@@ -1,0 +1,159 @@
+{
+  "name": "evergreen_closer_usecase",
+  "video_id": "gd_synth_evergreen_usecase_001",
+  "llm_label": "디팟 핸드크림",
+  "spoken_aliases": ["이 핸드크림", "핸드크림"],
+  "target_duration_ms": 60000,
+  "_notes": "v4 prompt fixture (2026-05-13). Last segment has BOTH an evergreen USE CASE chunk (chunk[5] — names target audience and usage scenarios) AND two live-only urgency chunks (chunks[6], [7], has_cta=true). v4 LLM picker MUST select chunk[5] as the CTA. Tests pattern (c) USE CASE in CLOSER definition. Hand-labeled.",
+  "scored_chunks": [
+    {
+      "start_ms": 0,
+      "end_ms": 25000,
+      "text": "건조한 겨울에 손등 갈라지셨던 분들 손 들어보세요 이거 진짜 답이에요",
+      "hook_score": 0.9,
+      "has_cta": false,
+      "importance_score": 0.55
+    },
+    {
+      "start_ms": 30000,
+      "end_ms": 55000,
+      "text": "오늘 가져온 건 디팟 핸드크림이에요 시어버터 함량이 30프로라 진짜 진하게 발려요",
+      "hook_score": 0.5,
+      "has_cta": false,
+      "importance_score": 0.85
+    },
+    {
+      "start_ms": 400000,
+      "end_ms": 425000,
+      "text": "한 번 짜셔서 손바닥에 비비고 손등 손가락 사이까지 골고루 발라주세요",
+      "hook_score": 0.4,
+      "has_cta": false,
+      "importance_score": 0.78
+    },
+    {
+      "start_ms": 425000,
+      "end_ms": 450000,
+      "text": "끈적임이 거의 없어서 바르고 바로 폰 만지셔도 자국 안 남아요",
+      "hook_score": 0.45,
+      "has_cta": false,
+      "importance_score": 0.75
+    },
+    {
+      "start_ms": 800000,
+      "end_ms": 825000,
+      "text": "용량은 50ml라 가방에 넣고 다니기에도 부담 없고 향도 은은해요",
+      "hook_score": 0.4,
+      "has_cta": false,
+      "importance_score": 0.55
+    },
+    {
+      "start_ms": 1500000,
+      "end_ms": 1525000,
+      "text": "사무직이라 손 자주 씻는 분들 운전 많이 하시는 분들 자기 전 루틴으로 챙기는 분들께 진짜 추천드려요",
+      "hook_score": 0.55,
+      "has_cta": false,
+      "importance_score": 0.7
+    },
+    {
+      "start_ms": 1600000,
+      "end_ms": 1620000,
+      "text": "지금 주문하시면 50프로 할인이에요 마지막 기회입니다 빨리 들어오세요",
+      "hook_score": 0.75,
+      "has_cta": true,
+      "importance_score": 0.6
+    },
+    {
+      "start_ms": 1650000,
+      "end_ms": 1670000,
+      "text": "오늘 방송에서만 이 가격이에요 매진 전에 빨리 구매하시고 추가 혜택도 받아가세요",
+      "hook_score": 0.7,
+      "has_cta": true,
+      "importance_score": 0.55
+    }
+  ],
+  "segments": [
+    {
+      "start_ms": 0,
+      "end_ms": 55000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_usecase_001_scene_001",
+          "start_ms": 0,
+          "end_ms": 25000,
+          "transcript_text": "건조한 겨울에 손등 갈라지셨던 분들 손 들어보세요 이거 진짜 답이에요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_usecase_001_scene_002",
+          "start_ms": 30000,
+          "end_ms": 55000,
+          "transcript_text": "오늘 가져온 건 디팟 핸드크림이에요 시어버터 함량이 30프로라 진짜 진하게 발려요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 400000,
+      "end_ms": 825000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_usecase_001_scene_020",
+          "start_ms": 400000,
+          "end_ms": 425000,
+          "transcript_text": "한 번 짜셔서 손바닥에 비비고 손등 손가락 사이까지 골고루 발라주세요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_usecase_001_scene_021",
+          "start_ms": 425000,
+          "end_ms": 450000,
+          "transcript_text": "끈적임이 거의 없어서 바르고 바로 폰 만지셔도 자국 안 남아요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_usecase_001_scene_040",
+          "start_ms": 800000,
+          "end_ms": 825000,
+          "transcript_text": "용량은 50ml라 가방에 넣고 다니기에도 부담 없고 향도 은은해요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 1500000,
+      "end_ms": 1670000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_usecase_001_scene_075",
+          "start_ms": 1500000,
+          "end_ms": 1525000,
+          "transcript_text": "사무직이라 손 자주 씻는 분들 운전 많이 하시는 분들 자기 전 루틴으로 챙기는 분들께 진짜 추천드려요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_usecase_001_scene_080",
+          "start_ms": 1600000,
+          "end_ms": 1620000,
+          "transcript_text": "지금 주문하시면 50프로 할인이에요 마지막 기회입니다 빨리 들어오세요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_usecase_001_scene_081",
+          "start_ms": 1650000,
+          "end_ms": 1670000,
+          "transcript_text": "오늘 방송에서만 이 가격이에요 매진 전에 빨리 구매하시고 추가 혜택도 받아가세요",
+          "speaker_transcript": ""
+        }
+      ]
+    }
+  ],
+  "ideal": {
+    "hook": {"source_start_ms": 0, "source_end_ms": 8000},
+    "intro": {"source_start_ms": 30000, "source_end_ms": 42000},
+    "detail": [
+      {"source_start_ms": 400000, "source_end_ms": 412500},
+      {"source_start_ms": 425000, "source_end_ms": 437500}
+    ],
+    "cta": {"source_start_ms": 1500000, "source_end_ms": 1508000}
+  }
+}

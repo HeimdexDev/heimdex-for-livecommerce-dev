@@ -7,6 +7,7 @@ from uuid import UUID
 class OrgContext:
     org_id: UUID
     org_slug: str
+    auth0_org_id: str | None = None
 
 
 org_context: ContextVar[OrgContext | None] = ContextVar("org_context", default=None)

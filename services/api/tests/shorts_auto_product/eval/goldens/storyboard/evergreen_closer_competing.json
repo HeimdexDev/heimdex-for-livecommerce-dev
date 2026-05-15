@@ -1,0 +1,159 @@
+{
+  "name": "evergreen_closer_competing",
+  "video_id": "gd_synth_evergreen_competing_001",
+  "llm_label": "이너 콜라겐",
+  "spoken_aliases": ["이 콜라겐", "콜라겐 파우더"],
+  "target_duration_ms": 60000,
+  "_notes": "v4 prompt stress-test fixture (2026-05-13). Last segment intentionally has THREE different evergreen closer candidates (chunk[4]=VERDICT, chunk[5]=DEMO RESULT, chunk[6]=USE CASE) AND one live-only urgency chunk (chunk[7], has_cta=true). The 'ideal' CTA below points to chunk[4] (VERDICT) as the primary expected pick because it most directly answers the HOOK's curiosity. HOWEVER chunks[5] and [6] are ALSO acceptable for v4 — manual rationale inspection is required to judge partial wins. IoU = 1.0 only when v4 LLM picks chunk[4]; IoU = 0 with chunks[5]/[6] is still a v4 success (just different evergreen preference). Pure live-only [7] pick is the only true failure. Hand-labeled.",
+  "scored_chunks": [
+    {
+      "start_ms": 0,
+      "end_ms": 25000,
+      "text": "30대 넘어가면서 피부 처지신 분들 이거 한번 보세요 진짜 달라요",
+      "hook_score": 0.92,
+      "has_cta": false,
+      "importance_score": 0.55
+    },
+    {
+      "start_ms": 30000,
+      "end_ms": 55000,
+      "text": "오늘은 이너 콜라겐 파우더예요 저분자 어유 콜라겐 5000mg 한 포에 들어있어요",
+      "hook_score": 0.55,
+      "has_cta": false,
+      "importance_score": 0.88
+    },
+    {
+      "start_ms": 400000,
+      "end_ms": 425000,
+      "text": "한 포 뜯어서 물 한 컵에 타먹으면 되고 맛이 자몽향이라 거부감 없이 드실 수 있어요",
+      "hook_score": 0.4,
+      "has_cta": false,
+      "importance_score": 0.78
+    },
+    {
+      "start_ms": 425000,
+      "end_ms": 450000,
+      "text": "비타민C도 같이 들어있어서 흡수율이 더 좋고 한 박스 30포라 한 달치예요",
+      "hook_score": 0.42,
+      "has_cta": false,
+      "importance_score": 0.75
+    },
+    {
+      "start_ms": 1450000,
+      "end_ms": 1475000,
+      "text": "저도 두 박스째 먹고 있는데 진짜 피부 톤 자체가 달라졌어요 솔직히 강추예요",
+      "hook_score": 0.6,
+      "has_cta": false,
+      "importance_score": 0.7
+    },
+    {
+      "start_ms": 1475000,
+      "end_ms": 1500000,
+      "text": "보세요 이쪽이 먹기 전 사진이고 이쪽이 한 달 먹고 난 사진이에요 차이 느껴지시죠",
+      "hook_score": 0.65,
+      "has_cta": false,
+      "importance_score": 0.72
+    },
+    {
+      "start_ms": 1500000,
+      "end_ms": 1525000,
+      "text": "환절기 피부 푸석푸석할 때 야근 많은 분들 화장 잘 안 먹는 분들께 진짜 추천드려요",
+      "hook_score": 0.5,
+      "has_cta": false,
+      "importance_score": 0.65
+    },
+    {
+      "start_ms": 1600000,
+      "end_ms": 1620000,
+      "text": "지금 주문하시면 한 박스 더 드려요 매진 임박입니다 오늘만 이 가격이에요",
+      "hook_score": 0.8,
+      "has_cta": true,
+      "importance_score": 0.6
+    }
+  ],
+  "segments": [
+    {
+      "start_ms": 0,
+      "end_ms": 55000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_competing_001_scene_001",
+          "start_ms": 0,
+          "end_ms": 25000,
+          "transcript_text": "30대 넘어가면서 피부 처지신 분들 이거 한번 보세요 진짜 달라요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_competing_001_scene_002",
+          "start_ms": 30000,
+          "end_ms": 55000,
+          "transcript_text": "오늘은 이너 콜라겐 파우더예요 저분자 어유 콜라겐 5000mg 한 포에 들어있어요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 400000,
+      "end_ms": 450000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_competing_001_scene_020",
+          "start_ms": 400000,
+          "end_ms": 425000,
+          "transcript_text": "한 포 뜯어서 물 한 컵에 타먹으면 되고 맛이 자몽향이라 거부감 없이 드실 수 있어요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_competing_001_scene_021",
+          "start_ms": 425000,
+          "end_ms": 450000,
+          "transcript_text": "비타민C도 같이 들어있어서 흡수율이 더 좋고 한 박스 30포라 한 달치예요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 1450000,
+      "end_ms": 1620000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_competing_001_scene_072",
+          "start_ms": 1450000,
+          "end_ms": 1475000,
+          "transcript_text": "저도 두 박스째 먹고 있는데 진짜 피부 톤 자체가 달라졌어요 솔직히 강추예요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_competing_001_scene_073",
+          "start_ms": 1475000,
+          "end_ms": 1500000,
+          "transcript_text": "보세요 이쪽이 먹기 전 사진이고 이쪽이 한 달 먹고 난 사진이에요 차이 느껴지시죠",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_competing_001_scene_074",
+          "start_ms": 1500000,
+          "end_ms": 1525000,
+          "transcript_text": "환절기 피부 푸석푸석할 때 야근 많은 분들 화장 잘 안 먹는 분들께 진짜 추천드려요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_competing_001_scene_080",
+          "start_ms": 1600000,
+          "end_ms": 1620000,
+          "transcript_text": "지금 주문하시면 한 박스 더 드려요 매진 임박입니다 오늘만 이 가격이에요",
+          "speaker_transcript": ""
+        }
+      ]
+    }
+  ],
+  "ideal": {
+    "hook": {"source_start_ms": 0, "source_end_ms": 8000},
+    "intro": {"source_start_ms": 30000, "source_end_ms": 42000},
+    "detail": [
+      {"source_start_ms": 400000, "source_end_ms": 412500},
+      {"source_start_ms": 425000, "source_end_ms": 437500}
+    ],
+    "cta": {"source_start_ms": 1450000, "source_end_ms": 1458000}
+  }
+}

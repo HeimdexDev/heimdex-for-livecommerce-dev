@@ -13,6 +13,7 @@ NOTE: These tests require:
 Skip with: pytest tests/test_search_quality.py -v -m "not quality"
 """
 import pytest
+import pytest_asyncio
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4, UUID
@@ -137,7 +138,7 @@ class TestRRFQualitySignals:
             {"_id": "vec2", "_score": 0.90, "_source": {"video_id": "v4", "transcript_char_count": 100}},
         ]
         
-        ranked = compute_weighted_rrf(lexical_hits, vector_hits, alpha=0.0)
+        ranked = compute_weighted_rrf(lexical_hits, vector_hits, [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         
         # Top results should be lexical (lex1, lex2)
         assert ranked[0].doc_id == "lex1"
@@ -155,7 +156,7 @@ class TestRRFQualitySignals:
             {"_id": "vec1", "_score": 0.95, "_source": {"video_id": "v2", "transcript_char_count": 100}},
         ]
         
-        ranked = compute_weighted_rrf(lexical_hits, vector_hits, alpha=1.0)
+        ranked = compute_weighted_rrf(lexical_hits, vector_hits, [], bm25_weight=0.0, text_knn_weight=1.0, visual_weight=0.0)
         
         # Top result should be vector
         assert ranked[0].doc_id == "vec1"
@@ -173,7 +174,7 @@ class TestRRFQualitySignals:
             {"_id": "both", "_score": 0.95, "_source": {"video_id": "v1", "transcript_char_count": 100}},
         ]
         
-        ranked = compute_weighted_rrf(lexical_hits, vector_hits, alpha=0.5)
+        ranked = compute_weighted_rrf(lexical_hits, vector_hits, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         
         # Document appearing in both should have contributions from each
         assert ranked[0].lexical_contribution > 0
@@ -188,7 +189,7 @@ class TestRRFQualitySignals:
             {"_id": "short", "_score": 10.0, "_source": {"video_id": "v2", "transcript_char_count": 10}},
         ]
         
-        ranked = compute_weighted_rrf(hits, [], alpha=0.0)
+        ranked = compute_weighted_rrf(hits, [], [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         
         long_item = next(r for r in ranked if r.doc_id == "long")
         short_item = next(r for r in ranked if r.doc_id == "short")
@@ -291,7 +292,7 @@ class TestGoldenQueryQuality:
     Run after seeding test data with known segment IDs.
     """
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def search_service(self):
         """Create SearchService with live connections."""
         from app.modules.search.client import OpenSearchClient
@@ -313,7 +314,7 @@ class TestGoldenQueryQuality:
         
         org_id = uuid4()  # Should match test data
         
-        for alpha in golden.test_alphas:
+        for alpha in golden.test_alphas or []:
             response = await search_service.search(
                 query=golden.query,
                 org_id=org_id,
@@ -370,6 +371,8 @@ class TestPropertyBasedQuality:
         """Verify: With sufficient video diversity, per-video limit is respected."""
         fixture = load_golden_queries_yaml()
         config = fixture.get("config", {})
+        if not isinstance(config, dict):
+            config = {}
         max_per_video = config.get("default_max_per_video", 4)
         
         ranked = []
@@ -396,6 +399,8 @@ class TestPropertyBasedQuality:
         """Verify: Quality factor never drops below floor."""
         fixture = load_golden_queries_yaml()
         config = fixture.get("config", {})
+        if not isinstance(config, dict):
+            config = {}
         quality_floor = config.get("quality_floor", 0.7)
         
         from app.modules.search.fusion import compute_quality_factor
@@ -416,11 +421,11 @@ class TestPropertyBasedQuality:
         lexical = [{"_id": "lex", "_score": 10.0, "_source": {"video_id": "v1"}}]
         vector = [{"_id": "vec", "_score": 0.9, "_source": {"video_id": "v2"}}]
         
-        results_lex = compute_weighted_rrf(lexical, vector, alpha=0.0)
+        results_lex = compute_weighted_rrf(lexical, vector, [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         assert results_lex[0].doc_id == "lex"
         assert results_lex[0].vector_contribution == 0.0
         
-        results_vec = compute_weighted_rrf(lexical, vector, alpha=1.0)
+        results_vec = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.0, text_knn_weight=1.0, visual_weight=0.0)
         assert results_vec[0].doc_id == "vec"
         assert results_vec[0].lexical_contribution == 0.0
 
@@ -455,6 +460,15 @@ class TestPropertyBasedQuality:
 
 class TestRRFTuning:
     """Tests for experimenting with RRF parameter tuning."""
+
+    def test_rrf_k_20_has_stronger_separation_than_60(self):
+        from app.modules.search.fusion import rrf_score
+
+        spread_20 = rrf_score(1, 20) - rrf_score(10, 20)
+        spread_60 = rrf_score(1, 60) - rrf_score(10, 60)
+
+        assert spread_20 > spread_60
+
 
     @pytest.mark.parametrize("k", [30, 60, 100])
     def test_rrf_k_impact(self, k):

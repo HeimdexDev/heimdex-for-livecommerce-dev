@@ -1,0 +1,389 @@
+"""
+Internal ingestion router for drive-workers.
+
+POST /internal/ingest/scenes — scene data from drive-worker
+POST /internal/ingest/enrich — enrichment merge from GPU workers
+POST /internal/ingest/thumbnails/face/{id} — face thumbnails from face-worker
+
+Auth: Pre-shared internal API key (Bearer token).
+Tenancy: org_id passed explicitly via X-Heimdex-Org-Id header (no Host-based
+         resolution — workers are internal services, not tenants).
+Feature-gated: only registered when DRIVE_CONNECTOR_ENABLED=true.
+"""
+import re
+from pathlib import Path
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from heimdex_media_contracts.ingest import IngestScenesRequest
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.dependencies import get_db_session, get_org_repository, get_scene_ingest_service
+from app.logging_config import get_logger
+from app.modules.ingest.schemas import (
+    EnrichScenesRequest,
+    EnrichScenesResponse,
+    IngestScenesResponse,
+)
+from app.modules.ingest.service import SceneIngestService
+from app.modules.orgs.repository import OrgRepository
+
+logger = get_logger(__name__)
+
+router = APIRouter(prefix="/internal/ingest", tags=["internal-ingest"])
+
+
+from app.dependencies import verify_internal_token as _verify_internal_token
+from app.lib.internal_auth import verify_service_identity
+
+
+@router.post("/scenes", response_model=IngestScenesResponse)
+async def internal_ingest_scenes(
+    request: IngestScenesRequest,
+    x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
+    verified_service_id: str = Depends(verify_service_identity),
+    db: AsyncSession = Depends(get_db_session),
+    org_repo: OrgRepository = Depends(get_org_repository),
+    ingest_service: SceneIngestService = Depends(get_scene_ingest_service),
+):
+    """Ingest scenes from drive-worker.
+
+    Auth (F1 Phase 3): per-service token via ``verify_service_identity``.
+    Workers send ``X-Heimdex-Service-Id`` header + their per-service
+    token; legacy global bearer continues to work as a backward-compat
+    fallback (returns ``service_id="legacy"``). The verified
+    ``service_id`` is logged on every call for audit; the body's
+    asserted ``X-Heimdex-Org-Id`` is still trusted (Phase 3 doesn't
+    bind service to allowed orgs — that's a separate hardening pass).
+    """
+    try:
+        org_id = UUID(x_heimdex_org_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid X-Heimdex-Org-Id: {x_heimdex_org_id!r}",
+        )
+
+    org = await org_repo.get_by_id(org_id)
+    if org is None:
+        logger.warning("internal_ingest_unknown_org", org_id=str(org_id))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    settings = get_settings()
+
+    # DoS protection: cap max scenes per request (same limit as agent endpoint)
+    if len(request.scenes) > settings.agent_ingest_max_scenes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Too many scenes: {len(request.scenes)} exceeds "
+                f"maximum of {settings.agent_ingest_max_scenes} per request"
+            ),
+        )
+
+    logger.info(
+        "internal_ingest_started",
+        org_id=str(org_id),
+        video_id=request.video_id,
+        library_id=str(request.library_id),
+        scene_count=len(request.scenes),
+        verified_service_id=verified_service_id,  # F1 Phase 3 audit
+    )
+
+    try:
+        result = await ingest_service.ingest_scenes(
+            request=request,
+            org_id=org_id,
+        )
+    except ValueError as e:
+        logger.warning(
+            "internal_ingest_validation_error",
+            org_id=str(org_id),
+            video_id=request.video_id,
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+
+    # Image captioning hook: fire-and-forget background task for any scene
+    # with content_type='image'. Runs on the same event loop, outside the
+    # request lifecycle. Short-circuits cleanly when image_caption_enabled
+    # is False. See app/modules/image_caption/README.md for rationale.
+    if settings.image_caption_enabled:
+        from app.modules.image_caption.service import (
+            SceneCaptionRequest,
+            schedule_image_caption_task,
+        )
+
+        image_scene_requests = [
+            SceneCaptionRequest(
+                org_id=org_id,
+                video_id=request.video_id,
+                scene_id=scene.scene_id,
+                file_name=getattr(request, "video_title", None),
+                library_name=None,
+            )
+            for scene in request.scenes
+            if getattr(scene, "content_type", None) == "image"
+        ]
+        if image_scene_requests:
+            schedule_image_caption_task(image_scene_requests)
+            logger.info(
+                "image_caption_scheduled",
+                org_id=str(org_id),
+                video_id=request.video_id,
+                scene_count=len(image_scene_requests),
+            )
+
+    return IngestScenesResponse(**result)
+
+
+@router.post("/enrich", response_model=EnrichScenesResponse)
+async def internal_enrich_scenes(
+    request: EnrichScenesRequest,
+    x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
+    verified_service_id: str = Depends(verify_service_identity),
+    db: AsyncSession = Depends(get_db_session),
+    org_repo: OrgRepository = Depends(get_org_repository),
+    ingest_service: SceneIngestService = Depends(get_scene_ingest_service),
+):
+    """Enrichment merge from GPU workers.
+
+    Auth (F1 Phase 3): per-service token via ``verify_service_identity``;
+    legacy global bearer continues to work as a backward-compat
+    fallback. ``verified_service_id`` is logged on every call.
+    """
+    try:
+        org_id = UUID(x_heimdex_org_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid X-Heimdex-Org-Id: {x_heimdex_org_id!r}",
+        )
+
+    org = await org_repo.get_by_id(org_id)
+    if org is None:
+        logger.warning("internal_enrich_unknown_org", org_id=str(org_id))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    settings = get_settings()
+    if len(request.scenes) > settings.agent_ingest_max_scenes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Too many scenes: {len(request.scenes)} exceeds "
+                f"maximum of {settings.agent_ingest_max_scenes} per request"
+            ),
+        )
+
+    logger.info(
+        "internal_enrich_started",
+        org_id=str(org_id),
+        video_id=request.video_id,
+        scene_count=len(request.scenes),
+        verified_service_id=verified_service_id,  # F1 Phase 3 audit
+    )
+
+    result = await ingest_service.enrich_scenes(
+        request=request,
+        org_id=org_id,
+    )
+
+    return EnrichScenesResponse(**result)
+
+
+@router.post("/thumbnails/face/{person_cluster_id}")
+async def internal_upload_face_thumbnail(
+    person_cluster_id: str,
+    file: Annotated[UploadFile, File(...)],
+    x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
+    _token: str = Depends(_verify_internal_token),
+):
+    """Upload face thumbnail from face-worker. Auth: internal API key."""
+    _UNSAFE_PATH_RE = re.compile(r"[/\\\x00]")
+    if not person_cluster_id or _UNSAFE_PATH_RE.search(person_cluster_id) or ".." in person_cluster_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid person_cluster_id",
+        )
+
+    try:
+        org_id = UUID(x_heimdex_org_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid X-Heimdex-Org-Id: {x_heimdex_org_id!r}",
+        )
+
+    content_type = (file.content_type or "").lower()
+    if content_type not in {"image/jpeg", "image/jpg"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="file must be image/jpeg",
+        )
+
+    settings = get_settings()
+    root = Path(settings.thumbnail_storage_dir)
+    target_dir = root / str(org_id) / "faces"
+    target_path = target_dir / f"{person_cluster_id}.jpg"
+
+    # Validate no path traversal
+    resolved = target_path.resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path",
+        )
+
+    # Override protection: skip if user has selected a custom thumbnail
+    from app.modules.face.repository import FaceRepository
+    from app.db.base import get_async_session_factory
+
+    factory = get_async_session_factory()
+    async with factory() as session:
+        repo = FaceRepository(session)
+        thumb_source = await repo.get_thumbnail_source(org_id, person_cluster_id)
+        if thumb_source and thumb_source != "auto":
+            logger.info(
+                "internal_face_thumbnail_skipped_user_override",
+                org_id=str(org_id),
+                person_cluster_id=person_cluster_id,
+                thumbnail_source=thumb_source,
+            )
+            return {"stored": False, "skipped": "user_override"}
+
+    data = await file.read()
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(data)
+    except OSError as e:
+        logger.error(
+            "internal_face_thumbnail_write_failed",
+            path=str(target_path),
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to store face thumbnail",
+        )
+
+    logger.info(
+        "internal_face_thumbnail_uploaded",
+        org_id=str(org_id),
+        person_cluster_id=person_cluster_id,
+        size_bytes=len(data),
+    )
+
+    # Dual-write to S3 (non-fatal)
+    try:
+        from app.modules.drive.keys import face_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3_key = face_thumbnail_s3_key(str(org_id), person_cluster_id)
+        await s3.upload_file_async(target_path, s3_key, content_type="image/jpeg")
+        logger.info("face_thumbnail_s3_uploaded", s3_key=s3_key)
+    except Exception:
+        logger.warning(
+            "face_thumbnail_s3_upload_failed",
+            org_id=str(org_id),
+            person_cluster_id=person_cluster_id,
+            exc_info=True,
+        )
+
+    return {"stored": True, "path": f"faces/{person_cluster_id}"}
+
+
+@router.post("/thumbnails/face-exemplar/{exemplar_id}")
+async def internal_upload_exemplar_thumbnail(
+    exemplar_id: str,
+    file: Annotated[UploadFile, File(...)],
+    x_heimdex_org_id: str = Header(..., alias="X-Heimdex-Org-Id"),
+    _token: str = Depends(_verify_internal_token),
+):
+    """Upload individual exemplar crop from face-worker. Auth: internal API key."""
+    _UNSAFE_PATH_RE = re.compile(r"[/\\\x00]")
+    if not exemplar_id or _UNSAFE_PATH_RE.search(exemplar_id) or ".." in exemplar_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid exemplar_id",
+        )
+
+    try:
+        org_id = UUID(x_heimdex_org_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid X-Heimdex-Org-Id: {x_heimdex_org_id!r}",
+        )
+
+    content_type = (file.content_type or "").lower()
+    if content_type not in {"image/jpeg", "image/jpg"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="file must be image/jpeg",
+        )
+
+    settings = get_settings()
+    root = Path(settings.thumbnail_storage_dir)
+    target_dir = root / str(org_id) / "faces" / "exemplars"
+    target_path = target_dir / f"{exemplar_id}.jpg"
+
+    resolved = target_path.resolve()
+    if not resolved.is_relative_to(root.resolve()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path",
+        )
+
+    data = await file.read()
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(data)
+    except OSError as e:
+        logger.error(
+            "internal_exemplar_thumbnail_write_failed",
+            path=str(target_path),
+            error=str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to store exemplar thumbnail",
+        )
+
+    logger.info(
+        "internal_exemplar_thumbnail_uploaded",
+        org_id=str(org_id),
+        exemplar_id=exemplar_id,
+        size_bytes=len(data),
+    )
+
+    # Dual-write to S3 (non-fatal)
+    try:
+        from app.modules.drive.keys import exemplar_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3_key = exemplar_thumbnail_s3_key(str(org_id), exemplar_id)
+        await s3.upload_file_async(target_path, s3_key, content_type="image/jpeg")
+        logger.info("exemplar_thumbnail_s3_uploaded", s3_key=s3_key)
+    except Exception:
+        logger.warning(
+            "exemplar_thumbnail_s3_upload_failed",
+            org_id=str(org_id),
+            exemplar_id=exemplar_id,
+            exc_info=True,
+        )
+
+    return {"stored": True, "path": f"faces/exemplars/{exemplar_id}"}

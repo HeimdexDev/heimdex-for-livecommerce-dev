@@ -1,0 +1,47 @@
+{
+  "total": 100,
+  "per_family": {
+    "red": 20,
+    "pink": 11,
+    "orange": 8,
+    "yellow": 1,
+    "green": 5,
+    "teal": 9,
+    "blue": 9,
+    "purple": 5,
+    "brown": 15,
+    "white": 11,
+    "gray": 3,
+    "black": 3
+  },
+  "per_type": {
+    "video": {
+      "red": 10,
+      "pink": 7,
+      "orange": 1,
+      "yellow": 0,
+      "green": 3,
+      "teal": 5,
+      "blue": 8,
+      "purple": 1,
+      "brown": 7,
+      "white": 10,
+      "gray": 1,
+      "black": 2
+    },
+    "image": {
+      "red": 10,
+      "pink": 4,
+      "orange": 7,
+      "yellow": 1,
+      "green": 2,
+      "teal": 4,
+      "blue": 1,
+      "purple": 4,
+      "brown": 8,
+      "white": 1,
+      "gray": 2,
+      "black": 1
+    }
+  }
+}

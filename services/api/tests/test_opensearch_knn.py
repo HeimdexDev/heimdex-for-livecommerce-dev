@@ -13,6 +13,7 @@ NOTE: Requires running OpenSearch instance. Skip with:
 """
 import math
 import pytest
+import pytest_asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 from uuid import uuid4
 
@@ -116,6 +117,7 @@ class TestKnnIntegrationMocked:
             settings = MagicMock()
             settings.opensearch_url = "http://localhost:9200"
             settings.opensearch_index_prefix = "test"
+            settings.opensearch_bulk_refresh = "true"
             mock_settings.return_value = settings
             
             async_client = MagicMock()
@@ -199,7 +201,7 @@ class TestKnnIntegrationLive:
     2. Run: pytest tests/test_opensearch_knn.py -m integration -v
     """
 
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def live_client(self):
         """
         Create a real OpenSearch client for integration tests.
@@ -210,6 +212,7 @@ class TestKnnIntegrationLive:
             settings = MagicMock()
             settings.opensearch_url = "http://localhost:9200"
             settings.opensearch_index_prefix = "test_knn"
+            settings.opensearch_bulk_refresh = "true"
             mock_settings.return_value = settings
             
             client = OpenSearchClient()

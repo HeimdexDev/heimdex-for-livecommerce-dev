@@ -28,8 +28,10 @@ class UserRepository:
         await self.session.flush()
         return user
 
-    async def list_by_org(self, org_id: UUID) -> list[User]:
-        result = await self.session.execute(select(User).where(User.org_id == org_id))
+    async def list_by_org(self, org_id: UUID, limit: int = 500) -> list[User]:
+        result = await self.session.execute(
+            select(User).where(User.org_id == org_id).limit(limit)
+        )
         return list(result.scalars().all())
 
     async def get_by_auth0_sub(self, auth0_sub: str, org_id: UUID) -> User | None:

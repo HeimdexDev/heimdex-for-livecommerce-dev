@@ -1,0 +1,379 @@
+import json
+import logging
+from typing import Annotated, Any
+from uuid import UUID
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from fastapi import APIRouter, Depends, HTTPException, status
+from google.auth.exceptions import RefreshError
+
+from app.config import get_settings
+from app.dependencies import (
+    get_drive_connection_repository,
+    get_drive_file_repository,
+    get_drive_secret_repository,
+    get_scene_opensearch_client,
+    get_watched_folder_repository,
+)
+from app.modules.drive.google_client import DriveClient
+from app.modules.drive.models import DriveConnection
+from app.modules.drive.repository import (
+    DriveConnectionRepository,
+    DriveFileRepository,
+    DriveSecretRepository,
+)
+from app.modules.drive.router import _decrypt_oauth_token_data, _require_drive_enabled
+from app.modules.drive.watched_folder_repository import WatchedFolderInput, WatchedFolderRepository
+from app.modules.drive.watched_folder_schemas import (
+    DriveInfoResponse,
+    FolderDisableImpactResponse,
+    FolderTreeResponse,
+    ToggleFolderResponse,
+    WatchedFolderContentTypesRequest,
+    WatchedFolderResponse,
+    WatchedFolderToggleRequest,
+)
+from app.modules.search.scene_client import SceneSearchClient
+from app.modules.auth.dependencies import require_role
+from app.modules.users.models import User, UserRole
+from app.modules.tenancy.context import OrgContext
+from app.modules.tenancy.middleware import get_current_org
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/drive/watched-folders", tags=["watched-folders"])
+
+
+def _build_folder_inputs(folders: list[dict[str, Any]]) -> list[WatchedFolderInput]:
+    by_id = {str(f["id"]): f for f in folders if f.get("id")}
+    path_cache: dict[str, str] = {}
+
+    def _resolve_path(folder_id: str) -> str:
+        cached = path_cache.get(folder_id)
+        if cached is not None:
+            return cached
+
+        folder = by_id.get(folder_id)
+        if folder is None:
+            return ""
+
+        name = str(folder.get("name") or folder_id)
+        parents = folder.get("parents") or []
+        parent_id = str(parents[0]) if parents else None
+
+        if parent_id and parent_id in by_id:
+            parent_path = _resolve_path(parent_id)
+            resolved = f"{parent_path}/{name}" if parent_path else f"/{name}"
+        else:
+            resolved = f"/{name}"
+
+        path_cache[folder_id] = resolved
+        return resolved
+
+    inputs: list[WatchedFolderInput] = []
+    for folder in folders:
+        folder_id = str(folder.get("id") or "")
+        if not folder_id:
+            continue
+
+        parents = folder.get("parents") or []
+        parent_id = str(parents[0]) if parents else None
+        if parent_id and parent_id not in by_id:
+            parent_id = None
+
+        inputs.append(
+            {
+                "google_folder_id": folder_id,
+                "folder_name": str(folder.get("name") or folder_id),
+                "folder_path": _resolve_path(folder_id),
+                "parent_folder_id": parent_id,
+            }
+        )
+
+    return inputs
+
+
+def _build_drive_infos(connections: list[DriveConnection]) -> list[DriveInfoResponse]:
+    """Build drive info list for FolderSyncTree.
+
+    Includes ``my_drive``, ``shared_drive``, and legacy ``drive`` connections.
+    Legacy ``drive`` connections are mapped to ``shared_drive`` in the response
+    so the frontend receives a consistent type.  When both a ``shared_drive``
+    and a legacy ``drive`` connection exist for the same Google Drive ID, only
+    the ``shared_drive`` entry is returned (it has folder associations from a
+    prior enumerate).
+    """
+    results: list[DriveInfoResponse] = []
+    shared_drive_ids: set[str] = set()
+
+    # First pass: include my_drive and shared_drive connections.
+    for conn in connections:
+        if conn.scope_type == "my_drive":
+            results.append(
+                DriveInfoResponse(
+                    connection_id=conn.id,
+                    drive_id=conn.drive_id,
+                    drive_name=conn.drive_name,
+                    scope_type="my_drive",
+                )
+            )
+        elif conn.scope_type == "shared_drive":
+            results.append(
+                DriveInfoResponse(
+                    connection_id=conn.id,
+                    drive_id=conn.drive_id,
+                    drive_name=conn.drive_name,
+                    scope_type="shared_drive",
+                )
+            )
+            if conn.drive_id:
+                shared_drive_ids.add(conn.drive_id)
+
+    # Second pass: include legacy "drive" connections not already covered.
+    for conn in connections:
+        if (
+            conn.scope_type == "drive"
+            and conn.drive_id
+            and conn.drive_id not in shared_drive_ids
+        ):
+            results.append(
+                DriveInfoResponse(
+                    connection_id=conn.id,
+                    drive_id=conn.drive_id,
+                    drive_name=conn.drive_name,
+                    scope_type="shared_drive",
+                )
+            )
+
+    return results
+
+
+async def _get_drive_client_for_org(
+    org_id: UUID,
+    secret_repo: DriveSecretRepository,
+    encryption_key_hex: str,
+) -> tuple[DriveClient, str]:
+    """Resolve a DriveClient from the best available credential.
+
+    Returns (client, auth_type) where auth_type is "oauth" or "sa".
+    Prefers OAuth when both exist (user-scoped access is more granular).
+    """
+    secret = await secret_repo.get_by_org(org_id, secret_type="oauth_token")
+    if secret is not None:
+        token_data = _decrypt_oauth_token_data(secret, encryption_key_hex)
+        try:
+            client = DriveClient.from_oauth_token(
+                refresh_token=token_data["refresh_token"],
+                client_id=token_data["client_id"],
+                client_secret=token_data["client_secret"],
+            )
+        except RefreshError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Google 연결이 만료되었습니다. 설정에서 다시 연결해 주세요.",
+            )
+        return client, "oauth"
+
+    secret = await secret_repo.get_by_org(org_id, secret_type="service_account_key")
+    if secret is not None:
+        key = bytes.fromhex(encryption_key_hex)
+        aesgcm = AESGCM(key)
+        plaintext = aesgcm.decrypt(secret.nonce, secret.encrypted_value, None)
+        secret_data = json.loads(plaintext.decode())
+        try:
+            client = DriveClient(
+                sa_key_info=secret_data,
+                impersonate_email=secret.impersonate_email,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Service Account 인증에 실패했습니다: {exc}",
+            )
+        return client, "sa"
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Google Drive is not connected. Please connect via OAuth or configure a Service Account.",
+    )
+
+
+@router.post("/enumerate-folders", response_model=FolderTreeResponse)
+async def enumerate_folders(
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    _admin: Annotated[User, Depends(require_role(UserRole.ADMIN))],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
+    folder_repo: Annotated[WatchedFolderRepository, Depends(get_watched_folder_repository)],
+    secret_repo: Annotated[DriveSecretRepository, Depends(get_drive_secret_repository)],
+    _: Annotated[None, Depends(_require_drive_enabled)],
+):
+    settings = get_settings()
+    drive_client, auth_type = await _get_drive_client_for_org(
+        org_ctx.org_id, secret_repo, settings.drive_sa_encryption_key
+    )
+
+    shared_drives = drive_client.list_shared_drives()
+    connections = await conn_repo.list_by_org(org_ctx.org_id)
+    library_id = connections[0].library_id if connections else None
+    if library_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No library found. Please connect Google Drive first.",
+        )
+
+    if auth_type == "oauth":
+        my_drive_conn = next((c for c in connections if c.scope_type == "my_drive"), None)
+        if my_drive_conn is None:
+            my_drive_conn = DriveConnection(
+                org_id=org_ctx.org_id,
+                library_id=library_id,
+                scope_type="my_drive",
+                drive_id=None,
+                drive_name="My Drive",
+            )
+            conn_repo.session.add(my_drive_conn)
+            await conn_repo.session.flush()
+            connections.append(my_drive_conn)
+
+        my_drive_folders = drive_client.list_all_folders(None)
+        my_drive_inputs = _build_folder_inputs(my_drive_folders)
+        await folder_repo.bulk_upsert(org_ctx.org_id, my_drive_conn.id, my_drive_inputs)
+
+    for shared_drive in shared_drives:
+        drive_id = str(shared_drive.get("id") or "")
+        if not drive_id:
+            continue
+
+        drive_name = str(shared_drive.get("name") or drive_id)
+        shared_conn = next(
+            (
+                c
+                for c in connections
+                if c.scope_type in {"shared_drive", "drive"} and c.drive_id == drive_id
+            ),
+            None,
+        )
+        if shared_conn is None:
+            shared_conn = DriveConnection(
+                org_id=org_ctx.org_id,
+                library_id=library_id,
+                scope_type="shared_drive",
+                drive_id=drive_id,
+                drive_name=drive_name,
+            )
+            conn_repo.session.add(shared_conn)
+            await conn_repo.session.flush()
+            connections.append(shared_conn)
+
+        folders = drive_client.list_all_folders(drive_id)
+        inputs = _build_folder_inputs(folders)
+        await folder_repo.bulk_upsert(org_ctx.org_id, shared_conn.id, inputs)
+
+    folders = await folder_repo.list_by_org(org_ctx.org_id)
+    return FolderTreeResponse(
+        folders=[WatchedFolderResponse.model_validate(folder) for folder in folders],
+        drives=_build_drive_infos(connections),
+    )
+
+
+@router.get("", response_model=FolderTreeResponse)
+async def get_watched_folders(
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
+    folder_repo: Annotated[WatchedFolderRepository, Depends(get_watched_folder_repository)],
+    _: Annotated[None, Depends(_require_drive_enabled)],
+):
+    connections = await conn_repo.list_by_org(org_ctx.org_id)
+    folders = await folder_repo.list_by_org(org_ctx.org_id)
+    return FolderTreeResponse(
+        folders=[WatchedFolderResponse.model_validate(folder) for folder in folders],
+        drives=_build_drive_infos(connections),
+    )
+
+
+@router.get("/{folder_id}/impact", response_model=FolderDisableImpactResponse)
+async def get_folder_disable_impact(
+    folder_id: UUID,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    folder_repo: Annotated[WatchedFolderRepository, Depends(get_watched_folder_repository)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
+    _: Annotated[None, Depends(_require_drive_enabled)],
+):
+    """Preview the impact of disabling a folder — how many files would be affected."""
+    folder = await folder_repo.get_by_id(folder_id, org_ctx.org_id)
+    if folder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+
+    folder_names = await folder_repo.get_descendant_folder_names(
+        org_ctx.org_id, folder.connection_id, folder.google_folder_id
+    )
+    counts = await file_repo.count_by_folder_names(
+        org_ctx.org_id, folder.connection_id, folder_names
+    )
+    return FolderDisableImpactResponse(
+        video_count=counts["video"],
+        image_count=counts["image"],
+        total_count=counts["video"] + counts["image"],
+    )
+
+
+@router.patch("/{folder_id}/toggle", response_model=ToggleFolderResponse)
+async def toggle_folder_sync(
+    folder_id: UUID,
+    body: WatchedFolderToggleRequest,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    _admin: Annotated[User, Depends(require_role(UserRole.ADMIN))],
+    folder_repo: Annotated[WatchedFolderRepository, Depends(get_watched_folder_repository)],
+    conn_repo: Annotated[DriveConnectionRepository, Depends(get_drive_connection_repository)],
+    file_repo: Annotated[DriveFileRepository, Depends(get_drive_file_repository)],
+    scene_client: Annotated[SceneSearchClient, Depends(get_scene_opensearch_client)],
+    _: Annotated[None, Depends(_require_drive_enabled)],
+):
+    folder = await folder_repo.update_toggle(folder_id, org_ctx.org_id, body.sync_enabled)
+    if folder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+
+    deleted_file_count = 0
+    if body.sync_enabled:
+        await conn_repo.set_sync_requested(folder.connection_id, org_ctx.org_id)
+    else:
+        folder_names = await folder_repo.get_descendant_folder_names(
+            org_ctx.org_id, folder.connection_id, folder.google_folder_id
+        )
+        video_ids = await file_repo.soft_delete_by_watched_folder(
+            org_ctx.org_id, folder.connection_id, folder_names
+        )
+        deleted_file_count = len(video_ids)
+        for vid in video_ids:
+            try:
+                await scene_client.delete_scenes_by_video_id(str(org_ctx.org_id), vid)
+            except Exception:
+                logger.warning(
+                    "watched_folder_scene_delete_failed",
+                    extra={
+                        "org_id": str(org_ctx.org_id),
+                        "folder_id": str(folder_id),
+                        "video_id": vid,
+                    },
+                )
+
+    return ToggleFolderResponse(
+        folder=WatchedFolderResponse.model_validate(folder),
+        deleted_file_count=deleted_file_count,
+    )
+
+
+@router.patch("/{folder_id}/content-types", response_model=WatchedFolderResponse)
+async def update_content_types(
+    folder_id: UUID,
+    body: WatchedFolderContentTypesRequest,
+    org_ctx: Annotated[OrgContext, Depends(get_current_org)],
+    _admin: Annotated[User, Depends(require_role(UserRole.ADMIN))],
+    folder_repo: Annotated[WatchedFolderRepository, Depends(get_watched_folder_repository)],
+    _: Annotated[None, Depends(_require_drive_enabled)],
+):
+    content_types = [value for value in body.content_types]
+    folder = await folder_repo.update_content_types(folder_id, org_ctx.org_id, content_types)
+    if folder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
+    return WatchedFolderResponse.model_validate(folder)

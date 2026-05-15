@@ -24,8 +24,14 @@ class LibraryRepository:
         await self.session.flush()
         return library
 
-    async def list_by_org(self, org_id: UUID) -> list[Library]:
+    async def get_by_name(self, org_id: UUID, name: str) -> Library | None:
         result = await self.session.execute(
-            select(Library).where(Library.org_id == org_id).order_by(Library.name)
+            select(Library).where(Library.org_id == org_id, Library.name == name)
+        )
+        return result.scalar_one_or_none()
+
+    async def list_by_org(self, org_id: UUID, limit: int = 200) -> list[Library]:
+        result = await self.session.execute(
+            select(Library).where(Library.org_id == org_id).order_by(Library.name).limit(limit)
         )
         return list(result.scalars().all())

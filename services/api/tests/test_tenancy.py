@@ -1,5 +1,5 @@
 import pytest
-from app.modules.tenancy.middleware import extract_org_slug, TenancyError
+from app.modules.tenancy.middleware import extract_org_slug, TenancyError, TenancyMiddleware
 
 
 class TestExtractOrgSlug:
@@ -32,6 +32,26 @@ class TestExtractOrgSlug:
     
     def test_with_port_number(self):
         slug, error = extract_org_slug("devorg.app.heimdex.local:8000")
+        assert slug == "devorg"
+        assert error is None
+    
+    def test_valid_subdomain_staging(self):
+        slug, error = extract_org_slug("devorg.app.heimdexdemo.dev")
+        assert slug == "devorg"
+        assert error is None
+    
+    def test_staging_with_hyphens(self):
+        slug, error = extract_org_slug("my-company.app.heimdexdemo.dev")
+        assert slug == "my-company"
+        assert error is None
+    
+    def test_staging_with_port(self):
+        slug, error = extract_org_slug("devorg.app.heimdexdemo.dev:443")
+        assert slug == "devorg"
+        assert error is None
+    
+    def test_staging_case_insensitive(self):
+        slug, error = extract_org_slug("DevOrg.APP.HEIMDEXDEMO.DEV")
         assert slug == "devorg"
         assert error is None
 
@@ -93,6 +113,33 @@ class TestExtractOrgSlugRejections:
         slug, error = extract_org_slug("some.random.domain.com")
         assert slug is None
         assert error == TenancyError.INVALID_FORMAT
+    
+    def test_staging_missing_subdomain_rejected(self):
+        slug, error = extract_org_slug("app.heimdexdemo.dev")
+        assert slug is None
+        assert error == TenancyError.MISSING_SUBDOMAIN
+    
+    def test_staging_bare_domain_rejected(self):
+        slug, error = extract_org_slug("heimdexdemo.dev")
+        assert slug is None
+        assert error == TenancyError.MISSING_SUBDOMAIN
+    
+    def test_heimdex_dev_not_accepted(self):
+        """heimdex.dev is NOT a valid domain — only heimdexdemo.dev is."""
+        slug, error = extract_org_slug("devorg.app.heimdex.dev")
+        assert slug is None
+        assert error == TenancyError.MISSING_SUBDOMAIN
+    
+    def test_heimdexdemo_local_not_accepted(self):
+        """heimdexdemo.local is NOT valid — only heimdex.local is for dev."""
+        slug, error = extract_org_slug("devorg.app.heimdexdemo.local")
+        assert slug is None
+        assert error == TenancyError.MISSING_SUBDOMAIN
+    
+    def test_staging_single_char_slug_rejected(self):
+        slug, error = extract_org_slug("a.app.heimdexdemo.dev")
+        assert slug is None
+        assert error == TenancyError.MISSING_SUBDOMAIN
 
 
 class TestTenancyErrorMessages:
@@ -111,3 +158,77 @@ class TestTenancyErrorMessages:
         msg = ERROR_MESSAGES[TenancyError.LOCALHOST]
         assert "/etc/hosts" in msg
         assert "localhost" in msg
+
+
+class TestTenancyMiddlewareSkipPaths:
+    """Test that TenancyMiddleware skips tenancy checks for internal and health paths."""
+
+    @pytest.fixture()
+    def captured_state(self):
+        """Fixture to capture ASGI scope state after middleware runs."""
+        captured = {}
+
+        async def app(scope, receive, send):
+            captured.update(scope.get("state", {}))
+
+        return captured, app
+
+    def _make_scope(self, path: str, host: str = "api:8000") -> dict:
+        return {
+            "type": "http",
+            "path": path,
+            "headers": [(b"host", host.encode())],
+        }
+
+    @pytest.mark.asyncio
+    async def test_internal_path_skips_tenancy(self, captured_state):
+        captured, app = captured_state
+        mw = TenancyMiddleware(app)
+        scope = self._make_scope("/internal/drive/jobs/claim")
+        await mw(scope, None, None)
+        # Internal paths skip tenancy entirely — no org_slug or tenancy_error set
+        assert "org_slug" not in captured
+        assert "tenancy_error" not in captured
+
+    @pytest.mark.asyncio
+    async def test_internal_ingest_path_skips_tenancy(self, captured_state):
+        captured, app = captured_state
+        mw = TenancyMiddleware(app)
+        scope = self._make_scope("/internal/ingest/scenes")
+        await mw(scope, None, None)
+        assert "org_slug" not in captured
+
+    @pytest.mark.asyncio
+    async def test_internal_processing_path_skips_tenancy(self, captured_state):
+        captured, app = captured_state
+        mw = TenancyMiddleware(app)
+        scope = self._make_scope("/internal/drive/processing/claim")
+        await mw(scope, None, None)
+        assert "org_slug" not in captured
+
+    @pytest.mark.asyncio
+    async def test_health_path_skips_tenancy(self, captured_state):
+        captured, app = captured_state
+        mw = TenancyMiddleware(app)
+        scope = self._make_scope("/health")
+        await mw(scope, None, None)
+        assert "org_slug" not in captured
+
+    @pytest.mark.asyncio
+    async def test_api_path_still_runs_tenancy(self, captured_state):
+        captured, app = captured_state
+        mw = TenancyMiddleware(app)
+        scope = self._make_scope("/api/people", host="devorg.app.heimdexdemo.dev")
+        await mw(scope, None, None)
+        assert captured["org_slug"] == "devorg"
+        assert captured["tenancy_error"] is None
+
+    @pytest.mark.asyncio
+    async def test_api_path_with_internal_host_logs_error(self, captured_state):
+        captured, app = captured_state
+        mw = TenancyMiddleware(app)
+        scope = self._make_scope("/api/people", host="api:8000")
+        await mw(scope, None, None)
+        # Non-internal paths with invalid host still get tenancy error
+        assert captured["org_slug"] is None
+        assert captured["tenancy_error"] == TenancyError.INVALID_FORMAT

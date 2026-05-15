@@ -1,4 +1,5 @@
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 from uuid import uuid4
 
@@ -8,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import get_settings
+from app.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -44,12 +48,17 @@ class UUIDMixin:
     )
 
 
+@lru_cache(maxsize=1)
 def get_async_engine():
     settings = get_settings()
     return create_async_engine(
         settings.database_url,
         echo=settings.environment == "development",
         pool_pre_ping=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout,
+        pool_recycle=settings.db_pool_recycle,
     )
 
 
@@ -68,7 +77,8 @@ async def get_db_session() -> AsyncSession:
         try:
             yield session
             await session.commit()
-        except Exception:
+        except Exception as e:
+            logger.error("db_session_rollback", error=str(e), exc_info=True)
             await session.rollback()
             raise
         finally:

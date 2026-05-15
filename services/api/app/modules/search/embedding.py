@@ -72,9 +72,13 @@ class EmbeddingService:
     Singleton access via get_embedding_service() which uses @lru_cache.
     """
     
+    _QUERY_CACHE_SIZE = 128
+
     def __init__(self) -> None:
         self.settings = get_settings()
         self._model: "SentenceTransformer | None" = None
+        self._query_cache: dict[str, list[float]] = {}
+        self._query_cache_order: list[str] = []
         
     def _load_model(self) -> "SentenceTransformer | None":
         """Lazy load the model on first use."""
@@ -111,20 +115,32 @@ class EmbeddingService:
         Generate embedding for a search query.
         
         E5 models require the "query: " prefix for queries to work correctly.
+        Results are cached (LRU, 128 entries) since embedding inference is
+        the dominant latency source (~800-1500ms on CPU).
         """
+        cached = self._query_cache.get(query)
+        if cached is not None:
+            return cached
+
         if self.settings.embedding_use_mock:
-            return _generate_mock_embedding(query, self.settings.embedding_dimension)
-        
-        model = self._load_model()
-        prefixed_query = f"{E5_QUERY_PREFIX}{query}"
-        
-        embedding = model.encode(
-            prefixed_query,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
-        
-        return embedding.tolist()
+            result = _generate_mock_embedding(query, self.settings.embedding_dimension)
+        else:
+            model = self._load_model()
+            prefixed_query = f"{E5_QUERY_PREFIX}{query}"
+            embedding = model.encode(
+                prefixed_query,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+            result = embedding.tolist()
+
+        if len(self._query_cache_order) >= self._QUERY_CACHE_SIZE:
+            evicted = self._query_cache_order.pop(0)
+            self._query_cache.pop(evicted, None)
+        self._query_cache[query] = result
+        self._query_cache_order.append(query)
+
+        return result
     
     def embed_passage(self, text: str) -> list[float]:
         """

@@ -1,0 +1,912 @@
+"""Service orchestration tests with all deps mocked.
+
+Verifies:
+- 404 when video doesn't exist
+- video_too_short when proxy_duration_ms below floor
+- empty result when no candidate scenes match mode filter
+- successful both-mode end-to-end with synthetic scenes
+- product mode hard-filters scenes with people via the contracts scorer
+- auto_render delegates to ShortsRenderService.create_render_job
+- auto_caption=True returns 422 (P4 deferred)
+- insufficient clips → 422 from auto_render
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
+
+import pytest
+from fastapi import HTTPException
+
+from app.modules.shorts_auto.schemas import (
+    AutoRenderRequest,
+    AutoSelectRequest,
+    ScoringModeRequest,
+)
+from app.modules.shorts_auto.scorers import (
+    PureSceneScorer,
+    ScorerFallbackSignal,
+    SceneScorer,
+    ScoringContext,
+)
+from app.modules.shorts_auto.selector import CandidateScenesResult
+from app.modules.shorts_auto.service import ShortsAutoService
+from heimdex_media_contracts.scenes.schemas import SceneDocument
+
+
+def _scene(
+    scene_id: str,
+    *,
+    video_id: str = "vid",
+    index: int = 0,
+    start_ms: int = 0,
+    end_ms: int = 35_000,
+    people: list[str] | None = None,
+    product_tags: list[str] | None = None,
+    keyword_tags: list[str] | None = None,
+    transcript_char_count: int = 100,
+    transcript_norm: str = "",
+    transcript_raw: str = "",
+    scene_caption: str = "",
+) -> SceneDocument:
+    return SceneDocument(
+        scene_id=scene_id,
+        video_id=video_id,
+        index=index,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        keyframe_timestamp_ms=(start_ms + end_ms) // 2,
+        people_cluster_ids=people or [],
+        product_tags=product_tags or [],
+        keyword_tags=keyword_tags or [],
+        transcript_char_count=transcript_char_count,
+        transcript_norm=transcript_norm,
+        transcript_raw=transcript_raw,
+        scene_caption=scene_caption,
+    )
+
+
+def _make_service(
+    *,
+    selector_scenes: list[SceneDocument] | None = None,
+    speaker_transcripts: dict[str, str] | None = None,
+    drive_file=None,
+    render_response=None,
+):
+    selector = MagicMock()
+    selector.fetch_candidates = AsyncMock(
+        return_value=CandidateScenesResult(
+            scenes=selector_scenes or [],
+            speaker_transcripts=speaker_transcripts or {},
+        )
+    )
+
+    drive_file_repo = MagicMock()
+    drive_file_repo.get_by_video_id = AsyncMock(return_value=drive_file)
+
+    shorts_render_service = MagicMock()
+    shorts_render_service.create_render_job = AsyncMock(return_value=render_response)
+
+    svc = ShortsAutoService(
+        selector=selector,
+        drive_file_repo=drive_file_repo,
+        shorts_render_service=shorts_render_service,
+        scorer=PureSceneScorer(),
+    )
+    return svc, selector, drive_file_repo, shorts_render_service
+
+
+def _drive_file(duration_ms: int = 600_000):
+    """Mock drive file. proxy_duration_ms=600000 = 10min, well above default 5min floor."""
+    return SimpleNamespace(video_id="vid", proxy_duration_ms=duration_ms)
+
+
+def _render_response():
+    return SimpleNamespace(
+        id=uuid4(),
+        video_id="vid",
+        title="Auto both (5 clips)",
+        status="queued",
+        created_at=datetime.now(timezone.utc),
+        completed_at=None,
+        render_time_ms=None,
+        output_duration_ms=None,
+        output_size_bytes=None,
+        error=None,
+    )
+
+
+@pytest.mark.asyncio
+class TestAutoSelect:
+    async def test_404_when_video_not_found(self):
+        svc, *_ = _make_service(drive_file=None)
+        with pytest.raises(HTTPException) as exc:
+            await svc.auto_select(
+                org_id=uuid4(),
+                user_id=uuid4(),
+                req=AutoSelectRequest(video_id="missing", mode=ScoringModeRequest.BOTH),
+            )
+        assert exc.value.status_code == 404
+
+    async def test_video_too_short_returns_skipped_reason(self):
+        svc, *_ = _make_service(drive_file=_drive_file(duration_ms=60_000))
+        resp = await svc.auto_select(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoSelectRequest(video_id="vid", mode=ScoringModeRequest.BOTH),
+        )
+        assert resp.clips == []
+        assert resp.skipped_reason == "video_too_short"
+
+    async def test_unknown_proxy_duration_logs_and_proceeds(self, caplog):
+        """If proxy_duration_ms is None (transcode pending), we do NOT
+        treat it as video_too_short. Proceeds — scene corpus check below
+        catches empty-corpus cases cleanly."""
+        # drive_file with no duration set; selector returns empty scenes
+        svc, *_ = _make_service(
+            drive_file=_drive_file(duration_ms=0),  # → None-equivalent
+            selector_scenes=[],
+        )
+        # drive_file with proxy_duration_ms=None
+        svc.drive_file_repo.get_by_video_id = AsyncMock(
+            return_value=SimpleNamespace(video_id="vid", proxy_duration_ms=None)
+        )
+        resp = await svc.auto_select(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoSelectRequest(video_id="vid", mode=ScoringModeRequest.BOTH),
+        )
+        # NOT rejected as too short — propagates to scene-level empty check.
+        assert resp.skipped_reason == "no_candidate_scenes_after_filter"
+
+    async def test_no_candidates_returns_skipped_reason(self):
+        svc, *_ = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=[],
+        )
+        resp = await svc.auto_select(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoSelectRequest(video_id="vid", mode=ScoringModeRequest.BOTH),
+        )
+        assert resp.clips == []
+        assert resp.skipped_reason == "no_candidate_scenes_after_filter"
+
+    async def test_both_mode_returns_clips_for_eligible_scenes(self):
+        scenes = [
+            _scene(
+                f"vid_scene_{i:03d}",
+                index=i,
+                start_ms=i * 35_000,
+                end_ms=(i + 1) * 35_000 - 5_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+            )
+            for i in range(8)
+        ]
+        svc, *_ = _make_service(drive_file=_drive_file(), selector_scenes=scenes)
+        resp = await svc.auto_select(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoSelectRequest(
+                video_id="vid",
+                mode=ScoringModeRequest.BOTH,
+                count=3,
+                prefer_continuous=False,
+            ),
+        )
+        assert resp.skipped_reason is None
+        assert 1 <= len(resp.clips) <= 3
+        # Chronologically sorted
+        starts = [c.start_ms for c in resp.clips]
+        assert starts == sorted(starts)
+
+    async def test_product_mode_hard_filters_scenes_with_people(self):
+        # Mix: scenes 0,1,4,5 are person-free + have product; 2,3 have people.
+        scenes = []
+        for i in range(8):
+            people = ["p1"] if i in (2, 3, 6, 7) else []
+            scenes.append(
+                _scene(
+                    f"vid_scene_{i:03d}",
+                    index=i,
+                    start_ms=i * 35_000,
+                    end_ms=(i + 1) * 35_000 - 5_000,
+                    people=people,
+                    product_tags=["스킨케어"] if i in (0, 1, 4, 5) else [],
+                    keyword_tags=["product_demo"] if i in (0, 1, 4, 5) else [],
+                )
+            )
+        svc, *_ = _make_service(drive_file=_drive_file(), selector_scenes=scenes)
+        resp = await svc.auto_select(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoSelectRequest(
+                video_id="vid",
+                mode=ScoringModeRequest.PRODUCT,
+                count=2,
+                prefer_continuous=False,
+            ),
+        )
+        assert resp.skipped_reason is None
+        assert len(resp.clips) >= 1
+        # No emitted clip references an ineligible scene
+        ineligible = {"vid_scene_002", "vid_scene_003", "vid_scene_006", "vid_scene_007"}
+        for c in resp.clips:
+            assert not (set(c.scene_ids) & ineligible)
+
+
+@pytest.mark.asyncio
+class TestAutoRender:
+    async def test_auto_caption_true_rejected_with_422(self):
+        svc, *_ = _make_service(drive_file=_drive_file())
+        with pytest.raises(HTTPException) as exc:
+            await svc.auto_render(
+                org_id=uuid4(),
+                user_id=uuid4(),
+                req=AutoRenderRequest(
+                    video_id="vid",
+                    mode=ScoringModeRequest.BOTH,
+                    auto_caption=True,
+                ),
+            )
+        assert exc.value.status_code == 422
+        assert "auto_caption" in exc.value.detail
+
+    async def test_empty_selection_returns_422(self):
+        """auto_render rejects when the selection has zero clips.
+        ``count`` is now a hint, not a hard floor — under-count
+        no longer 422s (matches user goal of "one 60s short").
+        """
+        svc, *_ = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=[],  # empty → zero clips
+        )
+        with pytest.raises(HTTPException) as exc:
+            await svc.auto_render(
+                org_id=uuid4(),
+                user_id=uuid4(),
+                req=AutoRenderRequest(
+                    video_id="vid",
+                    mode=ScoringModeRequest.BOTH,
+                    count=5,
+                ),
+            )
+        assert exc.value.status_code == 422
+        assert "no scenes available" in exc.value.detail
+
+    async def test_under_count_selection_still_renders(self):
+        """Pre-change this returned 422 (4 < 5). Now accepted — we
+        compose whatever clips we got. Prevents the classic LLM-
+        fallback-to-pure edge case where the pure scorer only
+        produced 4 clips but the user asked for 5.
+        """
+        scenes = [
+            _scene(
+                f"vid_scene_{i:03d}",
+                index=i,
+                start_ms=i * 35_000,
+                end_ms=(i + 1) * 35_000 - 5_000,
+                keyword_tags=["cta"],
+                product_tags=["product"],
+            )
+            for i in range(4)
+        ]
+        render_resp = _render_response()
+        svc, _, _, render_service = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=scenes,
+            render_response=render_resp,
+        )
+        result = await svc.auto_render(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoRenderRequest(
+                video_id="vid",
+                mode=ScoringModeRequest.BOTH,
+                count=5,  # asked for 5
+            ),
+        )
+        # No 422; render delegates normally with the 4 clips we have.
+        assert result is render_resp
+        render_service.create_render_job.assert_awaited_once()
+
+    async def test_successful_render_delegates_to_shorts_render(self):
+        scenes = [
+            _scene(
+                f"vid_scene_{i:03d}",
+                index=i,
+                start_ms=i * 35_000,
+                end_ms=(i + 1) * 35_000 - 5_000,
+                keyword_tags=["cta", "product_demo"],
+                product_tags=["스킨케어"],
+            )
+            for i in range(8)
+        ]
+        render_resp = _render_response()
+        svc, _, _, render_service = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=scenes,
+            render_response=render_resp,
+        )
+        result = await svc.auto_render(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoRenderRequest(
+                video_id="vid",
+                mode=ScoringModeRequest.BOTH,
+                count=2,
+                prefer_continuous=False,
+            ),
+        )
+        assert result is render_resp
+        # Delegation happened exactly once
+        render_service.create_render_job.assert_awaited_once()
+        # Payload includes a CompositionSpec with the right video_id
+        call = render_service.create_render_job.await_args
+        payload = call.kwargs["payload"]
+        assert payload.video_id == "vid"
+        assert payload.composition.scene_clips
+        for clip in payload.composition.scene_clips:
+            assert clip.video_id == "vid"
+            assert clip.source_type == "gdrive"
+
+    async def test_composition_emits_per_scene_clips_that_would_pass_render_validation(self):
+        """Regression: each SceneClipSpec's source span must sit inside
+        its NAMED scene's boundaries so ShortsRenderService._validate_scene_clips
+        passes. Previously the service emitted one SceneClipSpec per AutoClip
+        attached to the first member's scene_id with the whole clip's span,
+        which breaks validation for multi-scene continuous clips."""
+        # 3 back-to-back scenes forming one 30s continuous clip (each 10s).
+        scenes = [
+            _scene(
+                f"vid_scene_{i:03d}",
+                index=i,
+                start_ms=i * 10_000,
+                end_ms=(i + 1) * 10_000,
+                keyword_tags=["cta", "product_demo"],
+                product_tags=["스킨케어"],
+                transcript_char_count=100,
+            )
+            for i in range(3)
+        ]
+        render_resp = _render_response()
+        svc, _, _, render_service = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=scenes,
+            render_response=render_resp,
+        )
+        await svc.auto_render(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoRenderRequest(
+                video_id="vid",
+                mode=ScoringModeRequest.BOTH,
+                count=1,
+                target_duration_sec=30,
+                min_duration_sec=30,
+            ),
+        )
+        payload = render_service.create_render_job.await_args.kwargs["payload"]
+        # Should emit 3 SceneClipSpecs (one per scene), not 1 covering all three.
+        assert len(payload.composition.scene_clips) == 3
+        # Each SceneClipSpec's span must fit inside its named scene (mirrors
+        # _validate_scene_clips in ShortsRenderService).
+        scene_bounds = {s.scene_id: (s.start_ms, s.end_ms) for s in scenes}
+        for spec in payload.composition.scene_clips:
+            lo, hi = scene_bounds[spec.scene_id]
+            assert lo <= spec.start_ms < spec.end_ms <= hi, (
+                f"{spec.scene_id}: clip [{spec.start_ms},{spec.end_ms}] "
+                f"must lie within scene [{lo},{hi}]"
+            )
+        # Timeline is packed back-to-back.
+        timeline_sorted = sorted(
+            payload.composition.scene_clips, key=lambda c: c.timeline_start_ms
+        )
+        for i in range(len(timeline_sorted) - 1):
+            assert (
+                timeline_sorted[i].timeline_start_ms + timeline_sorted[i].duration_ms
+                == timeline_sorted[i + 1].timeline_start_ms
+            )
+
+    async def test_composition_truncates_to_respect_5_minute_cap(self):
+        """CompositionSpec caps total at 300s. We trim the trailing member
+        so validation doesn't raise."""
+        # 6 × 60s scenes: total 360s before cap.
+        scenes = [
+            _scene(
+                f"vid_scene_{i:03d}",
+                index=i,
+                start_ms=i * 60_000,
+                end_ms=(i + 1) * 60_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                transcript_char_count=100,
+            )
+            for i in range(6)
+        ]
+        render_resp = _render_response()
+        svc, _, _, render_service = _make_service(
+            drive_file=_drive_file(duration_ms=600_000),
+            selector_scenes=scenes,
+            render_response=render_resp,
+        )
+        await svc.auto_render(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoRenderRequest(
+                video_id="vid",
+                mode=ScoringModeRequest.BOTH,
+                count=5,
+                target_duration_sec=60,
+                min_duration_sec=30,
+            ),
+        )
+        payload = render_service.create_render_job.await_args.kwargs["payload"]
+        total_timeline = payload.composition.total_duration_ms
+        assert total_timeline <= 5 * 60 * 1000, (
+            f"composition exceeds 5-min cap: {total_timeline}ms"
+        )
+
+
+class _FailingScorer(SceneScorer):
+    """Always raises ScorerFallbackSignal. Used to test service fallback."""
+    name = "llm"
+
+    async def score(self, scenes, context: ScoringContext):
+        raise ScorerFallbackSignal("simulated_llm_defect")
+
+
+def _make_service_with_scorer(scorer, *, drive_file=None, selector_scenes=None):
+    selector = MagicMock()
+    selector.fetch_candidates = AsyncMock(
+        return_value=CandidateScenesResult(
+            scenes=selector_scenes or [],
+            speaker_transcripts={},
+        )
+    )
+    drive_file_repo = MagicMock()
+    drive_file_repo.get_by_video_id = AsyncMock(return_value=drive_file)
+    shorts_render_service = MagicMock()
+    shorts_render_service.create_render_job = AsyncMock(return_value=None)
+    return ShortsAutoService(
+        selector=selector,
+        drive_file_repo=drive_file_repo,
+        shorts_render_service=shorts_render_service,
+        scorer=scorer,
+    )
+
+
+@pytest.mark.asyncio
+class TestScorerFallback:
+    async def test_failing_primary_scorer_falls_back_to_pure(self):
+        """Service must never 5xx on a scorer defect. LLM failure →
+        pure scorer runs transparently and ``scorer`` field flips to 'pure'.
+        """
+        scenes = [
+            SceneDocument(
+                scene_id=f"vid_scene_{i:03d}",
+                video_id="vid",
+                index=i,
+                start_ms=i * 35_000,
+                end_ms=(i + 1) * 35_000,
+                keyframe_timestamp_ms=i * 35_000 + 15_000,
+                keyword_tags=["cta"],
+                transcript_char_count=150,
+            )
+            for i in range(6)
+        ]
+        svc = _make_service_with_scorer(
+            _FailingScorer(),
+            drive_file=_drive_file(),
+            selector_scenes=scenes,
+        )
+        resp = await svc.auto_select(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoSelectRequest(video_id="vid", mode=ScoringModeRequest.BOTH),
+        )
+        assert resp.scorer == "pure"
+        # Fallback must still produce clips — the service contract says
+        # "never fail the user-facing endpoint on a scorer defect".
+        assert len(resp.clips) > 0
+
+
+@pytest.mark.asyncio
+class TestMemberTranscriptPopulation:
+    """ClipMemberResponse.transcript + scene_caption are populated at the
+    service layer from the SceneDocument map + speaker_transcripts map
+    that the selector hands back. Frontend uses these fields to render
+    the inspector script panel without a second per-scene fetch.
+    """
+
+    async def _select(self, scenes, *, speaker_transcripts=None):
+        svc, *_ = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=scenes,
+            speaker_transcripts=speaker_transcripts or {},
+        )
+        return await svc.auto_select(
+            org_id=uuid4(),
+            user_id=uuid4(),
+            req=AutoSelectRequest(
+                video_id="vid",
+                mode=ScoringModeRequest.BOTH,
+                count=1,
+                prefer_continuous=False,
+            ),
+        )
+
+    async def _build_clip(self, scenes, scene_ids, *, speaker_transcripts=None):
+        """Build a clip via the explicit-scene_ids render path so per-member
+        resolver behavior can be tested without scorer eligibility noise.
+        """
+        svc, *_ = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=scenes,
+            speaker_transcripts=speaker_transcripts or {},
+        )
+        clip = await svc._build_clip_from_scene_ids(
+            org_id=uuid4(),
+            video_id="vid",
+            scene_ids=scene_ids,
+        )
+        assert clip is not None, "render path returned no clip"
+        return clip
+
+    async def test_speaker_transcript_preferred_when_available(self):
+        scenes = [
+            _scene(
+                f"vid_scene_{i:03d}",
+                index=i,
+                start_ms=i * 35_000,
+                end_ms=(i + 1) * 35_000 - 5_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                transcript_norm="raw transcript text",
+            )
+            for i in range(3)
+        ]
+        speaker = {"vid_scene_000": "A 0:00 안녕하세요"}
+        resp = await self._select(scenes, speaker_transcripts=speaker)
+        assert resp.clips
+        # find the member for scene 000
+        all_members = [m for c in resp.clips for m in c.members]
+        m000 = next((m for m in all_members if m.scene_id == "vid_scene_000"), None)
+        assert m000 is not None
+        # speaker_transcript wins over transcript_norm
+        assert m000.transcript == "A 0:00 안녕하세요"
+
+    async def test_falls_back_to_transcript_norm_when_no_speaker(self):
+        scenes = [
+            _scene(
+                "vid_scene_000",
+                index=0,
+                start_ms=0,
+                end_ms=30_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                transcript_norm="normalized text",
+            ),
+            _scene(
+                "vid_scene_001",
+                index=1,
+                start_ms=35_000,
+                end_ms=65_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                transcript_norm="normalized text 2",
+            ),
+        ]
+        resp = await self._select(scenes)
+        all_members = [m for c in resp.clips for m in c.members]
+        for m in all_members:
+            assert m.transcript == (
+                "normalized text" if m.scene_id == "vid_scene_000" else "normalized text 2"
+            )
+
+    async def test_transcript_none_when_all_text_empty(self):
+        scenes = [
+            _scene(
+                f"vid_scene_{i:03d}",
+                index=i,
+                start_ms=i * 35_000,
+                end_ms=(i + 1) * 35_000 - 5_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                transcript_norm="",
+            )
+            for i in range(2)
+        ]
+        resp = await self._select(scenes)
+        all_members = [m for c in resp.clips for m in c.members]
+        # all transcripts empty + no speaker text → None (compact response)
+        assert all(m.transcript is None for m in all_members)
+
+    async def test_scene_caption_populated_when_present(self):
+        scenes = [
+            _scene(
+                "vid_scene_000",
+                index=0,
+                start_ms=0,
+                end_ms=30_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                scene_caption="호스트가 제품을 들고 있다",
+            ),
+            _scene(
+                "vid_scene_001",
+                index=1,
+                start_ms=35_000,
+                end_ms=65_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                # no caption
+            ),
+        ]
+        # Use render path so both scenes are guaranteed in the clip
+        # without depending on scorer eligibility.
+        clip = await self._build_clip(scenes, ["vid_scene_000", "vid_scene_001"])
+        m_by_id = {m.scene_id: m for m in clip.members}
+        assert m_by_id["vid_scene_000"].scene_caption == "호스트가 제품을 들고 있다"
+        # Empty string from SceneDocument default collapses to None in the
+        # response so the wire format stays compact and the FE can use
+        # truthy checks.
+        assert m_by_id["vid_scene_001"].scene_caption is None
+
+    async def test_falls_back_to_transcript_raw_when_norm_is_whitespace(self):
+        """STT artifacts (BOM-only output, padding) can produce a
+        whitespace-only ``transcript_norm`` while ``transcript_raw`` still
+        carries usable text. Resolver must strip both candidates before
+        the priority chain so the blank norm doesn't shadow the real raw.
+        Caught by codex review (2026-04-28) as a [P2] correctness bug.
+        """
+        scenes = [
+            _scene(
+                "vid_scene_000",
+                index=0,
+                start_ms=0,
+                end_ms=30_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                transcript_norm="   \n  ",  # whitespace-only — must NOT win
+                transcript_raw="실제 발화 텍스트",  # must win
+            ),
+            _scene(
+                "vid_scene_001",
+                index=1,
+                start_ms=35_000,
+                end_ms=65_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                transcript_norm="  ",  # non-breaking spaces only
+                transcript_raw="다른 발화",
+            ),
+        ]
+        clip = await self._build_clip(scenes, ["vid_scene_000", "vid_scene_001"])
+        m_by_id = {m.scene_id: m for m in clip.members}
+        assert m_by_id["vid_scene_000"].transcript == "실제 발화 텍스트"
+        assert m_by_id["vid_scene_001"].transcript == "다른 발화"
+
+    async def test_render_path_populates_transcripts_via_explicit_scene_ids(self):
+        """auto_render with explicit scene_ids goes through
+        _build_clip_from_scene_ids which constructs ClipMemberResponse
+        directly. Same enrichment pipeline must apply so the editor deep
+        link surface gets transcripts too.
+        """
+        scenes = [
+            _scene(
+                "vid_scene_000",
+                index=0,
+                start_ms=0,
+                end_ms=30_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                transcript_norm="첫 장면 자막",
+                scene_caption="첫 장면 캡션",
+            ),
+            _scene(
+                "vid_scene_001",
+                index=1,
+                start_ms=35_000,
+                end_ms=65_000,
+                keyword_tags=["cta"],
+                product_tags=["스킨케어"],
+                transcript_norm="둘째 장면 자막",
+            ),
+        ]
+        speaker = {"vid_scene_000": "A 0:00 화자별 자막"}
+        svc, *_ = _make_service(
+            drive_file=_drive_file(),
+            selector_scenes=scenes,
+            speaker_transcripts=speaker,
+            render_response=_render_response(),
+        )
+        # Reach into the private helper directly; auto_render wraps it
+        # but also goes through ShortsRenderService which is mocked, so
+        # exercising the helper isolates the transcript-population path.
+        clip = await svc._build_clip_from_scene_ids(
+            org_id=uuid4(),
+            video_id="vid",
+            scene_ids=["vid_scene_000", "vid_scene_001"],
+        )
+        assert clip is not None
+        m_by_id = {m.scene_id: m for m in clip.members}
+        # Speaker transcript wins for scene 000.
+        assert m_by_id["vid_scene_000"].transcript == "A 0:00 화자별 자막"
+        assert m_by_id["vid_scene_000"].scene_caption == "첫 장면 캡션"
+        # No speaker text for scene 001 → falls back to transcript_norm.
+        assert m_by_id["vid_scene_001"].transcript == "둘째 장면 자막"
+        assert m_by_id["vid_scene_001"].scene_caption is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 PR 4: multi-clip LLM clustering
+# ---------------------------------------------------------------------------
+
+from app.modules.shorts_auto.service import (  # noqa: E402
+    _MAX_CLIP_DURATION_MS,
+    _MAX_CLIPS,
+    _MAX_INTRA_CLIP_GAP_MS,
+    _MIN_CLIPS,
+    _build_llm_clips,
+)
+
+
+def _scored(scene_id: str, *, index: int, start_ms: int, end_ms: int, score: float = 0.5, eligible: bool = True, reasons: list[str] | None = None):
+    """Minimal duck-typed scored-scene shape for the clustering tests.
+
+    Mirrors the (scene, breakdown) attribute access pattern that
+    _build_llm_clips reads. Avoids constructing real contracts
+    SceneDocument + ScoreBreakdown so the tests exercise the
+    clustering logic in isolation.
+    """
+    scene = SimpleNamespace(
+        scene_id=scene_id,
+        index=index,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+    breakdown = SimpleNamespace(
+        eligible=eligible,
+        total=score,
+        reasons=reasons or [],
+    )
+    return SimpleNamespace(scene=scene, breakdown=breakdown)
+
+
+class TestLlmClipClustering:
+    """Verifies _build_llm_clips honors the 3-5 clip floor/ceiling and
+    the gap-based clustering rule. Direct unit tests on the helper —
+    no service mocks needed because clustering is pure-functional."""
+
+    def test_no_picks_returns_empty(self):
+        assert _build_llm_clips([], target_duration_sec=60) == []
+
+    def test_all_picks_close_in_time_collapse_to_one_cluster_then_per_pick_fallback(self):
+        # 3 picks within 30s of each other → 1 cluster naturally.
+        # That's < _MIN_CLIPS, so per-pick fallback kicks in → 3 clips.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000),
+            _scored("vid_scene_001", index=1, start_ms=20_000, end_ms=30_000),
+            _scored("vid_scene_002", index=2, start_ms=40_000, end_ms=50_000),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == _MIN_CLIPS
+        # Each clip is a single member (per-pick fallback).
+        for c in clips:
+            assert len(c.members) == 1
+
+    def test_three_picks_with_large_gaps_yields_three_separate_clips(self):
+        # Each pick separated by > _MAX_INTRA_CLIP_GAP_MS (60s gaps) →
+        # 3 distinct clusters, no fallback needed.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000),
+            _scored("vid_scene_001", index=5, start_ms=120_000, end_ms=130_000),
+            _scored("vid_scene_002", index=10, start_ms=240_000, end_ms=250_000),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == 3
+        # No fallback: each cluster carries one pick. Continuous flag
+        # is True for single-member clusters (no gaps to fail the
+        # adjacency check on).
+        scene_ids = [c.scene_ids[0] for c in clips]
+        assert scene_ids == ["vid_scene_000", "vid_scene_001", "vid_scene_002"]
+
+    def test_seven_well_spaced_picks_are_capped_at_five_top_scoring(self):
+        # 7 picks, each in its own cluster (large gaps). Top 5 by
+        # score are kept, sorted chronologically.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000, score=0.9),
+            _scored("vid_scene_001", index=1, start_ms=60_000, end_ms=70_000, score=0.1),  # low
+            _scored("vid_scene_002", index=2, start_ms=120_000, end_ms=130_000, score=0.8),
+            _scored("vid_scene_003", index=3, start_ms=180_000, end_ms=190_000, score=0.7),
+            _scored("vid_scene_004", index=4, start_ms=240_000, end_ms=250_000, score=0.05),  # low
+            _scored("vid_scene_005", index=5, start_ms=300_000, end_ms=310_000, score=0.6),
+            _scored("vid_scene_006", index=6, start_ms=360_000, end_ms=370_000, score=0.5),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == _MAX_CLIPS
+        # Two lowest-scored picks (scene_001, scene_004) dropped.
+        kept_ids = {c.scene_ids[0] for c in clips}
+        assert "vid_scene_001" not in kept_ids
+        assert "vid_scene_004" not in kept_ids
+        # Survivors emerge in chronological order, not score order.
+        starts = [c.start_ms for c in clips]
+        assert starts == sorted(starts)
+
+    def test_adjacent_picks_in_same_cluster_become_one_clip_with_multi_members(self):
+        # 3 picks within the gap window cluster together. Combined
+        # with 2 more well-spaced picks → 3 total clusters → no
+        # fallback. The first cluster has 3 members.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000),
+            _scored("vid_scene_001", index=1, start_ms=15_000, end_ms=25_000),  # gap=5s
+            _scored("vid_scene_002", index=2, start_ms=30_000, end_ms=40_000),  # gap=5s
+            _scored("vid_scene_010", index=10, start_ms=200_000, end_ms=210_000),  # 160s gap
+            _scored("vid_scene_020", index=20, start_ms=400_000, end_ms=410_000),  # 190s gap
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == 3
+        # First clip has the cluster of 3.
+        assert len(clips[0].members) == 3
+        assert clips[0].scene_ids == ["vid_scene_000", "vid_scene_001", "vid_scene_002"]
+        # Single-pick clusters for the other two.
+        assert len(clips[1].members) == 1
+        assert len(clips[2].members) == 1
+
+    def test_single_pick_returns_single_clip_below_floor(self):
+        # Only 1 pick total — can't manufacture _MIN_CLIPS, accept what we have.
+        picks = [_scored("vid_scene_000", index=0, start_ms=0, end_ms=30_000)]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == 1
+
+    def test_two_picks_returns_two_clips_below_floor(self):
+        # 2 picks — can't manufacture a 3rd. Accept what we have.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=30_000),
+            _scored("vid_scene_001", index=5, start_ms=120_000, end_ms=150_000),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        assert len(clips) == 2
+
+    def test_cluster_duration_capped_at_max_clip_duration_ms(self):
+        # 4 adjacent picks each 30s long = 120s total in one cluster.
+        # Cap is 90s, so trailing pick gets dropped (90s exact = first
+        # 3 fit, 4th would push to 120s).
+        picks = [
+            _scored(f"vid_scene_{i:03d}", index=i, start_ms=i * 35_000, end_ms=i * 35_000 + 30_000)
+            for i in range(4)
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        # All 4 are within the 30s gap window so they cluster together.
+        # Per-pick fallback fires (1 cluster < _MIN_CLIPS=3, but len(picks)=4
+        # ≥ 3, so per-pick fires) → 4 clips, each single-member, each
+        # within the 90s cap.
+        assert len(clips) == 4
+        for c in clips:
+            assert c.duration_ms <= _MAX_CLIP_DURATION_MS
+
+    def test_ineligible_picks_are_filtered(self):
+        # eligible=False picks must not appear in any cluster.
+        picks = [
+            _scored("vid_scene_000", index=0, start_ms=0, end_ms=10_000, eligible=True),
+            _scored("vid_scene_999", index=99, start_ms=20_000, end_ms=30_000, eligible=False),
+            _scored("vid_scene_001", index=1, start_ms=60_000, end_ms=70_000, eligible=True),
+            _scored("vid_scene_002", index=2, start_ms=120_000, end_ms=130_000, eligible=True),
+        ]
+        clips = _build_llm_clips(picks, target_duration_sec=60)
+        all_member_ids = {m.scene_id for c in clips for m in c.members}
+        assert "vid_scene_999" not in all_member_ids
+
+    def test_constants_match_plan_locked_values(self):
+        # Regression guard: the plan locks 3 ≤ N ≤ 5 with a 30s gap
+        # threshold and 90s per-clip cap. Keep these honest so a
+        # casual edit doesn't silently widen the contract.
+        assert _MIN_CLIPS == 3
+        assert _MAX_CLIPS == 5
+        assert _MAX_INTRA_CLIP_GAP_MS == 30_000
+        assert _MAX_CLIP_DURATION_MS == 90_000

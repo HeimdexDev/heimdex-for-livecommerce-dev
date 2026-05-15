@@ -1,0 +1,129 @@
+{
+  "name": "synthetic_three_segment_60s",
+  "video_id": "gd_synth_001",
+  "llm_label": "달심",
+  "spoken_aliases": ["이 드라이기"],
+  "target_duration_ms": 60000,
+  "_notes": "Synthetic fixture for the storyboard eval harness. Three product-mention segments distributed across a 30-minute source video. The picker should pull HOOK from segment[0], INTRO from a label-matching chunk in segment[0] or segment[1], DETAIL from the highest-importance middle chunks, and CTA from segment[2] (which has has_cta=true). Curated by hand 2026-05-07; bump when the heuristic picker's slot definitions change.",
+  "scored_chunks": [
+    {
+      "start_ms": 0,
+      "end_ms": 20000,
+      "text": "안녕하세요 여러분 오늘은 정말 특별한 제품 보여드릴게요",
+      "hook_score": 0.92,
+      "has_cta": false,
+      "importance_score": 0.55
+    },
+    {
+      "start_ms": 20000,
+      "end_ms": 40000,
+      "text": "달심 드라이기 정말 좋아요 한번 써보세요",
+      "hook_score": 0.65,
+      "has_cta": false,
+      "importance_score": 0.78
+    },
+    {
+      "start_ms": 600000,
+      "end_ms": 620000,
+      "text": "달심 사용법을 자세히 보여드릴게요 이렇게 잡고 천천히",
+      "hook_score": 0.6,
+      "has_cta": false,
+      "importance_score": 0.91
+    },
+    {
+      "start_ms": 620000,
+      "end_ms": 640000,
+      "text": "이 드라이기는 음이온이 풍부해서 머릿결이 부드러워져요",
+      "hook_score": 0.55,
+      "has_cta": false,
+      "importance_score": 0.85
+    },
+    {
+      "start_ms": 1200000,
+      "end_ms": 1220000,
+      "text": "지금 구매하시면 30프로 할인입니다 빠르게 들어오세요",
+      "hook_score": 0.78,
+      "has_cta": true,
+      "importance_score": 0.7
+    },
+    {
+      "start_ms": 1220000,
+      "end_ms": 1240000,
+      "text": "마지막 기회에요 댓글 남겨주시면 추가 혜택 드려요",
+      "hook_score": 0.7,
+      "has_cta": true,
+      "importance_score": 0.6
+    }
+  ],
+  "segments": [
+    {
+      "start_ms": 0,
+      "end_ms": 40000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_001_scene_001",
+          "start_ms": 0,
+          "end_ms": 20000,
+          "transcript_text": "안녕하세요 여러분 오늘은 정말 특별한 제품 보여드릴게요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_001_scene_002",
+          "start_ms": 20000,
+          "end_ms": 40000,
+          "transcript_text": "달심 드라이기 정말 좋아요 한번 써보세요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 600000,
+      "end_ms": 640000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_001_scene_030",
+          "start_ms": 600000,
+          "end_ms": 620000,
+          "transcript_text": "달심 사용법을 자세히 보여드릴게요 이렇게 잡고 천천히",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_001_scene_031",
+          "start_ms": 620000,
+          "end_ms": 640000,
+          "transcript_text": "이 드라이기는 음이온이 풍부해서 머릿결이 부드러워져요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 1200000,
+      "end_ms": 1240000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_001_scene_060",
+          "start_ms": 1200000,
+          "end_ms": 1220000,
+          "transcript_text": "지금 구매하시면 30프로 할인입니다 빠르게 들어오세요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_001_scene_061",
+          "start_ms": 1220000,
+          "end_ms": 1240000,
+          "transcript_text": "마지막 기회에요 댓글 남겨주시면 추가 혜택 드려요",
+          "speaker_transcript": ""
+        }
+      ]
+    }
+  ],
+  "ideal": {
+    "hook": {"source_start_ms": 0, "source_end_ms": 8000},
+    "intro": {"source_start_ms": 20000, "source_end_ms": 32000},
+    "detail": [
+      {"source_start_ms": 600000, "source_end_ms": 612500},
+      {"source_start_ms": 620000, "source_end_ms": 632500}
+    ],
+    "cta": {"source_start_ms": 1220000, "source_end_ms": 1228000}
+  }
+}

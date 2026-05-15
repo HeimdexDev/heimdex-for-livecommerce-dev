@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision: str = "002_add_auth0_sub"
-down_revision: Union[str, None] = "001_initial_schema"
+down_revision: Union[str, None] = "001"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

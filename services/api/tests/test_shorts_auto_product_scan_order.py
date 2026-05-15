@@ -1,0 +1,1325 @@
+"""Phase 4 PR #2 — scan-order service tests.
+
+Covers the wizard's parent-job orchestration plumbing:
+
+* ``compute_settings_hash`` — canonical-JSON SHA256 (codex Q3).
+* ``_validate_scan_order_inputs`` — aggregate-output cap + time-range
+  sanity (codex Q5).
+* ``ProductScanService.enqueue_scan_order`` — pre-flight gates,
+  idempotency via settings_hash, parent-row creation.
+* ``ProductScanService.get_scan_order_status`` — aggregate shape
+  with rollup counters.
+* ``ProductScanService.cancel_scan_order`` — cascading cancel.
+* ``ProductScanService.commit_scan_order`` — Phase 6 stub.
+
+NOT in CI allowlist (consistent with the rest of the
+test_shorts_auto_product_*.py suite).
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock
+from uuid import UUID, uuid4
+
+import pytest
+from fastapi import HTTPException
+
+from app.modules.shorts_auto_product.models import (
+    SCAN_MODE_RENDER_CHILD,
+    SCAN_MODE_SCAN_ORDER,
+    SCAN_STAGE_DONE,
+    SCAN_STAGE_FAILED,
+    SCAN_STAGE_QUEUED,
+)
+from app.modules.shorts_auto_product.schemas import ScanOrderCreateRequest
+from app.modules.shorts_auto_product.service import (
+    ProductScanService,
+    _validate_scan_order_inputs,
+    compute_settings_hash,
+)
+
+
+# ----------------------------------------------------------------------
+# helpers
+# ----------------------------------------------------------------------
+
+
+def _settings_stub(**overrides):
+    """Minimal Settings stub for service construction."""
+    s = MagicMock()
+    s.auto_shorts_product_v2_enabled = True
+    s.auto_shorts_product_v2_rollout_pct = 100
+    s.auto_shorts_product_v2_daily_budget_usd = 50.0
+    s.auto_shorts_product_v2_max_concurrent_per_org = 3
+    s.auto_shorts_product_v2_scan_order_idempotency_seconds = 60
+    s.auto_shorts_product_v2_tracker_version = "v1.0"
+    s.auto_shorts_product_v2_enumeration_prompt_version = "v1.0"
+    for k, v in overrides.items():
+        setattr(s, k, v)
+    return s
+
+
+def _build_service(*, settings=None):
+    """Construct a ProductScanService with all repos mocked."""
+    svc = ProductScanService(
+        session=MagicMock(),
+        settings=settings or _settings_stub(),
+    )
+    svc.session.flush = AsyncMock()
+    # get_scan_order_status batches a select on ShortsRenderJob.status
+    # since v0.16.1 — the mock needs to await-return a result whose
+    # ``.all()`` yields an empty list (no render statuses to surface
+    # in unit tests; the assertion-on-children focuses on stage logic).
+    _empty_result = MagicMock()
+    _empty_result.all = MagicMock(return_value=[])
+    svc.session.execute = AsyncMock(return_value=_empty_result)
+    svc.catalog_repo = MagicMock()
+    svc.catalog_repo.list_active_by_video = AsyncMock(return_value=[])
+    svc.appearance_repo = MagicMock()
+    svc.job_repo = MagicMock()
+    svc.cost_repo = MagicMock()
+    svc.cost_repo.get_today_cost = AsyncMock(return_value=Decimal("0"))
+    svc.job_repo.count_active_for_org = AsyncMock(return_value=0)
+    svc.job_repo.find_recent_scan_order_duplicate = AsyncMock(return_value=None)
+    return svc
+
+
+def _scan_order_body(**overrides):
+    defaults = {
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+    }
+    defaults.update(overrides)
+    return ScanOrderCreateRequest(**defaults)
+
+
+# ======================================================================
+# compute_settings_hash — canonical-JSON SHA256
+# ======================================================================
+
+
+def test_settings_hash_is_deterministic():
+    """Same inputs → same hash. Output is a 64-char hex digest."""
+    args = {
+        "video_id": UUID("11111111-1111-1111-1111-111111111111"),
+        "user_id": UUID("22222222-2222-2222-2222-222222222222"),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "active_catalog_entry_ids": ["aaa", "bbb", "ccc"],
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    h1 = compute_settings_hash(**args)
+    h2 = compute_settings_hash(**args)
+    assert h1 == h2
+    assert len(h1) == 64
+    assert all(c in "0123456789abcdef" for c in h1)
+
+
+def test_settings_hash_intent_separates_preview_from_commit():
+    """Codex Q3: preview and commit MUST produce different hashes
+    even with otherwise-identical inputs.
+    """
+    args = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "active_catalog_entry_ids": [],
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    preview_hash = compute_settings_hash(intent="preview", **args)
+    commit_hash = compute_settings_hash(intent="commit", **args)
+    assert preview_hash != commit_hash
+
+
+def test_settings_hash_catalog_set_changes_hash():
+    """Rescan that produces new catalog entries must change the hash
+    (the catalog set is the version signal — codex confirmed this
+    avoids needing a separate catalog_version column).
+    """
+    base = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    h_a = compute_settings_hash(active_catalog_entry_ids=["e1", "e2"], **base)
+    h_b = compute_settings_hash(active_catalog_entry_ids=["e1", "e2", "e3"], **base)
+    assert h_a != h_b
+
+
+def test_settings_hash_tracker_version_changes_hash():
+    """Codex Q3: model bumps invalidate dedupe so re-running after
+    a deploy gets fresh output instead of stale cached results.
+    """
+    base = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "active_catalog_entry_ids": [],
+        "enumeration_prompt_version": "v1.0",
+    }
+    h_old = compute_settings_hash(tracker_version="v1.0", **base)
+    h_new = compute_settings_hash(tracker_version="v2.0", **base)
+    assert h_old != h_new
+
+
+def test_settings_hash_canonical_json_is_key_order_insensitive():
+    """Canonical JSON sorts keys, so dict ordering at the call site
+    must not affect the hash. Verified by inspecting that the
+    function is deterministic across multiple invocations with the
+    same kwargs (Python dict order is insertion-sensitive in 3.7+).
+    """
+    args_1 = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "active_catalog_entry_ids": [],
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    h1 = compute_settings_hash(**args_1)
+    # Reconstruct with reversed kwarg order
+    args_2 = dict(reversed(list(args_1.items())))
+    h2 = compute_settings_hash(**args_2)
+    assert h1 == h2
+
+
+def test_settings_hash_omits_selected_entry_when_none():
+    """Backward compat: scan orders submitted without product picks
+    must hash IDENTICALLY to the same call without the parameter, so
+    live idempotency keys for whole-catalog mode don't churn during
+    deploy."""
+    base = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "active_catalog_entry_ids": ["aaa"],
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    h_no_kwarg = compute_settings_hash(**base)
+    h_explicit_none = compute_settings_hash(selected_catalog_entry_ids=None, **base)
+    h_empty_list = compute_settings_hash(selected_catalog_entry_ids=[], **base)
+    # All three forms (omitted / None / empty list) collapse to the
+    # same whole-catalog hash since the field is only added when
+    # populated.
+    assert h_no_kwarg == h_explicit_none == h_empty_list
+
+
+def test_settings_hash_changes_when_user_picks_a_product():
+    """Picking a product semantically narrows the job — must produce a
+    distinct dedupe key from the same wizard inputs without a pick."""
+    base = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "active_catalog_entry_ids": ["aaa", "bbb"],
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    h_unpicked = compute_settings_hash(**base)
+    h_picked_a = compute_settings_hash(selected_catalog_entry_ids=["aaa"], **base)
+    h_picked_b = compute_settings_hash(selected_catalog_entry_ids=["bbb"], **base)
+    # Three distinct intents → three distinct hashes.
+    assert len({h_unpicked, h_picked_a, h_picked_b}) == 3
+
+
+def test_settings_hash_stable_across_input_order_for_multi_pick():
+    """PR 2: multi-product picks must hash identically regardless of
+    input order, so the wizard's UI cosmetic ordering doesn't break
+    idempotency dedupe within the 60s window."""
+    base = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "active_catalog_entry_ids": ["aaa", "bbb", "ccc"],
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    h_abc = compute_settings_hash(
+        selected_catalog_entry_ids=["aaa", "bbb", "ccc"], **base,
+    )
+    h_cba = compute_settings_hash(
+        selected_catalog_entry_ids=["ccc", "bbb", "aaa"], **base,
+    )
+    h_bca = compute_settings_hash(
+        selected_catalog_entry_ids=["bbb", "ccc", "aaa"], **base,
+    )
+    assert h_abc == h_cba == h_bca
+
+
+def test_settings_hash_distinguishes_different_product_sets():
+    """PR 2: different SETS of picked products must hash differently.
+    Same set in different orders is fine (above test), but different
+    set membership is a different intent."""
+    base = {
+        "video_id": uuid4(),
+        "user_id": uuid4(),
+        "length_seconds": 60,
+        "requested_count": 5,
+        "time_range_start_ms": None,
+        "time_range_end_ms": None,
+        "product_distribution": "single",
+        "language": "ko",
+        "intent": "commit",
+        "active_catalog_entry_ids": ["aaa", "bbb", "ccc"],
+        "tracker_version": "v1.0",
+        "enumeration_prompt_version": "v1.0",
+    }
+    h_ab = compute_settings_hash(selected_catalog_entry_ids=["aaa", "bbb"], **base)
+    h_ac = compute_settings_hash(selected_catalog_entry_ids=["aaa", "ccc"], **base)
+    h_bc = compute_settings_hash(selected_catalog_entry_ids=["bbb", "ccc"], **base)
+    h_abc = compute_settings_hash(
+        selected_catalog_entry_ids=["aaa", "bbb", "ccc"], **base,
+    )
+    assert len({h_ab, h_ac, h_bc, h_abc}) == 4
+
+
+# ======================================================================
+# _validate_scan_order_inputs — codex Q5 aggregate cap + time range
+# ======================================================================
+
+
+def test_validate_aggregate_cap_under_limit_passes():
+    """count=15 × length=120 = 1800 — exactly at the cap, accepted."""
+    body = _scan_order_body(requested_count=15, length_seconds=120)
+    _validate_scan_order_inputs(body=body)
+
+
+def test_validate_aggregate_cap_over_limit_422():
+    """count=20 × length=120 = 2400 → 422 with clear message."""
+    body = _scan_order_body(requested_count=20, length_seconds=120)
+    with pytest.raises(HTTPException) as exc:
+        _validate_scan_order_inputs(body=body)
+    assert exc.value.status_code == 422
+    assert "1800" in str(exc.value.detail)
+
+
+def test_validate_time_range_partial_422():
+    """Setting only start (not end) — 422."""
+    body = _scan_order_body(time_range_start_ms=1000)
+    with pytest.raises(HTTPException) as exc:
+        _validate_scan_order_inputs(body=body)
+    assert exc.value.status_code == 422
+
+
+def test_validate_time_range_inverted_422():
+    """end <= start — 422."""
+    body = _scan_order_body(
+        time_range_start_ms=5000,
+        time_range_end_ms=2000,
+        requested_count=2,  # so the per-short check doesn't fire first
+    )
+    with pytest.raises(HTTPException) as exc:
+        _validate_scan_order_inputs(body=body)
+    assert exc.value.status_code == 422
+
+
+def test_validate_time_range_too_short_per_short_422():
+    """count=10 shorts × 60s each = 600s required source.
+    Range = 300s → 30s/short → 422.
+    """
+    body = _scan_order_body(
+        length_seconds=60,
+        requested_count=10,
+        time_range_start_ms=0,
+        time_range_end_ms=300_000,
+    )
+    with pytest.raises(HTTPException) as exc:
+        _validate_scan_order_inputs(body=body)
+    assert exc.value.status_code == 422
+    assert "source" in str(exc.value.detail)
+
+
+def test_validate_time_range_sufficient_passes():
+    """count=5 × 60s each = 300s required.
+    Range = 600s → 120s/short → passes.
+    """
+    body = _scan_order_body(
+        length_seconds=60,
+        requested_count=5,
+        time_range_start_ms=0,
+        time_range_end_ms=600_000,
+    )
+    _validate_scan_order_inputs(body=body)
+
+
+# ======================================================================
+# ProductScanService.enqueue_scan_order
+# ======================================================================
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_happy_path_creates_parent():
+    """End-to-end: validation passes → settings_hash computed →
+    no dedupe match → parent row created → response returned."""
+    svc = _build_service()
+    org_id = uuid4()
+    video_id = uuid4()
+    user_id = uuid4()
+
+    parent = MagicMock()
+    parent.id = uuid4()
+    svc.job_repo.create_scan_order_parent = AsyncMock(return_value=parent)
+
+    body = _scan_order_body(
+        length_seconds=60, requested_count=5,
+        product_distribution="single", language="ko", intent="commit",
+    )
+    resp = await svc.enqueue_scan_order(
+        org_id=org_id, video_id=video_id, user_id=user_id, body=body,
+    )
+    assert resp.parent_job_id == parent.id
+    assert resp.deduped is False
+    # Verify settings_hash was passed and is a 64-char hex string.
+    call_kwargs = svc.job_repo.create_scan_order_parent.await_args.kwargs
+    assert len(call_kwargs["settings_hash"]) == 64
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_dedupes_within_window():
+    """Existing parent with matching settings_hash → return existing
+    job_id with deduped=True; no new row created.
+    """
+    svc = _build_service()
+    org_id = uuid4()
+    user_id = uuid4()
+    existing_parent = MagicMock()
+    existing_parent.id = uuid4()
+    svc.job_repo.find_recent_scan_order_duplicate = AsyncMock(
+        return_value=existing_parent,
+    )
+    svc.job_repo.create_scan_order_parent = AsyncMock()
+
+    resp = await svc.enqueue_scan_order(
+        org_id=org_id, video_id=uuid4(), user_id=user_id, body=_scan_order_body(),
+    )
+    assert resp.deduped is True
+    assert resp.parent_job_id == existing_parent.id
+    svc.job_repo.create_scan_order_parent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_aggregate_cap_422():
+    svc = _build_service()
+    body = _scan_order_body(requested_count=20, length_seconds=120)
+    with pytest.raises(HTTPException) as exc:
+        await svc.enqueue_scan_order(
+            org_id=uuid4(), video_id=uuid4(), user_id=uuid4(), body=body,
+        )
+    assert exc.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_budget_402():
+    settings = _settings_stub(auto_shorts_product_v2_daily_budget_usd=10.0)
+    svc = _build_service(settings=settings)
+    svc.cost_repo.get_today_cost = AsyncMock(return_value=Decimal("10.5"))
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.enqueue_scan_order(
+            org_id=uuid4(), video_id=uuid4(), user_id=uuid4(), body=_scan_order_body(),
+        )
+    assert exc.value.status_code == 402
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_concurrency_429():
+    svc = _build_service()
+    svc.job_repo.count_active_for_org = AsyncMock(return_value=3)
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.enqueue_scan_order(
+            org_id=uuid4(), video_id=uuid4(), user_id=uuid4(), body=_scan_order_body(),
+        )
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_disabled_404():
+    settings = _settings_stub(auto_shorts_product_v2_enabled=False)
+    svc = _build_service(settings=settings)
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.enqueue_scan_order(
+            org_id=uuid4(), video_id=uuid4(), user_id=uuid4(), body=_scan_order_body(),
+        )
+    assert exc.value.status_code == 404
+
+
+# ======================================================================
+# ProductScanService.get_scan_order_status
+# ======================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_scan_order_status_aggregates_children():
+    """Parent + 3 children (1 done, 1 failed, 1 in-flight) → response
+    carries rollup counters for the wizard's progress UI.
+    """
+    svc = _build_service()
+    parent_id = uuid4()
+    org_id = uuid4()
+
+    parent = MagicMock()
+    parent.id = parent_id
+    parent.mode = SCAN_MODE_SCAN_ORDER
+    parent.catalog_entry_id = None
+    parent.parent_job_id = None
+    parent.shorts_index = None
+    parent.render_job_id = None
+    parent.stage = "fanned_out"
+    parent.progress_pct = 100
+    parent.progress_label = None
+    parent.completed_at = None
+    parent.failed_at = None
+    parent.cancelled_at = None
+    parent.error_code = None
+    parent.error_message = None
+    parent.cost_usd_estimate = Decimal("0.5")
+    # Wizard-input columns surfaced via CriteriaSummary.
+    parent.length_seconds = 30
+    parent.requested_count = 3
+    parent.time_range_start_ms = 0
+    parent.time_range_end_ms = 90_000
+    parent.product_distribution = "multi"
+    parent.intent = "commit"
+
+    def _child(idx, *, stage, completed_at=None, failed_at=None):
+        c = MagicMock()
+        c.id = uuid4()
+        c.mode = SCAN_MODE_RENDER_CHILD
+        c.catalog_entry_id = None
+        c.parent_job_id = parent_id
+        c.shorts_index = idx
+        c.render_job_id = uuid4() if completed_at else None
+        c.stage = stage
+        c.progress_pct = 100 if completed_at else (50 if not failed_at else 0)
+        c.progress_label = None
+        c.completed_at = completed_at
+        c.failed_at = failed_at
+        c.cancelled_at = None
+        c.error_code = None
+        c.error_message = None
+        c.cost_usd_estimate = Decimal("0")
+        return c
+
+    from datetime import datetime, timezone
+    children = [
+        _child(1, stage=SCAN_STAGE_DONE, completed_at=datetime.now(timezone.utc)),
+        _child(2, stage=SCAN_STAGE_FAILED, failed_at=datetime.now(timezone.utc)),
+        _child(3, stage="rendering"),
+    ]
+    svc.job_repo.get_scan_order_with_children = AsyncMock(
+        return_value=(parent, children),
+    )
+
+    resp = await svc.get_scan_order_status(
+        org_id=org_id, parent_job_id=parent_id,
+    )
+    assert resp.parent.kind == "scan_order"
+    assert resp.parent.render_job_id is None  # Q4 invariant
+    assert len(resp.children) == 3
+    assert resp.children_total == 3
+    assert resp.children_complete == 1
+    assert resp.children_failed == 1
+    # CriteriaSummary mirrors the wizard-input columns on the parent.
+    assert resp.criteria is not None
+    assert resp.criteria.length_seconds == 30
+    assert resp.criteria.requested_count == 3
+    assert resp.criteria.time_range_start_ms == 0
+    assert resp.criteria.time_range_end_ms == 90_000
+    assert resp.criteria.product_distribution == "multi"
+    assert resp.criteria.intent == "commit"
+
+
+@pytest.mark.asyncio
+async def test_get_scan_order_status_404_when_missing():
+    svc = _build_service()
+    svc.job_repo.get_scan_order_with_children = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.get_scan_order_status(
+            org_id=uuid4(), parent_job_id=uuid4(),
+        )
+    assert exc.value.status_code == 404
+
+
+# ======================================================================
+# ProductScanService.cancel_scan_order
+# ======================================================================
+
+
+@pytest.mark.asyncio
+async def test_cancel_scan_order_cascades():
+    svc = _build_service()
+    parent = MagicMock()
+    parent.mode = SCAN_MODE_SCAN_ORDER
+    svc.job_repo.get = AsyncMock(return_value=parent)
+    # 1 parent + 3 children all transitioned
+    svc.job_repo.cancel_scan_order = AsyncMock(return_value=4)
+
+    await svc.cancel_scan_order(org_id=uuid4(), parent_job_id=uuid4())
+    svc.job_repo.cancel_scan_order.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cancel_scan_order_404_when_missing():
+    svc = _build_service()
+    svc.job_repo.get = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.cancel_scan_order(org_id=uuid4(), parent_job_id=uuid4())
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cancel_scan_order_404_when_already_terminal():
+    svc = _build_service()
+    parent = MagicMock()
+    parent.mode = SCAN_MODE_SCAN_ORDER
+    svc.job_repo.get = AsyncMock(return_value=parent)
+    svc.job_repo.cancel_scan_order = AsyncMock(return_value=0)  # nothing to cancel
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.cancel_scan_order(org_id=uuid4(), parent_job_id=uuid4())
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cancel_scan_order_404_when_wrong_mode():
+    """Targeting a non-scan_order job for cancel via this endpoint
+    must 404 (legacy enumerate / clip jobs use the existing
+    /jobs/{id}/cancel endpoint)."""
+    svc = _build_service()
+    parent = MagicMock()
+    parent.mode = "enumerate"  # not scan_order
+    svc.job_repo.get = AsyncMock(return_value=parent)
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.cancel_scan_order(org_id=uuid4(), parent_job_id=uuid4())
+    assert exc.value.status_code == 404
+
+
+# ======================================================================
+# ProductScanService.commit_scan_order — Phase 6 stub
+# ======================================================================
+
+
+@pytest.mark.asyncio
+async def test_commit_scan_order_returns_501():
+    svc = _build_service()
+    with pytest.raises(HTTPException) as exc:
+        await svc.commit_scan_order(
+            org_id=uuid4(),
+            parent_job_id=uuid4(),
+            selected_window_ids=None,
+        )
+    assert exc.value.status_code == 501
+    assert "Phase 6" in exc.value.detail
+
+
+# ======================================================================
+# PR 1 of multi-product wizard — single-pick propagation to children
+# ======================================================================
+#
+# The pre-PR-1 behavior: parent.catalog_entry_id was set when the user
+# picked a product, but the api-process runner ignored it (latent bug).
+# PR 1 propagates the pick to every child at fan-out time so the runner
+# honors it. These tests verify the propagation in the STT-mode service
+# path; the actual runner-side use is tested in
+# ``test_shorts_auto_product_child_runner.py``.
+#
+# Plan: ``.claude/plans/wizard-multi-product-select.md`` (PR 1 of 3).
+
+
+def _stt_settings(**overrides):
+    """Settings stub configured for the STT inline fan-out path."""
+    return _settings_stub(
+        auto_shorts_product_v2_track_mode="stt",
+        auto_shorts_product_v2_publish_scan_order_enabled=False,
+        **overrides,
+    )
+
+
+def _stt_service():
+    """Service with STT-mode settings + a fake parent factory wired so
+    enqueue_scan_order's STT branch fans out without raising."""
+    svc = _build_service(settings=_stt_settings())
+    fake_parent = MagicMock(id=uuid4(), requested_count=5)
+    svc.job_repo.create_scan_order_parent = AsyncMock(return_value=fake_parent)
+    svc.job_repo.create_render_children = AsyncMock(return_value=[])
+    svc.job_repo.transition_parent_to_fanned_out_unclaimed = AsyncMock()
+    # Wizard's product-select prerequisite: catalog must contain the picked entry.
+    # Mocked at body-validation time via catalog_repo.get returning a non-rejected entry.
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=None,  # set per-test if a body has video_id check
+        rejected_at=None,
+    ))
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_stt_fanout_no_pick_passes_no_assignments():
+    """Whole-catalog mode (legacy default): body.catalog_entry_id=None
+    → ``create_render_children`` is called WITHOUT
+    ``catalog_entry_assignments`` (or with None). Children stay NULL,
+    runner falls back to picker round-robin (preserved behavior)."""
+    svc = _stt_service()
+    body = _scan_order_body(catalog_entry_id=None)
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=uuid4(), user_id=uuid4(), body=body,
+    )
+
+    svc.job_repo.create_render_children.assert_awaited_once()
+    call_kwargs = svc.job_repo.create_render_children.await_args.kwargs
+    assert call_kwargs.get("catalog_entry_assignments") is None, (
+        f"Expected no assignments for whole-catalog mode, got: {call_kwargs}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stt_fanout_single_pick_propagates_to_every_child():
+    """Single-pick wizard: body.catalog_entry_id=X, requested_count=5
+    → ``catalog_entry_assignments=[X, X, X, X, X]`` so each child
+    carries the pick. Fixes the latent single-pick bug — without this,
+    children get NULL and the runner round-robins across the whole
+    catalog."""
+    svc = _stt_service()
+    picked = uuid4()
+    video_id = uuid4()
+    # catalog_repo.get must return a row that matches video_id and is not rejected.
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=video_id, rejected_at=None,
+    ))
+    body = _scan_order_body(catalog_entry_id=picked, requested_count=5)
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+    )
+
+    svc.job_repo.create_render_children.assert_awaited_once()
+    call_kwargs = svc.job_repo.create_render_children.await_args.kwargs
+    assignments = call_kwargs.get("catalog_entry_assignments")
+    assert assignments == [picked] * 5, (
+        f"Expected uniform [X]*5 assignment for single-pick body, got: {assignments}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stt_fanout_single_pick_count_matches_requested_count():
+    """Edge: requested_count=1 → single-element list of one. Confirms
+    no off-by-one in the propagation."""
+    svc = _stt_service()
+    picked = uuid4()
+    video_id = uuid4()
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=video_id, rejected_at=None,
+    ))
+    body = _scan_order_body(catalog_entry_id=picked, requested_count=1)
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+    )
+
+    call_kwargs = svc.job_repo.create_render_children.await_args.kwargs
+    assert call_kwargs.get("catalog_entry_assignments") == [picked]
+
+
+# ======================================================================
+# PR 2 of multi-product wizard — list field, normalizer, round-robin
+# ======================================================================
+#
+# Plan: ``.claude/plans/wizard-multi-product-select.md`` (PR 2 of 3).
+
+
+# ----- _normalize_catalog_selection helper (pure) -----
+
+
+def test_normalize_returns_empty_when_neither_field_set():
+    from app.modules.shorts_auto_product.service import (
+        _normalize_catalog_selection,
+    )
+    body = _scan_order_body()  # no catalog_entry_id, default catalog_entry_ids=[]
+    assert _normalize_catalog_selection(body=body) == []
+
+
+def test_normalize_promotes_legacy_single_pick_to_list_of_one():
+    from app.modules.shorts_auto_product.service import (
+        _normalize_catalog_selection,
+    )
+    pick = uuid4()
+    body = _scan_order_body(catalog_entry_id=pick)
+    assert _normalize_catalog_selection(body=body) == [pick]
+
+
+def test_normalize_returns_sorted_deduped_list_field():
+    from app.modules.shorts_auto_product.service import (
+        _normalize_catalog_selection,
+    )
+    a, b, c = sorted([uuid4(), uuid4(), uuid4()])
+    # User submits in random order with a duplicate
+    body = _scan_order_body(catalog_entry_ids=[c, a, b, a])
+    result = _normalize_catalog_selection(body=body)
+    assert result == [a, b, c]  # sorted, deduped
+
+
+def test_normalize_rejects_both_fields_set_with_422():
+    from app.modules.shorts_auto_product.service import (
+        _normalize_catalog_selection,
+    )
+    body = _scan_order_body(
+        catalog_entry_id=uuid4(),
+        catalog_entry_ids=[uuid4()],
+    )
+    with pytest.raises(HTTPException) as exc:
+        _normalize_catalog_selection(body=body)
+    assert exc.value.status_code == 422
+    assert "not both" in exc.value.detail
+
+
+# ----- list shape validation in _validate_scan_order_inputs -----
+
+
+def test_validate_rejects_list_longer_than_requested_count():
+    body = _scan_order_body(
+        requested_count=2,
+        catalog_entry_ids=[uuid4(), uuid4(), uuid4()],
+    )
+    with pytest.raises(HTTPException) as exc:
+        _validate_scan_order_inputs(body=body)
+    assert exc.value.status_code == 422
+    assert "each picked product must get at least one short" in exc.value.detail
+
+
+def test_validate_rejects_duplicate_ids_in_list():
+    dup = uuid4()
+    body = _scan_order_body(
+        requested_count=3,
+        catalog_entry_ids=[dup, uuid4(), dup],
+    )
+    with pytest.raises(HTTPException) as exc:
+        _validate_scan_order_inputs(body=body)
+    assert exc.value.status_code == 422
+    assert "duplicates" in exc.value.detail
+
+
+def test_validate_accepts_list_at_cap():
+    """Edge: len(list) == requested_count is the allowed maximum."""
+    body = _scan_order_body(
+        requested_count=3,
+        catalog_entry_ids=[uuid4(), uuid4(), uuid4()],
+    )
+    # Should NOT raise.
+    _validate_scan_order_inputs(body=body)
+
+
+# ----- enqueue_scan_order behavior with list field -----
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_list_field_propagates_round_robin():
+    """K=2 picks, N=5 shorts → assignments cycle through sorted picks:
+    [A, B, A, B, A] (sorted UUID order)."""
+    svc = _stt_service()
+    a, b = sorted([uuid4(), uuid4()])
+    video_id = uuid4()
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=video_id, rejected_at=None,
+    ))
+    body = _scan_order_body(
+        catalog_entry_ids=[b, a],  # user-submitted in arbitrary order
+        requested_count=5,
+    )
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+    )
+
+    call_kwargs = svc.job_repo.create_render_children.await_args.kwargs
+    assignments = call_kwargs.get("catalog_entry_assignments")
+    # Sorted (a, b) → indices 0..4 cycle: [a, b, a, b, a]
+    assert assignments == [a, b, a, b, a]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_list_field_3_picks_3_shorts_each_distinct():
+    """K=N: each short is about exactly one distinct product. Plan
+    example: 3 shorts + 3 products."""
+    svc = _stt_service()
+    a, b, c = sorted([uuid4(), uuid4(), uuid4()])
+    video_id = uuid4()
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=video_id, rejected_at=None,
+    ))
+    body = _scan_order_body(
+        catalog_entry_ids=[c, a, b],
+        requested_count=3,
+    )
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+    )
+
+    call_kwargs = svc.job_repo.create_render_children.await_args.kwargs
+    assignments = call_kwargs.get("catalog_entry_assignments")
+    assert assignments == [a, b, c]
+    # All unique → each child gets its own product
+    assert len(set(assignments)) == 3
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_legacy_field_still_propagates_uniformly():
+    """Back-compat: legacy single-pick body still works exactly like
+    pre-PR-2 (every child gets the same picked id)."""
+    svc = _stt_service()
+    pick = uuid4()
+    video_id = uuid4()
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=video_id, rejected_at=None,
+    ))
+    body = _scan_order_body(catalog_entry_id=pick, requested_count=4)
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+    )
+
+    call_kwargs = svc.job_repo.create_render_children.await_args.kwargs
+    assert call_kwargs.get("catalog_entry_assignments") == [pick] * 4
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_rejects_sam2_track_mode_with_multi_pick():
+    """SAM2 worker doesn't propagate per-child catalog_entry_id; the
+    API rejects multi-select submissions for SAM2 track mode."""
+    svc = _build_service(settings=_settings_stub(
+        auto_shorts_product_v2_track_mode="sam2",
+        auto_shorts_product_v2_multi_select_enabled=True,
+        auto_shorts_product_v2_publish_scan_order_enabled=False,
+    ))
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=None, rejected_at=None,
+    ))
+    body = _scan_order_body(
+        catalog_entry_ids=[uuid4(), uuid4()],
+        requested_count=3,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.enqueue_scan_order(
+            org_id=uuid4(), video_id=uuid4(), user_id=uuid4(), body=body,
+        )
+    assert exc.value.status_code == 422
+    assert "STT track mode" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_rejects_multi_pick_when_flag_disabled():
+    """Feature flag emergency disable: multi-select rejected with 422.
+    Single-pick still works through either field."""
+    svc = _build_service(settings=_settings_stub(
+        auto_shorts_product_v2_track_mode="stt",
+        auto_shorts_product_v2_multi_select_enabled=False,
+        auto_shorts_product_v2_publish_scan_order_enabled=False,
+    ))
+    body = _scan_order_body(
+        catalog_entry_ids=[uuid4(), uuid4()],
+        requested_count=3,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.enqueue_scan_order(
+            org_id=uuid4(), video_id=uuid4(), user_id=uuid4(), body=body,
+        )
+    assert exc.value.status_code == 422
+    assert "currently disabled" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_single_pick_via_list_works_under_sam2_and_flag_off():
+    """Edge: K=1 via the new list field is semantically a single-pick.
+    Must NOT trigger the SAM2 or flag-off multi-pick guards."""
+    svc = _build_service(settings=_settings_stub(
+        auto_shorts_product_v2_track_mode="sam2",
+        auto_shorts_product_v2_multi_select_enabled=False,
+        auto_shorts_product_v2_publish_scan_order_enabled=False,
+    ))
+    svc.catalog_repo.list_active_by_video = AsyncMock(return_value=[])
+    pick = uuid4()
+    video_id = uuid4()
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=video_id, rejected_at=None,
+    ))
+    fake_parent = MagicMock(id=uuid4(), requested_count=3)
+    svc.job_repo.create_scan_order_parent = AsyncMock(return_value=fake_parent)
+    svc.job_repo.create_render_children = AsyncMock(return_value=[])
+    body = _scan_order_body(catalog_entry_ids=[pick], requested_count=3)
+
+    # MUST NOT raise — single-pick via list is back-compat with single-pick via field.
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+    )
+
+    # Parent gets the legacy catalog_entry_id set (single-pick semantics).
+    create_kwargs = svc.job_repo.create_scan_order_parent.await_args.kwargs
+    assert create_kwargs["catalog_entry_id"] == pick
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_multi_pick_parent_catalog_entry_id_is_null():
+    """When K>1 in STT mode, parent.catalog_entry_id is NULL — there's
+    no single canonical pick. The per-child assignments carry the
+    distribution. SAM2 callback path won't see this since multi-pick
+    is rejected for SAM2."""
+    svc = _stt_service()
+    a, b = sorted([uuid4(), uuid4()])
+    video_id = uuid4()
+    svc.catalog_repo.get = AsyncMock(return_value=MagicMock(
+        video_id=video_id, rejected_at=None,
+    ))
+    body = _scan_order_body(
+        catalog_entry_ids=[a, b],
+        requested_count=3,
+    )
+
+    await svc.enqueue_scan_order(
+        org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+    )
+
+    create_kwargs = svc.job_repo.create_scan_order_parent.await_args.kwargs
+    assert create_kwargs["catalog_entry_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_enqueue_scan_order_validates_membership_for_each_id_in_list():
+    """Each id in catalog_entry_ids must exist + belong to (org, video)
+    + not be rejected. If ANY id fails, return 404 (no-info-leak)."""
+    svc = _stt_service()
+    a, b = uuid4(), uuid4()
+    video_id = uuid4()
+
+    # First call: a → valid; second call: b → REJECTED.
+    svc.catalog_repo.get = AsyncMock(side_effect=[
+        MagicMock(video_id=video_id, rejected_at=None),  # a is fine
+        MagicMock(video_id=video_id, rejected_at=MagicMock()),  # b rejected
+    ])
+    body = _scan_order_body(
+        catalog_entry_ids=[a, b],
+        requested_count=2,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.enqueue_scan_order(
+            org_id=uuid4(), video_id=video_id, user_id=uuid4(), body=body,
+        )
+    assert exc.value.status_code == 404
+    assert "catalog entry not found" in exc.value.detail
+
+
+# ======================================================================
+# axisT1 — render_summary + product_labels surfaced on aggregate response
+# ======================================================================
+#
+# JobStatusResponse gained three fields backed by existing DB columns
+# (migration 059 = ShortsRenderJob.summary/summary_generated_at,
+# migration 051 = ProductCatalogEntry.user_label/llm_label). The aggregate
+# scan-order endpoint must batch-load both and surface them per child
+# so the wizard's ResultCard renders without extra round-trips.
+
+
+def _parent_mock(*, parent_id, mode=SCAN_MODE_SCAN_ORDER, stage="fanned_out"):
+    p = MagicMock()
+    p.id = parent_id
+    p.mode = mode
+    p.catalog_entry_id = None
+    p.parent_job_id = None
+    p.shorts_index = None
+    p.render_job_id = None
+    p.stage = stage
+    p.progress_pct = 100
+    p.progress_label = None
+    p.completed_at = None
+    p.failed_at = None
+    p.cancelled_at = None
+    p.error_code = None
+    p.error_message = None
+    p.cost_usd_estimate = Decimal("0")
+    p.length_seconds = 30
+    p.requested_count = 3
+    p.time_range_start_ms = None
+    p.time_range_end_ms = None
+    p.product_distribution = "single"
+    p.intent = "commit"
+    return p
+
+
+def _render_child_mock(
+    *,
+    parent_id,
+    idx,
+    stage="rendering",
+    render_job_id=None,
+    catalog_entry_id=None,
+):
+    c = MagicMock()
+    c.id = uuid4()
+    c.mode = SCAN_MODE_RENDER_CHILD
+    c.catalog_entry_id = catalog_entry_id
+    c.parent_job_id = parent_id
+    c.shorts_index = idx
+    c.render_job_id = render_job_id
+    c.stage = stage
+    c.progress_pct = 100 if stage == SCAN_STAGE_DONE else 50
+    c.progress_label = None
+    c.completed_at = None
+    c.failed_at = None
+    c.cancelled_at = None
+    c.error_code = None
+    c.error_message = None
+    c.cost_usd_estimate = Decimal("0")
+    return c
+
+
+def _execute_side_effect(*, render_rows=None, catalog_rows=None):
+    """Return an async side_effect that routes the result by inspecting
+    the SQL statement — distinguishes the ``ShortsRenderJob`` SELECT
+    from the ``ProductCatalogEntry`` SELECT by table name. Order-
+    independent: works whether the service skips one branch (e.g.
+    children with no render_job_id) or runs both.
+    """
+    render_result = MagicMock()
+    render_result.all = MagicMock(return_value=render_rows or [])
+    catalog_result = MagicMock()
+    catalog_result.all = MagicMock(return_value=catalog_rows or [])
+
+    async def _side_effect(stmt, *_args, **_kwargs):
+        stmt_str = str(stmt)
+        if "product_catalog_entries" in stmt_str:
+            return catalog_result
+        return render_result
+
+    return _side_effect
+
+
+@pytest.mark.asyncio
+async def test_aggregate_response_carries_render_summary_for_child():
+    """render_child with a populated ShortsRenderJob.summary surfaces
+    the summary text + generated_at timestamp on its JobStatusResponse.
+    """
+    svc = _build_service()
+    parent_id = uuid4()
+    render_job_id = uuid4()
+    parent = _parent_mock(parent_id=parent_id)
+    child = _render_child_mock(
+        parent_id=parent_id, idx=1, render_job_id=render_job_id,
+    )
+    svc.job_repo.get_scan_order_with_children = AsyncMock(
+        return_value=(parent, [child]),
+    )
+
+    from datetime import UTC, datetime
+    summary_at = datetime(2026, 5, 17, 9, 30, tzinfo=UTC)
+    render_row = MagicMock()
+    render_row.id = render_job_id
+    render_row.status = "completed"
+    render_row.summary = "이 영상은 ~~를 소개합니다."
+    render_row.summary_generated_at = summary_at
+
+    svc.session.execute = AsyncMock(
+        side_effect=_execute_side_effect(render_rows=[render_row]),
+    )
+
+    resp = await svc.get_scan_order_status(
+        org_id=uuid4(), parent_job_id=parent_id,
+    )
+    assert len(resp.children) == 1
+    child_resp = resp.children[0]
+    assert child_resp.render_summary == "이 영상은 ~~를 소개합니다."
+    assert child_resp.render_summary_generated_at == summary_at
+    assert child_resp.render_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_aggregate_response_null_summary_yields_none():
+    """A ShortsRenderJob row with NULL summary keeps the response field
+    as None (the FE shows a 요약 생성 affordance for those rows)."""
+    svc = _build_service()
+    parent_id = uuid4()
+    render_job_id = uuid4()
+    parent = _parent_mock(parent_id=parent_id)
+    child = _render_child_mock(
+        parent_id=parent_id, idx=1, render_job_id=render_job_id,
+    )
+    svc.job_repo.get_scan_order_with_children = AsyncMock(
+        return_value=(parent, [child]),
+    )
+
+    render_row = MagicMock()
+    render_row.id = render_job_id
+    render_row.status = "rendering"
+    render_row.summary = None
+    render_row.summary_generated_at = None
+    svc.session.execute = AsyncMock(
+        side_effect=_execute_side_effect(render_rows=[render_row]),
+    )
+
+    resp = await svc.get_scan_order_status(
+        org_id=uuid4(), parent_job_id=parent_id,
+    )
+    child_resp = resp.children[0]
+    assert child_resp.render_summary is None
+    assert child_resp.render_summary_generated_at is None
+
+
+@pytest.mark.asyncio
+async def test_aggregate_response_carries_product_labels_for_child():
+    """render_child with a non-null catalog_entry_id picks up the
+    resolved label (user_label preferred over llm_label)."""
+    svc = _build_service()
+    parent_id = uuid4()
+    catalog_entry_id = uuid4()
+    parent = _parent_mock(parent_id=parent_id)
+    child = _render_child_mock(
+        parent_id=parent_id, idx=1, catalog_entry_id=catalog_entry_id,
+    )
+    svc.job_repo.get_scan_order_with_children = AsyncMock(
+        return_value=(parent, [child]),
+    )
+
+    catalog_row = MagicMock()
+    catalog_row.id = catalog_entry_id
+    catalog_row.user_label = "사용자 라벨"
+    catalog_row.llm_label = "LLM 라벨"
+    svc.session.execute = AsyncMock(
+        side_effect=_execute_side_effect(catalog_rows=[catalog_row]),
+    )
+
+    resp = await svc.get_scan_order_status(
+        org_id=uuid4(), parent_job_id=parent_id,
+    )
+    assert resp.children[0].product_labels == ["사용자 라벨"]
+
+
+@pytest.mark.asyncio
+async def test_aggregate_response_falls_back_to_llm_label_when_no_user_label():
+    """user_label NULL → fall back to llm_label (matches gallery rule
+    and runner.py:1205)."""
+    svc = _build_service()
+    parent_id = uuid4()
+    catalog_entry_id = uuid4()
+    parent = _parent_mock(parent_id=parent_id)
+    child = _render_child_mock(
+        parent_id=parent_id, idx=1, catalog_entry_id=catalog_entry_id,
+    )
+    svc.job_repo.get_scan_order_with_children = AsyncMock(
+        return_value=(parent, [child]),
+    )
+
+    catalog_row = MagicMock()
+    catalog_row.id = catalog_entry_id
+    catalog_row.user_label = None
+    catalog_row.llm_label = "LLM 라벨"
+    svc.session.execute = AsyncMock(
+        side_effect=_execute_side_effect(catalog_rows=[catalog_row]),
+    )
+
+    resp = await svc.get_scan_order_status(
+        org_id=uuid4(), parent_job_id=parent_id,
+    )
+    assert resp.children[0].product_labels == ["LLM 라벨"]
+
+
+@pytest.mark.asyncio
+async def test_aggregate_response_null_catalog_entry_yields_empty_labels():
+    """Whole-catalog children (catalog_entry_id IS NULL) get an empty
+    label list — no catalog row to resolve, no failure."""
+    svc = _build_service()
+    parent_id = uuid4()
+    parent = _parent_mock(parent_id=parent_id)
+    child = _render_child_mock(
+        parent_id=parent_id, idx=1, catalog_entry_id=None,
+    )
+    svc.job_repo.get_scan_order_with_children = AsyncMock(
+        return_value=(parent, [child]),
+    )
+
+    resp = await svc.get_scan_order_status(
+        org_id=uuid4(), parent_job_id=parent_id,
+    )
+    assert resp.children[0].product_labels == []
+
+
+@pytest.mark.asyncio
+async def test_aggregate_response_scan_order_parent_has_empty_summary_and_labels():
+    """The parent JobStatusResponse must report render_summary=None
+    and product_labels=[] — parents never carry renders (Q4 invariant)
+    or catalog entries."""
+    svc = _build_service()
+    parent_id = uuid4()
+    parent = _parent_mock(parent_id=parent_id, stage="fanned_out")
+    svc.job_repo.get_scan_order_with_children = AsyncMock(
+        return_value=(parent, []),
+    )
+
+    resp = await svc.get_scan_order_status(
+        org_id=uuid4(), parent_job_id=parent_id,
+    )
+    assert resp.parent.render_summary is None
+    assert resp.parent.render_summary_generated_at is None
+    assert resp.parent.product_labels == []

@@ -33,7 +33,7 @@ class TestRankingInvariants:
             {"_id": "b", "_score": 0.85, "_source": {"video_id": "v2", "transcript_char_count": 100}},
         ]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=0.5)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         
         for i in range(len(results) - 1):
             assert results[i].adjusted_score >= results[i + 1].adjusted_score
@@ -42,7 +42,7 @@ class TestRankingInvariants:
         """Invariant: adjusted_score = fused_score × quality_factor."""
         lexical = [{"_id": "doc1", "_score": 10.0, "_source": {"video_id": "v1", "transcript_char_count": 50}}]
         
-        results = compute_weighted_rrf(lexical, [], alpha=0.0)
+        results = compute_weighted_rrf(lexical, [], [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         
         for item in results:
             expected = item.fused_score * item.quality_factor
@@ -53,7 +53,7 @@ class TestRankingInvariants:
         lexical = [{"_id": "doc1", "_score": 10.0, "_source": {"video_id": "v1"}}]
         vector = [{"_id": "doc1", "_score": 0.9, "_source": {"video_id": "v1"}}]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=0.5)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         
         for item in results:
             expected = item.lexical_contribution + item.vector_contribution
@@ -68,7 +68,7 @@ class TestAlphaInvariants:
         lexical = [{"_id": "lex1", "_score": 10.0, "_source": {"video_id": "v1"}}]
         vector = [{"_id": "vec1", "_score": 0.95, "_source": {"video_id": "v2"}}]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=0.0)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=1.0, text_knn_weight=0.0, visual_weight=0.0)
         
         for item in results:
             assert item.vector_contribution == 0.0
@@ -78,7 +78,7 @@ class TestAlphaInvariants:
         lexical = [{"_id": "lex1", "_score": 10.0, "_source": {"video_id": "v1"}}]
         vector = [{"_id": "vec1", "_score": 0.95, "_source": {"video_id": "v2"}}]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=1.0)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.0, text_knn_weight=1.0, visual_weight=0.0)
         
         for item in results:
             assert item.lexical_contribution == 0.0
@@ -88,7 +88,7 @@ class TestAlphaInvariants:
         lexical = [{"_id": "both", "_score": 10.0, "_source": {"video_id": "v1"}}]
         vector = [{"_id": "both", "_score": 0.9, "_source": {"video_id": "v1"}}]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=0.5)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         
         item = results[0]
         assert item.lexical_contribution == pytest.approx(item.vector_contribution, rel=0.01)
@@ -225,7 +225,7 @@ class TestBothSignalsBoost:
             {"_id": "vec_only", "_score": 0.8, "_source": {"video_id": "v3", "transcript_char_count": 100}},
         ]
         
-        results = compute_weighted_rrf(lexical, vector, alpha=0.5)
+        results = compute_weighted_rrf(lexical, vector, [], bm25_weight=0.5, text_knn_weight=0.5, visual_weight=0.0)
         
         both_item = next(r for r in results if r.doc_id == "both")
         lex_only = next(r for r in results if r.doc_id == "lex_only")

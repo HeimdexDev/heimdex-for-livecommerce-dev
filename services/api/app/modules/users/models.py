@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,5 +32,6 @@ class User(Base, UUIDMixin, TimestampMixin):
     org: Mapped["Org"] = relationship("Org", back_populates="users")
     
     __table_args__ = (
+        UniqueConstraint("org_id", "email", name="uq_users_org_id_email"),
         {"comment": "Users table with org-scoped emails and Auth0 subject ID"},
     )

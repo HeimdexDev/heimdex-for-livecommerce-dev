@@ -1,0 +1,159 @@
+{
+  "name": "evergreen_closer_v1",
+  "video_id": "gd_synth_evergreen_001",
+  "llm_label": "달심",
+  "spoken_aliases": ["이 드라이기", "드라이기"],
+  "target_duration_ms": 60000,
+  "_notes": "v4 prompt fixture (2026-05-13). Last segment intentionally has BOTH an evergreen verdict chunk (chunk[5]) AND two live-only urgency chunks (chunks[6], [7], has_cta=true). With v4 prompt the LLM picker MUST select chunk[5] as the CTA slot; picking [6] or [7] indicates the prompt change did not take effect. Heuristic picker will still pick [7] (has_cta=True priority) — that's expected, heuristic-side fix is opt B/D in the larger plan. Hand-labeled.",
+  "scored_chunks": [
+    {
+      "start_ms": 0,
+      "end_ms": 25000,
+      "text": "이거 한번 보세요 진짜 머릿결이 달라져요",
+      "hook_score": 0.88,
+      "has_cta": false,
+      "importance_score": 0.6
+    },
+    {
+      "start_ms": 30000,
+      "end_ms": 55000,
+      "text": "오늘 소개해드릴 건 달심 드라이기예요 음이온이 정말 풍부해요",
+      "hook_score": 0.55,
+      "has_cta": false,
+      "importance_score": 0.82
+    },
+    {
+      "start_ms": 400000,
+      "end_ms": 425000,
+      "text": "이 드라이기는 이렇게 잡고 천천히 말리시면 됩니다 손목에 무리도 안 가요",
+      "hook_score": 0.45,
+      "has_cta": false,
+      "importance_score": 0.85
+    },
+    {
+      "start_ms": 425000,
+      "end_ms": 450000,
+      "text": "온도 조절도 세 단계로 가능하고요 약풍 중풍 강풍 다 있어요",
+      "hook_score": 0.4,
+      "has_cta": false,
+      "importance_score": 0.78
+    },
+    {
+      "start_ms": 800000,
+      "end_ms": 825000,
+      "text": "음이온이 머릿결 큐티클을 정리해줘서 윤기가 나요 이게 핵심이에요",
+      "hook_score": 0.5,
+      "has_cta": false,
+      "importance_score": 0.75
+    },
+    {
+      "start_ms": 1500000,
+      "end_ms": 1525000,
+      "text": "정리하면 진짜 가성비 좋은 드라이기예요 저는 만족하면서 쓰고 있어요",
+      "hook_score": 0.5,
+      "has_cta": false,
+      "importance_score": 0.65
+    },
+    {
+      "start_ms": 1600000,
+      "end_ms": 1620000,
+      "text": "지금 구매하시면 30프로 할인이에요 매진 임박입니다",
+      "hook_score": 0.78,
+      "has_cta": true,
+      "importance_score": 0.6
+    },
+    {
+      "start_ms": 1650000,
+      "end_ms": 1670000,
+      "text": "오늘만 이 가격이에요 댓글 남기시면 추가 혜택 드려요",
+      "hook_score": 0.7,
+      "has_cta": true,
+      "importance_score": 0.55
+    }
+  ],
+  "segments": [
+    {
+      "start_ms": 0,
+      "end_ms": 55000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_001_scene_001",
+          "start_ms": 0,
+          "end_ms": 25000,
+          "transcript_text": "이거 한번 보세요 진짜 머릿결이 달라져요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_001_scene_002",
+          "start_ms": 30000,
+          "end_ms": 55000,
+          "transcript_text": "오늘 소개해드릴 건 달심 드라이기예요 음이온이 정말 풍부해요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 400000,
+      "end_ms": 825000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_001_scene_020",
+          "start_ms": 400000,
+          "end_ms": 425000,
+          "transcript_text": "이 드라이기는 이렇게 잡고 천천히 말리시면 됩니다 손목에 무리도 안 가요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_001_scene_021",
+          "start_ms": 425000,
+          "end_ms": 450000,
+          "transcript_text": "온도 조절도 세 단계로 가능하고요 약풍 중풍 강풍 다 있어요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_001_scene_040",
+          "start_ms": 800000,
+          "end_ms": 825000,
+          "transcript_text": "음이온이 머릿결 큐티클을 정리해줘서 윤기가 나요 이게 핵심이에요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 1500000,
+      "end_ms": 1670000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_001_scene_075",
+          "start_ms": 1500000,
+          "end_ms": 1525000,
+          "transcript_text": "정리하면 진짜 가성비 좋은 드라이기예요 저는 만족하면서 쓰고 있어요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_001_scene_080",
+          "start_ms": 1600000,
+          "end_ms": 1620000,
+          "transcript_text": "지금 구매하시면 30프로 할인이에요 매진 임박입니다",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_001_scene_081",
+          "start_ms": 1650000,
+          "end_ms": 1670000,
+          "transcript_text": "오늘만 이 가격이에요 댓글 남기시면 추가 혜택 드려요",
+          "speaker_transcript": ""
+        }
+      ]
+    }
+  ],
+  "ideal": {
+    "hook": {"source_start_ms": 0, "source_end_ms": 8000},
+    "intro": {"source_start_ms": 30000, "source_end_ms": 42000},
+    "detail": [
+      {"source_start_ms": 400000, "source_end_ms": 412500},
+      {"source_start_ms": 425000, "source_end_ms": 437500}
+    ],
+    "cta": {"source_start_ms": 1500000, "source_end_ms": 1508000}
+  }
+}

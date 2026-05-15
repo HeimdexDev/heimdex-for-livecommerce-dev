@@ -1,0 +1,1230 @@
+import asyncio
+import shutil
+from pathlib import Path as FilePath
+from typing import Annotated, cast
+from uuid import UUID
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.config import get_settings
+from app.dependencies import (
+    get_db_session,
+    get_face_repository,
+    get_people_cluster_label_repository,
+    get_people_exclude_preference_repository,
+    get_people_video_exclusion_repository,
+    get_scene_opensearch_client,
+    get_scene_override_repository,
+)
+from app.logging_config import get_logger
+from app.modules.auth import get_current_user
+from app.modules.people.repository import (
+    PeopleClusterLabelRepository,
+    PeopleExcludePreferenceRepository,
+    PeopleVideoExclusionRepository,
+)
+from app.modules.scene_overrides.repository import SceneOverrideRepository
+from app.modules.face.repository import FaceRepository
+from app.modules.people.schemas import (
+    BulkDeleteRequest,
+    BulkDeleteResponse,
+    ExcludePreferencesResponse,
+    ExemplarListResponse,
+    ExemplarResponse,
+    LinkPersonVideoRequest,
+    LinkPersonVideoResponse,
+    MergePersonRequest,
+    MergePersonResponse,
+    PeopleListResponse,
+    PersonResponse,
+    PersonTimelineResponse,
+    PersonTimelineScene,
+    PersonTimelineVideo,
+    PersonVideoItem,
+    PersonVideosResponse,
+    RenamePersonRequest,
+    RenamePersonResponse,
+    SetExcludePreferencesRequest,
+    SetThumbnailRequest,
+    SetVideoExclusionsRequest,
+    SimilarPeopleResponse,
+    SimilarPersonItem,
+    ThumbnailResponse,
+    VideoExclusionsResponse,
+)
+from app.modules.search.scene_client import SceneSearchClient
+from app.modules.tenancy import OrgContext, get_current_org
+from app.modules.users.models import User
+
+logger = get_logger(__name__)
+router = APIRouter(prefix="/people", tags=["people"])
+
+
+@router.get("", response_model=PeopleListResponse)
+async def list_people(
+    q: str | None = Query(None, min_length=1, max_length=100),
+    date_from: str | None = Query(None, description="Filter scenes from this date (YYYY-MM-DD)"),
+    date_to: str | None = Query(None, description="Filter scenes until this date (YYYY-MM-DD)"),
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
+    exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
+    face_repo: FaceRepository = Depends(get_face_repository),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    user_id = cast(UUID, user.id)
+    org_id_str = str(org_ctx.org_id)
+    logger.debug("list_people_request", user_id=str(user_id), org_id=org_id_str, q=q)
+
+    labels = await people_repo.list_by_org(org_ctx.org_id)
+    label_map = {entry.person_cluster_id: entry.label for entry in labels}
+
+    excluded_ids = set(await exclude_repo.list_by_user(org_ctx.org_id, user_id))
+
+    facets = await scene_opensearch.get_facets(org_id_str, {}, date_from=date_from, date_to=date_to)
+    people_buckets = facets.get("people", [])
+
+    video_title_matches: dict[str, list[str]] = {}
+    label_match_ids: set[str] = set()
+    matching_ids: set[str] = set()
+
+    if q:
+        vt_result, lb_result = await asyncio.gather(
+            scene_opensearch.search_people_by_video_title(org_id_str, q, date_from=date_from, date_to=date_to),
+            people_repo.search_by_label(org_ctx.org_id, q),
+        )
+        video_title_matches = vt_result
+        label_match_ids = set(lb_result)
+        matching_ids = set(video_title_matches.keys()) | label_match_ids
+
+    people: list[PersonResponse] = []
+    seen_cluster_ids: set[str] = set()
+
+    for bucket in people_buckets:
+        cluster_id = str(bucket.get("key", ""))
+        if not cluster_id:
+            continue
+        if q and cluster_id not in matching_ids:
+            continue
+        seen_cluster_ids.add(cluster_id)
+        people.append(
+            PersonResponse(
+                person_cluster_id=cluster_id,
+                label=label_map.get(cluster_id),
+                face_count=int(bucket.get("doc_count", 0)),
+                is_excluded=cluster_id in excluded_ids,
+                matched_video_titles=video_title_matches.get(cluster_id) if q else None,
+            )
+        )
+
+    for cluster_id, label in sorted(label_map.items()):
+        if cluster_id in seen_cluster_ids:
+            continue
+        if q and cluster_id not in label_match_ids:
+            continue
+        people.append(
+            PersonResponse(
+                person_cluster_id=cluster_id,
+                label=label,
+                face_count=0,
+                is_excluded=cluster_id in excluded_ids,
+                matched_video_titles=video_title_matches.get(cluster_id) if q else None,
+            )
+        )
+        seen_cluster_ids.add(cluster_id)
+
+    all_cluster_ids = [p.person_cluster_id for p in people]
+    rep_scenes = await scene_opensearch.get_representative_scenes_for_people(
+        org_id_str, all_cluster_ids, date_from=date_from, date_to=date_to
+    )
+
+    # Batch-fetch thumbnail sources from face identities
+    thumb_sources = await face_repo.get_thumbnail_sources_batch(org_ctx.org_id, all_cluster_ids)
+
+    for person in people:
+        scene_info = rep_scenes.get(person.person_cluster_id)
+        if scene_info:
+            person.representative_video_id = scene_info["video_id"]
+            person.representative_scene_id = scene_info["scene_id"]
+            person.last_seen_scene_time = scene_info.get("capture_time") or scene_info.get("ingest_time")
+        person.thumbnail_source = thumb_sources.get(person.person_cluster_id, "auto")
+
+    return PeopleListResponse(people=people, total=len(people))
+
+
+@router.patch("/{person_cluster_id}", response_model=RenamePersonResponse)
+async def rename_person(
+    person_cluster_id: str,
+    request: RenamePersonRequest,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    logger.debug(
+        "rename_person_request",
+        user_id=str(user.id),
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+    )
+
+    # set_label does upsert — no need to check existence first.
+    # Clusters can exist in OpenSearch facets without a Postgres label row.
+
+    updated = await people_repo.set_label(org_ctx.org_id, person_cluster_id, request.label)
+    await db.commit()
+
+    return RenamePersonResponse(
+        person_cluster_id=updated.person_cluster_id,
+        label=updated.label,
+    )
+
+
+@router.get("/{person_cluster_id}/similar", response_model=SimilarPeopleResponse)
+async def find_similar_people(
+    person_cluster_id: str,
+    threshold: float = Query(0.40, ge=0.0, le=1.0, description="Minimum cosine similarity"),
+    limit: int = Query(20, ge=1, le=50, description="Maximum results"),
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    face_repo: FaceRepository = Depends(get_face_repository),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    similar = await face_repo.find_similar_identities(
+        org_id=org_ctx.org_id,
+        cluster_id=person_cluster_id,
+        threshold=threshold,
+        limit=limit,
+    )
+
+    return SimilarPeopleResponse(
+        target_cluster_id=person_cluster_id,
+        similarities=[
+            SimilarPersonItem(
+                person_cluster_id=row["cluster_id"],
+                similarity=round(row["similarity"], 4),
+            )
+            for row in similar
+        ],
+        total=len(similar),
+        threshold=threshold,
+    )
+
+
+@router.post("/merge", response_model=MergePersonResponse)
+async def merge_people(
+    request: MergePersonRequest,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
+    exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
+    video_excl_repo: PeopleVideoExclusionRepository = Depends(get_people_video_exclusion_repository),
+    face_repo: FaceRepository = Depends(get_face_repository),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Merge one or more person clusters into a target cluster.
+
+    The target cluster survives. Source clusters are absorbed:
+    - Their scenes are reassigned to the target in OpenSearch
+    - Their face identities/exemplars are merged in Postgres
+    - Their labels and exclude preferences are transferred
+    - Their face thumbnails are cleaned up
+    """
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    org_id_str = str(org_ctx.org_id)
+    target_id = request.target_cluster_id
+    source_ids = request.source_cluster_ids
+
+    # Guard: target must not be in source list
+    if target_id in source_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="target_cluster_id must not appear in source_cluster_ids",
+        )
+
+    logger.info(
+        "merge_people_request",
+        user_id=str(user.id),
+        org_id=org_id_str,
+        target_cluster_id=target_id,
+        source_cluster_ids=source_ids,
+        keep_label=request.keep_label,
+    )
+
+    total_scenes_updated = 0
+
+    for source_id in source_ids:
+        # 1. Replace source_id with target_id in OpenSearch scene documents
+        try:
+            scenes_updated = await scene_opensearch.replace_person_cluster_id(
+                org_id_str, source_id, target_id,
+            )
+            total_scenes_updated += scenes_updated
+        except Exception:
+            logger.exception(
+                "merge_people_opensearch_failed",
+                org_id=org_id_str,
+                source_cluster_id=source_id,
+                target_cluster_id=target_id,
+            )
+
+        # 2. Merge face identities (centroid recomputation + exemplar reassignment)
+        try:
+            await face_repo.merge_identities(
+                org_ctx.org_id, source_id, target_id,
+            )
+        except Exception:
+            logger.exception(
+                "merge_people_face_identity_failed",
+                org_id=org_id_str,
+                source_cluster_id=source_id,
+                target_cluster_id=target_id,
+            )
+
+        # 3. Merge cluster labels
+        await people_repo.merge_labels(
+            org_ctx.org_id, source_id, target_id, request.keep_label,
+        )
+
+        # 4. Transfer exclude preferences
+        await exclude_repo.transfer_exclusions(
+            org_ctx.org_id, source_id, target_id,
+        )
+
+        # 4b. Transfer per-video exclusions
+        await video_excl_repo.transfer_exclusions(
+            org_ctx.org_id, source_id, target_id,
+        )
+
+        # 5. Clean up source face thumbnail (disk)
+        try:
+            thumbnail_dir = FilePath(settings.thumbnail_storage_dir)
+            source_face = thumbnail_dir / org_id_str / "faces" / f"{source_id}.jpg"
+            if source_face.exists():
+                # If target has no thumbnail, promote source thumbnail
+                target_face = thumbnail_dir / org_id_str / "faces" / f"{target_id}.jpg"
+                if not target_face.exists():
+                    source_face.rename(target_face)
+                else:
+                    source_face.unlink()
+        except Exception:
+            logger.exception(
+                "merge_people_thumbnail_cleanup_failed",
+                org_id=org_id_str,
+                source_cluster_id=source_id,
+            )
+
+        # 5b. Clean up source face thumbnail (S3, non-fatal)
+        try:
+            from app.modules.drive.keys import face_thumbnail_s3_key
+            from app.storage.s3 import S3Client
+
+            s3 = S3Client(bucket=settings.drive_s3_bucket)
+            source_s3 = face_thumbnail_s3_key(org_id_str, source_id)
+            target_s3 = face_thumbnail_s3_key(org_id_str, target_id)
+            # Promote source to target in S3 if target doesn't exist
+            if not await s3.exists_async(target_s3):
+                source_data = await s3.get_object_bytes_async(source_s3)
+                if source_data:
+                    import tempfile
+
+                    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                        tmp.write(source_data)
+                        tmp_path = FilePath(tmp.name)
+                    await s3.upload_file_async(tmp_path, target_s3, content_type="image/jpeg")
+                    tmp_path.unlink(missing_ok=True)
+            s3.delete(source_s3)
+        except Exception:
+            logger.warning(
+                "merge_people_s3_cleanup_failed",
+                org_id=org_id_str,
+                source_cluster_id=source_id,
+                exc_info=True,
+            )
+
+    await db.commit()
+
+    # Resolve final label for response
+    final_label_row = await people_repo.get_by_cluster_id(org_ctx.org_id, target_id)
+    final_label = final_label_row.label if final_label_row else None
+
+    logger.info(
+        "merge_people_complete",
+        org_id=org_id_str,
+        target_cluster_id=target_id,
+        source_cluster_ids=source_ids,
+        scenes_updated=total_scenes_updated,
+        final_label=final_label,
+    )
+
+    return MergePersonResponse(
+        target_cluster_id=target_id,
+        merged_source_ids=source_ids,
+        scenes_updated=total_scenes_updated,
+        label=final_label,
+    )
+
+@router.delete("/{person_cluster_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_person(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
+    exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
+    video_excl_repo: PeopleVideoExclusionRepository = Depends(get_people_video_exclusion_repository),
+    face_repo: FaceRepository = Depends(get_face_repository),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Permanently delete a face profile and remove from all scene data."""
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    org_id_str = str(org_ctx.org_id)
+    logger.info(
+        "delete_person_request",
+        user_id=str(user.id),
+        org_id=org_id_str,
+        person_cluster_id=person_cluster_id,
+    )
+
+    # 1. Delete cluster label from Postgres (also validates existence)
+    deleted_label = await people_repo.delete_by_cluster_id(
+        org_ctx.org_id, person_cluster_id
+    )
+
+    # 2. Delete all exclude preferences for this cluster (all users)
+    exclude_count = await exclude_repo.delete_by_cluster_id(
+        org_ctx.org_id, person_cluster_id
+    )
+
+    # 2b. Delete per-video exclusions for this cluster (all users)
+    video_excl_count = await video_excl_repo.delete_by_cluster_id(
+        org_ctx.org_id, person_cluster_id
+    )
+
+    await db.commit()
+
+    # 3. Remove cluster_id from OpenSearch scene documents
+    scenes_updated = 0
+    try:
+        scenes_updated = await scene_opensearch.remove_person_cluster_id(
+            org_id_str, person_cluster_id
+        )
+    except Exception:
+        logger.exception(
+            "delete_person_opensearch_cleanup_failed",
+            org_id=org_id_str,
+            person_cluster_id=person_cluster_id,
+        )
+
+    # 4. Delete face thumbnail file + exemplar crops (disk + S3)
+    try:
+        thumbnail_dir = FilePath(settings.thumbnail_storage_dir)
+        face_path = thumbnail_dir / org_id_str / "faces" / f"{person_cluster_id}.jpg"
+        if face_path.exists():
+            face_path.unlink()
+        # Clean up exemplar crop files
+        exemplar_ids = await face_repo.get_exemplar_ids_for_identity(org_ctx.org_id, person_cluster_id)
+        exemplar_dir = thumbnail_dir / org_id_str / "faces" / "exemplars"
+        for eid in exemplar_ids:
+            crop_path = exemplar_dir / f"{eid}.jpg"
+            if crop_path.exists():
+                crop_path.unlink()
+    except Exception:
+        logger.exception(
+            "delete_person_thumbnail_cleanup_failed",
+            org_id=org_id_str,
+            person_cluster_id=person_cluster_id,
+        )
+
+    # 4b. Delete from S3 (non-fatal)
+    try:
+        from app.modules.drive.keys import face_thumbnail_s3_key, exemplar_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3.delete(face_thumbnail_s3_key(org_id_str, person_cluster_id))
+        for eid in exemplar_ids:
+            s3.delete(exemplar_thumbnail_s3_key(org_id_str, str(eid)))
+    except Exception:
+        logger.warning(
+            "delete_person_s3_cleanup_failed",
+            org_id=org_id_str,
+            person_cluster_id=person_cluster_id,
+            exc_info=True,
+        )
+
+    # Idempotent: if cluster was already gone, that's the same outcome as delete.
+    # Log for diagnostics but don't error.
+    if not deleted_label and scenes_updated == 0:
+        logger.warning(
+            "delete_person_already_absent",
+            org_id=org_id_str,
+            person_cluster_id=person_cluster_id,
+        )
+
+    logger.info(
+        "delete_person_complete",
+        org_id=org_id_str,
+        person_cluster_id=person_cluster_id,
+        label_deleted=deleted_label,
+        exclude_prefs_deleted=exclude_count,
+        video_excl_deleted=video_excl_count,
+        scenes_updated=scenes_updated,
+    )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteResponse)
+async def bulk_delete_people(
+    request: BulkDeleteRequest,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    people_repo: PeopleClusterLabelRepository = Depends(get_people_cluster_label_repository),
+    exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
+    video_excl_repo: PeopleVideoExclusionRepository = Depends(get_people_video_exclusion_repository),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Bulk delete multiple person clusters. Best-effort: failures don't rollback."""
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    org_id_str = str(org_ctx.org_id)
+    deleted_ids: list[str] = []
+    failed_ids: list[str] = []
+
+    logger.info(
+        "bulk_delete_people_request",
+        user_id=str(user.id),
+        org_id=org_id_str,
+        cluster_count=len(request.person_cluster_ids),
+    )
+
+    for person_cluster_id in request.person_cluster_ids:
+        try:
+            # 1. Delete cluster label from Postgres
+            deleted_label = await people_repo.delete_by_cluster_id(
+                org_ctx.org_id, person_cluster_id
+            )
+
+            # 2. Delete all exclude preferences for this cluster
+            exclude_count = await exclude_repo.delete_by_cluster_id(
+                org_ctx.org_id, person_cluster_id
+            )
+
+            # 3. Delete per-video exclusions for this cluster
+            video_excl_count = await video_excl_repo.delete_by_cluster_id(
+                org_ctx.org_id, person_cluster_id
+            )
+
+            # 4. Remove cluster_id from OpenSearch scene documents
+            try:
+                await scene_opensearch.remove_person_cluster_id(
+                    org_id_str, person_cluster_id
+                )
+            except Exception:
+                logger.exception(
+                    "bulk_delete_opensearch_cleanup_failed",
+                    org_id=org_id_str,
+                    person_cluster_id=person_cluster_id,
+                )
+
+            # 5. Delete face thumbnail file (disk)
+            try:
+                thumbnail_dir = FilePath(settings.thumbnail_storage_dir)
+                face_path = thumbnail_dir / org_id_str / "faces" / f"{person_cluster_id}.jpg"
+                if face_path.exists():
+                    face_path.unlink()
+            except Exception:
+                logger.exception(
+                    "bulk_delete_thumbnail_cleanup_failed",
+                    org_id=org_id_str,
+                    person_cluster_id=person_cluster_id,
+                )
+
+            # 5b. Delete from S3 (non-fatal)
+            try:
+                from app.modules.drive.keys import face_thumbnail_s3_key
+                from app.storage.s3 import S3Client
+
+                s3 = S3Client(bucket=settings.drive_s3_bucket)
+                s3.delete(face_thumbnail_s3_key(org_id_str, person_cluster_id))
+            except Exception:
+                logger.warning(
+                    "bulk_delete_s3_cleanup_failed",
+                    org_id=org_id_str,
+                    person_cluster_id=person_cluster_id,
+                    exc_info=True,
+                )
+
+            deleted_ids.append(person_cluster_id)
+            logger.debug(
+                "bulk_delete_person_success",
+                org_id=org_id_str,
+                person_cluster_id=person_cluster_id,
+            )
+
+        except Exception:
+            failed_ids.append(person_cluster_id)
+            logger.exception(
+                "bulk_delete_person_failed",
+                org_id=org_id_str,
+                person_cluster_id=person_cluster_id,
+            )
+
+    await db.commit()
+
+    logger.info(
+        "bulk_delete_people_complete",
+        org_id=org_id_str,
+        deleted_count=len(deleted_ids),
+        failed_count=len(failed_ids),
+        deleted_ids=deleted_ids,
+        failed_ids=failed_ids,
+    )
+
+    return BulkDeleteResponse(
+        deleted_ids=deleted_ids,
+        failed_ids=failed_ids,
+        total_deleted=len(deleted_ids),
+    )
+
+
+@router.get("/{person_cluster_id}/videos", response_model=PersonVideosResponse)
+async def person_videos(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    logger.debug(
+        "person_videos_request",
+        user_id=str(user.id),
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+    )
+
+    result = await scene_opensearch.get_videos_by_person(
+        str(org_ctx.org_id),
+        person_cluster_id,
+    )
+
+    videos = [
+        PersonVideoItem(
+            video_id=v["video_id"],
+            video_title=v.get("video_title"),
+            scene_count=v.get("scene_count", 0),
+        )
+        for v in result
+    ]
+
+    return PersonVideosResponse(
+        person_cluster_id=person_cluster_id,
+        videos=videos,
+        total=len(videos),
+    )
+
+
+@router.get("/{person_cluster_id}/timeline", response_model=PersonTimelineResponse)
+async def person_timeline(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    logger.debug(
+        "person_timeline_request",
+        user_id=str(user.id),
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+    )
+
+    raw = await scene_opensearch.get_person_timeline(
+        str(org_ctx.org_id),
+        person_cluster_id,
+    )
+
+    videos = [
+        PersonTimelineVideo(
+            video_id=v["video_id"],
+            video_title=v.get("video_title"),
+            total_scenes=v.get("total_scenes", 0),
+            scenes=[
+                PersonTimelineScene(
+                    scene_id=s["scene_id"],
+                    start_ms=s["start_ms"],
+                    end_ms=s["end_ms"],
+                    has_person=s["has_person"],
+                )
+                for s in v.get("scenes", [])
+            ],
+        )
+        for v in raw
+    ]
+
+    return PersonTimelineResponse(
+        person_cluster_id=person_cluster_id,
+        videos=videos,
+    )
+
+
+@router.get("/exclude-preferences", response_model=ExcludePreferencesResponse)
+async def get_exclude_preferences(
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    user_id = cast(UUID, user.id)
+    excluded = await exclude_repo.list_by_user(org_ctx.org_id, user_id)
+    return ExcludePreferencesResponse(excluded_person_cluster_ids=excluded)
+
+
+@router.put("/exclude-preferences", response_model=ExcludePreferencesResponse)
+async def set_exclude_preferences(
+    request: SetExcludePreferencesRequest,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    exclude_repo: PeopleExcludePreferenceRepository = Depends(get_people_exclude_preference_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    user_id = cast(UUID, user.id)
+    logger.debug(
+        "set_exclude_preferences",
+        user_id=str(user_id),
+        org_id=str(org_ctx.org_id),
+        count=len(request.person_cluster_ids),
+    )
+
+    excluded = await exclude_repo.replace_all(
+        org_ctx.org_id, user_id, request.person_cluster_ids
+    )
+    await db.commit()
+    return ExcludePreferencesResponse(excluded_person_cluster_ids=excluded)
+
+
+@router.get("/{person_cluster_id}/video-exclusions", response_model=VideoExclusionsResponse)
+async def get_video_exclusions(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    video_excl_repo: PeopleVideoExclusionRepository = Depends(get_people_video_exclusion_repository),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    user_id = cast(UUID, user.id)
+    excluded = await video_excl_repo.list_by_user_and_person(
+        org_ctx.org_id, user_id, person_cluster_id,
+    )
+    return VideoExclusionsResponse(
+        person_cluster_id=person_cluster_id,
+        excluded_video_ids=excluded,
+    )
+
+
+@router.put("/{person_cluster_id}/video-exclusions", response_model=VideoExclusionsResponse)
+async def set_video_exclusions(
+    person_cluster_id: str,
+    request: SetVideoExclusionsRequest,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    video_excl_repo: PeopleVideoExclusionRepository = Depends(get_people_video_exclusion_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="People feature is not enabled",
+        )
+
+    user_id = cast(UUID, user.id)
+    logger.debug(
+        "set_video_exclusions",
+        user_id=str(user_id),
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+        count=len(request.excluded_video_ids),
+    )
+
+    excluded = await video_excl_repo.replace_for_person(
+        org_ctx.org_id, user_id, person_cluster_id, request.excluded_video_ids,
+    )
+    await db.commit()
+    return VideoExclusionsResponse(
+        person_cluster_id=person_cluster_id,
+        excluded_video_ids=excluded,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Thumbnail management (gallery picker + custom upload)
+# ---------------------------------------------------------------------------
+
+_MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+_MAX_THUMBNAIL_PX = 512
+_ALLOWED_UPLOAD_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
+
+
+@router.get("/{person_cluster_id}/exemplars", response_model=ExemplarListResponse)
+async def list_exemplars(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    _user: User = Depends(get_current_user),
+    face_repo: FaceRepository = Depends(get_face_repository),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    exemplars = await face_repo.get_exemplars_for_identity(org_ctx.org_id, person_cluster_id, limit=20)
+
+    return ExemplarListResponse(
+        exemplars=[
+            ExemplarResponse(
+                exemplar_id=str(e.id),
+                video_id=e.video_id,
+                scene_id=e.scene_id,
+                quality=e.quality,
+                thumbnail_url=f"/api/thumbnails/faces/exemplars/{e.id}",
+            )
+            for e in exemplars
+        ],
+        total=len(exemplars),
+    )
+
+
+@router.patch("/{person_cluster_id}/thumbnail", response_model=ThumbnailResponse)
+async def select_thumbnail_from_exemplar(
+    person_cluster_id: str,
+    request: SetThumbnailRequest,
+    org_ctx: OrgContext = Depends(get_current_org),
+    _user: User = Depends(get_current_user),
+    face_repo: FaceRepository = Depends(get_face_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    exemplar_id = UUID(request.exemplar_id)
+    exemplar = await face_repo.get_exemplar_by_id(org_ctx.org_id, exemplar_id)
+    if exemplar is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exemplar not found")
+
+    # Copy exemplar crop to main face thumbnail path
+    root = FilePath(settings.thumbnail_storage_dir)
+    exemplar_path = root / str(org_ctx.org_id) / "faces" / "exemplars" / f"{exemplar_id}.jpg"
+    main_path = root / str(org_ctx.org_id) / "faces" / f"{person_cluster_id}.jpg"
+
+    if exemplar_path.exists():
+        main_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(exemplar_path), str(main_path))
+    else:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exemplar thumbnail file not found")
+
+    # Dual-write to S3: copy exemplar as main face thumbnail (non-fatal)
+    try:
+        from app.modules.drive.keys import face_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3_key = face_thumbnail_s3_key(str(org_ctx.org_id), person_cluster_id)
+        await s3.upload_file_async(main_path, s3_key, content_type="image/jpeg")
+        logger.info("face_thumbnail_s3_uploaded_from_exemplar", s3_key=s3_key)
+    except Exception:
+        logger.warning(
+            "face_thumbnail_s3_upload_failed",
+            org_id=str(org_ctx.org_id),
+            person_cluster_id=person_cluster_id,
+            exc_info=True,
+        )
+
+    identity = await face_repo.set_thumbnail_source(
+        org_ctx.org_id, person_cluster_id, "exemplar", exemplar_id,
+    )
+    if identity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Person not found")
+
+    await db.commit()
+
+    logger.info(
+        "thumbnail_selected_from_exemplar",
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+        exemplar_id=str(exemplar_id),
+    )
+
+    return ThumbnailResponse(
+        person_cluster_id=person_cluster_id,
+        thumbnail_source="exemplar",
+    )
+
+
+@router.post("/{person_cluster_id}/thumbnail", response_model=ThumbnailResponse)
+async def upload_custom_thumbnail(
+    person_cluster_id: str,
+    file: Annotated[UploadFile, File(...)],
+    org_ctx: OrgContext = Depends(get_current_org),
+    _user: User = Depends(get_current_user),
+    face_repo: FaceRepository = Depends(get_face_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    content_type = (file.content_type or "").lower()
+    if content_type not in _ALLOWED_UPLOAD_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported image type. Allowed: JPEG, PNG, WebP",
+        )
+
+    data = await file.read()
+    if len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File too large. Maximum size: {_MAX_UPLOAD_BYTES // (1024 * 1024)}MB",
+        )
+
+    # Process image: validate, resize, convert to JPEG
+    from PIL import Image
+    import io
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.verify()
+        img = Image.open(io.BytesIO(data))  # re-open after verify
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid image file")
+
+    if img.width < 64 or img.height < 64:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Image too small. Minimum 64x64 pixels.")
+
+    # Resize to max 512x512 maintaining aspect ratio
+    if img.width > _MAX_THUMBNAIL_PX or img.height > _MAX_THUMBNAIL_PX:
+        img.thumbnail((_MAX_THUMBNAIL_PX, _MAX_THUMBNAIL_PX), Image.LANCZOS)
+
+    # Convert to RGB JPEG
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    jpeg_data = buf.getvalue()
+
+    # Write to disk
+    root = FilePath(settings.thumbnail_storage_dir)
+    main_path = root / str(org_ctx.org_id) / "faces" / f"{person_cluster_id}.jpg"
+    main_path.parent.mkdir(parents=True, exist_ok=True)
+    main_path.write_bytes(jpeg_data)
+
+    # Dual-write to S3 (non-fatal)
+    try:
+        from app.modules.drive.keys import face_thumbnail_s3_key
+        from app.storage.s3 import S3Client
+
+        s3 = S3Client(bucket=settings.drive_s3_bucket)
+        s3_key = face_thumbnail_s3_key(str(org_ctx.org_id), person_cluster_id)
+        await s3.upload_file_async(main_path, s3_key, content_type="image/jpeg")
+        logger.info("face_thumbnail_s3_uploaded", s3_key=s3_key)
+    except Exception:
+        logger.warning(
+            "face_thumbnail_s3_upload_failed",
+            org_id=str(org_ctx.org_id),
+            person_cluster_id=person_cluster_id,
+            exc_info=True,
+        )
+
+    identity = await face_repo.set_thumbnail_source(
+        org_ctx.org_id, person_cluster_id, "upload",
+    )
+    if identity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Person not found")
+
+    await db.commit()
+
+    logger.info(
+        "thumbnail_custom_uploaded",
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+        size_bytes=len(jpeg_data),
+        original_size=len(data),
+    )
+
+    return ThumbnailResponse(
+        person_cluster_id=person_cluster_id,
+        thumbnail_source="upload",
+    )
+
+
+@router.delete("/{person_cluster_id}/thumbnail", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_thumbnail(
+    person_cluster_id: str,
+    org_ctx: OrgContext = Depends(get_current_org),
+    _user: User = Depends(get_current_user),
+    face_repo: FaceRepository = Depends(get_face_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    identity = await face_repo.reset_thumbnail_source(org_ctx.org_id, person_cluster_id)
+    if identity is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Person not found")
+
+    await db.commit()
+
+    logger.info(
+        "thumbnail_reset_to_auto",
+        org_id=str(org_ctx.org_id),
+        person_cluster_id=person_cluster_id,
+    )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{person_cluster_id}/unlink-video", response_model=LinkPersonVideoResponse)
+async def unlink_person_from_video(
+    person_cluster_id: str,
+    request: LinkPersonVideoRequest,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+    override_repo: SceneOverrideRepository = Depends(get_scene_override_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Unlink a person from all scenes in a specific video.
+
+    Creates scene overrides so the unlink survives face re-detection.
+    """
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    org_id_str = str(org_ctx.org_id)
+    user_id = cast(UUID, user.id)
+    video_id = request.video_id
+
+    logger.info(
+        "unlink_person_from_video_request",
+        user_id=str(user_id),
+        org_id=org_id_str,
+        person_cluster_id=person_cluster_id,
+        video_id=video_id,
+    )
+
+    # 1. Find all scenes in this video
+    scene_ids = await scene_opensearch.find_scene_ids_by_video_id(org_id_str, video_id)
+    if not scene_ids:
+        return LinkPersonVideoResponse(
+            person_cluster_id=person_cluster_id,
+            video_id=video_id,
+            scenes_updated=0,
+        )
+
+    # 2. Fetch current people_cluster_ids per scene
+    doc_ids = [f"{org_id_str}:{sid}" for sid in scene_ids]
+    scenes_data = await scene_opensearch.mget_scenes(doc_ids)
+
+    # 3. Create scene overrides for each scene that contains this person
+    override_count = 0
+    for scene_id in scene_ids:
+        doc_id = f"{org_id_str}:{scene_id}"
+        scene_doc = scenes_data.get(doc_id, {})
+        current_ids = scene_doc.get("people_cluster_ids", []) or []
+
+        if person_cluster_id not in current_ids:
+            continue
+
+        new_ids = [cid for cid in current_ids if cid != person_cluster_id]
+        await override_repo.upsert(
+            org_id=org_ctx.org_id,
+            scene_id=scene_id,
+            video_id=video_id,
+            edited_by=user_id,
+            fields={"people_cluster_ids": new_ids},
+            originals={"people_cluster_ids": current_ids},
+        )
+        override_count += 1
+
+    # 4. Update OpenSearch in bulk via Painless script
+    scenes_updated = await scene_opensearch.remove_person_from_video(
+        org_id_str, person_cluster_id, video_id,
+    )
+
+    await db.commit()
+
+    logger.info(
+        "unlink_person_from_video_complete",
+        org_id=org_id_str,
+        person_cluster_id=person_cluster_id,
+        video_id=video_id,
+        overrides_created=override_count,
+        scenes_updated=scenes_updated,
+    )
+
+    return LinkPersonVideoResponse(
+        person_cluster_id=person_cluster_id,
+        video_id=video_id,
+        scenes_updated=scenes_updated,
+    )
+
+
+@router.post("/{person_cluster_id}/link-video", response_model=LinkPersonVideoResponse)
+async def link_person_to_video(
+    person_cluster_id: str,
+    request: LinkPersonVideoRequest,
+    org_ctx: OrgContext = Depends(get_current_org),
+    user: User = Depends(get_current_user),
+    scene_opensearch: SceneSearchClient = Depends(get_scene_opensearch_client),
+    override_repo: SceneOverrideRepository = Depends(get_scene_override_repository),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Link a person to all scenes in a specific video.
+
+    Creates scene overrides so the link survives face re-detection.
+    """
+    settings = get_settings()
+    if not settings.people_enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="People feature is not enabled")
+
+    org_id_str = str(org_ctx.org_id)
+    user_id = cast(UUID, user.id)
+    video_id = request.video_id
+
+    logger.info(
+        "link_person_to_video_request",
+        user_id=str(user_id),
+        org_id=org_id_str,
+        person_cluster_id=person_cluster_id,
+        video_id=video_id,
+    )
+
+    # 1. Find all scenes in this video
+    scene_ids = await scene_opensearch.find_scene_ids_by_video_id(org_id_str, video_id)
+    if not scene_ids:
+        return LinkPersonVideoResponse(
+            person_cluster_id=person_cluster_id,
+            video_id=video_id,
+            scenes_updated=0,
+        )
+
+    # 2. Fetch current people_cluster_ids per scene
+    doc_ids = [f"{org_id_str}:{sid}" for sid in scene_ids]
+    scenes_data = await scene_opensearch.mget_scenes(doc_ids)
+
+    # 3. Create scene overrides for each scene that doesn't already have this person
+    override_count = 0
+    for scene_id in scene_ids:
+        doc_id = f"{org_id_str}:{scene_id}"
+        scene_doc = scenes_data.get(doc_id, {})
+        current_ids = scene_doc.get("people_cluster_ids", []) or []
+
+        if person_cluster_id in current_ids:
+            continue
+
+        new_ids = current_ids + [person_cluster_id]
+        await override_repo.upsert(
+            org_id=org_ctx.org_id,
+            scene_id=scene_id,
+            video_id=video_id,
+            edited_by=user_id,
+            fields={"people_cluster_ids": new_ids},
+            originals={"people_cluster_ids": current_ids},
+        )
+        override_count += 1
+
+    # 4. Update OpenSearch in bulk via Painless script
+    scenes_updated = await scene_opensearch.add_person_to_video(
+        org_id_str, person_cluster_id, video_id,
+    )
+
+    await db.commit()
+
+    logger.info(
+        "link_person_to_video_complete",
+        org_id=org_id_str,
+        person_cluster_id=person_cluster_id,
+        video_id=video_id,
+        overrides_created=override_count,
+        scenes_updated=scenes_updated,
+    )
+
+    return LinkPersonVideoResponse(
+        person_cluster_id=person_cluster_id,
+        video_id=video_id,
+        scenes_updated=scenes_updated,
+    )

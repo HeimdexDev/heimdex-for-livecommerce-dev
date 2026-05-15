@@ -4,12 +4,14 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.dependencies import get_user_repository
 from app.db.base import get_db_session
 from app.logging_config import get_logger
-from app.modules.auth.oidc import validate_auth0_token, Auth0TokenPayload
+from app.modules.auth.oidc import validate_auth0_token, fetch_userinfo, Auth0TokenPayload
 from app.modules.auth.schemas import TokenPayload
 from app.modules.tenancy import OrgContext, get_current_org
 from app.modules.users.models import User
@@ -73,8 +75,10 @@ async def get_current_user(
     org_ctx: OrgContext = Depends(get_current_org),
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: AsyncSession = Depends(get_db_session),
+    user_repo: UserRepository = Depends(get_user_repository),
 ) -> User:
     if not credentials:
+        logger.warning("auth_no_credentials", org_slug=org_ctx.org_slug)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authorization header missing",
@@ -82,12 +86,42 @@ async def get_current_user(
     
     settings = get_settings()
     token = credentials.credentials
-    user_repo = UserRepository(db)
-    
+    logger.debug("auth_credentials_received", org_slug=org_ctx.org_slug)
+
     if settings.auth0_enabled:
         return await _validate_auth0_user(token, org_ctx, user_repo)
     else:
         return await _validate_dev_user(token, org_ctx, user_repo, db)
+
+
+def _enforce_org_binding(auth0_payload: Auth0TokenPayload, org_ctx: OrgContext) -> None:
+    """Enforce org binding via subdomain + optional token org_id.
+
+    The subdomain is the source of truth for org identity (server-controlled).
+    User lookup is always scoped to org_ctx.org_id, so cross-tenant access is
+    impossible even without org_id in the token.
+
+    If org_id IS present in the token, it must match — reject mismatches.
+    If org_id is absent, allow it — the org-scoped user lookup is sufficient.
+    """
+    token_org_id = auth0_payload.org_id
+
+    if not token_org_id:
+        logger.debug("org_binding_skip_no_token_org", org_slug=org_ctx.org_slug)
+        return
+
+    expected = org_ctx.auth0_org_id or str(org_ctx.org_id)
+    if token_org_id != expected:
+        logger.warning(
+            "org_mismatch",
+            org_slug=org_ctx.org_slug,
+            token_org_id=token_org_id,
+            expected_org_id=expected,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Token organization does not match request",
+        )
 
 
 async def _validate_auth0_user(
@@ -104,44 +138,69 @@ async def _validate_auth0_user(
             detail=str(e),
         ) from e
     
-    if auth0_payload.org_id and auth0_payload.org_id != str(org_ctx.org_id):
-        logger.warning(
-            "org_mismatch_in_auth0_token",
-            token_org=auth0_payload.org_id,
-            request_org=str(org_ctx.org_id),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Token organization does not match request",
-        )
+    _enforce_org_binding(auth0_payload, org_ctx)
     
     user = await user_repo.get_by_auth0_sub(auth0_payload.sub, org_ctx.org_id)
     
-    # Auto-link by email ONLY if email is verified
-    # This prevents account takeover via unverified email registration
-    if not user and auth0_payload.email:
+    if not user:
+        email = auth0_payload.email
         email_verified = auth0_payload.raw_claims.get("email_verified", False)
         
-        if not email_verified:
-            logger.warning(
-                "auth0_email_not_verified",
-                email=auth0_payload.email,
-                sub=auth0_payload.sub,
-            )
+        # Auth0 access tokens don't include email by default.
+        # Fall back to /userinfo endpoint to get email + verification status.
+        if not email:
+            logger.info("auth0_email_missing_from_token", sub=auth0_payload.sub)
+            userinfo = fetch_userinfo(token)
+            email = userinfo.get("email")
+            email_verified = userinfo.get("email_verified", False)
+        
+        if email and not email_verified:
+            logger.warning("auth0_email_not_verified", email=email, sub=auth0_payload.sub)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Email not verified. Please verify your email before accessing this organization.",
             )
         
-        user = await user_repo.get_by_email(auth0_payload.email, org_ctx.org_id)
-        if user:
-            await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
-            logger.info(
-                "linked_auth0_sub_to_user",
-                user_id=str(user.id),
-                sub=auth0_payload.sub,
-                email_verified=True,
-            )
+        if email:
+            user = await user_repo.get_by_email(email, org_ctx.org_id)
+            if user:
+                await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
+                logger.info(
+                    "linked_auth0_sub_to_user",
+                    user_id=str(user.id),
+                    sub=auth0_payload.sub,
+                    email=email,
+                )
+            else:
+                # Auto-provision: Auth0 org membership + verified email = trusted user.
+                # Admin adds users to the Auth0 organization; on first login we
+                # create their DB row automatically so no manual SQL is needed.
+                # SAVEPOINT handles the race where parallel requests both try to INSERT.
+                try:
+                    async with user_repo.session.begin_nested():
+                        user = await user_repo.create(org_ctx.org_id, email)
+                    await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
+                    logger.info(
+                        "auto_provisioned_user",
+                        user_id=str(user.id),
+                        sub=auth0_payload.sub,
+                        email=email,
+                        org_id=str(org_ctx.org_id),
+                    )
+                except IntegrityError:
+                    user = await user_repo.get_by_email(email, org_ctx.org_id)
+                    if user:
+                        await user_repo.link_auth0_sub(user.id, auth0_payload.sub)
+                        logger.info(
+                            "linked_auth0_sub_after_race",
+                            user_id=str(user.id),
+                            sub=auth0_payload.sub,
+                            email=email,
+                        )
+                # Commit immediately so the user persists even if the
+                # downstream endpoint returns 403/404/etc.
+                if user:
+                    await user_repo.session.commit()
     
     if not user:
         raise HTTPException(

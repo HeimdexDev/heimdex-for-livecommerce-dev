@@ -12,7 +12,10 @@ from app.modules.tenancy.context import OrgContext, org_context
 
 logger = get_logger(__name__)
 
-SUBDOMAIN_PATTERN = re.compile(r"^([a-z0-9][a-z0-9-]*[a-z0-9])\.app\.heimdex\.(local|co)$")
+SUBDOMAIN_PATTERN = re.compile(
+    r"^([a-z0-9][a-z0-9-]*[a-z0-9])\.app\."
+    r"(?:heimdex\.(?:local|co)|heimdexdemo\.dev)$"
+)
 LOCALHOST_PATTERN = re.compile(r"^localhost(:\d+)?$")
 
 HEALTH_PATHS = {"/health", "/healthz", "/ready"}
@@ -58,7 +61,7 @@ class TenancyMiddleware:
             return
 
         path = scope.get("path", "")
-        if path in HEALTH_PATHS:
+        if path in HEALTH_PATHS or path.startswith("/internal/"):
             await self.app(scope, receive, send)
             return
 
@@ -90,7 +93,8 @@ ERROR_MESSAGES = {
     ),
     TenancyError.INVALID_FORMAT: (
         "Invalid Host header format. "
-        "Expected: {org}.app.heimdex.local (dev) or {org}.app.heimdex.co (prod)"
+        "Expected: {org}.app.heimdex.local (dev), "
+        "{org}.app.heimdexdemo.dev (staging), or {org}.app.heimdex.co (prod)"
     ),
     TenancyError.MISSING_SUBDOMAIN: (
         "Missing organization subdomain in Host header. "
@@ -146,7 +150,11 @@ async def get_current_org(
             detail=f"Organization '{org_slug}' not found. Verify the subdomain is correct.",
         )
     
-    ctx = OrgContext(org_id=org.id, org_slug=org.slug)
+    ctx = OrgContext(
+        org_id=org.id,
+        org_slug=org.slug,
+        auth0_org_id=getattr(org, "auth0_org_id", None),
+    )
     org_context.set(ctx)
     
     logger.debug("org_context_resolved", org_id=str(org.id), slug=org.slug)

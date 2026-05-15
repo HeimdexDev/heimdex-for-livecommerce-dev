@@ -1,0 +1,159 @@
+{
+  "name": "evergreen_closer_demo",
+  "video_id": "gd_synth_evergreen_demo_001",
+  "llm_label": "글로우 마스크팩",
+  "spoken_aliases": ["이 마스크팩", "마스크팩"],
+  "target_duration_ms": 60000,
+  "_notes": "v4 prompt fixture (2026-05-13). Last segment has BOTH an evergreen DEMO RESULT chunk (chunk[5] — 'borrow visible result via sensory reveal') AND two live-only urgency chunks (chunks[6], [7], has_cta=true). v4 LLM picker MUST select chunk[5] as the CTA. Tests pattern (b) DEMO RESULT in CLOSER definition. Hand-labeled.",
+  "scored_chunks": [
+    {
+      "start_ms": 0,
+      "end_ms": 25000,
+      "text": "이거 한번 보세요 한 장 붙이고 자고 일어났더니 피부가 이렇게 달라졌어요",
+      "hook_score": 0.85,
+      "has_cta": false,
+      "importance_score": 0.5
+    },
+    {
+      "start_ms": 30000,
+      "end_ms": 55000,
+      "text": "오늘 소개해드릴 건 글로우 마스크팩이에요 히알루론산이랑 비타민C가 풍부해서 보습 진짜 잘돼요",
+      "hook_score": 0.45,
+      "has_cta": false,
+      "importance_score": 0.85
+    },
+    {
+      "start_ms": 400000,
+      "end_ms": 425000,
+      "text": "이렇게 한 장 꺼내서 얼굴에 딱 붙이시고 15분 정도 두시면 됩니다",
+      "hook_score": 0.4,
+      "has_cta": false,
+      "importance_score": 0.78
+    },
+    {
+      "start_ms": 425000,
+      "end_ms": 450000,
+      "text": "성분 보시면 자극 없는 무알콜 무파라벤이고 민감 피부도 안심하고 쓰실 수 있어요",
+      "hook_score": 0.35,
+      "has_cta": false,
+      "importance_score": 0.82
+    },
+    {
+      "start_ms": 800000,
+      "end_ms": 825000,
+      "text": "한 박스에 30매 들어있어서 한 달 매일 쓰셔도 충분하고 가성비도 좋아요",
+      "hook_score": 0.4,
+      "has_cta": false,
+      "importance_score": 0.6
+    },
+    {
+      "start_ms": 1500000,
+      "end_ms": 1525000,
+      "text": "보세요 이쪽 발랐던 부분이 차이 느껴지죠 광택도 살아나고 결도 정돈됐어요",
+      "hook_score": 0.65,
+      "has_cta": false,
+      "importance_score": 0.7
+    },
+    {
+      "start_ms": 1600000,
+      "end_ms": 1620000,
+      "text": "지금 주문하시면 30프로 할인에 사은품까지 드려요 매진 임박이에요",
+      "hook_score": 0.78,
+      "has_cta": true,
+      "importance_score": 0.62
+    },
+    {
+      "start_ms": 1650000,
+      "end_ms": 1670000,
+      "text": "오늘만 이 구성에 이 가격이에요 댓글 남겨주시면 추가 혜택 드립니다",
+      "hook_score": 0.72,
+      "has_cta": true,
+      "importance_score": 0.55
+    }
+  ],
+  "segments": [
+    {
+      "start_ms": 0,
+      "end_ms": 55000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_demo_001_scene_001",
+          "start_ms": 0,
+          "end_ms": 25000,
+          "transcript_text": "이거 한번 보세요 한 장 붙이고 자고 일어났더니 피부가 이렇게 달라졌어요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_demo_001_scene_002",
+          "start_ms": 30000,
+          "end_ms": 55000,
+          "transcript_text": "오늘 소개해드릴 건 글로우 마스크팩이에요 히알루론산이랑 비타민C가 풍부해서 보습 진짜 잘돼요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 400000,
+      "end_ms": 825000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_demo_001_scene_020",
+          "start_ms": 400000,
+          "end_ms": 425000,
+          "transcript_text": "이렇게 한 장 꺼내서 얼굴에 딱 붙이시고 15분 정도 두시면 됩니다",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_demo_001_scene_021",
+          "start_ms": 425000,
+          "end_ms": 450000,
+          "transcript_text": "성분 보시면 자극 없는 무알콜 무파라벤이고 민감 피부도 안심하고 쓰실 수 있어요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_demo_001_scene_040",
+          "start_ms": 800000,
+          "end_ms": 825000,
+          "transcript_text": "한 박스에 30매 들어있어서 한 달 매일 쓰셔도 충분하고 가성비도 좋아요",
+          "speaker_transcript": ""
+        }
+      ]
+    },
+    {
+      "start_ms": 1500000,
+      "end_ms": 1670000,
+      "scenes": [
+        {
+          "scene_id": "gd_synth_evergreen_demo_001_scene_075",
+          "start_ms": 1500000,
+          "end_ms": 1525000,
+          "transcript_text": "보세요 이쪽 발랐던 부분이 차이 느껴지죠 광택도 살아나고 결도 정돈됐어요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_demo_001_scene_080",
+          "start_ms": 1600000,
+          "end_ms": 1620000,
+          "transcript_text": "지금 주문하시면 30프로 할인에 사은품까지 드려요 매진 임박이에요",
+          "speaker_transcript": ""
+        },
+        {
+          "scene_id": "gd_synth_evergreen_demo_001_scene_081",
+          "start_ms": 1650000,
+          "end_ms": 1670000,
+          "transcript_text": "오늘만 이 구성에 이 가격이에요 댓글 남겨주시면 추가 혜택 드립니다",
+          "speaker_transcript": ""
+        }
+      ]
+    }
+  ],
+  "ideal": {
+    "hook": {"source_start_ms": 0, "source_end_ms": 8000},
+    "intro": {"source_start_ms": 30000, "source_end_ms": 42000},
+    "detail": [
+      {"source_start_ms": 400000, "source_end_ms": 412500},
+      {"source_start_ms": 425000, "source_end_ms": 437500}
+    ],
+    "cta": {"source_start_ms": 1500000, "source_end_ms": 1508000}
+  }
+}
