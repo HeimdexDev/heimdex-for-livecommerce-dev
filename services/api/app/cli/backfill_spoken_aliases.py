@@ -229,111 +229,21 @@ async def _run(args: argparse.Namespace) -> int:
             print(f"  ... ({len(entries) - 20} more)")
         return 0
 
-    stats = {"ok": 0, "terminal": 0, "retryable": 0, "skipped_budget": 0}
-    total_cost_usd = 0.0
-    total_aliases = 0
-    start = time.monotonic()
-    exit_code = 0
-
-    for i, entry in enumerate(entries, start=1):
-        if total_cost_usd >= args.max_cost_usd:
-            logger.warning(
-                "alias_backfill_max_cost_reached",
-                extra={
-                    "spent_usd": total_cost_usd,
-                    "max_cost_usd": args.max_cost_usd,
-                    "remaining": len(entries) - i + 1,
-                },
-            )
-            stats["skipped_budget"] = len(entries) - i + 1
-            exit_code = 2
-            break
-
-        try:
-            result = await generator.generate(
-                canonical_crop_s3_key=entry.canonical_crop_s3_key,
-                llm_label=entry.llm_label,
-            )
-        except AliasGenerationBudgetExceeded as e:
-            logger.warning("alias_backfill_budget_exceeded", extra={"error": str(e)})
-            exit_code = 2
-            break
-        except AliasGenerationTerminal as e:
-            stats["terminal"] += 1
-            logger.warning(
-                "alias_backfill_entry_terminal",
-                extra={
-                    "entry_id": str(entry.id),
-                    "label": entry.llm_label[:80],
-                    "error": str(e)[:300],
-                },
-            )
-            continue
-        except AliasGenerationRetryable as e:
-            stats["retryable"] += 1
-            logger.warning(
-                "alias_backfill_entry_retryable",
-                extra={
-                    "entry_id": str(entry.id),
-                    "label": entry.llm_label[:80],
-                    "error": str(e)[:300],
-                },
-            )
-            continue
-        except AliasGenerationError as e:
-            stats["retryable"] += 1
-            logger.warning(
-                "alias_backfill_entry_unknown",
-                extra={
-                    "entry_id": str(entry.id),
-                    "label": entry.llm_label[:80],
-                    "error": str(e)[:300],
-                },
-            )
-            continue
-
-        # Per-entry session so a write failure on one row does not
-        # roll back the previous successful writes.
-        async with factory() as session:
-            repo = ProductCatalogRepository(session)
-            updated = await repo.update_aliases(
-                entry_id=entry.id,
-                aliases=result.aliases,
-                prompt_version=result.prompt_version,
-            )
-            await session.commit()
-            if not updated:
-                logger.warning(
-                    "alias_backfill_row_vanished",
-                    extra={"entry_id": str(entry.id)},
-                )
-
-        stats["ok"] += 1
-        total_cost_usd += result.cost_usd
-        total_aliases += len(result.aliases)
-        print(
-            f"  [{i}/{len(entries)}] {entry.llm_label[:40]:40s} → "
-            f"{len(result.aliases):2d} aliases  "
-            f"({result.latency_ms} ms, ${result.cost_usd:.5f}): "
-            f"{result.aliases}"
-        )
-
-    elapsed = time.monotonic() - start
-    print(
-        f"\nDone in {elapsed:.1f}s — "
-        f"ok={stats['ok']}, terminal_fail={stats['terminal']}, "
-        f"retryable_fail={stats['retryable']}, "
-        f"skipped_budget={stats['skipped_budget']}, "
-        f"avg_aliases={total_aliases / stats['ok']:.1f} per entry, "
-        f"total_cost_usd=${total_cost_usd:.4f}"
-        if stats["ok"]
-        else f"\nDone in {elapsed:.1f}s — no entries processed; "
-        f"terminal_fail={stats['terminal']}, "
-        f"retryable_fail={stats['retryable']}, "
-        f"skipped_budget={stats['skipped_budget']}"
+    from app.modules.shorts_auto_product.aliases.backfill_core import (
+        backfill_aliases_for_video,
     )
-
-    return exit_code if exit_code else (1 if stats["terminal"] + stats["retryable"] else 0)
+    # The CLI may run org-wide (video optional). backfill_core
+    # accepts video_db_id as Optional — find_entries_needing_aliases
+    # treats video_id=None as "all", so delegate as-is.
+    processed = await backfill_aliases_for_video(
+        session_factory=factory,
+        org_id=org_id,
+        video_db_id=video_uuid,   # org-wide if None
+        settings=settings,
+    )
+    print(f"\\nDone — processed={processed} entries "
+          f"(per-entry failures logged as alias_backfill_core_entry_failed)")
+    return 0
 
 
 def main() -> None:

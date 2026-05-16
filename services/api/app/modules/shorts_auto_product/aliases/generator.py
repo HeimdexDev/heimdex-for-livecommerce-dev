@@ -293,6 +293,28 @@ def _parse_and_validate(
             },
         )
         raise AliasGenerationTerminal(f"json_parse_failed: {e}") from e
+    
+    # v2.0: defensive cleanup — LLM occasionally emits a comma-joined
+    # list as one string despite the prompt. Split on comma + dedup.
+    # NO length filter here — would kill short brand transliterations
+    # ('달심'); generic-word removal is the prompt's job (it can tell
+    # brand vs category, this code can't).
+    if isinstance(data, dict) and isinstance(data.get("aliases"), list):
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for raw in data["aliases"]:
+            if not isinstance(raw, str):
+                continue
+            for part in raw.split(","):
+                p = part.strip()
+                if not p:
+                    continue
+                key = p.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                cleaned.append(p)
+        data["aliases"] = cleaned
 
     try:
         return AliasGenerationResponse.model_validate(data)

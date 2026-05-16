@@ -449,6 +449,14 @@ def schedule_stt_enumeration_task(
                     )
                     if inserted:
                         await session.commit()
+                        from app.modules.shorts_auto_product.aliases.auto_hook import (
+                            schedule_alias_generation,
+                        )
+                        schedule_alias_generation(
+                            org_id=org_id,
+                            video_db_id=video_db_id,
+                            settings=settings,
+                        )
             finally:
                 # Best-effort cleanup — the OS / OpenAI clients hold
                 # connection pools we should release even on failure.

@@ -201,6 +201,34 @@ async def test_strict_json_schema_passed_to_openai():
     assert rf["json_schema"]["schema"]["properties"]["aliases"]["maxItems"] == 10
 
 
+@pytest.mark.asyncio
+async def test_comma_joined_alias_is_split():
+    fake_openai = _FakeOpenAI(
+        raw_text=json.dumps({"aliases": ["프레첼, 웨하스, 와플 셋트", "달심"]}),
+    )
+    gen = AliasGenerator(openai_client=fake_openai, s3_client=_FakeS3Client())
+    result = await gen.generate(
+        canonical_crop_s3_key="proxies/x/canonical.jpg",
+        llm_label="말차 프레첼",
+    )
+    # 콤마 split, 짧은 brand("달심" 2자)는 보존 (length cut 안 함)
+    assert result.aliases == ["프레첼", "웨하스", "와플 셋트", "달심"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_alias_deduped():
+    fake_openai = _FakeOpenAI(
+        raw_text=json.dumps({"aliases": ["달심", "달심", "Dalsim"]}),
+    )
+    gen = AliasGenerator(openai_client=fake_openai, s3_client=_FakeS3Client())
+    result = await gen.generate(
+        canonical_crop_s3_key="proxies/x/canonical.jpg",
+        llm_label="달심",
+    )
+    # casefold 중복 제거. "달심" 1개, "Dalsim"(다른 토큰) 유지
+    assert result.aliases == ["달심", "Dalsim"]
+
+
 # ---------- S3 failure modes ----------
 
 

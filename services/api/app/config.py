@@ -371,6 +371,9 @@ class Settings(BaseSettings):
     # multiple products in the same window).
     auto_shorts_product_v2_mention_dominance_threshold: float = 0.0
 
+    auto_shorts_product_v2_alias_auto_hook_enabled: bool = False
+    auto_shorts_product_v2_alias_daily_budget_usd: float = 5.0
+
     # --- chunk-level LLM catalog match ---
     # threshold=0.0 means OFF (back-compat). Typical staging: 0.5-0.7.
     # chunk_scorer's LLM emits primary_catalog_match (0~1); chunks with
