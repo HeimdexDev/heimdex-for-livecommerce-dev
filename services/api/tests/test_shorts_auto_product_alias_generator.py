@@ -229,6 +229,28 @@ async def test_duplicate_alias_deduped():
     assert result.aliases == ["달심", "Dalsim"]
 
 
+@pytest.mark.asyncio
+async def test_text_only_when_no_canonical_crop():
+    """canonical_crop_s3_key=None -> S3 skip, text-only LLM call,
+    aliases still generated."""
+    fake_openai = _FakeOpenAI(
+        raw_text=json.dumps({"aliases": ["달심", "달심 주스"]}),
+    )
+    fake_s3 = _FakeS3Client()
+    gen = AliasGenerator(openai_client=fake_openai, s3_client=fake_s3)
+
+    result = await gen.generate(
+        canonical_crop_s3_key=None,
+        llm_label="달심 ABC 주스",
+    )
+
+    assert result.aliases == ["달심", "달심 주스"]
+    assert fake_s3.calls == []  # S3 not touched
+    [call] = fake_openai.completions.calls
+    user_msg = call["messages"][1]
+    assert isinstance(user_msg["content"], str)  # text only, not list
+    
+
 # ---------- S3 failure modes ----------
 
 
