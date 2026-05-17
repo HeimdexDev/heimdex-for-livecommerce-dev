@@ -16,9 +16,11 @@ const TABS: { id: RightPanelTab; label: string }[] = [
 ];
 
 export function RightPanelTabs({ active, onChange }: RightPanelTabsProps) {
-  // figma 1663:45754 — h=32 border-b border-neutral-h-100 / tabs flex-1 equal width
+  // figma 1663:45754 — h=32 border-b border-neutral-h-100, full-width strip
+  // sitting inside the RightPanel's p-20 wrapper. Each tab takes flex-1 and
+  // active state lifts a 2px heimdex-navy underline.
   return (
-    <div className="flex h-8 items-start border-b border-neutral-h-100 px-5 pt-5">
+    <div className="flex h-[32px] w-full shrink-0 items-start border-b border-neutral-h-100">
       {TABS.map((tab) => (
         <button
           key={tab.id}
