@@ -629,6 +629,7 @@ export function ShortsEditorPage() {
           onUpdateSubtitlePosition={handleSubtitlePositionChange}
           onUpdateSubtitleFontSize={handleSubtitleFontSizeChange}
           onClose={() => setIsFullscreen(false)}
+          filename={title || meta?.video_title || undefined}
         />
       )}
 
