@@ -1,0 +1,67 @@
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV HF_HOME=/models/huggingface
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    ca-certificates \
+    curl \
+    gnupg \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    git \
+    gcc \
+    g++ \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      python3.11 \
+      python3.11-dev \
+      python3.11-distutils \
+      python3.11-venv \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3.11 /tmp/get-pip.py \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip \
+    && rm -f /tmp/get-pip.py \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.5.0"
+
+COPY heimdex-media-contracts/ /tmp/heimdex-media-contracts/
+RUN pip install --no-cache-dir /tmp/heimdex-media-contracts \
+    && rm -rf /tmp/heimdex-media-contracts
+
+COPY heimdex-media-pipelines/ /tmp/heimdex-media-pipelines/
+RUN pip install --no-cache-dir /tmp/heimdex-media-pipelines \
+    && rm -rf /tmp/heimdex-media-pipelines
+
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
+      "torch>=2.0" "torchvision>=0.15" \
+    && pip install --no-cache-dir \
+      "transformers>=4.48.0" "Pillow>=9.0" "einops>=0.7" "timm>=0.9" \
+      "boto3>=1.34" "pydantic-settings>=2.0" \
+      "structlog>=23.0" "requests>=2.31" \
+      "accelerate>=0.26.0" "bitsandbytes>=0.43"
+
+RUN --mount=type=secret,id=hf_token mkdir -p "${HF_HOME}" \
+    && export HF_TOKEN=$(cat /run/secrets/hf_token 2>/dev/null) \
+    && python -c "from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig; import torch; bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16); Qwen2_5_VLForConditionalGeneration.from_pretrained('Qwen/Qwen2.5-VL-7B-Instruct', quantization_config=bnb_config, trust_remote_code=True, device_map='auto'); AutoProcessor.from_pretrained('Qwen/Qwen2.5-VL-7B-Instruct', trust_remote_code=True)"
+
+COPY dev-heimdex-for-livecommerce/services/drive-caption-worker/src/ src/
+
+RUN useradd -m -u 1000 appuser \
+    && chown -R appuser:appuser /app /models
+USER appuser
+
+CMD ["python", "-m", "src.worker"]

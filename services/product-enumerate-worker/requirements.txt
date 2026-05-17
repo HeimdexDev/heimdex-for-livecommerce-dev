@@ -1,0 +1,37 @@
+# Phase 2: shorts-auto product enumerate worker — gpt-4o-mini vision +
+# SigLIP2 (google/siglip2-base-patch16-256) on CUDA 12.4 + torch 2.4.1.
+#
+# No insightface / OWLv2 — the enumerate stage doesn't need them. SAM2
+# is reserved for the track worker (Phase 3, separate image).
+#
+# Torch wheels need the cu124 extra index — supplied in Dockerfile.gpu
+# via `pip install --extra-index-url https://download.pytorch.org/whl/cu124`.
+# Pins mirror drive-blur-worker / drive-visual-embed-worker where they
+# overlap so we operate one Python+CUDA matrix across GPU workers.
+
+# core
+boto3>=1.34
+httpx==0.27.2
+openai>=1.0
+Pillow==10.2.0
+pydantic==2.13.0
+pydantic-settings>=2.0
+structlog>=23.0
+
+# ML
+accelerate==1.13.0
+huggingface_hub==1.10.1
+numpy==2.4.4
+safetensors==0.7.0
+sentencepiece>=0.1.99
+tokenizers==0.22.2
+torch==2.4.1+cu124
+torchvision==0.19.1+cu124
+transformers==5.5.4
+
+# Heimdex shared libs:
+# * worker-sdk: pinned to PyPI version, installed by Dockerfile BEFORE
+#   this requirements file.
+# * contracts + pipelines: installed from sibling source checkouts
+#   (NOT from this requirements file) — pipelines is not yet on PyPI.
+#   See Dockerfile.gpu for the COPY+install steps.

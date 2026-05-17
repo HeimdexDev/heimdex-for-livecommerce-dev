@@ -1,0 +1,9 @@
+[Unit]
+Description=Heimdex Shorts Render Cleanup (daily expired job removal)
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/heimdex/dev-heimdex-for-livecommerce
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.onprem.yml exec -T api python -m app.cli.cleanup_shorts_renders
+TimeoutStartSec=300

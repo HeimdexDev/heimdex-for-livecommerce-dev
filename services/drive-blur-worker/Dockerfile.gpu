@@ -1,0 +1,123 @@
+# PII blur worker — CUDA 12.4 + torch 2.4.1 + transformers + insightface.
+#
+# Mirrors drive-face-worker/Dockerfile.gpu so devops operates one pattern
+# across all GPU workers. Pins come from the senior engineer's battle-
+# tested requirements (services/drive-blur-worker/requirements.txt) —
+# do NOT replace with loose floors; the OWLv2 + SCRFD combo is sensitive
+# to torch / transformers version drift.
+#
+# Build (invoked by docker compose from repo root):
+#   docker build \
+#     -f services/drive-blur-worker/Dockerfile.gpu \
+#     -t heimdex-drive-blur-worker:gpu .
+#
+# Run: see docker-compose.yml `drive-blur-worker` service.
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    HF_HOME=/models/hf \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates curl gnupg \
+        build-essential python3-dev git \
+        ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-dev python3.11-distutils python3.11-venv \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3.11 /tmp/get-pip.py \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip \
+    && rm -f /tmp/get-pip.py \
+    && rm -rf /var/lib/apt/lists/*
+
+# v0.10 layer export requires the ``ffv1`` encoder (per-category
+# grayscale masks written by the pipeline) and ``prores_ks`` (the
+# ProRes 4444 NLE-compatible layer produced by the export task). Fail
+# the build immediately if either is missing from the stock ffmpeg
+# package — discovering this at runtime inside Aircloud costs a full
+# GPU cold-start cycle just to learn the image is broken.
+RUN set -e; \
+    encoders="$(ffmpeg -hide_banner -encoders 2>/dev/null)"; \
+    echo "$encoders" | grep -qw ffv1 || { echo "ERROR: ffmpeg build is missing the 'ffv1' encoder (required for per-category blur masks)"; exit 1; }; \
+    echo "$encoders" | grep -qw prores_ks || { echo "ERROR: ffmpeg build is missing the 'prores_ks' encoder (required for ProRes 4444 layer export)"; exit 1; }; \
+    echo "ffmpeg encoders ok: ffv1 + prores_ks"
+
+WORKDIR /app
+
+# Worker SDK — pip-installed from PyPI, pinned at the version that adds
+# the "blur" job type to the gpu_orchestrator mapping (PR 4). Until
+# 0.2.0 is published we volume-mount the local source via
+# docker-compose override for local dev.
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.5.0" || \
+    echo "worker-sdk 0.2.0 not yet on PyPI — expecting volume mount"
+
+# Heimdex media contracts — same version-mount pattern.
+COPY heimdex-media-contracts/ /tmp/heimdex-media-contracts/
+RUN pip install --no-cache-dir /tmp/heimdex-media-contracts \
+    && rm -rf /tmp/heimdex-media-contracts
+
+# Heavy ML deps pinned from senior's validated environment.
+COPY dev-heimdex-for-livecommerce/services/drive-blur-worker/requirements.txt /tmp/requirements.txt
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install \
+        --extra-index-url https://download.pytorch.org/whl/cu124 \
+        -r /tmp/requirements.txt \
+    && rm -f /tmp/requirements.txt
+
+# Pipeline library (imports BlurPipeline from heimdex_media_pipelines.blur).
+# PR 1 lives in the sibling checkout; volume-mounted for local dev.
+COPY heimdex-media-pipelines/ /tmp/heimdex-media-pipelines/
+RUN pip install --no-cache-dir /tmp/heimdex-media-pipelines \
+    && rm -rf /tmp/heimdex-media-pipelines
+
+# Create the runtime user BEFORE pre-warming so SCRFD weights land in
+# the home dir that the runtime FaceAnalysis() call actually reads from.
+# Also pre-create the matplotlib cache dir — matplotlib mkdirs it on
+# import, and failing to write to ~/.cache/matplotlib prints a noisy
+# warning + falls back to a throwaway /tmp location on every cold start.
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p /home/appuser/.cache/matplotlib
+
+# Pre-warm OWLv2 weights into HF_HOME so Aircloud cold-starts don't pay
+# the 400 MB HuggingFace download cost on every wake. Fails the build if
+# the weights are unreachable — intentional; broken pulls must be
+# visible at build time, not at 2 am during a blur run.
+RUN mkdir -p /models/hf \
+    && python -c "\
+from transformers import Owlv2Processor, Owlv2ForObjectDetection; \
+Owlv2Processor.from_pretrained('google/owlv2-base-patch16-ensemble'); \
+Owlv2ForObjectDetection.from_pretrained('google/owlv2-base-patch16-ensemble'); \
+print('owlv2 cached')"
+
+# Pre-warm SCRFD (buffalo_l) into appuser's ~/.insightface — which is
+# the default location insightface.FaceAnalysis looks up when called
+# without an explicit root=. Pre-warming to /models/insightface (as we
+# did before) was wasted because heimdex_media_pipelines.faces.detect
+# calls FaceAnalysis(name='buffalo_l') with no root, so insightface
+# falls back to ~/.insightface → /home/appuser/.insightface at runtime
+# and triggered a ~275 MB GitHub re-download on every cold start.
+RUN mkdir -p /home/appuser/.insightface/models \
+    && python -c "\
+import insightface; \
+app = insightface.app.FaceAnalysis(name='buffalo_l', root='/home/appuser/.insightface', providers=['CPUExecutionProvider']); \
+app.prepare(ctx_id=-1, det_size=(640,640))"
+
+COPY dev-heimdex-for-livecommerce/services/drive-blur-worker/src/ src/
+
+RUN chown -R appuser:appuser /app /models /home/appuser
+USER appuser
+
+CMD ["python", "-m", "src.worker"]

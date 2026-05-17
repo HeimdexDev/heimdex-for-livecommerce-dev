@@ -1,11 +1,13 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: heimdex-postgres
+    mem_limit: 1g
+    cpus: "2.0"
     environment:
-      POSTGRES_USER: heimdex
-      POSTGRES_PASSWORD: heimdex_dev_password
-      POSTGRES_DB: heimdex
+      POSTGRES_USER: ${POSTGRES_USER:-heimdex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heimdex_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-heimdex}
     ports:
       - "5432:5432"
     volumes:
@@ -22,6 +24,8 @@ services:
       dockerfile: Dockerfile
     image: heimdex-opensearch:2.11.1-nori
     container_name: heimdex-opensearch
+    mem_limit: 1g
+    cpus: "2.0"
     environment:
       - discovery.type=single-node
       - plugins.security.disabled=true
@@ -48,9 +52,11 @@ services:
   minio:
     image: minio/minio:latest
     container_name: heimdex-minio
+    mem_limit: 512m
+    cpus: "1.0"
     environment:
-      MINIO_ROOT_USER: heimdex
-      MINIO_ROOT_PASSWORD: heimdex_dev_password
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-heimdex}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-heimdex_dev_password}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -68,35 +74,286 @@ services:
       context: ./services/api
       dockerfile: Dockerfile
     container_name: heimdex-api
+    mem_limit: 6g  # Increased from 4g for SigLIP2 text encoder (~200MB BF16) alongside E5-large
+    cpus: "4.0"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex
-      - DATABASE_URL_SYNC=postgresql://heimdex:heimdex_dev_password@postgres:5432/heimdex
-      - OPENSEARCH_URL=http://opensearch:9200
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=heimdex
-      - MINIO_SECRET_KEY=heimdex_dev_password
-      - JWT_SECRET_KEY=dev-secret-key-change-in-production
-      - ENVIRONMENT=development
-      - LOG_LEVEL=DEBUG
-      - ALLOWED_HOSTS=*.app.heimdex.local,localhost
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://heimdex:heimdex_dev_password@postgres:5432/heimdex}
+      - DATABASE_URL_SYNC=${DATABASE_URL_SYNC:-postgresql://heimdex:heimdex_dev_password@postgres:5432/heimdex}
+      - OPENSEARCH_URL=${OPENSEARCH_URL:-http://opensearch:9200}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - JWT_EXPIRATION_HOURS=${JWT_EXPIRATION_HOURS:-24}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*.app.heimdex.local,localhost}
+      - AUTH_COOKIE_SECURE=${AUTH_COOKIE_SECURE:-true}
+      - AUTH_COOKIE_SAMESITE=${AUTH_COOKIE_SAMESITE:-lax}
       # Embedding configuration - set EMBEDDING_USE_MOCK=false for real semantic search
-      - EMBEDDING_MODEL=intfloat/multilingual-e5-large
-      - EMBEDDING_DIMENSION=1024
-      - EMBEDDING_DEVICE=cpu
-      - EMBEDDING_USE_MOCK=true
-      # Auth0 configuration - set AUTH0_ENABLED=true and configure for production
-      - AUTH0_ENABLED=false
-      - AUTH0_DOMAIN=your-tenant.auth0.com
-      - AUTH0_AUDIENCE=https://api.heimdex.io
-      - AUTH0_ORG_CLAIM=https://heimdex.io/org_id
-      # HuggingFace model cache directory (persists downloaded models)
-      - HF_HOME=/root/.cache/huggingface
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-1024}
+      - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cpu}
+      - EMBEDDING_USE_MOCK=${EMBEDDING_USE_MOCK:-true}
+      # MX-6 dev-only: wizard parent/children progress_pct 를 응답 시점에
+      # 시작시각 기준 elapsed 로 덮어쓴다. 워커 없이도 진행률 바가 자연스럽게
+      # 움직이는 mock UX 제공. 운영 deploy 흐름에선 본 compose 가 안 쓰이므로
+      # 영향 없음. 끄려면 MOCK_WIZARD_AUTO_PROGRESS=false 로 export.
+      - MOCK_WIZARD_AUTO_PROGRESS=${MOCK_WIZARD_AUTO_PROGRESS:-true}
+      # Cross-encoder reranker (GPU service)
+      - RERANKER_ENABLED=${RERANKER_ENABLED:-false}
+      - RERANKER_SERVICE_URL=${RERANKER_SERVICE_URL:-}
+      - RERANKER_TIMEOUT_MS=${RERANKER_TIMEOUT_MS:-5000}
+      - RERANKER_USE_MOCK=${RERANKER_USE_MOCK:-false}
+      # Search rate limiting — per-(org, user) sliding window. Livenow
+      # customer support incident 2026-04-24 drove the per-user switch;
+      # the previous per-org bucket starved concurrent teammates.
+      - SEARCH_RATE_LIMIT_MAX_REQUESTS=${SEARCH_RATE_LIMIT_MAX_REQUESTS:-60}
+      - SEARCH_RATE_LIMIT_WINDOW_SECONDS=${SEARCH_RATE_LIMIT_WINDOW_SECONDS:-60}
+      # Speech-aware scene splitting + VLM tags
+      - DRIVE_SPEECH_SPLIT_ENABLED=${DRIVE_SPEECH_SPLIT_ENABLED:-false}
+      - VLM_TAGS_ENABLED=${VLM_TAGS_ENABLED:-false}
+      - AI_TAGS_ENABLED=${AI_TAGS_ENABLED:-false}
+      - FACE_THUMBNAIL_S3_PRIMARY=${FACE_THUMBNAIL_S3_PRIMARY:-false}
+      - HIGHLIGHT_REEL_ENABLED=${HIGHLIGHT_REEL_ENABLED:-false}
+      - VIDEO_SUMMARY_ENABLED=${VIDEO_SUMMARY_ENABLED:-false}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Image caption (OpenAI gpt-4o) — see services/api/app/modules/image_caption/
+      - IMAGE_CAPTION_ENABLED=${IMAGE_CAPTION_ENABLED:-false}
+      - IMAGE_CAPTION_MODEL=${IMAGE_CAPTION_MODEL:-gpt-4o}
+      - IMAGE_CAPTION_IMAGE_DETAIL=${IMAGE_CAPTION_IMAGE_DETAIL:-low}
+      - IMAGE_CAPTION_MAX_CONCURRENCY=${IMAGE_CAPTION_MAX_CONCURRENCY:-4}
+      - IMAGE_CAPTION_TIMEOUT_S=${IMAGE_CAPTION_TIMEOUT_S:-30.0}
+      - IMAGE_CAPTION_DAILY_BUDGET_USD=${IMAGE_CAPTION_DAILY_BUDGET_USD:-50.0}
+      - IMAGE_CAPTION_ESTIMATED_COST_PER_CALL_USD=${IMAGE_CAPTION_ESTIMATED_COST_PER_CALL_USD:-0.012}
+      - IMAGE_CAPTION_PROMPT_VERSION=${IMAGE_CAPTION_PROMPT_VERSION:-2026-04-13-v1}
+      # Auto-shorts product mode v2 (wizard) — pass-through to api so .env
+      # toggles propagate. Without this block the api silently uses
+      # config.py defaults (every flag false) regardless of host .env state.
+      # The same pattern of bug bit Phase 2 — the worker block had its own
+      # vars wired but the api block didn't, so the API never saw flag flips.
+      # 2026-05-17 dev default true — wizard V2 시각 검증 위해 enable + 100% rollout.
+      # 운영 deploy 는 본 compose 안 쓰고 별도 .env 로 명시.
+      - AUTO_SHORTS_PRODUCT_V2_ENABLED=${AUTO_SHORTS_PRODUCT_V2_ENABLED:-true}
+      - AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT=${AUTO_SHORTS_PRODUCT_V2_ROLLOUT_PCT:-100}
+      # Per-org concurrency cap on in-flight ProductScanJob rows
+      # (counts modes scan_order + enumerate + render_child in ACTIVE
+      # stages). Default 10. Operators raised this from 3 to 10 on
+      # 2026-05-06 after the cap was paper-cutting iteration cycles.
+      - AUTO_SHORTS_PRODUCT_V2_MAX_CONCURRENT_PER_ORG=${AUTO_SHORTS_PRODUCT_V2_MAX_CONCURRENT_PER_ORG:-10}
+      - AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED=${AUTO_SHORTS_PRODUCT_V2_PUBLISH_SCAN_ORDER_ENABLED:-false}
+      # PR 2.5 STT-pivot: track_mode flag. ``"sam2"`` (default) preserves
+      # SAM2 visual tracking. ``"stt"`` swaps in the in-process STT
+      # pipeline at shorts_auto_product/track_stt — see
+      # .claude/plans/shorts-auto-product-stt-pivot.md.
+      - AUTO_SHORTS_PRODUCT_V2_TRACK_MODE=${AUTO_SHORTS_PRODUCT_V2_TRACK_MODE:-sam2}
+      # PR 3 v0.16.0 STT-first enumeration. Runs alongside vision in the
+      # api process; OFF by default until calibration goldens land
+      # (PR 5 of .claude/plans/shorts-auto-product-stt-enum-2026-05-06.md).
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_ENABLED=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_ENABLED:-false}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MODEL=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MODEL:-gpt-4o-mini}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_CONCURRENCY=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_CONCURRENCY:-4}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_PROMPT_VERSION=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_PROMPT_VERSION:-v1.0}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_TRANSCRIPT_TOKENS=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_TRANSCRIPT_TOKENS:-80000}
+      - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_TIMEOUT_S=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_TIMEOUT_S:-90}
+      # Auto-shorts post-render Whisper subtitle refinement
+      # (.claude/plans/auto-shorts-whisper-subtitles-2026-05-06.md).
+      # Master flag default false; set to true on staging to enable
+      # the refinement hook. Memory: feedback_compose_env_passthrough_required.md
+      # — these lines are mandatory; ``restart`` does not reload .env.
+      - AUTO_SHORTS_PRODUCT_V2_WHISPER_REFINE_ENABLED=${AUTO_SHORTS_PRODUCT_V2_WHISPER_REFINE_ENABLED:-false}
+      - AUTO_SHORTS_PRODUCT_V2_WHISPER_ROLLOUT_PCT=${AUTO_SHORTS_PRODUCT_V2_WHISPER_ROLLOUT_PCT:-0}
+      - AUTO_SHORTS_PRODUCT_V2_WHISPER_MODEL=${AUTO_SHORTS_PRODUCT_V2_WHISPER_MODEL:-whisper-1}
+      - AUTO_SHORTS_PRODUCT_V2_WHISPER_LANGUAGE=${AUTO_SHORTS_PRODUCT_V2_WHISPER_LANGUAGE:-ko}
+      - AUTO_SHORTS_PRODUCT_V2_WHISPER_DAILY_BUDGET_USD=${AUTO_SHORTS_PRODUCT_V2_WHISPER_DAILY_BUDGET_USD:-5.0}
+      - AUTO_SHORTS_PRODUCT_V2_WHISPER_TIMEOUT_S=${AUTO_SHORTS_PRODUCT_V2_WHISPER_TIMEOUT_S:-60}
+      - AUTO_SHORTS_PRODUCT_V2_WHISPER_S3_DOWNLOAD_TIMEOUT_S=${AUTO_SHORTS_PRODUCT_V2_WHISPER_S3_DOWNLOAD_TIMEOUT_S:-30}
+      # Auto-shorts overlay-mode caption flow
+      # (.claude/plans/auto-shorts-overlay-mode-2026-05-07.md). When
+      # ON: Whisper post-render writes cues to the parent's
+      # input_spec (no child render); /rerender produces an export
+      # child that does NOT replace the parent. Default off; flip on
+      # staging only.
+      - AUTO_SHORTS_PRODUCT_V2_OVERLAY_MODE_ENABLED=${AUTO_SHORTS_PRODUCT_V2_OVERLAY_MODE_ENABLED:-false}
+      # Auto-shorts storyboard composition (Tier B / Tier C). Plan
+      # in ``track_stt/storyboard/__init__.py``. Default-off; flip
+      # on staging via .env. Same allowlist rule as the whisper
+      # block above — ``restart`` doesn't reload the .env file
+      # without the matching env: line here.
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_MODE_ENABLED=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_MODE_ENABLED:-false}
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_PICKER=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_PICKER:-heuristic}
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_HOOK_MS=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_HOOK_MS:-8000}
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_INTRO_MS=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_INTRO_MS:-12000}
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_DETAIL_MS=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_DETAIL_MS:-25000}
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_CTA_MS=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_CTA_MS:-8000}
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_SHADOW_MODE=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_SHADOW_MODE:-false}
+      # Auto-shorts: OCR re-rank in mention_extractor. Plan
+      # `.claude/plans/ocr-mention-extractor-rerank.md`. Default OFF; flip
+      # per-org once OCR backfill has populated v5 for that org's videos.
+      # Without these passthrough lines, setting the env vars in `.env`
+      # is a no-op inside the container (allowlist-based per
+      # `feedback_compose_env_passthrough_required.md`).
+      - AUTO_SHORTS_PRODUCT_V2_OCR_RERANK_ENABLED=${AUTO_SHORTS_PRODUCT_V2_OCR_RERANK_ENABLED:-false}
+      - AUTO_SHORTS_PRODUCT_V2_OCR_BOOST=${AUTO_SHORTS_PRODUCT_V2_OCR_BOOST:-0.6}
+      # Auto-shorts storyboard Tier C (LLM director). Plan
+      # `.claude/plans/storyboard-tier-c-llm-picker-2026-05-07.md`.
+      # Activated by AUTO_SHORTS_PRODUCT_V2_STORYBOARD_PICKER=llm
+      # (the master ..._STORYBOARD_MODE_ENABLED flag must also be true).
+      # Reuses the existing OPENAI_API_KEY from the chunk_scorer block.
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_MODEL=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_MODEL:-gpt-4o-mini}
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_TIMEOUT_S=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_TIMEOUT_S:-5.0}
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_DAILY_BUDGET_USD=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_DAILY_BUDGET_USD:-5.0}
+      - AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_PROMPT_VERSION=${AUTO_SHORTS_PRODUCT_V2_STORYBOARD_LLM_PROMPT_VERSION:-v1}
+      # Phase 1 live-block filter (only source clips from scenes
+      # where the host was actively talking). See
+      # ``config.py::auto_shorts_product_v2_live_only_enabled``.
+      - AUTO_SHORTS_PRODUCT_V2_LIVE_ONLY_ENABLED=${AUTO_SHORTS_PRODUCT_V2_LIVE_ONLY_ENABLED:-false}
+      - AUTO_SHORTS_PRODUCT_V2_MENTION_DOMINANCE_THRESHOLD=${AUTO_SHORTS_PRODUCT_V2_MENTION_DOMINANCE_THRESHOLD:-0.0}
+      - AUTO_SHORTS_PRODUCT_V2_CHUNK_CATALOG_MATCH_THRESHOLD=${AUTO_SHORTS_PRODUCT_V2_CHUNK_CATALOG_MATCH_THRESHOLD:-0.0}
+      # Auth0 configuration
+      - AUTH0_ENABLED=${AUTH0_ENABLED:-false}
+      - AUTH0_DOMAIN=${AUTH0_DOMAIN:-}
+      - AUTH0_AUDIENCE=${AUTH0_AUDIENCE:-}
+      - AUTH0_ORG_CLAIM=${AUTH0_ORG_CLAIM:-https://heimdex.io/org_id}
+      - AUTH0_ALGORITHMS=${AUTH0_ALGORITHMS:-RS256}
+      # Agent configuration
+      - AGENT_INGEST_ENABLED=${AGENT_INGEST_ENABLED:-true}
+      - AGENT_API_KEY=${AGENT_API_KEY:-dev-agent-key-change-in-production}
+      - AGENT_API_KEY_MODE=${AGENT_API_KEY_MODE:-global}
+      - AGENT_INGEST_MAX_SCENES=${AGENT_INGEST_MAX_SCENES:-500}
+      - AGENT_INGEST_MAX_TRANSCRIPT_CHARS=${AGENT_INGEST_MAX_TRANSCRIPT_CHARS:-50000}
+      - DEVICE_SECRET_PEPPER=${DEVICE_SECRET_PEPPER:-dev-device-pepper-change-in-production}
+      - PAIRING_CODE_TTL_MINUTES=${PAIRING_CODE_TTL_MINUTES:-10}
+      - AGENT_INTENTS_ENABLED=${AGENT_INTENTS_ENABLED:-true}
+      - AGENT_INTENT_TTL_MINUTES=${AGENT_INTENT_TTL_MINUTES:-10}
+      - AGENT_INTENT_MAX_PER_ORG=${AGENT_INTENT_MAX_PER_ORG:-10}
+      - AGENT_INTENT_EXCHANGE_MAX_ATTEMPTS=${AGENT_INTENT_EXCHANGE_MAX_ATTEMPTS:-5}
+      # Ingest safety
+      - INGEST_REQUIRE_TIMESTAMP=${INGEST_REQUIRE_TIMESTAMP:-false}
+      - INGEST_TIMESTAMP_SKEW_SECONDS=${INGEST_TIMESTAMP_SKEW_SECONDS:-300}
+      - INGEST_REQUIRE_IDEMPOTENCY=${INGEST_REQUIRE_IDEMPOTENCY:-false}
+      - INGEST_IDEMPOTENCY_TTL_SECONDS=${INGEST_IDEMPOTENCY_TTL_SECONDS:-600}
+      # SQS queue configuration
+      - SQS_ENABLED=${SQS_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_PROCESSING_QUEUE_URL=${SQS_PROCESSING_QUEUE_URL:-}
+      - SQS_CAPTION_QUEUE_URL=${SQS_CAPTION_QUEUE_URL:-}
+      - SQS_STT_QUEUE_URL=${SQS_STT_QUEUE_URL:-}
+      - SQS_OCR_QUEUE_URL=${SQS_OCR_QUEUE_URL:-}
+      - SQS_TRANSCODE_QUEUE_URL=${SQS_TRANSCODE_QUEUE_URL:-}
+      - SQS_FACE_QUEUE_URL=${SQS_FACE_QUEUE_URL:-}
+      # GPU transcode mode (cpu=local ffmpeg, gpu=S3+SQS+NVENC)
+      - DRIVE_TRANSCODE_MODE=${DRIVE_TRANSCODE_MODE:-cpu}
+      # Dev features
+      - ENABLE_DEV_REFRESH=${ENABLE_DEV_REFRESH:-true}
+      # Drive internal ingest key (shared with drive-worker)
+      - DRIVE_CONNECTOR_ENABLED=${DRIVE_CONNECTOR_ENABLED:-false}
+      - FOLDER_SYNC_V2_ENABLED=${FOLDER_SYNC_V2_ENABLED:-true}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_SA_ENCRYPTION_KEY=${DRIVE_SA_ENCRYPTION_KEY:-}
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      # Google Drive OAuth (folder-scoped sync)
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID:-}
+      - GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      - GOOGLE_OAUTH_REDIRECT_URI=${GOOGLE_OAUTH_REDIRECT_URI:-}
+      # Closed-vocabulary VMD search
+      - CLOSED_VOCAB_ENABLED=${CLOSED_VOCAB_ENABLED:-false}
+      - CLOSED_VOCAB_SERVICE_URL=${CLOSED_VOCAB_SERVICE_URL:-http://closed-vocab-search:8080}
+      - CLOSED_VOCAB_TIMEOUT_MS=${CLOSED_VOCAB_TIMEOUT_MS:-1000}
+      # Visual embedding (SigLIP2 query-time text encoder)
+      - VISUAL_EMBEDDING_ENABLED=${VISUAL_EMBEDDING_ENABLED:-false}
+      - SQS_VISUAL_EMBED_QUEUE_URL=${SQS_VISUAL_EMBED_QUEUE_URL:-}
+      - SQS_EXPORT_QUEUE_URL=${SQS_EXPORT_QUEUE_URL:-}
+      - SQS_SHORTS_RENDER_QUEUE_URL=${SQS_SHORTS_RENDER_QUEUE_URL:-}
+      - SQS_BLUR_QUEUE_URL=${SQS_BLUR_QUEUE_URL:-}
+      - SQS_PRODUCT_ENUMERATE_QUEUE_URL=${SQS_PRODUCT_ENUMERATE_QUEUE_URL:-}
+      - SQS_PRODUCT_TRACK_QUEUE_URL=${SQS_PRODUCT_TRACK_QUEUE_URL:-}
+      # PII blur (user-triggered, see app/modules/blur/)
+      - BLUR_ENABLED=${BLUR_ENABLED:-false}
+      # BLUR_EXPORT_ENABLED gates the v0.10 ProRes 4444 layer export
+      # workflow (POST /api/blur/jobs/{id}/export). Stays dark until
+      # drive-blur-worker is on the dispatcher build AND contracts
+      # v0.10.0 is published to PyPI.
+      - BLUR_EXPORT_ENABLED=${BLUR_EXPORT_ENABLED:-false}
+      - BLUR_MAX_ACTIVE_PER_ORG=${BLUR_MAX_ACTIVE_PER_ORG:-5}
+      - BLUR_LEASE_SECONDS=${BLUR_LEASE_SECONDS:-1800}
+      # Auto-shorts (mode-aware AI clip selection over the existing
+      # shorts render pipeline). Router 404s while AUTO_SHORTS_ENABLED
+      # is false so the feature ships dark.
+      # 2026-05-17: dev default true (시각 검증 위해). 운영 deploy 흐름은
+      # 본 compose 안 쓰고 별도 .env 로 명시하므로 영향 없음.
+      - AUTO_SHORTS_ENABLED=${AUTO_SHORTS_ENABLED:-true}
+      - AUTO_SHORTS_RATE_LIMIT_PER_HOUR=${AUTO_SHORTS_RATE_LIMIT_PER_HOUR:-10}
+      - AUTO_SHORTS_MIN_VIDEO_DURATION_SEC=${AUTO_SHORTS_MIN_VIDEO_DURATION_SEC:-300}
+      # Auto-shorts LLM scorer (Option C from
+      # .claude/plans/shorts-auto-llm-selection.md). All flags default-off;
+      # staging flips AUTO_SHORTS_LLM_ENABLED=true + rollout_pct=100 via .env.
+      # Service falls back to the pure scorer on any LLM defect, so the
+      # flag flip is safe even before the Aircloud OpenAI quota is sized.
+      - AUTO_SHORTS_LLM_ENABLED=${AUTO_SHORTS_LLM_ENABLED:-false}
+      - AUTO_SHORTS_LLM_MODEL=${AUTO_SHORTS_LLM_MODEL:-gpt-4o-mini}
+      - AUTO_SHORTS_LLM_MAX_SCENES=${AUTO_SHORTS_LLM_MAX_SCENES:-50}
+      - AUTO_SHORTS_LLM_DAILY_BUDGET_USD=${AUTO_SHORTS_LLM_DAILY_BUDGET_USD:-25.0}
+      - AUTO_SHORTS_LLM_ESTIMATED_COST_PER_CALL_USD=${AUTO_SHORTS_LLM_ESTIMATED_COST_PER_CALL_USD:-0.003}
+      - AUTO_SHORTS_LLM_TIMEOUT_SEC=${AUTO_SHORTS_LLM_TIMEOUT_SEC:-8.0}
+      - AUTO_SHORTS_LLM_ROLLOUT_PCT=${AUTO_SHORTS_LLM_ROLLOUT_PCT:-0}
+      - AUTO_SHORTS_LLM_PROMPT_VERSION=${AUTO_SHORTS_LLM_PROMPT_VERSION:-2026-04-24-v1}
+      - BLUR_DAILY_BUDGET_USD_PER_ORG=${BLUR_DAILY_BUDGET_USD_PER_ORG:-50.0}
+      # Aircloud GPU worker orchestration
+      - AIRCLOUD_ENABLED=${AIRCLOUD_ENABLED:-false}
+      - AIRCLOUD_API_KEY=${AIRCLOUD_API_KEY:-}
+      - AIRCLOUD_ENDPOINT_TRANSCODE=${AIRCLOUD_ENDPOINT_TRANSCODE:-}
+      - AIRCLOUD_ENDPOINT_CAPTION=${AIRCLOUD_ENDPOINT_CAPTION:-}
+      - AIRCLOUD_ENDPOINT_STT=${AIRCLOUD_ENDPOINT_STT:-}
+      - AIRCLOUD_ENDPOINT_OCR=${AIRCLOUD_ENDPOINT_OCR:-}
+      - AIRCLOUD_ENDPOINT_FACE=${AIRCLOUD_ENDPOINT_FACE:-}
+      - AIRCLOUD_ENDPOINT_VISUAL_EMBED=${AIRCLOUD_ENDPOINT_VISUAL_EMBED:-}
+      - AIRCLOUD_ENDPOINT_BLUR=${AIRCLOUD_ENDPOINT_BLUR:-}
+      - AIRCLOUD_ENDPOINT_PRODUCT_ENUMERATE=${AIRCLOUD_ENDPOINT_PRODUCT_ENUMERATE:-}
+      - AIRCLOUD_ENDPOINT_PRODUCT_TRACK=${AIRCLOUD_ENDPOINT_PRODUCT_TRACK:-}
+      - AIRCLOUD_WAKE_DEBOUNCE_SECONDS=${AIRCLOUD_WAKE_DEBOUNCE_SECONDS:-300}
+      - AIRCLOUD_COOLDOWN_CHECKS=${AIRCLOUD_COOLDOWN_CHECKS:-3}
+      # Export settings
+      - EXPORT_MAX_SIZE_BYTES=${EXPORT_MAX_SIZE_BYTES:-2147483648}
+      - EXPORT_MAX_CLIPS=${EXPORT_MAX_CLIPS:-100}
+      - EXPORT_MAX_PROXIES=${EXPORT_MAX_PROXIES:-20}
+      - EXPORT_EXPIRY_DAYS=${EXPORT_EXPIRY_DAYS:-3}
+      - ANALYTICS_ENABLED=${ANALYTICS_ENABLED:-true}
+      - ANALYTICS_EXPORT_ENABLED=${ANALYTICS_EXPORT_ENABLED:-false}
+      - ANALYTICS_S3_BUCKET=${ANALYTICS_S3_BUCKET:-}
+      - ANALYTICS_S3_PREFIX=${ANALYTICS_S3_PREFIX:-analytics}
+      - ANALYTICS_BQ_ENABLED=${ANALYTICS_BQ_ENABLED:-false}
+      - ANALYTICS_BQ_PROJECT=${ANALYTICS_BQ_PROJECT:-}
+      - ANALYTICS_BQ_DATASET=${ANALYTICS_BQ_DATASET:-search_analytics}
+      # BigQuery WIF credentials. ADC reads GOOGLE_APPLICATION_CREDENTIALS,
+      # the file is mounted via volumes below from GCP_CREDENTIALS_HOST_PATH.
+      # AWS_REGION is required because google-auth's AWS provider hits the
+      # IMDS region URL on every token refresh — without it the BQ load
+      # silently fails with "Unable to retrieve AWS region" and the
+      # try/except in export_worker_events.py:253 swallows it.
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-/secrets/gcp-credentials.json}
+      - AWS_REGION=${AWS_REGION:-ap-northeast-2}
+      - YOUTUBE_ENABLED=${YOUTUBE_ENABLED:-false}
+      - YOUTUBE_S3_BUCKET=${YOUTUBE_S3_BUCKET:-}
+      - HF_HOME=/home/appuser/.cache/huggingface
     ports:
       - "8000:8000"
     volumes:
       - ./services/api:/app
+      # Mount heimdex-media-contracts for runtime import (shorts scorer, scene schemas)
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
       # Persistent volume for HuggingFace model cache (~2.4GB for multilingual-e5-large)
-      - huggingface_cache:/root/.cache/huggingface
+      - huggingface_cache:/home/appuser/.cache/huggingface
+      # Persistent storage for uploaded scene/face thumbnails
+      - ./thumbnails:/data/thumbnails
+      # GCP WIF external_account JSON for BigQuery analytics export.
+      # Host path is configurable so non-prod hosts can override; the path
+      # is also referenced by GOOGLE_APPLICATION_CREDENTIALS env above.
+      - ${GCP_CREDENTIALS_HOST_PATH:-/opt/heimdex/gcp-credentials.json}:/secrets/gcp-credentials.json:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -109,32 +366,788 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*' --reload"
 
   web:
     build:
       context: ./services/web
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL-http://devorg.app.heimdex.local:8000}
+        - NEXT_PUBLIC_AUTH0_ENABLED=${NEXT_PUBLIC_AUTH0_ENABLED:-false}
+        - NEXT_PUBLIC_AUTH0_DOMAIN=${NEXT_PUBLIC_AUTH0_DOMAIN:-}
+        - NEXT_PUBLIC_AUTH0_CLIENT_ID=${NEXT_PUBLIC_AUTH0_CLIENT_ID:-}
+        - NEXT_PUBLIC_AUTH0_AUDIENCE=${NEXT_PUBLIC_AUTH0_AUDIENCE:-}
+        - NEXT_PUBLIC_GA_MEASUREMENT_ID=${NEXT_PUBLIC_GA_MEASUREMENT_ID:-}
+        - NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED=${NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED:-false}
     container_name: heimdex-web
+    mem_limit: 512m
+    cpus: "1.0"
     environment:
-      - NEXT_PUBLIC_API_URL=http://devorg.app.heimdex.local:8000
-      # Auth0 configuration - set NEXT_PUBLIC_AUTH0_ENABLED=true for production
-      - NEXT_PUBLIC_AUTH0_ENABLED=false
-      - NEXT_PUBLIC_AUTH0_DOMAIN=your-tenant.auth0.com
-      - NEXT_PUBLIC_AUTH0_CLIENT_ID=your-client-id
-      - NEXT_PUBLIC_AUTH0_AUDIENCE=https://api.heimdex.io
+      - AGENT_UPDATE_MANIFEST_URL=${AGENT_UPDATE_MANIFEST_URL:-}
+      - HOSTNAME=0.0.0.0
     ports:
       - "3000:3000"
-    volumes:
-      - ./services/web:/app
-      - /app/node_modules
-      - /app/.next
     extra_hosts:
       - "devorg.app.heimdex.local:host-gateway"
     depends_on:
       - api
+
+  # DEPRECATED (2026-02-26): face-worker is dead code — never ran in production.
+  # Kept for reference only. Removal planned in PR4 (housekeeping).
+  face-worker:
+    profiles: ["face-dev"]
+    build:
+      context: ./services/worker
+      dockerfile: Dockerfile
+    container_name: heimdex-face-worker
+    mem_limit: 2g
+    cpus: "2.0"
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./services/worker:/app
+      - ./data:/data
+      - ./artifacts/face:/app/artifacts
+      - ./.insightface:/root/.insightface
+    command: ["sleep", "infinity"]
+
+  drive-worker:
+    build:
+      context: .
+      dockerfile: services/drive-worker/Dockerfile
+    container_name: heimdex-drive-worker
+    mem_limit: 2g
+    cpus: "2.0"
+    environment:
+      - PYTHONPATH=/app
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - DRIVE_CONNECTOR_ENABLED=${DRIVE_CONNECTOR_ENABLED:-false}
+      - DRIVE_SPEECH_SPLIT_ENABLED=${DRIVE_SPEECH_SPLIT_ENABLED:-false}
+      - VLM_TAGS_ENABLED=${VLM_TAGS_ENABLED:-false}
+      - AI_TAGS_ENABLED=${AI_TAGS_ENABLED:-false}
+      - FOLDER_SYNC_V2_ENABLED=${FOLDER_SYNC_V2_ENABLED:-true}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_WORKER_POLL_INTERVAL_SECONDS=${DRIVE_WORKER_POLL_INTERVAL_SECONDS:-30}
+      - DRIVE_WORKER_GLOBAL_CONCURRENCY=${DRIVE_WORKER_GLOBAL_CONCURRENCY:-2}
+      - DRIVE_WORKER_PER_ORG_CONCURRENCY=${DRIVE_WORKER_PER_ORG_CONCURRENCY:-1}
+      - DRIVE_TEMP_DISK_BUDGET_GB=${DRIVE_TEMP_DISK_BUDGET_GB:-50}
+      - DRIVE_TEMP_DIR=/data/drive-tmp
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - DRIVE_PROXY_MAX_HEIGHT=${DRIVE_PROXY_MAX_HEIGHT:-720}
+      - DRIVE_PROXY_CRF=${DRIVE_PROXY_CRF:-23}
+      - DRIVE_PROXY_PRESET=${DRIVE_PROXY_PRESET:-fast}
+      - DRIVE_PROXY_AUDIO_BITRATE=${DRIVE_PROXY_AUDIO_BITRATE:-128k}
+      - DRIVE_PROXY_MAX_BITRATE=${DRIVE_PROXY_MAX_BITRATE:-2500k}
+      - DRIVE_PROXY_BUFSIZE=${DRIVE_PROXY_BUFSIZE:-5000k}
+      - DRIVE_ENRICHMENT_ENABLED=${DRIVE_ENRICHMENT_ENABLED:-false}
+      - IMAGE_PROCESSING_ENABLED=${IMAGE_PROCESSING_ENABLED:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SQS configuration
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_PROCESSING_QUEUE_URL=${SQS_PROCESSING_QUEUE_URL:-}
+      - SQS_TRANSCODE_QUEUE_URL=${SQS_TRANSCODE_QUEUE_URL:-}
+      - SQS_EXPORT_QUEUE_URL=${SQS_EXPORT_QUEUE_URL:-}
+      - EXPORT_MAX_SIZE_BYTES=${EXPORT_MAX_SIZE_BYTES:-2147483648}
+      - EXPORT_MAX_CLIPS=${EXPORT_MAX_CLIPS:-100}
+      - EXPORT_MAX_PROXIES=${EXPORT_MAX_PROXIES:-20}
+      - EXPORT_EXPIRY_DAYS=${EXPORT_EXPIRY_DAYS:-3}
+      # GPU transcode mode (cpu=local ffmpeg, gpu=S3+SQS+NVENC)
+      - DRIVE_TRANSCODE_MODE=${DRIVE_TRANSCODE_MODE:-cpu}
+      # Aircloud GPU worker orchestration
+      - AIRCLOUD_ENABLED=${AIRCLOUD_ENABLED:-false}
+      - AIRCLOUD_API_KEY=${AIRCLOUD_API_KEY:-}
+      - AIRCLOUD_ENDPOINT_TRANSCODE=${AIRCLOUD_ENDPOINT_TRANSCODE:-}
+      - AIRCLOUD_ENDPOINT_CAPTION=${AIRCLOUD_ENDPOINT_CAPTION:-}
+      - AIRCLOUD_ENDPOINT_STT=${AIRCLOUD_ENDPOINT_STT:-}
+      - AIRCLOUD_ENDPOINT_OCR=${AIRCLOUD_ENDPOINT_OCR:-}
+      - AIRCLOUD_ENDPOINT_FACE=${AIRCLOUD_ENDPOINT_FACE:-}
+      - AIRCLOUD_ENDPOINT_VISUAL_EMBED=${AIRCLOUD_ENDPOINT_VISUAL_EMBED:-}
+      - AIRCLOUD_ENDPOINT_BLUR=${AIRCLOUD_ENDPOINT_BLUR:-}
+      - AIRCLOUD_ENDPOINT_PRODUCT_ENUMERATE=${AIRCLOUD_ENDPOINT_PRODUCT_ENUMERATE:-}
+      - AIRCLOUD_ENDPOINT_PRODUCT_TRACK=${AIRCLOUD_ENDPOINT_PRODUCT_TRACK:-}
+      - AIRCLOUD_WAKE_DEBOUNCE_SECONDS=${AIRCLOUD_WAKE_DEBOUNCE_SECONDS:-300}
+      - AIRCLOUD_COOLDOWN_CHECKS=${AIRCLOUD_COOLDOWN_CHECKS:-3}
+      - SQS_CAPTION_QUEUE_URL=${SQS_CAPTION_QUEUE_URL:-}
+      - SQS_STT_QUEUE_URL=${SQS_STT_QUEUE_URL:-}
+      - SQS_OCR_QUEUE_URL=${SQS_OCR_QUEUE_URL:-}
+      - SQS_FACE_QUEUE_URL=${SQS_FACE_QUEUE_URL:-}
+      - SQS_VISUAL_EMBED_QUEUE_URL=${SQS_VISUAL_EMBED_QUEUE_URL:-}
+      - SQS_BLUR_QUEUE_URL=${SQS_BLUR_QUEUE_URL:-}
+      - SQS_PRODUCT_ENUMERATE_QUEUE_URL=${SQS_PRODUCT_ENUMERATE_QUEUE_URL:-}
+      - SQS_PRODUCT_TRACK_QUEUE_URL=${SQS_PRODUCT_TRACK_QUEUE_URL:-}
+    volumes:
+      - ./services/drive-worker:/app
+      # Mount pipeline repos for scene detection + keyframe extraction (V3a)
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+      - ./data:/data
+    depends_on:
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             python -m src.worker"
+
+  # DEPRECATED (2026-02-26): OCR enrichment worker migrated to Aircloud+ GPU.
+  # This CPU service definition is kept for local dev only.
+  # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-ocr-worker-gpu:latest on Aircloud+.
+  # Guarded by profiles: ["ec2-legacy"] — requires --profile ec2-legacy to start.
+  drive-ocr-worker:
+    profiles: ["ec2-legacy"]
+    build:
+      context: .
+      dockerfile: services/drive-ocr-worker/Dockerfile
+    container_name: heimdex-drive-ocr-worker
+    mem_limit: 2g
+    cpus: "2.0"
+    environment:
+      - PYTHONPATH=/app
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - DRIVE_OCR_ENABLED=${DRIVE_OCR_ENABLED:-false}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - DRIVE_OCR_CONCURRENCY=${DRIVE_OCR_CONCURRENCY:-1}
+      - DRIVE_OCR_MAX_FRAMES_PER_SCENE=${DRIVE_OCR_MAX_FRAMES_PER_SCENE:-10}
+      - DRIVE_OCR_MAX_FRAMES_PER_VIDEO=${DRIVE_OCR_MAX_FRAMES_PER_VIDEO:-300}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SQS configuration
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_OCR_QUEUE_URL=${SQS_OCR_QUEUE_URL:-}
+    volumes:
+      - ./services/drive-ocr-worker:/app
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+    depends_on:
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             python -m src.worker"
+
+  # DEPRECATED (2026-02-26): llama-caption-server replaced by Qwen2.5-VL-7B on Aircloud+ GPU.
+  # Caption worker no longer uses HTTP-based llama backend (CAPTION_ENGINE=qwen2vl on Aircloud+).
+  # Kept for local dev fallback only. Removal planned in PR2/PR4.
+  llama-caption-server:
+    profiles: ["llama-caption"]
+    build:
+      context: ./services/llama-caption-server
+      dockerfile: Dockerfile
+    container_name: heimdex-llama-caption
+    networks:
+      - default
+      - caption-net
+    expose:
+      - "8089"
+    mem_limit: 4g
+    cpus: "4.0"
+    environment:
+      - LLAMA_API_KEY=${LLAMA_CAPTION_API_KEY:-}
+      - LLAMA_THREADS=${LLAMA_CAPTION_THREADS:-2}
+      - LLAMA_MLOCK=${LLAMA_MLOCK:-false}
+    volumes:
+      - llama_models:/models
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    healthcheck:
+      test: ["CMD", "bash", "/usr/local/bin/healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+
+  # DEPRECATED (2026-02-26): Caption enrichment worker migrated to Aircloud+ GPU.
+  # This CPU service definition is kept for local dev only.
+  # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-caption-worker-gpu:latest on Aircloud+.
+  # Model: Qwen/Qwen2.5-VL-7B-Instruct (GPU) vs OpenGVLab/InternVL2-1B (CPU, below).
+  # Guarded by profiles: ["ec2-legacy"] — requires --profile ec2-legacy to start.
+  drive-caption-worker:
+    profiles: ["ec2-legacy"]
+    build:
+      context: .
+      dockerfile: services/drive-caption-worker/Dockerfile
+    container_name: heimdex-drive-caption-worker
+    mem_limit: 4g
+    cpus: "2.0"
+    environment:
+      - PYTHONPATH=/app
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - SCENE_CAPTION_ENABLED=${SCENE_CAPTION_ENABLED:-false}
+      - CAPTION_ENGINE=${CAPTION_ENGINE:-internvl2}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - DRIVE_CAPTION_CONCURRENCY=${DRIVE_CAPTION_CONCURRENCY:-1}
+      - DRIVE_CAPTION_MODEL=${DRIVE_CAPTION_MODEL:-OpenGVLab/InternVL2-1B}
+      - LLAMA_CAPTION_URL=http://llama-caption-server:8089
+      - LLAMA_CAPTION_API_KEY=${LLAMA_CAPTION_API_KEY:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HF_HOME=/data/huggingface
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
+      # SQS configuration
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_CAPTION_QUEUE_URL=${SQS_CAPTION_QUEUE_URL:-}
+    volumes:
+      - ./services/drive-caption-worker:/app
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+      - huggingface_cache:/data/huggingface
+    networks:
+      - default
+      - caption-net
+    depends_on:
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             python -m src.worker"
+
+  # Visual embedding worker (SigLIP2 vision encoder).
+  # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-visual-embed-worker-gpu:latest on Aircloud+.
+  # Model: google/siglip2-base-patch16-256 — 768-dim visual embeddings.
+  # Guarded by profiles: ["ec2-legacy"] — requires --profile ec2-legacy to start.
+  drive-visual-embed-worker:
+    profiles: ["ec2-legacy"]
+    build:
+      context: .
+      dockerfile: services/drive-visual-embed-worker/Dockerfile
+    container_name: heimdex-drive-visual-embed-worker
+    mem_limit: 4g
+    cpus: "2.0"
+    environment:
+      - PYTHONPATH=/app
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - VISUAL_EMBED_ENABLED=${VISUAL_EMBED_ENABLED:-false}
+      - VISUAL_EMBED_CONCURRENCY=${VISUAL_EMBED_CONCURRENCY:-1}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - HF_HOME=/data/huggingface
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
+      # SQS configuration
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_VISUAL_EMBED_QUEUE_URL=${SQS_VISUAL_EMBED_QUEUE_URL:-}
+    volumes:
+      - ./services/drive-visual-embed-worker:/app
+      - huggingface_cache:/data/huggingface
+    networks:
+      - default
+    depends_on:
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "python -m src.worker"
+  # DEPRECATED (2026-02-26): STT enrichment worker migrated to Aircloud+ GPU.
+  # This CPU service definition is kept for local dev only.
+  # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-stt-worker-gpu:latest on Aircloud+.
+  # Model: turbo/cuda/float16 (GPU) vs small/cpu/int8 (CPU, below).
+  # Guarded by profiles: ["ec2-legacy"] — requires --profile ec2-legacy to start.
+  drive-stt-worker:
+    profiles: ["ec2-legacy"]
+    build:
+      context: .
+      dockerfile: services/drive-stt-worker/Dockerfile
+    container_name: heimdex-drive-stt-worker
+    mem_limit: 2g
+    cpus: "2.0"
+    environment:
+      - PYTHONPATH=/app
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - DRIVE_STT_ENABLED=${DRIVE_STT_ENABLED:-false}
+      - DRIVE_STT_MODEL=${DRIVE_STT_MODEL:-small}
+      - DRIVE_STT_LANGUAGE=${DRIVE_STT_LANGUAGE:-ko}
+      - DRIVE_STT_BACKEND=${DRIVE_STT_BACKEND:-faster-whisper}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - DRIVE_STT_CONCURRENCY=${DRIVE_STT_CONCURRENCY:-1}
+      - DRIVE_STT_MAX_AUDIO_SECONDS=${DRIVE_STT_MAX_AUDIO_SECONDS:-3600}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SQS configuration
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_STT_QUEUE_URL=${SQS_STT_QUEUE_URL:-}
+      - DRIVE_STT_DIARIZATION_ENABLED=${DRIVE_STT_DIARIZATION_ENABLED:-false}
+      - DRIVE_STT_DIARIZATION_MODEL=${DRIVE_STT_DIARIZATION_MODEL:-pyannote/speaker-diarization-3.1}
+      - DRIVE_STT_MIN_SPEAKERS=${DRIVE_STT_MIN_SPEAKERS:-1}
+      - DRIVE_STT_MAX_SPEAKERS=${DRIVE_STT_MAX_SPEAKERS:-4}
+      - HF_ACCESS_TOKEN=${HF_ACCESS_TOKEN:-}
+    volumes:
+      - ./services/drive-stt-worker:/app
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+      - whisper_model_cache:/data/whisper-models
+    depends_on:
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             python -m src.worker"
+
+  # Face detection GPU worker (Aircloud+).
+  # Consumes from SQS face queue, detects faces, matches identities via pgvector.
+  # Staging/prod uses ghcr.io/jlee-heimdex/heimdex-face-worker-gpu:latest on Aircloud+.
+  # Guarded by profiles: ["ec2-legacy"] — requires --profile ec2-legacy to start.
+  drive-face-worker:
+    profiles: ["ec2-legacy"]
+    build:
+      context: .
+      dockerfile: services/drive-face-worker/Dockerfile
+    container_name: heimdex-drive-face-worker
+    mem_limit: 4g
+    cpus: "2.0"
+    environment:
+      - PYTHONPATH=/app
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SQS configuration
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_FACE_QUEUE_URL=${SQS_FACE_QUEUE_URL:-}
+      - USE_GPU=${USE_GPU:-false}
+      - FACE_MATCH_THRESHOLD=${FACE_MATCH_THRESHOLD:-0.55}
+    volumes:
+      - ./services/drive-face-worker:/app
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+    depends_on:
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             python -m src.worker"
+
+
+  drive-blur-worker:
+    # User-triggered PII blur (face + OWLv2). Off by default — enable
+    # with `docker compose --profile blur up drive-blur-worker`. Runs on
+    # Aircloud GPU in staging/prod; locally requires an NVIDIA GPU or
+    # BLUR_ALLOW_CPU=true (CPU mode is painfully slow, test-only).
+    profiles: ["blur"]
+    build:
+      context: ..
+      dockerfile: dev-heimdex-for-livecommerce/services/drive-blur-worker/Dockerfile.gpu
+    container_name: heimdex-drive-blur-worker
+    mem_limit: 8g
+    cpus: "4.0"
+    environment:
+      - PYTHONPATH=/app
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SQS
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_BLUR_QUEUE_URL=${SQS_BLUR_QUEUE_URL:-}
+      # Blur config
+      - BLUR_ENABLED=${BLUR_ENABLED:-false}
+      # Same v0.10 gate as the api container. When false the
+      # dispatcher still routes blur.export_created messages but the
+      # API will never publish them, so the worker effectively only
+      # runs blur-job tasks.
+      - BLUR_EXPORT_ENABLED=${BLUR_EXPORT_ENABLED:-false}
+      - DRIVE_BLUR_CONCURRENCY=${DRIVE_BLUR_CONCURRENCY:-1}
+      - BLUR_OWL_MODEL=${BLUR_OWL_MODEL:-google/owlv2-base-patch16-ensemble}
+      - BLUR_OWL_STRIDE=${BLUR_OWL_STRIDE:-5}
+      - BLUR_OWL_SCORE_THRESHOLD=${BLUR_OWL_SCORE_THRESHOLD:-0.35}
+      - BLUR_LEASE_SECONDS=${BLUR_LEASE_SECONDS:-1800}
+      - BLUR_ALLOW_CPU=${BLUR_ALLOW_CPU:-false}
+      - USE_GPU=${USE_GPU:-false}
+      # HuggingFace cache persists between runs when mounted
+      - HF_HOME=/models/hf
+    volumes:
+      - ./services/drive-blur-worker:/app
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+      - huggingface_cache:/models/hf
+    depends_on:
+      minio:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+
+  product-enumerate-worker:
+    # Phase 2: shorts-auto product mode v2 enumerate worker.
+    # Off by default — enable with
+    #   docker compose --profile product-enum up product-enumerate-worker
+    # Runs on Aircloud GPU in staging/prod (Phase 2 deliverable).
+    # Locally requires NVIDIA GPU or ENUMERATE_ALLOW_CPU=true.
+    profiles: ["product-enum"]
+    build:
+      context: ..
+      dockerfile: dev-heimdex-for-livecommerce/services/product-enumerate-worker/Dockerfile.gpu
+    container_name: heimdex-product-enumerate-worker
+    mem_limit: 8g
+    cpus: "4.0"
+    environment:
+      - PYTHONPATH=/app
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      # MinIO / S3 — the SDK's S3Client reads these from env. Without
+      # MINIO_ENDPOINT the SDK falls back to ``localhost:9000`` (i.e.
+      # the container's own loopback) so all keyframe reads 404.
+      # Inter-container default is ``minio:9000`` matching the other
+      # worker profiles.
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SQS
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_PRODUCT_ENUMERATE_QUEUE_URL=${SQS_PRODUCT_ENUMERATE_QUEUE_URL:-}
+      # Worker identity
+      - WORKER_ID=${WORKER_ID:-product-enumerate-worker-local}
+      - WORKER_LEASE_SECONDS=${WORKER_LEASE_SECONDS:-600}
+      - DRIVE_PRODUCT_ENUMERATE_CONCURRENCY=${DRIVE_PRODUCT_ENUMERATE_CONCURRENCY:-1}
+      # Feature flag mirror (worker hard-refuses to start when false).
+      - PRODUCT_V2_ENABLED=${AUTO_SHORTS_PRODUCT_V2_ENABLED:-false}
+      # OpenAI gpt-4o-mini for vision enumeration.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${AUTO_SHORTS_PRODUCT_V2_OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_TIMEOUT_SEC=${AUTO_SHORTS_PRODUCT_V2_OPENAI_TIMEOUT_SEC:-30}
+      - OPENAI_MAX_RETRIES=${AUTO_SHORTS_PRODUCT_V2_OPENAI_MAX_RETRIES:-3}
+      - OPENAI_BATCH_SIZE=${AUTO_SHORTS_PRODUCT_V2_OPENAI_BATCH_SIZE:-10}
+      # Pipeline versions — must match the API's
+      # AUTO_SHORTS_PRODUCT_V2_*_VERSION envs.
+      - ENUMERATION_VERSION=${AUTO_SHORTS_PRODUCT_V2_ENUMERATION_VERSION:-v1.0}
+      - ENUMERATION_PROMPT_VERSION=${AUTO_SHORTS_PRODUCT_V2_ENUMERATION_PROMPT_VERSION:-v1.0}
+      - MAX_KEYFRAMES_PER_VIDEO=${AUTO_SHORTS_PRODUCT_V2_MAX_KEYFRAMES_PER_VIDEO:-60}
+      # Thresholds — calibrate on staging goldens before prod rollout.
+      - ENUM_PROMINENCE_FLOOR_PCT=${AUTO_SHORTS_PRODUCT_V2_ENUM_PROMINENCE_FLOOR_PCT:-0.03}
+      - ENUM_CLUSTER_COSINE_THRESHOLD=${AUTO_SHORTS_PRODUCT_V2_ENUM_CLUSTER_COSINE_THRESHOLD:-0.85}
+      - ENUM_MIN_SUPPORTING_KEYFRAMES=${AUTO_SHORTS_PRODUCT_V2_ENUM_MIN_SUPPORTING_KEYFRAMES:-2}
+      - ENUM_MIN_CONFIDENCE=${AUTO_SHORTS_PRODUCT_V2_ENUM_MIN_CONFIDENCE:-0.6}
+      # Vision model — must match drive-visual-embed-worker exactly.
+      - SIGLIP2_MODEL_ID=${AUTO_SHORTS_PRODUCT_V2_SIGLIP2_MODEL_ID:-google/siglip2-base-patch16-256}
+      - ENUMERATE_ALLOW_CPU=${ENUMERATE_ALLOW_CPU:-false}
+      - HF_HOME=/models/hf
+    volumes:
+      - ./services/product-enumerate-worker:/app
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+      - huggingface_cache:/models/hf
+    depends_on:
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+  product-track-worker:
+    # Phase 3c: shorts-auto product mode v2 track + assembly worker.
+    # Off by default — enable with
+    #   docker compose --profile product-track up product-track-worker
+    # Runs on Aircloud GPU in staging/prod (Phase 3c-A scaffold;
+    # Phase 3c-B adds the real SAM2 integration).
+    # Locally requires NVIDIA GPU or TRACK_ALLOW_CPU=true.
+    profiles: ["product-track"]
+    build:
+      context: ..
+      dockerfile: dev-heimdex-for-livecommerce/services/product-track-worker/Dockerfile.gpu
+    container_name: heimdex-product-track-worker
+    mem_limit: 8g
+    cpus: "4.0"
+    environment:
+      - PYTHONPATH=/app
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      # F1 Phase 3 — opt into per-service identity (when set, the
+      # worker sends X-Heimdex-Service-Id and the api validates the
+      # bearer against INTERNAL_SERVICE_TOKENS[<this>]). Empty falls
+      # back to the legacy global bearer.
+      - INTERNAL_SERVICE_ID=${PRODUCT_TRACK_SERVICE_ID:-}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      # MinIO / S3 — the SDK's S3Client reads these from env. Without
+      # MINIO_ENDPOINT the SDK falls back to ``localhost:9000`` (i.e.
+      # the container's own loopback) so all keyframe / proxy reads
+      # 404. Inter-container default is ``minio:9000`` matching the
+      # other worker profiles.
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # SQS
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-false}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_PRODUCT_TRACK_QUEUE_URL=${SQS_PRODUCT_TRACK_QUEUE_URL:-}
+      # Worker identity
+      - WORKER_ID=${WORKER_ID:-product-track-worker-local}
+      # Track jobs are heavier than enumerate (SAM2 + per-scene video
+      # decode). 1800s lease matches the queue's visibility timeout.
+      - WORKER_LEASE_SECONDS=${PRODUCT_TRACK_WORKER_LEASE_SECONDS:-1800}
+      - DRIVE_PRODUCT_TRACK_CONCURRENCY=${DRIVE_PRODUCT_TRACK_CONCURRENCY:-1}
+      # Feature flag mirror (worker hard-refuses to start when false).
+      - PRODUCT_V2_ENABLED=${AUTO_SHORTS_PRODUCT_V2_ENABLED:-false}
+      # Vision model — must match drive-visual-embed-worker /
+      # product-enumerate-worker exactly. Drift breaks the OS coarse
+      # pre-filter at /scenes-by-visual-similarity.
+      - SIGLIP2_MODEL_ID=${AUTO_SHORTS_PRODUCT_V2_SIGLIP2_MODEL_ID:-google/siglip2-base-patch16-256}
+      # SAM2 checkpoint — calibrated in Phase 3c-B on staging goldens.
+      - SAM2_MODEL_ID=${AUTO_SHORTS_PRODUCT_V2_SAM2_MODEL_ID:-facebook/sam2-hiera-base-plus}
+      # OpenAI gpt-4o-mini for the LLM subset picker. Falls back to
+      # GreedyPicker (deterministic) when OPENAI_API_KEY is empty.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${AUTO_SHORTS_PRODUCT_V2_OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_TIMEOUT_SEC=${AUTO_SHORTS_PRODUCT_V2_OPENAI_TIMEOUT_SEC:-30}
+      # Tracking thresholds — every config knob in TrackingConfig is
+      # exposed as an env override so on-call can tune any single
+      # one without a code change.
+      - COARSE_PREFILTER_THRESHOLD=${AUTO_SHORTS_PRODUCT_V2_COARSE_PREFILTER_THRESHOLD:-0.45}
+      - PRECISE_PASS_THRESHOLD=${AUTO_SHORTS_PRODUCT_V2_PRECISE_PASS_THRESHOLD:-0.72}
+      - COARSE_TOP_K=${AUTO_SHORTS_PRODUCT_V2_COARSE_TOP_K:-60}
+      - SAM2_SAMPLE_FPS=${AUTO_SHORTS_PRODUCT_V2_SAM2_SAMPLE_FPS:-5}
+      - MIN_WINDOW_DURATION_MS=${AUTO_SHORTS_PRODUCT_V2_MIN_WINDOW_DURATION_MS:-1500}
+      - MIN_AVG_BBOX_AREA_PCT=${AUTO_SHORTS_PRODUCT_V2_MIN_AVG_BBOX_AREA_PCT:-0.02}
+      - MIN_AVG_CONFIDENCE=${AUTO_SHORTS_PRODUCT_V2_MIN_AVG_CONFIDENCE:-0.7}
+      - MAX_WINDOWS_PER_PRODUCT=${AUTO_SHORTS_PRODUCT_V2_MAX_WINDOWS_PER_PRODUCT:-30}
+      - TRACK_ALLOW_CPU=${TRACK_ALLOW_CPU:-false}
+      - HF_HOME=/models/hf
+    volumes:
+      - ./services/product-track-worker:/app
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+      - huggingface_cache:/models/hf
+    depends_on:
+      api:
+        condition: service_healthy
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+
+  bgutil-provider:
+    profiles: ["youtube"]
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: heimdex-bgutil-provider
+    mem_limit: 512m
+    restart: unless-stopped
+    environment:
+      - TOKEN_TTL=${BGUTIL_TOKEN_TTL:-21600}
+    ports:
+      - "127.0.0.1:4416:4416"
+
+  youtube-worker:
+    profiles: ["youtube"]
+    build:
+      context: .
+      dockerfile: services/youtube-worker/Dockerfile
+    container_name: heimdex-youtube-worker
+    mem_limit: 2g
+    cpus: "2.0"
+    environment:
+      - PYTHONPATH=/app
+      - YOUTUBE_ENABLED=${YOUTUBE_ENABLED:-false}
+      - YOUTUBE_ORG_ID=${YOUTUBE_ORG_ID:-}
+      - YOUTUBE_COOKIES_PATH=${YOUTUBE_COOKIES_PATH:-}
+      - YOUTUBE_POT_PROVIDER_URL=${YOUTUBE_POT_PROVIDER_URL:-http://bgutil-provider:4416}
+      - YOUTUBE_S3_BUCKET=${YOUTUBE_S3_BUCKET:-}
+      - YOUTUBE_SYNC_INTERVAL_SECONDS=${YOUTUBE_SYNC_INTERVAL_SECONDS:-21600}
+      - YOUTUBE_DOWNLOAD_FORMAT=${YOUTUBE_DOWNLOAD_FORMAT:-bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]}
+      - YOUTUBE_RATE_LIMIT_SLEEP=${YOUTUBE_RATE_LIMIT_SLEEP:-3}
+      - YOUTUBE_RATE_LIMIT_MAX_SLEEP=${YOUTUBE_RATE_LIMIT_MAX_SLEEP:-8}
+      - YOUTUBE_MAX_CONCURRENT_DOWNLOADS=${YOUTUBE_MAX_CONCURRENT_DOWNLOADS:-2}
+      - YOUTUBE_AUTO_DELETE_ORIGINALS=${YOUTUBE_AUTO_DELETE_ORIGINALS:-true}
+      - YOUTUBE_ORIGINAL_TTL_DAYS=${YOUTUBE_ORIGINAL_TTL_DAYS:-7}
+      - DRIVE_API_BASE_URL=${DRIVE_API_BASE_URL:-http://api:8000}
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - S3_REGION=${S3_REGION:-ap-northeast-2}
+      - SQS_ENABLED=${SQS_ENABLED:-false}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - SQS_TRANSCODE_QUEUE_URL=${SQS_TRANSCODE_QUEUE_URL:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+    volumes:
+      - ./services/youtube-worker:/app
+      - youtube_tmp:/data/youtube-tmp
+      - ${YOUTUBE_COOKIES_HOST_DIR:-./secrets/youtube}:/app/cookies:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      bgutil-provider:
+        condition: service_started
+    command: >
+      sh -c "python -m src.worker"
+
+  shorts-render-worker:
+    build:
+      context: .
+      dockerfile: services/shorts-render-worker/Dockerfile
+    container_name: heimdex-shorts-render-worker
+    environment:
+      - PYTHONPATH=/app
+      - SQS_CONSUMER_ENABLED=${SQS_CONSUMER_ENABLED:-true}
+      - SQS_SHORTS_RENDER_QUEUE_URL=${SQS_SHORTS_RENDER_QUEUE_URL:-}
+      - SQS_ENDPOINT_URL=${SQS_ENDPOINT_URL:-}
+      - SQS_REGION=${SQS_REGION:-ap-northeast-2}
+      - DRIVE_API_BASE_URL=http://api:8000
+      - DRIVE_INTERNAL_API_KEY=${DRIVE_INTERNAL_API_KEY:-}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT-minio:9000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-heimdex}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-heimdex_dev_password}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - DRIVE_S3_BUCKET=${DRIVE_S3_BUCKET:-heimdex-drive}
+      - FONT_DIR=/usr/share/fonts/heimdex
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      # Mount pipeline repos (same pattern as drive-worker)
+      - ../heimdex-media-contracts:/opt/heimdex-media-contracts:ro
+      - ../heimdex-media-pipelines:/opt/heimdex-media-pipelines:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    restart: unless-stopped
+    command: >
+      sh -c "pip install --no-deps /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps /opt/heimdex-media-pipelines 2>/dev/null;
+             python -m src.worker"
+
+  # NOTE (2026-02-26): elasticmq is for LOCAL DEV SQS simulation only.
+  # Staging/prod uses real AWS SQS (ap-northeast-2). Not needed on EC2.
+  # Guarded by profiles: ["local-dev"] — requires --profile local-dev to start.
+  elasticmq:
+    profiles: ["local-dev"]
+    image: softwaremill/elasticmq-native:latest
+    container_name: heimdex-elasticmq
+    mem_limit: 256m
+    ports:
+      - "9324:9324"
+      - "9325:9325"
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf
+
+  # Closed-vocabulary VMD search sidecar. Hosts ~162 product/brand terms +
+  # precomputed SigLIP2 prompt embeddings for direct kNN lookups, bypassing
+  # the normal semantic pipeline. Opt-in via the ``closed-vocab`` profile so
+  # daily ``docker compose up -d`` doesn't pay the 512MB / 1 CPU cost when
+  # the feature is off. To bring it up: ``docker compose --profile closed-vocab up -d``
+  # (or ``COMPOSE_PROFILES=closed-vocab docker compose up -d``).
+  # Image source + protocol: see .claude/docs/closed-vocab-search.md.
+  closed-vocab-search:
+    image: ghcr.io/5sudeng/heimdex-closed-vocab-search:v0.1.0
+    profiles: ["closed-vocab"]
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
 volumes:
   postgres_data:
   opensearch_data:
   minio_data:
   huggingface_cache:
+  whisper_model_cache:
+  llama_models:
+  youtube_tmp:
+
+networks:
+  caption-net:
+    internal: true

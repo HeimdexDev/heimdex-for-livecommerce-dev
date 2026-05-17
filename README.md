@@ -1,5 +1,5 @@
 # Heimdex
-
+ 
 Video search platform with hybrid lexical + semantic search, supporting Korean language.
 
 ## Quick Start
@@ -185,7 +185,7 @@ POST /api/auth/dev-login
 Host: devorg.app.heimdex.local
 
 {
-  "email": "admin@devorg.test"
+  "email": "admin@devorg.example.com"
 }
 ```
 
@@ -259,7 +259,7 @@ Heimdex supports two authentication modes:
 When `AUTH0_ENABLED=false` (default), Heimdex uses a simple dev-login flow:
 
 1. Click "Dev Login" in the header
-2. Enter an email that exists in the database (e.g., `admin@devorg.test`)
+2. Enter an email that exists in the database (e.g., `admin@devorg.example.com`)
 3. The API issues a JWT token stored in sessionStorage
 
 This mode is convenient for local development but NOT suitable for production.

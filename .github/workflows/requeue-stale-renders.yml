@@ -1,0 +1,119 @@
+name: Requeue Stale Render Jobs
+
+# Republish shorts_render_jobs rows stuck in 'queued' beyond a 5-min
+# threshold to SQS. Safety net for the boto3 long-poll wedge in the
+# shorts-render-worker (see ``feedback_boto3_longpoll_wedge.md`` and
+# ``.claude/plans/sqs-wedge-investigation-2026-05-07.md``).
+#
+# The worker SDK 0.4.0 watchdog only catches HUNG ``receive_jobs`` —
+# the production failure mode is ``receive_jobs`` returning empty
+# fast even when SQS has visible messages. Until the SDK ships a
+# queue-depth-aware watchdog (Fix A), DB rows can sit in 'queued'
+# indefinitely. This cron reconciles the DB state with SQS every
+# 5 minutes.
+#
+# Idempotency: ``ShortsRenderJobRepository.complete_idempotent``
+# silently absorbs double-completes, so a republish that races with
+# a worker actually picking up the original message is a safe no-op.
+#
+# Dispatch on demand:
+#   gh workflow run requeue-stale-renders.yml -f dry_run=true
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print candidates without publishing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      stale_minutes:
+        description: "Min age in minutes for a 'queued' row to count as stale"
+        required: false
+        default: "5"
+        type: string
+
+concurrency:
+  # Skip overlapping runs — the cron is fast (<10s typical) but a
+  # 5-min interval against an SSH-driven script could occasionally
+  # collide on a busy runner. Newer wins so a manual dispatch isn't
+  # delayed by a cron tick.
+  group: requeue-stale-renders
+  cancel-in-progress: true
+
+jobs:
+  requeue-staging:
+    name: Requeue staging stale renders
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run janitor via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ec2-user
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          command_timeout: 4m
+          script: |
+            set -euo pipefail
+
+            APP_DIR=/opt/heimdex/dev-heimdex-for-livecommerce
+            DRY_RUN_FLAG=""
+            if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+              DRY_RUN_FLAG="--dry-run"
+            fi
+            STALE_MINUTES="${{ github.event.inputs.stale_minutes || '5' }}"
+
+            cd "$APP_DIR"
+            docker compose exec -T api python -m app.cli.requeue_stale_renders \
+              --stale-minutes "$STALE_MINUTES" \
+              $DRY_RUN_FLAG
+
+  requeue-production:
+    name: Requeue production stale renders
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Run janitor via SSH (skip if module missing)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ec2-user
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          command_timeout: 4m
+          script: |
+            set -euo pipefail
+
+            APP_DIR=/opt/heimdex/dev-heimdex-for-livecommerce
+            DRY_RUN_FLAG=""
+            if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+              DRY_RUN_FLAG="--dry-run"
+            fi
+            STALE_MINUTES="${{ github.event.inputs.stale_minutes || '5' }}"
+
+            cd "$APP_DIR"
+
+            # The CLI ships with the api image. Production is deployed
+            # manually via ``gh workflow run "Deploy Production"`` — it
+            # may lag the staging auto-deploy by hours-to-days. While
+            # the prod image doesn't yet contain
+            # ``app.cli.requeue_stale_renders``, treat the cron as a
+            # no-op rather than a recurring red workflow run. The next
+            # prod deploy that includes this commit makes the check
+            # pass and the cron starts working automatically.
+            if ! docker compose exec -T api python -c \
+                "import importlib.util, sys; \
+                 sys.exit(0 if importlib.util.find_spec('app.cli.requeue_stale_renders') else 1)" \
+                2>/dev/null; then
+              echo "requeue_stale_renders not deployed to production yet — skipping cron run"
+              exit 0
+            fi
+
+            docker compose exec -T api python -m app.cli.requeue_stale_renders \
+              --stale-minutes "$STALE_MINUTES" \
+              $DRY_RUN_FLAG

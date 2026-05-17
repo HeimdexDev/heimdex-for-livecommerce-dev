@@ -1,0 +1,7 @@
+./services/api/app/cli/export_analytics.py
+./services/api/app/modules/shorts_auto_product/children/runner.py
+./services/api/app/modules/shorts_auto_product/track_stt/storyboard/factory.py
+services/api/app/cli/export_analytics.py
+services/api/app/modules/shorts_auto_product/children/runner.py
+services/api/app/modules/shorts_auto_product/track_stt/storyboard/factory.py
+services/web/src/features/shorts-editor/components/ShortsEditorPage.tsx

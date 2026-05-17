@@ -1,0 +1,188 @@
+name: Test
+
+# Unit test gate for PRs and main. Runs:
+# - Backend pytest on a curated allowlist of tests known to pass without
+#   docker services (minio/opensearch/SQS). The allowlist widens as stale
+#   tests get repaired. Run the full suite locally with:
+#     cd services/api && pytest -m "not integration and not quality"
+# - Frontend vitest (entire suite — currently 1000+ tests).
+#
+# NOT run here: integration/quality-marked tests, end-to-end tests, e2e/
+# Playwright specs. Deploy workflows stay independent.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest allowlist)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: services/api/pyproject.toml
+
+      - name: Install dependencies (with dev extras)
+        # uv.lock is gitignored (project policy); install from
+        # pyproject.toml directly. setup-python's Python lives in the
+        # toolcache and is not externally-managed, so plain pip works.
+        run: pip install -e ".[dev]"
+
+      - name: Run pytest allowlist
+        # Curated list of files verified to pass without external services
+        # (no minio, no opensearch, no SQS). Add a file here once it's been
+        # cleaned up and verified locally. pytest.ini `addopts` already
+        # filters out integration and quality markers.
+        run: |
+          pytest \
+            tests/test_moodboard_pagination.py \
+            tests/test_visual_fusion_semantic.py \
+            tests/test_search_analytics.py \
+            tests/test_image_search.py \
+            tests/test_fusion.py \
+            tests/test_fusion_3way.py \
+            tests/test_intent.py \
+            tests/test_grouping_algorithm.py \
+            tests/test_search_contract.py \
+            tests/test_search_mode.py \
+            tests/test_search_mode_routing.py \
+            tests/test_search_rate_limit.py \
+            tests/test_shorts_render_cleanup.py \
+            tests/test_shorts_render_hardening.py \
+            tests/test_internal_router_deferred_caption.py \
+            tests/test_export_images.py \
+            tests/test_vendored_product_track.py \
+            tests/test_single_product_picker.py \
+            tests/test_composition_adapter.py \
+            tests/test_scene_id_utils.py \
+            tests/test_runner_real_swap.py \
+            tests/test_shorts_auto_product_child_runner.py \
+            tests/test_shorts_render_dedupe_window.py \
+            tests/test_shorts_auto_product_phase4_foundation.py \
+            tests/test_shorts_auto_product_repository.py \
+            tests/test_create_scan_order_video_id_resolution.py \
+            tests/test_v2_router_video_id_resolution.py \
+            tests/test_videos_internal_scenes_with_keyframes.py \
+            tests/test_shorts_auto_product_alias_generator.py \
+            tests/test_shorts_auto_product_track_stt_pure.py \
+            tests/test_shorts_auto_product_track_stt_async.py \
+            tests/test_shorts_auto_product_stt_runner_branch.py \
+            tests/test_track_stt_storyboard_heuristic.py \
+            tests/test_track_stt_storyboard_factory.py \
+            tests/test_track_stt_storyboard_llm_prompt.py \
+            tests/test_track_stt_storyboard_llm_schemas.py \
+            tests/test_track_stt_storyboard_llm_picker.py \
+            tests/test_track_stt_segmentation.py \
+            tests/test_shorts_auto_product_enumeration_source.py \
+            tests/test_shorts_auto_product_enumerate_stt.py \
+            tests/test_whisper_transcribe_schemas.py \
+            tests/test_whisper_transcribe_budget.py \
+            tests/test_whisper_transcribe_client.py \
+            tests/test_subtitle_chunking_chunker.py \
+            tests/test_subtitle_chunking_word_to_subtitle.py \
+            tests/test_subtitle_chunking_regression.py \
+            tests/test_rollout.py \
+            tests/test_refinement_pure.py \
+            tests/test_post_render_hook.py \
+            tests/test_refinement_service_runner.py \
+            tests/test_shorts_render_internal_router.py \
+            tests/test_shorts_render_subtitles_patch.py \
+            tests/test_subtitles_export.py \
+            tests/test_shorts_render_subtitles_download.py \
+            tests/test_shorts_render_summary.py \
+            tests/test_rerender_from_edits.py \
+            tests/test_refinement_overlay_mode.py \
+            tests/test_rerender_overlay_mode.py \
+            tests/test_render_idempotency_key.py \
+            tests/test_requeue_stale_renders.py \
+            tests/test_ingest_event_loop_regression.py \
+            tests/test_closed_vocab_startup.py \
+            --tb=short
+
+          # NOTE: shorts_auto tests are deliberately NOT in the CI
+          # allowlist. They import from heimdex_media_contracts.shorts.*
+          # which lives on the sibling repo (volume-mounted in Docker)
+          # but is not yet on PyPI. Re-add these once a contracts
+          # release includes the shorts subpackage:
+          #   - tests/test_shorts_auto_schemas.py
+          #   - tests/test_shorts_auto_selector.py
+          #   - tests/test_shorts_auto_service.py
+          #   - tests/test_shorts_auto_rate_limit.py
+          #   - tests/test_shorts_auto_factory.py
+          #   - tests/test_shorts_auto_llm_prompt.py
+          #   - tests/test_shorts_auto_llm_scorer.py
+          # They pass locally (`cd services/api && pytest`) and in the
+          # API container (volume-mounted contracts).
+
+      - name: Report backend test lane inventory
+        run: python scripts/test_inventory.py
+
+      - name: Run marker-based core lane (shadow)
+        # Non-blocking while Phase 2 classifies the remaining API tests.
+        # Once this proves stable in CI, replace the path allowlist above
+        # with this marker-based command.
+        continue-on-error: true
+        run: pytest -m core --tb=short
+
+  frontend:
+    name: Frontend (vitest + tsc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: services/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: services/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run vitest
+        run: npx vitest run --reporter=dot
+
+  no-auth0-org-fallback:
+    # Guard: the build-time Auth0 org fallback env var was removed in 2026-05
+    # because a multi-tenant build cannot bake a correct value for every
+    # tenant (livenow + ebsdemo + devorg share one bundle). Source of truth
+    # is the subdomain → DB lookup → /api/auth/org-info. This step blocks
+    # any future PR that re-introduces the build-time fallback.
+    #
+    # Grep target excludes this workflow file by design — the var name is
+    # constructed at runtime so the regex doesn't match the guard itself.
+    name: No Auth0 org build-time fallback
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Grep for re-introduction
+        run: |
+          # Construct the forbidden name at runtime to avoid self-match.
+          NAME='NEXT_PUBLIC_AUTH0_'"ORGANIZATION"
+          if grep -RnE --exclude-dir=.next --exclude-dir=node_modules "$NAME" services/web/ docker-compose*.yml 2>/dev/null; then
+            echo "::error::Build-time Auth0 org fallback reintroduced — multi-tenant builds cannot bake a correct value for all tenants. Use /api/auth/org-info dynamic resolution instead."
+            exit 1
+          fi
+          echo "OK: no fallback present"

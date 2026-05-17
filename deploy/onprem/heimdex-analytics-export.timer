@@ -1,0 +1,9 @@
+[Unit]
+Description=Heimdex Analytics Export Timer (daily 01:00 UTC)
+
+[Timer]
+OnCalendar=*-*-* 01:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

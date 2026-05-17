@@ -28,10 +28,10 @@ Heimdex is a multi-tenant video search platform that enables scene-level search 
            │   Postgres    │        │  OpenSearch   │        │     MinIO     │
            │   (5432)      │        │   (9200)      │        │   (9000)      │
            │               │        │               │        │               │
-           │ - orgs        │        │ - segments    │        │ - thumbnails  │
-           │ - users       │        │   (kNN+BM25)  │        │ - sprites     │
-           │ - libraries   │        │               │        │ - timings     │
-           │ - profiles    │        │               │        │               │
+            │ - orgs        │        │ - segments    │        │ - thumbnails  │
+            │ - users       │        │   (kNN+BM25)  │        │ - sprites     │
+            │ - libraries   │        │ - scenes      │        │ - timings     │
+            │ - profiles    │        │   (kNN+BM25)  │        │               │
            └───────────────┘        └───────────────┘        └───────────────┘
 ```
 
@@ -170,7 +170,11 @@ people_cluster_labels
 └── label (nullable)
 ```
 
-### Search Index (OpenSearch)
+### Search Indices (OpenSearch)
+
+Heimdex maintains two parallel search indices. The active index for `POST /api/search` is controlled by the `SEARCH_DEFAULT_MODE` environment variable.
+
+#### Segments Index (default)
 
 ```json
 {
@@ -192,6 +196,41 @@ people_cluster_labels
 }
 ```
 
+#### Scenes Index
+
+Scenes are pre-computed atomic search units that aggregate multiple speech segments. Each scene contains a single embedding and aggregated transcript.
+
+```json
+{
+  "org_id": "keyword",
+  "library_id": "keyword",
+  "video_id": "keyword",
+  "scene_id": "keyword",
+  "start_ms": "integer",
+  "end_ms": "integer",
+  "transcript_raw": "text",
+  "transcript_norm": "text (analyzed, Nori when available)",
+  "transcript_char_count": "integer",
+  "speech_segment_count": "integer",
+  "thumbnail_url": "keyword (not indexed)",
+  "source_type": "keyword",
+  "required_drive_nickname": "keyword",
+  "people_cluster_ids": "keyword[]",
+  "capture_time": "date",
+  "ingest_time": "date",
+  "embedding_vector": "knn_vector (1024-dim)"
+}
+```
+
+#### Dual-Index Search Mode
+
+| Mode | `SEARCH_DEFAULT_MODE` | `POST /api/search` | `POST /api/search/scenes` |
+|------|----------------------|---------------------|---------------------------|
+| Segments (default) | `segments` | Queries segments index | Queries scenes index |
+| Scenes | `scenes` | Queries scenes index | Queries scenes index |
+
+**Rollback**: Set `SEARCH_DEFAULT_MODE=segments` and restart. No code revert needed. The scenes index remains intact but unused by the default endpoint.
+
 ### Index Versioning & Zero-Downtime Migrations
 
 Heimdex uses **versioned indices with aliases** for zero-downtime schema migrations.
@@ -200,9 +239,11 @@ Heimdex uses **versioned indices with aliases** for zero-downtime schema migrati
 
 | Component | Pattern | Example |
 |-----------|---------|---------|
-| Alias (queries use this) | `{prefix}_segments` | `heimdex_segments` |
-| Versioned Index | `{alias}_{version}` | `heimdex_segments_v2` |
-| Version Constant | `INDEX_VERSION` in `client.py` | `"v2"` |
+| Segment Alias | `{prefix}_segments` | `heimdex_segments` |
+| Segment Index | `{prefix}_segments_{version}` | `heimdex_segments_v2` |
+| Scene Alias | `{prefix}_scenes` | `heimdex_scenes` |
+| Scene Index | `{prefix}_scenes_{version}` | `heimdex_scenes_v1` |
+| Version Constant | `INDEX_VERSION` in `client.py` / `scene_client.py` | `"v2"` / `"v1"` |
 
 #### Key Behaviors
 
@@ -283,8 +324,8 @@ print(info)
 | `users` | User CRUD (org-scoped) |
 | `libraries` | Library CRUD (org-scoped) |
 | `profiles` | Library versioning, shadow builds, promotion |
-| `search` | Query processing, retrieval, fusion, response formatting |
-| `people` | Face cluster labels, drive nickname registry |
+| `search` | Query processing, retrieval, fusion, response formatting (segments + scenes) |
+| `people` | Face cluster labels, drive nickname registry, per-person scene timeline (regular search, supports 400+ scenes/video), video exclusions |
 | `artifacts` | Asset storage interface (MinIO) |
 
 ## Future Considerations

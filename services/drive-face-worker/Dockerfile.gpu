@@ -1,0 +1,76 @@
+# cuDNN is required by onnxruntime-gpu for GPU inference (CUDAExecutionProvider).
+# The plain '-runtime' tag does NOT include cuDNN — worker falls back to CPU without it.
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    ca-certificates \
+    curl \
+    gnupg \
+    build-essential \
+    python3-dev \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    git \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      python3.11 \
+      python3.11-dev \
+      python3.11-distutils \
+      python3.11-venv \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3.11 /tmp/get-pip.py \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip \
+    && rm -f /tmp/get-pip.py \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.5.0"
+
+COPY heimdex-media-contracts/ /tmp/heimdex-media-contracts/
+RUN pip install --no-cache-dir /tmp/heimdex-media-contracts \
+    && rm -rf /tmp/heimdex-media-contracts
+
+COPY heimdex-media-pipelines/ /tmp/heimdex-media-pipelines/
+RUN pip install --no-cache-dir /tmp/heimdex-media-pipelines \
+    && rm -rf /tmp/heimdex-media-pipelines
+
+# InsightFace + ONNX Runtime GPU for face detection and ArcFace embedding
+# Cython is a build dependency for insightface
+RUN pip install --no-cache-dir "Cython>=3.0" && \
+    pip install --no-cache-dir \
+      "insightface>=0.7.3" \
+      "onnxruntime-gpu>=1.16.0" \
+      "numpy>=1.24" \
+      "opencv-python-headless>=4.8" \
+      "boto3>=1.34" \
+      "pydantic-settings>=2.0" \
+      "structlog>=23.0" \
+      "requests>=2.31" \
+      "Pillow>=9.0"
+
+# Pre-download InsightFace buffalo_l model (~300MB)
+RUN mkdir -p /models/insightface \
+    && python -c "import insightface; app = insightface.app.FaceAnalysis(name='buffalo_l', root='/models/insightface', providers=['CPUExecutionProvider']); app.prepare(ctx_id=-1, det_size=(640,640))"
+
+ENV INSIGHTFACE_HOME=/models/insightface
+
+COPY dev-heimdex-for-livecommerce/services/drive-face-worker/src/ src/
+
+RUN useradd -m -u 1000 appuser \
+    && chown -R appuser:appuser /app /models
+USER appuser
+
+CMD ["python", "-m", "src.worker"]

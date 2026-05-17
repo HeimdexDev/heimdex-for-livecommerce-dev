@@ -1,0 +1,68 @@
+# docker-compose.override.yml
+# DEV-ONLY: Mounts heimdex-worker-sdk (sibling repo) and installs it as editable.
+# This file is auto-loaded by `docker compose up` when present.
+# Production images bake the SDK wheel at build time (see Dockerfiles).
+#
+# To run WITHOUT this override (prod-like):
+#   docker compose -f docker-compose.yml up
+
+services:
+  drive-worker:
+    volumes:
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+  drive-ocr-worker:
+    volumes:
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+  drive-caption-worker:
+    volumes:
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+  drive-stt-worker:
+    volumes:
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"
+
+  # Mounted into the override 2026-05-12 so the short-poll + adaptive
+  # backoff SDK change (heimdex-worker-sdk feat/short-poll-adaptive-backoff)
+  # can be baked on staging without a PyPI release. Once the bake is
+  # green, this entry stays — same iteration pattern as the drive
+  # workers above. Reverting is a one-line removal here.
+  shorts-render-worker:
+    volumes:
+      - ../heimdex-worker-sdk:/opt/heimdex-worker-sdk:ro
+    environment:
+      - PYTHONPATH=/app:/opt/heimdex-worker-sdk/src
+    command: >
+      sh -c "pip install --no-deps -e /opt/heimdex-media-contracts 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-media-pipelines 2>/dev/null;
+             pip install --no-deps -e /opt/heimdex-worker-sdk 2>/dev/null;
+             python -m src.worker"

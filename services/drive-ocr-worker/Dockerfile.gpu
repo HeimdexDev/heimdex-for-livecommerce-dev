@@ -1,0 +1,66 @@
+# cuDNN is required by PaddlePaddle-GPU at import time (dlopen libcudnn.so).
+# The plain '-runtime' tag does NOT include cuDNN — must use '-cudnn8-runtime'.
+# CUDA 11.8 chosen over 12.6 for widest driver compatibility (>= 520.x).
+# PaddlePaddle 3.3.0 is available for cu118, cu126, cu129, cu130 — no cu121.
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    ca-certificates \
+    curl \
+    gnupg \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+      python3.11 \
+      python3.11-distutils \
+      python3.11-venv \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3.11 /tmp/get-pip.py \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip \
+    && rm -f /tmp/get-pip.py \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.5.0"
+
+COPY heimdex-media-contracts/ /tmp/heimdex-media-contracts/
+RUN pip install --no-cache-dir /tmp/heimdex-media-contracts \
+    && rm -rf /tmp/heimdex-media-contracts
+
+COPY heimdex-media-pipelines/ /tmp/heimdex-media-pipelines/
+RUN pip install --no-cache-dir /tmp/heimdex-media-pipelines \
+    && rm -rf /tmp/heimdex-media-pipelines
+
+RUN pip install --no-cache-dir -i https://www.paddlepaddle.org.cn/packages/stable/cu118/ \
+      "paddlepaddle-gpu==3.3.0" \
+    && pip install --no-cache-dir \
+      "paddleocr>=3.4.0" "Pillow>=9.0" \
+      "boto3>=1.34" "pydantic-settings>=2.0" \
+      "structlog>=23.0" "requests>=2.31"
+
+# Note: PaddleOCR model preload skipped — paddlepaddle-gpu requires libcuda.so at import
+# time, unavailable during docker build. Models download on first container start (~100MB).
+# Previous CUDA 12.6 + runtime-only image caused "paddle.tensor not available" because
+# libcudnn.so was missing. Fixed by switching to cudnn8-runtime base + cu118 index.
+
+COPY dev-heimdex-for-livecommerce/services/drive-ocr-worker/src/ src/
+
+RUN useradd -m -u 1000 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+CMD ["python", "-m", "src.worker"]

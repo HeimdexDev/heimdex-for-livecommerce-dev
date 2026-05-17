@@ -1,7 +1,7 @@
 "use client";
 
-import { SearchContainer } from "@/features/search";
+import DashboardContent from "@/components/dashboard/DashboardContent";
 
 export default function HomeContent() {
-  return <SearchContainer />;
+  return <DashboardContent defaultContentType="video" hideContentTypeToggle />;
 }

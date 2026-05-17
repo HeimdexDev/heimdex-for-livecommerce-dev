@@ -1,0 +1,118 @@
+# shorts-auto product enumerate worker — CUDA 12.4 + torch 2.4.1 + transformers.
+#
+# Mirrors drive-blur-worker/Dockerfile.gpu so devops operates a single
+# pattern across GPU workers. The substantive changes vs blur:
+#   * No insightface / OWLv2 — no face detection here.
+#   * Pre-downloads google/siglip2-base-patch16-256 weights into the
+#     image so cold-starts on Aircloud don't pay HuggingFace download
+#     time on every container restart.
+#   * No `heimdex-media-pipelines` PyPI pin — the package is not yet
+#     published; we install from the sibling source checkout so local
+#     and GHA builds use the same code path.
+#
+# Build context layout (from workspace root):
+#   .
+#   ├── dev-heimdex-for-livecommerce/  (this repo)
+#   ├── heimdex-media-contracts/
+#   └── heimdex-media-pipelines/
+#
+# Local build:
+#   docker build \
+#     -f dev-heimdex-for-livecommerce/services/product-enumerate-worker/Dockerfile.gpu \
+#     -t heimdex-product-enumerate-worker:gpu \
+#     <workspace-root>
+#
+# CI build: see .github/workflows/build-gpu-images.yml.
+
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    HF_HOME=/models/hf \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+# deadsnakes PPA via direct GPG keyserver fetch — bypasses
+# ``add-apt-repository`` which calls ``api.launchpad.net`` for
+# anonymous OAuth and times out when Launchpad's API is degraded
+# (observed 2026-05-01 during product-track GPU build merge).
+# ``keyserver.ubuntu.com`` is a separate keyserver that stays
+# reachable when ``api.launchpad.net`` is down.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg \
+        build-essential python3-dev git \
+        ffmpeg libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libgomp1 \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF23C5A6CF475977595C89F51BA6932366A755776" \
+        | gpg --dearmor -o /etc/apt/keyrings/deadsnakes.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/deadsnakes.gpg] http://ppa.launchpad.net/deadsnakes/ppa/ubuntu jammy main" \
+        > /etc/apt/sources.list.d/deadsnakes.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 python3.11-dev python3.11-distutils python3.11-venv \
+    && curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py \
+    && python3.11 /tmp/get-pip.py \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python3 \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3 \
+    && ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip \
+    && rm -f /tmp/get-pip.py \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Worker SDK — pip-installed from PyPI, pinned at the version that adds
+# the worker-event recorder (used by both new product workers).
+RUN pip install --no-cache-dir "heimdex-worker-sdk==0.5.0"
+
+# Contracts — install from sibling source so the Dockerfile build
+# context layout matches the GHA workflow which checks out
+# heimdex-media-contracts as a sibling of this repo.
+COPY heimdex-media-contracts/ /tmp/heimdex-media-contracts/
+RUN pip install --no-cache-dir /tmp/heimdex-media-contracts \
+    && rm -rf /tmp/heimdex-media-contracts
+
+# Heavy ML deps. requirements.txt MUST NOT include heimdex-media-* —
+# those are installed from sibling sources (above + below) so the
+# build does not depend on PyPI freshness.
+COPY dev-heimdex-for-livecommerce/services/product-enumerate-worker/requirements.txt /tmp/requirements.txt
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install \
+        --extra-index-url https://download.pytorch.org/whl/cu124 \
+        -r /tmp/requirements.txt \
+    && rm -f /tmp/requirements.txt
+
+# Pipeline library. ``heimdex_media_pipelines.product_enum`` and
+# ``heimdex_media_pipelines.siglip2`` ship here; the worker only ever
+# imports through this package.
+COPY heimdex-media-pipelines/ /tmp/heimdex-media-pipelines/
+RUN pip install --no-cache-dir /tmp/heimdex-media-pipelines \
+    && rm -rf /tmp/heimdex-media-pipelines
+
+# Runtime user — created before model pre-warm so HF cache dirs are
+# owned correctly on cold start.
+RUN useradd -m -u 1000 appuser
+
+# Pre-warm SigLIP2 weights. Variant must match drive-visual-embed-worker
+# exactly so OS scene-level vectors stay reusable as the coarse
+# pre-filter for Phase 3 tracking. Build fails immediately if the
+# download is unreachable — broken pulls must be visible at build
+# time, not at 2 am during an enumerate run.
+RUN mkdir -p /models/hf \
+    && python -c "\
+from transformers import AutoImageProcessor, SiglipVisionModel; \
+SiglipVisionModel.from_pretrained('google/siglip2-base-patch16-256'); \
+AutoImageProcessor.from_pretrained('google/siglip2-base-patch16-256'); \
+print('siglip2 cached')"
+
+COPY dev-heimdex-for-livecommerce/services/product-enumerate-worker/src/ src/
+
+RUN chown -R appuser:appuser /app /models /home/appuser
+USER appuser
+
+CMD ["python", "-m", "src.worker"]

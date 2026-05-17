@@ -26,8 +26,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -45,6 +45,9 @@ ENV/
 env.bak/
 venv.bak/
 .python-version
+
+# Lockfiles (uv)
+uv.lock
 
 # Testing
 .tox/
@@ -97,6 +100,10 @@ yarn-error.log*
 *.key
 secrets/
 credentials.json
+sa-key*.json
+spike/drive/sa-key*.json
+spike/drive/tmp/
+spike/drive/logs/
 
 # =============================================================================
 # Logs & Temporary Files
@@ -123,5 +130,56 @@ temp/
 # Migration/setup reports (generated, not source)
 _reports/
 
-# OpenCode (AI assistant state)
+# AI coding assistants
+.omc/
+.claude/
+AGENTS.md
 .opencode/
+.aider*/
+.sisyphus/
+.cursor/
+.copilot/
+.codeium/
+.windsurf/
+.continue/
+.augment/
+.bolt/
+.v0/
+
+# Face worker local artifacts
+artifacts/
+data/
+.insightface/
+.gstack/
+# Codex CLI session state (transient — session ids are not stable across runs)
+.context/
+
+# E2E Playwright test artifacts (local only)
+e2e/node_modules/
+e2e/artifacts/
+e2e/.omc/
+# Contains hardcoded staging password — keep local until sanitized
+e2e/premiere-export.spec.ts
+
+# Analytics seed generator output (local Parquet, uploaded to S3 manually)
+scripts/seed_output/
+
+# Storyboard eval local outputs
+services/api/reports/
+services/api/tests/shorts_auto_product/eval/llm_cache/
+
+# Figma cache (local only). Keep fetch-nodes.sh in repo.
+.figma-cache/*
+!.figma-cache/fetch-nodes.sh
+
+# Terraform local cache, state, plan files (do not commit).
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

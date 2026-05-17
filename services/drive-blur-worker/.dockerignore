@@ -1,0 +1,20 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+.ipynb_checkpoints
+.vscode
+.idea
+# Keep the worker build context tight — never ship sample videos or
+# local output trees into the Docker image layer.
+samples/
+output_owl/
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.webm
+# Tests aren't executed inside the GPU image; they live alongside the
+# source for local iteration.
+tests/

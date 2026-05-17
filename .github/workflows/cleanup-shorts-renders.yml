@@ -1,0 +1,75 @@
+name: Cleanup Shorts Renders
+
+# Delete expired shorts-render jobs (S3 + DB) on a nightly schedule.
+# Jobs expire after SHORTS_RENDER_EXPIRY_DAYS (default 3 days) — this
+# sweep turns the expires_at timestamp into actual storage reclaim.
+#
+# Runs at 02:00 UTC (11:00 KST) — after analytics-export at 01:00 UTC,
+# off-peak for both staging and production.
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print what would be deleted without touching S3/DB"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+concurrency:
+  group: cleanup-shorts-renders
+  cancel-in-progress: false
+
+jobs:
+  cleanup-staging:
+    name: Cleanup staging expired renders
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run cleanup via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ec2-user
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          command_timeout: 8m
+          script: |
+            set -euo pipefail
+
+            APP_DIR=/opt/heimdex/dev-heimdex-for-livecommerce
+            DRY_RUN_FLAG=""
+            if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+              DRY_RUN_FLAG="--dry-run"
+            fi
+
+            cd "$APP_DIR"
+            docker compose exec -T api python -m app.cli.cleanup_shorts_renders $DRY_RUN_FLAG
+
+  cleanup-production:
+    name: Cleanup production expired renders
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run cleanup via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ec2-user
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          command_timeout: 8m
+          script: |
+            set -euo pipefail
+
+            APP_DIR=/opt/heimdex/dev-heimdex-for-livecommerce
+            DRY_RUN_FLAG=""
+            if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+              DRY_RUN_FLAG="--dry-run"
+            fi
+
+            cd "$APP_DIR"
+            docker compose exec -T api python -m app.cli.cleanup_shorts_renders $DRY_RUN_FLAG

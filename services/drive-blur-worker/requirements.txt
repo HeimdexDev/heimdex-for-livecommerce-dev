@@ -1,0 +1,78 @@
+# PR 6: PII blur worker — pinned from the senior engineer's validated
+# CUDA 12.4 / torch 2.4.1 environment (see
+# Downloads/blur_owl_pipeline/requirements-docker.txt for the source).
+#
+# Torch wheels need the cu124 extra index — supplied in Dockerfile.gpu
+# via `pip install --extra-index-url https://download.pytorch.org/whl/cu124`.
+# System bindings (dbus-python, PyGObject, python-apt, etc.) are
+# intentionally omitted — they come from apt, not pip.
+
+accelerate==1.13.0
+annotated-types==0.7.0
+anyio==4.6.0
+attrs==24.2.0
+certifi==2024.8.30
+cffi==1.17.1
+charset-normalizer==3.3.2
+Cython==3.2.4
+filelock==3.13.1
+flatbuffers==25.12.19
+fsspec==2024.2.0
+h11==0.14.0
+hf-xet==1.4.3
+httpcore==1.0.5
+httpx==0.27.2
+huggingface_hub==1.10.1
+idna==3.10
+ImageIO==2.37.3
+insightface==0.7.3
+Jinja2==3.1.3
+joblib==1.5.3
+kiwisolver==1.5.0
+lazy-loader==0.5
+MarkupSafe==2.1.5
+ml_dtypes==0.5.4
+mpmath==1.3.0
+networkx==3.2.1
+numpy==2.4.4
+onnx==1.21.0
+# onnxruntime-gpu provides the same `onnxruntime` module, so installing
+# both CPU and GPU packages causes the CPU build to shadow the GPU one
+# at import time (observed on Aircloud 2026-04-14: insightface SCRFD
+# ran on CPUExecutionProvider despite torch.cuda.is_available()==True).
+# Keep only -gpu.
+onnxruntime-gpu==1.24.4
+opencv-python-headless==4.13.0.92
+packaging==24.1
+pillow==10.2.0
+platformdirs==4.3.6
+protobuf==7.34.1
+psutil==6.0.0
+pycparser==2.22
+pydantic==2.13.0
+pydantic_core==2.46.0
+pydantic-settings>=2.0
+python-dateutil==2.9.0.post0
+PyYAML==6.0.2
+regex==2026.4.4
+requests==2.32.3
+safetensors==0.7.0
+scikit-image==0.26.0
+scikit-learn==1.8.0
+scipy==1.17.1
+six==1.16.0
+sniffio==1.3.1
+structlog>=23.0
+sympy==1.12
+threadpoolctl==3.6.0
+tifffile==2026.3.3
+tokenizers==0.22.2
+torch==2.4.1+cu124
+torchaudio==2.4.1+cu124
+torchvision==0.19.1+cu124
+tqdm==4.67.3
+transformers==5.5.4
+triton==3.0.0
+typing_extensions==4.15.0
+urllib3==2.2.3
+boto3>=1.34

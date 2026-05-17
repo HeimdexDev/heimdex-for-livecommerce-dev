@@ -1,0 +1,9 @@
+[Unit]
+Description=Heimdex Analytics Export (daily Parquet to S3)
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/heimdex/dev-heimdex-for-livecommerce
+ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.onprem.yml exec -T api python -m app.cli.export_analytics
+TimeoutStartSec=300

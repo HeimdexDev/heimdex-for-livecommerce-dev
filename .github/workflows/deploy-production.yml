@@ -1,0 +1,392 @@
+name: Deploy Production
+
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  PRODUCTION DEPLOYMENT — LiveNow (livenow.app.heimdex.co)   ║
+# ║                                                              ║
+# ║  Manual trigger ONLY. Never auto-deploys.                    ║
+# ║  Matches staging pattern: git pull + build on EC2.           ║
+# ║                                                              ║
+# ║  CRITICAL: Uses docker-compose.prod.yml override and         ║
+# ║  --no-deps flag because backing services (Postgres,          ║
+# ║  OpenSearch, S3) are AWS managed, not Docker containers.     ║
+# ║                                                              ║
+# ║  Required secrets:                                           ║
+# ║    PRODUCTION_HOST     — EC2 public IP (54.116.79.254)       ║
+# ║    PRODUCTION_SSH_KEY  — PEM private key for ec2-user        ║
+# ║                                                              ║
+# ║  See: docs/PRODUCTION_CICD.md for full documentation.        ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+on:
+  workflow_dispatch:
+    inputs:
+      services:
+        description: 'Services to deploy (api, web, drive-worker, youtube-worker, or "all")'
+        required: false
+        default: 'all'
+      skip_migrations:
+        description: 'Skip database migrations'
+        required: false
+        type: boolean
+        default: false
+      git_ref:
+        description: 'Git ref to deploy (branch/tag/sha). Default: main'
+        required: false
+        default: 'main'
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false  # NEVER cancel in-progress production deploys
+
+jobs:
+  deploy:
+    name: Deploy to production EC2
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production   # Requires GitHub environment approval if configured
+
+    steps:
+      - name: Validate inputs
+        run: |
+          echo "Services: ${{ github.event.inputs.services }}"
+          echo "Git ref: ${{ github.event.inputs.git_ref }}"
+          echo "Skip migrations: ${{ github.event.inputs.skip_migrations }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Trigger time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PRODUCTION_HOST }}
+          username: ec2-user
+          key: ${{ secrets.PRODUCTION_SSH_KEY }}
+          command_timeout: 15m
+          # script_stop: true breaks if/else — drone-ssh injects $? checks per-line
+          script: |
+            set -euo pipefail
+
+            # ── Paths ─────────────────────────────────────────────────────────────
+            APP_DIR=/opt/heimdex/dev-heimdex-for-livecommerce
+            CONTRACTS_DIR=/opt/heimdex/heimdex-media-contracts
+            PIPELINES_DIR=/opt/heimdex/heimdex-media-pipelines
+            WORKER_SDK_DIR=/opt/heimdex/heimdex-worker-sdk
+            COMPOSE_OVERRIDE=/opt/heimdex/docker-compose.prod.yml
+            LOG=/opt/heimdex/logs/deploy-$(date +%Y%m%d-%H%M%S).log
+
+            exec > >(tee -a "$LOG") 2>&1
+            echo "╔══════════════════════════════════════════════════════════════╗"
+            echo "║  PRODUCTION DEPLOY — $(date -u +%Y-%m-%dT%H:%M:%SZ)                    ║"
+            echo "║  Triggered by: ${{ github.actor }}                                    ║"
+            echo "║  Services: ${{ github.event.inputs.services }}                                       ║"
+            echo "║  Git ref: ${{ github.event.inputs.git_ref }}                                        ║"
+            echo "╚══════════════════════════════════════════════════════════════╝"
+            echo ""
+
+            GIT_REF="${{ github.event.inputs.git_ref }}"
+
+            # ── Pre-deploy snapshot ───────────────────────────────────────────────
+            echo "=== Pre-deploy state ==="
+            cd "$APP_DIR"
+            PREV_SHA=$(git rev-parse HEAD)
+            echo "Previous commit: $PREV_SHA"
+            echo "Previous commit msg: $(git log -1 --format='%s' HEAD)"
+            echo ""
+
+            # Record running container images for rollback reference
+            echo "Running containers:"
+            docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}' || true
+            echo ""
+
+            # ── Sync repos ────────────────────────────────────────────────────────
+            echo "=== Step 1: Sync repositories ==="
+
+            echo "--- git pull (app) ---"
+            cd "$APP_DIR"
+            git remote prune origin 2>/dev/null || true
+            git fetch origin --force
+            git checkout "$GIT_REF" 2>/dev/null || git checkout "origin/$GIT_REF"
+            git reset --hard "origin/$GIT_REF" 2>/dev/null || git reset --hard HEAD
+            CURR_SHA=$(git rev-parse HEAD)
+            echo "App: $PREV_SHA → $CURR_SHA"
+
+            echo "--- git pull (contracts) ---"
+            cd "$CONTRACTS_DIR"
+            git remote prune origin 2>/dev/null || true
+            git fetch origin main --force
+            git reset --hard origin/main
+
+            echo "--- git pull (pipelines) ---"
+            cd "$PIPELINES_DIR"
+            git remote prune origin 2>/dev/null || true
+            git fetch origin main --force
+            git reset --hard origin/main
+
+            # Production currently bakes the worker-sdk wheel into each
+            # worker image at build time (no override mount), so pulling
+            # this source has no immediate effect on running workers.
+            # Pulled anyway for symmetry with staging and to keep
+            # ad-hoc SSH ``pip install -e /opt/heimdex/heimdex-worker-sdk``
+            # from picking up stale code. Wrapped in a directory check
+            # because the repo may not be cloned on every prod host.
+            if [ -d "$WORKER_SDK_DIR/.git" ]; then
+              echo "--- git pull (worker-sdk) ---"
+              cd "$WORKER_SDK_DIR"
+              git remote prune origin 2>/dev/null || true
+              git fetch origin main --force
+              git reset --hard origin/main
+            fi
+            echo ""
+
+            cd "$APP_DIR"
+
+            # ── Determine what to build ───────────────────────────────────────────
+            echo "=== Step 2: Detect changes ==="
+            SERVICES="${{ github.event.inputs.services }}"
+            DEPLOY_API=false
+            DEPLOY_WEB=false
+            DEPLOY_WORKER=false
+            DEPLOY_YOUTUBE=false
+
+            if [ "$SERVICES" = "all" ]; then
+              # If deploying all, check what actually changed to optimize build time
+              if [ "$PREV_SHA" != "$CURR_SHA" ]; then
+                DIFF_FILES=$(git diff --name-only "$PREV_SHA" "$CURR_SHA" 2>/dev/null || echo "FULL_DEPLOY")
+                if [ "$DIFF_FILES" = "FULL_DEPLOY" ]; then
+                  DEPLOY_API=true
+                  DEPLOY_WEB=true
+                  DEPLOY_WORKER=true
+                  DEPLOY_YOUTUBE=true
+                else
+                  # Use if-statements instead of `echo|grep && ... || true` to avoid
+                  # pipefail + set -e interaction in appleboy/ssh-action (script_stop: true).
+                  if echo "$DIFF_FILES" | grep -qE '^services/api/'; then DEPLOY_API=true; fi
+                  if echo "$DIFF_FILES" | grep -q '^services/web/'; then DEPLOY_WEB=true; fi
+                  if echo "$DIFF_FILES" | grep -qE '^services/drive-worker/'; then DEPLOY_WORKER=true; fi
+                  if echo "$DIFF_FILES" | grep -qE '^services/youtube-worker/'; then DEPLOY_YOUTUBE=true; fi
+                  # Shared config changes trigger all
+                  if echo "$DIFF_FILES" | grep -qE '^(docker-compose\.yml|\.env\.example|requirements)'; then DEPLOY_API=true; DEPLOY_WEB=true; DEPLOY_WORKER=true; DEPLOY_YOUTUBE=true; fi
+                fi
+              else
+                echo "No new commits. Force-deploying all services."
+                DEPLOY_API=true
+                DEPLOY_WEB=true
+                DEPLOY_WORKER=true
+                DEPLOY_YOUTUBE=true
+              fi
+            else
+              # Deploy only specified services
+              if echo "$SERVICES" | grep -q "api"; then DEPLOY_API=true; fi
+              if echo "$SERVICES" | grep -q "web"; then DEPLOY_WEB=true; fi
+              if echo "$SERVICES" | grep -q "drive-worker"; then DEPLOY_WORKER=true; fi
+              if echo "$SERVICES" | grep -q "youtube-worker"; then DEPLOY_YOUTUBE=true; fi
+            fi
+
+            # YouTube worker uses --profile youtube; only deploy if already running
+            if [ "$DEPLOY_YOUTUBE" = true ]; then
+              YT_STATUS=$(docker inspect --format='{{.State.Status}}' heimdex-youtube-worker 2>/dev/null || echo "not_found")
+              if [ "$YT_STATUS" != "running" ]; then
+                echo "youtube-worker not running, skipping deploy"
+                DEPLOY_YOUTUBE=false
+              fi
+            fi
+
+            echo "Deploy API:            $DEPLOY_API"
+            echo "Deploy Web:            $DEPLOY_WEB"
+            echo "Deploy drive-worker:   $DEPLOY_WORKER"
+            echo "Deploy youtube-worker: $DEPLOY_YOUTUBE"
+            echo ""
+
+            if [ "$DEPLOY_API" = false ] && [ "$DEPLOY_WEB" = false ] && [ "$DEPLOY_WORKER" = false ] && [ "$DEPLOY_YOUTUBE" = false ]; then
+              echo "No services to deploy. Exiting."
+              echo "=== Deploy finished at $(date) | NO CHANGES ==="
+              exit 0
+            fi
+
+            # ── Compose command helper ────────────────────────────────────────────
+            # CRITICAL: Production uses docker-compose.prod.yml override which:
+            #   - Removes depends_on for postgres/opensearch/minio (AWS managed)
+            #   - Overrides OPENSEARCH_URL to use env var (base hardcodes http://opensearch:9200)
+            #   - Overrides MINIO_ENDPOINT to empty (S3 mode)
+            #   - Removes --reload from uvicorn
+            # CRITICAL: --no-deps is REQUIRED because compose v2 merge doesn't fully
+            #   clear depends_on: {} — without --no-deps, compose tries to start
+            #   postgres/opensearch/minio containers which don't exist.
+            DC="docker compose -f docker-compose.yml -f $COMPOSE_OVERRIDE"
+
+            # ── Build changed services ────────────────────────────────────────────
+            echo "=== Step 3: Build images ==="
+
+            if [ "$DEPLOY_API" = true ]; then
+              echo "--- building api ---"
+              $DC build api
+            fi
+
+            if [ "$DEPLOY_WEB" = true ]; then
+              echo "--- building web ---"
+              $DC build web
+            fi
+
+            if [ "$DEPLOY_WORKER" = true ]; then
+              echo "--- building drive-worker ---"
+              $DC build drive-worker
+            fi
+
+            if [ "$DEPLOY_YOUTUBE" = true ]; then
+              echo "--- building youtube-worker ---"
+              $DC --profile youtube build youtube-worker
+            fi
+            echo ""
+
+            # ── Database migrations ───────────────────────────────────────────────
+            SKIP_MIGRATIONS="${{ github.event.inputs.skip_migrations }}"
+            if [ "$DEPLOY_API" = true ] && [ "$SKIP_MIGRATIONS" != "true" ]; then
+              echo "=== Step 4: Database migrations ==="
+              # Run migrations using new image. --no-deps prevents starting backing services.
+              $DC run --rm -T --no-deps api alembic upgrade head
+              echo "Migrations applied."
+              echo ""
+            else
+              echo "=== Step 4: Database migrations — SKIPPED ==="
+              echo ""
+            fi
+
+            # ── Restart services ──────────────────────────────────────────────────
+            echo "=== Step 5: Restart services ==="
+
+            # API first (other services may depend on it being healthy)
+            if [ "$DEPLOY_API" = true ]; then
+              echo "--- restarting api ---"
+              $DC up -d --no-deps api
+              echo "Waiting 15s for API startup..."
+              sleep 15
+            fi
+
+            if [ "$DEPLOY_WORKER" = true ]; then
+              echo "--- restarting drive-worker ---"
+              $DC up -d --no-deps drive-worker
+              sleep 5
+            fi
+
+            if [ "$DEPLOY_YOUTUBE" = true ]; then
+              echo "--- restarting youtube-worker ---"
+              $DC --profile youtube up -d --no-deps youtube-worker
+              sleep 5
+            fi
+
+            if [ "$DEPLOY_WEB" = true ]; then
+              echo "--- restarting web ---"
+              # --force-recreate -V ensures Next.js build args (Auth0 etc.) are refreshed
+              $DC up -d --no-deps --force-recreate -V web
+              sleep 5
+            fi
+            echo ""
+
+            # ── Health checks ─────────────────────────────────────────────────────
+            echo "=== Step 6: Health checks ==="
+            FAIL=0
+            MAX_ATTEMPTS=20
+            INTERVAL=3
+
+            echo "Waiting for API (max ${MAX_ATTEMPTS}x${INTERVAL}s)..."
+            API_OK=false
+            for i in $(seq 1 $MAX_ATTEMPTS); do
+              API_STATUS=$(curl -sf --max-time 5 http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','UNKNOWN'))" 2>/dev/null || echo "DOWN")
+              if [ "$API_STATUS" = "ok" ]; then
+                echo "✓ API: OK (attempt $i)"
+                API_OK=true
+                break
+              fi
+              echo "  API: not ready (attempt $i/$MAX_ATTEMPTS, status=$API_STATUS)"
+              sleep $INTERVAL
+            done
+            if [ "$API_OK" = false ]; then
+              echo "✗ API: FAILED after $MAX_ATTEMPTS attempts"
+              echo ""
+              echo "--- API container logs (last 50 lines) ---"
+              docker logs --tail 50 heimdex-api 2>&1 || true
+              echo "--- end logs ---"
+              FAIL=1
+            fi
+
+            echo ""
+            echo "Waiting for Web (max ${MAX_ATTEMPTS}x${INTERVAL}s)..."
+            WEB_OK=false
+            for i in $(seq 1 $MAX_ATTEMPTS); do
+              WEB_CODE=$(curl -sf -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:3000 || echo "000")
+              if [ "${WEB_CODE}" -ge 200 ] && [ "${WEB_CODE}" -lt 400 ]; then
+                echo "✓ Web: OK (HTTP $WEB_CODE, attempt $i)"
+                WEB_OK=true
+                break
+              fi
+              echo "  Web: not ready (attempt $i/$MAX_ATTEMPTS, code=$WEB_CODE)"
+              sleep $INTERVAL
+            done
+            if [ "$WEB_OK" = false ]; then
+              echo "✗ Web: FAILED after $MAX_ATTEMPTS attempts"
+              echo ""
+              echo "--- Web container logs (last 50 lines) ---"
+              docker logs --tail 50 heimdex-web 2>&1 || true
+              echo "--- end logs ---"
+              FAIL=1
+            fi
+
+            echo ""
+            echo "Checking drive-worker..."
+            WORKER_STATUS=$(docker inspect --format='{{.State.Status}}' heimdex-drive-worker 2>/dev/null || echo "not_found")
+            if [ "$WORKER_STATUS" = "running" ]; then
+              echo "✓ drive-worker: running"
+            else
+              echo "✗ drive-worker: $WORKER_STATUS"
+              echo ""
+              echo "--- drive-worker logs (last 30 lines) ---"
+              docker logs --tail 30 heimdex-drive-worker 2>&1 || true
+              echo "--- end logs ---"
+              FAIL=1
+            fi
+
+            YT_CHECK=$(docker inspect --format='{{.State.Status}}' heimdex-youtube-worker 2>/dev/null || echo "not_found")
+            if [ "$YT_CHECK" = "running" ]; then
+              echo "✓ youtube-worker: running"
+            elif [ "$YT_CHECK" = "not_found" ]; then
+              echo "- youtube-worker: not deployed (optional)"
+            else
+              echo "⚠ youtube-worker: $YT_CHECK"
+            fi
+            echo ""
+
+            # ── External HTTPS check ──────────────────────────────────────────────
+            echo "=== Step 7: External HTTPS check ==="
+            EXT_CODE=$(curl -sf -o /dev/null -w '%{http_code}' --max-time 10 https://livenow.app.heimdex.co/api/health 2>/dev/null || echo "000")
+            if [ "${EXT_CODE}" -ge 200 ] && [ "${EXT_CODE}" -lt 400 ]; then
+              echo "✓ External HTTPS: OK (HTTP $EXT_CODE)"
+            else
+              echo "⚠ External HTTPS: HTTP $EXT_CODE (may be DNS/TLS issue, not a deploy failure)"
+            fi
+            echo ""
+
+            # ── Docker cleanup ────────────────────────────────────────────────────
+            echo "=== Step 8: Cleanup ==="
+            docker image prune -f || true
+            docker builder prune -f --keep-storage=5G || true
+            echo "Disk after cleanup: $(df -h / | tail -1)"
+            echo ""
+
+            # ── Summary ──────────────────────────────────────────────────────────
+            echo "╔══════════════════════════════════════════════════════════════╗"
+            echo "║  Deploy Summary — PRODUCTION                                ║"
+            echo "╠══════════════════════════════════════════════════════════════╣"
+            echo "  Commit:       $CURR_SHA"
+            echo "  Previous:     $PREV_SHA"
+            echo "  Services:     api=$DEPLOY_API web=$DEPLOY_WEB worker=$DEPLOY_WORKER youtube=$DEPLOY_YOUTUBE"
+            echo "  Status:       $([ $FAIL -eq 0 ] && echo 'SUCCESS' || echo 'DEGRADED')"
+            echo ""
+            echo "  Rollback:     SSH into EC2 and run:"
+            echo "    cd $APP_DIR && git reset --hard $PREV_SHA"
+            echo "    $DC build api web drive-worker youtube-worker"
+            echo "    $DC up -d --no-deps api web drive-worker youtube-worker"
+            echo "╚══════════════════════════════════════════════════════════════╝"
+
+            echo ""
+            echo "=== Deploy finished at $(date) | commit=$CURR_SHA | status=$([ $FAIL -eq 0 ] && echo 'SUCCESS' || echo 'DEGRADED') ==="
+
+            exit $FAIL

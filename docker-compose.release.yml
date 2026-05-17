@@ -1,0 +1,36 @@
+# docker-compose.release.yml
+# Release overlay: removes local path mounts and editable installs.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.release.yml up -d
+#
+# In release mode, heimdex-media-contracts and heimdex-media-pipelines are
+# installed from PyPI / GitHub Releases during docker build, NOT from local
+# path mounts. All source code is baked into the images.
+#
+# Prerequisites:
+#   - heimdex-media-contracts published to PyPI (CI does this on tag push)
+#   - heimdex-media-pipelines wheel available (CI publishes to GitHub Releases)
+
+services:
+  api:
+    volumes:
+      # Override: remove source mount and contracts mount; keep persistent volumes
+      - huggingface_cache:/data/huggingface
+      - ./thumbnails:/data/thumbnails
+    command: >
+      sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
+
+  drive-worker:
+    volumes:
+      - ./data:/data
+    command: "python -m src.worker"
+
+  drive-ocr-worker:
+    volumes: []
+    command: "python -m src.worker"
+
+  drive-stt-worker:
+    volumes:
+      - whisper_model_cache:/data/whisper-models
+    command: "python -m src.worker"

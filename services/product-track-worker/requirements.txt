@@ -1,0 +1,48 @@
+# Phase 3c-A: shorts-auto product track worker — SAM2 + SigLIP2 +
+# gpt-4o-mini on CUDA 12.4 + torch 2.4.1.
+#
+# SAM2 dependency is reserved for Phase 3c-B (sam2_loader.py +
+# sam2_tracker.py are scaffold stubs in 3c-A). Once the SAM2 python
+# package is chosen (Meta's official ``sam2``, HF transformers'
+# ``Sam2Model``, or ultralytics), pin it here.
+#
+# Torch wheels need the cu124 extra index — supplied in Dockerfile.gpu
+# via `pip install --extra-index-url https://download.pytorch.org/whl/cu124`.
+# Pins mirror product-enumerate-worker / drive-blur-worker where they
+# overlap so we operate one Python+CUDA matrix across GPU workers.
+
+# core
+boto3>=1.34
+httpx==0.27.2
+openai>=1.0
+Pillow==10.2.0
+pydantic==2.13.0
+pydantic-settings>=2.0
+structlog>=23.0
+
+# ML — SigLIP2 reused via heimdex_media_pipelines.siglip2 (loaded
+# by drive-visual-embed-worker as well; same variant pin).
+accelerate==1.13.0
+huggingface_hub==1.10.1
+numpy==2.4.4
+safetensors==0.7.0
+sentencepiece>=0.1.99
+tokenizers==0.22.2
+torch==2.4.1+cu124
+torchvision==0.19.1+cu124
+transformers==5.5.4
+
+# SAM2 (Phase 3c-B): HF transformers' Sam2 family is the
+# calibration-default choice — matches the existing transformers
+# ecosystem (SigLIP2 already comes from transformers) so we
+# operate one image-model pattern across GPU workers. Real package
+# is the same ``transformers`` already pinned above; no extra dep.
+# OpenCV is needed to decode the proxy video at sample_fps.
+opencv-python-headless==4.10.0.84
+
+# Heimdex shared libs:
+# * worker-sdk: pinned to PyPI version, installed by Dockerfile BEFORE
+#   this requirements file.
+# * contracts + pipelines: installed from sibling source checkouts
+#   (NOT from this requirements file) — pipelines is not yet on PyPI.
+#   See Dockerfile.gpu for the COPY+install steps.
