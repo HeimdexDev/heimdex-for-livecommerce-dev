@@ -27,7 +27,6 @@ import type { EditorOverlay, EditorTextOverlay, PresetKind } from "../lib/overla
 import { RightPanel } from "./RightPanel";
 import { BackgroundPanel } from "./BackgroundPanel";
 import { TemplatePanel } from "./TemplatePanel";
-import { useTopHeaderActions } from "@/components/layout/TopHeaderActionsContext";
 
 function BackArrowIcon() {
   return (
@@ -268,8 +267,6 @@ export function ShortsEditorPage() {
     [v2Enabled, selectedOverlay],
   );
 
-  useTopHeaderActions(headerMenu);
-
   // Load from scene IDs (entry from ShortsCreatePage or ShortsPlanPanel)
   useEffect(() => {
     if (!videoId || shortId) return;
@@ -465,7 +462,7 @@ export function ShortsEditorPage() {
         renderError={renderError}
         onRender={submitComposition}
         onRenderReset={resetRender}
-        onToggleFullscreen={() => setIsFullscreen(true)}
+        templateSaveSlot={headerMenu}
       />
 
       <EditorLayout

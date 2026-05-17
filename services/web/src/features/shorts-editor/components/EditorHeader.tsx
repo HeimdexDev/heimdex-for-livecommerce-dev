@@ -1,15 +1,16 @@
 "use client";
 
-// figma: 1713:271669  (cache: .figma-cache/1713-271669_phase5_editor-1.api.json)
-// node-name: GNB · spec: h=80 padL/R=32 / 뒤로가기 라벨 fs=16 fw=500 → text-base font-medium text-grayscale-500
-// 공통 GNB는 editor-2 (1713:274802) 와 동일 스펙.
+// figma: 1602:37719 (editor GNB)
+// spec: h=80 px=32 / back ▸ chevron-left + "뒤로가기" 16px medium grayscale-500
+//        title 18px semibold black + "N개 장면" 12px medium neutral-h-500
+//        right ▸ [템플릿 저장 slot] [내보내기 primary] / h=32 px=10 py=6 r=8 fs=12
+import type { ReactNode } from "react";
 import { useCallback } from "react";
 import Link from "next/link";
-import { Maximize2 } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { RenderStatus } from "../hooks/useCompositionExport";
 import type { RenderJobResponse } from "@/lib/api/shorts-render";
-import { getApiBaseUrl } from "@/lib/api/utils";
 
 interface EditorHeaderProps {
   videoTitle: string | null;
@@ -24,14 +25,10 @@ interface EditorHeaderProps {
   onRender: () => void;
   onRenderReset: () => void;
   onToggleFullscreen?: () => void;
-}
-
-function BackArrowIcon() {
-  return (
-    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
-    </svg>
-  );
+  // Slot rendered between metadata and the export button — the page wires
+  // a TemplateSaveMenu in here so the GNB ordering stays figma-aligned
+  // (back / title / scenes / 템플릿 저장 / 내보내기).
+  templateSaveSlot?: ReactNode;
 }
 
 function DownloadIcon() {
@@ -43,7 +40,7 @@ function DownloadIcon() {
 }
 
 const STATUS_LABELS: Record<RenderStatus, string> = {
-  idle: "렌더링",
+  idle: "내보내기",
   submitting: "제출 중...",
   queued: "대기 중...",
   rendering: "렌더링 중...",
@@ -64,8 +61,9 @@ export function EditorHeader({
   renderError,
   onRender,
   onRenderReset,
-  onToggleFullscreen,
+  templateSaveSlot,
 }: EditorHeaderProps) {
+  void totalDurationMs;
   const isWorking = renderStatus === "submitting" || renderStatus === "queued" || renderStatus === "rendering";
   const canRender = clipCount > 0 && !isWorking && renderStatus !== "completed";
 
@@ -80,10 +78,6 @@ export function EditorHeader({
 
   const handleDownload = useCallback(async () => {
     if (!renderJob?.download_url) return;
-    // ``download_url`` is now an absolute presigned S3 URL (post
-    // 2026-05-06 fix). The browser can hit it directly with no
-    // auth header. Don't prefix the api base url — that would
-    // produce a malformed double-host URL.
     const a = document.createElement("a");
     a.href = renderJob.download_url;
     a.download = `short_${renderJob.id}.mp4`;
@@ -93,57 +87,50 @@ export function EditorHeader({
   }, [renderJob]);
 
   return (
-    <div className="flex h-20 items-center justify-between border-b border-grayscale-100 bg-white px-8">
-      {/* Left: back + metadata */}
-      <div className="flex items-center gap-3">
+    <div className="flex h-20 items-center border-b border-grayscale-100 bg-white px-8">
+      {/* Left: back + metadata — figma gap=20 */}
+      <div className="flex items-center gap-5">
         <Link
           href="/export/shorts"
           onClick={handleBack}
-          className="inline-flex items-center gap-1 rounded-full px-2 py-1 text-base font-medium text-grayscale-500 hover:bg-grayscale-10 hover:text-grayscale-800"
+          className="inline-flex items-center gap-1 text-grayscale-500 hover:text-grayscale-800"
         >
-          <BackArrowIcon />
-          <span>뒤로가기</span>
+          <ChevronLeft className="h-6 w-6" strokeWidth={2} />
+          <span className="text-[16px] font-medium leading-[1.4] tracking-[-0.4px]">
+            뒤로가기
+          </span>
         </Link>
 
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => onTitleChange(e.target.value)}
-          placeholder={videoTitle ?? "제목 없음"}
-          className="max-w-64 truncate rounded-md border border-transparent px-2 py-1 text-[18px] font-semibold leading-[1.4] tracking-[-0.45px] text-grayscale-800 placeholder-grayscale-300 hover:border-grayscale-100 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
-        />
-
-        <span className="text-xs font-medium text-grayscale-500">
-          {clipCount}개 장면 &middot; {Math.round(totalDurationMs / 1000)}초
-          {isDirty && <span className="ml-1 text-amber-h-500">*</span>}
-        </span>
+        <div className="flex items-center gap-[10px]">
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => onTitleChange(e.target.value)}
+            placeholder={videoTitle ?? "제목 없음"}
+            aria-label="영상 제목"
+            className="max-w-64 truncate rounded-md border border-transparent px-1 text-[18px] font-semibold leading-[1.4] tracking-[-0.45px] text-black placeholder-grayscale-300 hover:border-grayscale-100 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
+          />
+          <span className="whitespace-nowrap text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-neutral-h-500">
+            {clipCount}개 장면
+            {isDirty && <span className="ml-1 text-amber-h-500">*</span>}
+          </span>
+        </div>
       </div>
 
-      {/* Right: render controls */}
-      <div className="flex items-center gap-2">
-        {onToggleFullscreen && (
-          <button
-            type="button"
-            onClick={onToggleFullscreen}
-            aria-label="전체보기"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-grayscale-500 transition-colors hover:bg-grayscale-100 hover:text-heimdex-navy-500"
-          >
-            <Maximize2 className="h-4 w-4" />
-          </button>
-        )}
-
-        {/* Error message */}
+      {/* Right: 템플릿 저장 + 내보내기 — figma h=32 px=10 py=6 r=8 fs=12 */}
+      <div className="ml-auto flex items-center gap-2">
         {renderError && (
-          <span className="text-xs text-red-h-500 max-w-48 truncate">{renderError}</span>
+          <span className="max-w-48 truncate text-xs text-red-h-500">{renderError}</span>
         )}
 
-        {/* Completed: download + new render */}
+        {templateSaveSlot}
+
         {renderStatus === "completed" && renderJob && (
           <>
             <button
               type="button"
               onClick={handleDownload}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-heimdex-navy-500 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-heimdex-navy-600"
+              className="inline-flex h-8 items-center gap-1.5 rounded-[8px] bg-heimdex-navy-500 px-[10px] py-[6px] text-[12px] font-semibold text-white transition-colors hover:bg-heimdex-navy-600"
             >
               <DownloadIcon />
               다운로드
@@ -151,39 +138,37 @@ export function EditorHeader({
             <button
               type="button"
               onClick={onRenderReset}
-              className="rounded-lg border border-grayscale-200 bg-white px-3 py-2 text-sm font-semibold text-grayscale-800 transition-colors hover:bg-grayscale-10"
+              className="h-8 rounded-[8px] border border-neutral-h-500 bg-white px-[10px] py-[6px] text-[12px] font-semibold text-neutral-h-500 transition-colors hover:bg-grayscale-10"
             >
               다시 렌더링
             </button>
           </>
         )}
 
-        {/* Failed: retry */}
         {renderStatus === "failed" && (
           <button
             type="button"
             onClick={onRenderReset}
-            className="rounded-lg border border-grayscale-200 bg-white px-3 py-2 text-sm font-semibold text-grayscale-800 transition-colors hover:bg-grayscale-10"
+            className="h-8 rounded-[8px] border border-neutral-h-500 bg-white px-[10px] py-[6px] text-[12px] font-semibold text-neutral-h-500 transition-colors hover:bg-grayscale-10"
           >
             재시도
           </button>
         )}
 
-        {/* Render button */}
         {renderStatus !== "completed" && (
           <button
             type="button"
             onClick={onRender}
             disabled={!canRender}
             className={cn(
-              "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors",
+              "inline-flex h-8 items-center gap-2 rounded-[8px] px-[10px] py-[6px] text-[12px] font-semibold leading-none transition-colors",
               canRender
                 ? "bg-heimdex-navy-500 text-white hover:bg-heimdex-navy-600"
-                : "cursor-not-allowed bg-grayscale-100 text-grayscale-400",
+                : "cursor-not-allowed bg-neutral-h-100 text-neutral-h-300",
             )}
           >
             {isWorking && (
-              <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              <div className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
             )}
             {STATUS_LABELS[renderStatus]}
           </button>
