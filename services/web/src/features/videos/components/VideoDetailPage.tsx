@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { SkipBack, SkipForward } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useAgent } from "@/features/search/hooks/useAgent";
 import { getVideoScenes, getReprocessStatus, reprocessScenes, patchSceneOverride, resetSceneOverride, getVideoSummary, generateVideoSummary, editVideoSummary, resetVideoSummary } from "@/lib/api/videos";
@@ -177,30 +178,21 @@ function VideoInfoPanel({
   seekKey?: number;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { settings } = useOrgSettings();
-  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
   const title = meta?.video_title || videoId;
   const lastEnd = scenes.length > 0 ? scenes[scenes.length - 1].end_ms : 0;
   const firstStart = scenes.length > 0 ? scenes[0].start_ms : 0;
   const durationMs = lastEnd - firstStart;
 
-  // Frame 1707484647 — 커스텀 컨트롤(진행바/Play 32px/타임라벨/CC 토글) 상태
+  // figma 1602:38481 — overlay controls: progress bar + play + skip pill + time pill
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [totalTimeMs, setTotalTimeMs] = useState(0);
-  const [ccEnabled, setCcEnabled] = useState(false);
 
   const sourceLabel =
     meta?.source_type === "gdrive" ? "Google Drive"
     : meta?.source_type === "removable_disk" ? "외장 디스크"
     : meta?.source_type === "local" ? "로컬 파일"
     : "-";
-
-  // 영상 소스 칩 라벨 — Figma `소스 칩` (Local/Drive/Disk) navy radius=999
-  const sourceChipLabel =
-    meta?.source_type === "gdrive" ? "Drive"
-    : meta?.source_type === "removable_disk" ? "Disk"
-    : "Local";
 
   const folderName =
     meta?.source_type === "gdrive"
@@ -216,7 +208,6 @@ function VideoInfoPanel({
     ["파일 위치", sourceLabel],
     ["폴더 제목", folderName],
     ["재생 시간", durationMs > 0 ? formatHms(durationMs) : "-"],
-    ["촬영 장소", "-"],
     ["업로드 일자", captureDate],
   ];
 
@@ -267,6 +258,13 @@ function VideoInfoPanel({
     }
   }, []);
 
+  const skipBy = useCallback((deltaSec: number) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(video.duration)) return;
+    const next = Math.min(video.duration, Math.max(0, video.currentTime + deltaSec));
+    video.currentTime = next;
+  }, []);
+
   const handleProgressSeek = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const video = videoRef.current;
     if (!video || !video.duration) return;
@@ -285,13 +283,15 @@ function VideoInfoPanel({
 
   const progressRatio = totalTimeMs > 0 ? (currentTimeMs / totalTimeMs) * 100 : 0;
 
+  const displayTotalMs = totalTimeMs > 0 ? totalTimeMs : durationMs;
+
   return (
-    // figma: 1602:38478 (좌측 영상 카드 — 영상 파일명) / 1602:38481 (재생 컨트롤) / 1602:38512 (좌측 섹션 외곽)
-    <div className="overflow-hidden rounded-card border border-grayscale-100 bg-white shadow-card">
-      {/* Frame 38 — 제목 영역 (영상 파일 이름, 긴 이름은 middle truncate) */}
-      <div className="px-5 pt-5 pb-2.5 flex items-center gap-2 min-w-0">
+    // figma: 1602:38477 — 좌측 영상 카드 (rounded-10 shadow-card, no border)
+    <div className="flex flex-col overflow-hidden rounded-card bg-white shadow-card">
+      {/* figma 1602:38478 — 제목 영역 (pt-20 pb-10 px-20) */}
+      <div className="flex items-center gap-2 min-w-0 px-5 pt-5 pb-2.5">
         <h2
-          className="min-w-0 text-lg font-semibold tracking-[-0.45px] text-grayscale-800"
+          className="min-w-0 text-lg font-semibold tracking-[-0.45px] text-neutral-h-black"
           title={title}
         >
           {middleTruncate(title, 30)}
@@ -302,82 +302,86 @@ function VideoInfoPanel({
         />
       </div>
 
-      {/* Frame 69 — 비디오 영역 + 소스 칩 */}
-      <div className={cn(
-        "relative w-full bg-black",
-        getThumbnailAspectClass(aspectRatio),
-      )}>
+      {/* figma 1602:38480 — 비디오 frame (9:16 고정) with overlay 컨트롤 */}
+      <div className="relative w-full aspect-[9/16] overflow-hidden bg-black">
         <video
           ref={videoRef}
           src={playbackUrl}
-          className="h-full w-full object-contain"
+          className="absolute inset-0 h-full w-full object-contain"
           poster={posterUrl}
         />
-        <span className="absolute left-2.5 top-2.5 rounded-full bg-heimdex-navy-500 px-2 py-0.5 text-xs font-semibold text-white">
-          {sourceChipLabel}
-        </span>
-        {ccEnabled && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-2.5 px-4 text-center text-xs font-medium text-white drop-shadow">
-            {/* CC 토글 활성 표시 — 자막 스트림 미연결 상태에서는 토글 시각만 노출 */}
-          </div>
-        )}
-      </div>
 
-      {/* Frame 1707484647 — 커스텀 컨트롤 (341×68, padding 10) */}
-      <div className="flex flex-col gap-2 p-2.5">
-        <div
-          role="slider"
-          tabIndex={0}
-          aria-valuemin={0}
-          aria-valuemax={Math.max(0, Math.round(totalTimeMs / 1000))}
-          aria-valuenow={Math.round(currentTimeMs / 1000)}
-          aria-label="재생 진행"
-          onClick={handleProgressSeek}
-          className="relative h-1 w-full cursor-pointer overflow-hidden rounded-full bg-grayscale-100"
-        >
+        {/* figma 1602:38481 — 컨트롤 overlay (absolute inset-0, justify-end, p-10, gap-12) */}
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-start justify-end gap-3 p-2.5">
+          {/* figma 1602:38482 — 진행바 (h-4 white track, navy fill) */}
           <div
-            className="absolute left-0 top-0 h-full bg-heimdex-navy-500"
-            style={{ width: `${progressRatio}%` }}
-          />
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={togglePlay}
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-grayscale-800/50 text-white"
-            aria-label={isPlaying ? "일시정지" : "재생"}
+            role="slider"
+            tabIndex={0}
+            aria-valuemin={0}
+            aria-valuemax={Math.max(0, Math.round(displayTotalMs / 1000))}
+            aria-valuenow={Math.round(currentTimeMs / 1000)}
+            aria-label="재생 진행"
+            onClick={handleProgressSeek}
+            className="pointer-events-auto relative h-1 w-full cursor-pointer overflow-hidden bg-white"
           >
-            {isPlaying ? <PauseIcon /> : <PlayIcon />}
-          </button>
-          <span className="text-xs font-medium text-grayscale-800">
-            {formatHms(currentTimeMs)} / {formatHms(totalTimeMs > 0 ? totalTimeMs : durationMs)}
-          </span>
-          <button
-            type="button"
-            onClick={() => setCcEnabled((v) => !v)}
-            className={cn(
-              "ml-auto flex h-8 w-8 items-center justify-center rounded-full",
-              ccEnabled
-                ? "bg-heimdex-navy-500 text-white"
-                : "bg-grayscale-100 text-grayscale-500",
-            )}
-            aria-label="자막 토글"
-            aria-pressed={ccEnabled}
-          >
-            <CcIcon />
-          </button>
+            <div
+              className="absolute left-0 top-0 h-full bg-heimdex-navy-500"
+              style={{ width: `${progressRatio}%` }}
+            />
+          </div>
+
+          {/* figma 1602:38485 — 버튼 row (play 32, skip pill 72×32, time pill) */}
+          <div className="pointer-events-auto flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={togglePlay}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-[rgba(38,38,38,0.5)] text-white"
+              aria-label={isPlaying ? "일시정지" : "재생"}
+            >
+              {isPlaying ? <PauseIcon /> : <PlayIcon />}
+            </button>
+            <div className="flex h-8 w-[72px] items-center justify-between rounded-full bg-[rgba(38,38,38,0.5)] px-2 py-0.5">
+              <button
+                type="button"
+                onClick={() => skipBy(-5)}
+                className="text-white"
+                aria-label="5초 뒤로"
+              >
+                <SkipBack className="h-5 w-5" strokeWidth={1.667} />
+              </button>
+              <button
+                type="button"
+                onClick={() => skipBy(5)}
+                className="text-white"
+                aria-label="5초 앞으로"
+              >
+                <SkipForward className="h-5 w-5" strokeWidth={1.667} />
+              </button>
+            </div>
+            <div className="flex h-8 items-center rounded-full bg-[rgba(38,38,38,0.5)] px-2 py-0.5">
+              <span className="text-sm font-medium tracking-[-0.35px] text-white">
+                {formatHms(currentTimeMs)} / {formatHms(displayTotalMs)}
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* 메타 정보 */}
-      <dl className="space-y-3 border-t border-grayscale-100 px-5 py-4">
-        {rows.map(([label, value]) => (
-          <div key={label} className="flex items-baseline gap-4 text-sm">
-            <dt className="w-[140px] flex-shrink-0 text-grayscale-500">{label}</dt>
-            <dd className="text-grayscale-800">{value}</dd>
+      {/* figma 1602:38496 / 1607:64939 — 메타 정보 (p-20, items-end, 2 column gap-32) */}
+      <div className="flex flex-col items-end p-5">
+        <div className="flex gap-8 items-start text-sm font-medium leading-[1.4] tracking-[-0.35px]">
+          <div className="flex flex-col gap-5 items-start text-neutral-500 whitespace-nowrap">
+            {rows.map(([label]) => (
+              <p key={label}>{label}</p>
+            ))}
           </div>
-        ))}
-      </dl>
+          <div className="flex flex-col gap-5 items-start text-grayscale-800 whitespace-nowrap">
+            {rows.map(([label, value]) => (
+              <p key={label}>{value}</p>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
