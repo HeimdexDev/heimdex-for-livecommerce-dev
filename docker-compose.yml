@@ -151,6 +151,16 @@ services:
       - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_PROMPT_VERSION=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_PROMPT_VERSION:-v1.0}
       - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_TRANSCRIPT_TOKENS=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_MAX_TRANSCRIPT_TOKENS:-80000}
       - AUTO_SHORTS_PRODUCT_V2_STT_ENUM_TIMEOUT_S=${AUTO_SHORTS_PRODUCT_V2_STT_ENUM_TIMEOUT_S:-90}
+      # Auto-shorts post-enumeration catalog consolidation
+      # (PR #182, services/api/app/modules/shorts_auto_product/consolidate/).
+      # Same allowlist rule as the whisper / storyboard blocks below —
+      # restart does NOT reload .env without these lines. Memory:
+      # feedback_compose_env_passthrough_required.md.
+      - AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_ENABLED=${AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_ENABLED:-false}
+      - AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_MODEL=${AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_MODEL:-gpt-4o}
+      - AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_TIMEOUT_S=${AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_TIMEOUT_S:-120}
+      - AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_GRACE_S=${AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_GRACE_S:-105}
+      - AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_PROMPT_VERSION=${AUTO_SHORTS_PRODUCT_V2_CONSOLIDATE_PROMPT_VERSION:-v1.0}
       # Auto-shorts post-render Whisper subtitle refinement
       # (.claude/plans/auto-shorts-whisper-subtitles-2026-05-06.md).
       # Master flag default false; set to true on staging to enable
