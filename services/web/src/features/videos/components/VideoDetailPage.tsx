@@ -185,22 +185,12 @@ function VideoInfoPanel({
   scenes,
   seekMs,
   seekKey,
-  onReprocessClick,
-  isReprocessing,
-  onBlurClick,
-  hasBlurJob,
-  blurDisabled,
 }: {
   videoId: string;
   meta: VideoScenesResponse | null;
   scenes: VideoScene[];
   seekMs?: number | null;
   seekKey?: number;
-  onReprocessClick: () => void;
-  isReprocessing: boolean;
-  onBlurClick: () => void;
-  hasBlurJob: boolean;
-  blurDisabled: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { settings } = useOrgSettings();
@@ -326,16 +316,6 @@ function VideoInfoPanel({
           sourceType={meta?.source_type ?? "local"}
           webViewLink={meta?.web_view_link}
         />
-        {/* figma: 1602:38512 — 장면 재분석 버튼은 카테고리 탭 우측으로 이동 */}
-        {!blurDisabled && (
-          <button
-            type="button"
-            onClick={onBlurClick}
-            className="ml-auto shrink-0 rounded-lg border border-grayscale-200 bg-white px-3 py-1.5 text-xs font-semibold text-grayscale-800 hover:bg-grayscale-10"
-          >
-            {hasBlurJob ? "블러 상세 보기" : "블러 처리"}
-          </button>
-        )}
       </div>
 
       {/* Frame 69 — 비디오 영역 + 소스 칩 */}
@@ -1275,7 +1255,7 @@ function ScenesPanel({
             disabled={selectedIds.size === 0}
             onClick={() => {
               if (selectedIds.size > 0) {
-                router.push(`/export/shorts/create?videoId=${videoId}&sceneIds=${Array.from(selectedIds).join(",")}`);
+                router.push(`/export/shorts/editor?videoId=${videoId}&sceneIds=${Array.from(selectedIds).join(",")}`);
               }
             }}
             className={cn(
@@ -1640,7 +1620,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
           />
           <button
             type="button"
-            onClick={() => router.push(`/export/shorts/create?videoId=${videoId}`)}
+            onClick={() => router.push(`/export/shorts/editor?videoId=${videoId}`)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
           >
             <DownloadIcon />
