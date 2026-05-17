@@ -18,11 +18,11 @@ export function SubtitleCancelActionBar({
 }: SubtitleCancelActionBarProps) {
   return (
     <div
-      className="flex items-center gap-5 rounded-[10px] bg-white px-4 py-2 shadow-[2px_2px_20px_0px_rgba(0,0,0,0.25)]"
+      className="inline-flex w-fit items-center gap-5 whitespace-nowrap rounded-[10px] bg-white px-4 py-2 shadow-[2px_2px_20px_0px_rgba(0,0,0,0.25)]"
       data-figma-node="1669:49437"
     >
-      <span className="flex items-center gap-[10px]">
-        <span className="text-[14px] font-medium leading-[1.4] tracking-[-0.35px] text-grayscale-500">
+      <span className="inline-flex items-center gap-[10px] whitespace-nowrap">
+        <span className="whitespace-nowrap text-[14px] font-medium leading-[1.4] tracking-[-0.35px] text-grayscale-500">
           선택
         </span>
         <span className="w-[90px] overflow-hidden text-ellipsis whitespace-nowrap text-[14px] font-medium leading-[1.4] tracking-[-0.35px] text-grayscale-800">
