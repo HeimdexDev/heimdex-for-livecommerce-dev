@@ -416,7 +416,7 @@ export function SavedShortsPage() {
             </span>
           </h1>
           <div className="flex items-center gap-[8px]">
-            <Link href="/export/shorts/create">
+            <Link href="/export/shorts/editor">
               <Button variant="secondary" size="sm" leadingIcon={<Plus className="h-4 w-4" strokeWidth={2} />}>
                 새 쇼츠 생성
               </Button>
@@ -519,7 +519,7 @@ export function SavedShortsPage() {
                 <div className="relative w-full overflow-hidden rounded-card border border-grayscale-100 bg-neutral-h-100 aspect-[200/337]">
                   {item.type === "saved" && item.scene_ids ? (
                     <Link
-                      href={`/export/shorts/create?videoId=${item.video_id}&sceneIds=${item.scene_ids.join(",")}`}
+                      href={`/export/shorts/editor?videoId=${item.video_id}&sceneIds=${item.scene_ids.join(",")}`}
                       className="block h-full w-full"
                     >
                       <SceneThumbnail

@@ -315,19 +315,16 @@ export function PreviewPanel({
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >
-      {/* Preview container — matches org aspect ratio */}
+      {/* Preview container — figma 1602:37722: w=352 h=626, rounded-[10px] */}
       <div
         ref={containerRef}
         className={cn(
-          // figma: 1713:271669 r=10
-          "relative w-full overflow-hidden rounded-card bg-black",
+          "relative overflow-hidden rounded-[10px] bg-black",
           aspectRatio === "9:16"
-            ? fullscreen
-              ? "aspect-[9/16] max-w-[352px]"
-              : "aspect-[9/16] max-w-[280px]"
+            ? "w-[352px] h-[626px]"
             : fullscreen
-              ? "aspect-video max-w-[626px]"
-              : "aspect-video max-w-[480px]",
+              ? "aspect-video w-full max-w-[626px]"
+              : "aspect-video w-full max-w-[480px]",
         )}
         onClick={() => onSelectSubtitle(null)}
       >
@@ -468,8 +465,7 @@ export function PreviewPanel({
       {/* Transport controls — fade on idle, always shown while playing */}
       <div
         className={cn(
-          "flex w-full flex-col gap-2 transition-opacity duration-200",
-          fullscreen ? "max-w-[352px]" : "max-w-[280px]",
+          "flex w-full flex-col gap-2 transition-opacity duration-200 max-w-[352px]",
           showTransport ? "opacity-100" : "pointer-events-none opacity-0",
         )}
       >
