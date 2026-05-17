@@ -86,20 +86,24 @@ export function PlayheadCursor({
           {formatTimelineTimestamp(playheadMs)}
         </div>
       )}
-      {/* figma: 1669:48427 — 16x16 chevron-down head sits on top of the 2px
-          heimdex-navy bar; flex + items-center keeps both shapes centered on
-          the same column so the column accurately marks the playhead time. */}
+      {/* figma: 1669:48428 — rounded chevron-down pointer (12×10 path) inside
+          a 16×16 hit area; sits flush on top of the 2px heimdex-navy bar. */}
       <div
-        className="pointer-events-auto cursor-grab active:cursor-grabbing"
+        className="pointer-events-auto flex h-4 w-4 shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
         onPointerDown={onPointerDown}
         onPointerEnter={() => setIsHovering(true)}
         onPointerLeave={() => setIsHovering(false)}
       >
-        <svg width="16" height="16" viewBox="0 0 16 16" className="fill-heimdex-navy-500">
-          <path d="M0 0h16v6L8 16 0 6z" />
+        <svg width="12" height="10" viewBox="0 0 12 10" fill="none" className="shrink-0">
+          <path
+            fillRule="evenodd"
+            clipRule="evenodd"
+            d="M10.6641 0C11.7423 0.000245073 12.3739 1.21401 11.7559 2.09766L7.09179 8.76562C6.56102 9.52428 5.438 9.52428 4.90722 8.76562L0.243159 2.09766C-0.374937 1.214 0.256651 0.000226545 1.33496 0H10.6641Z"
+            fill="#234C77"
+          />
         </svg>
       </div>
-      <div className="w-[2px] bg-heimdex-navy-500" style={{ height: Math.max(0, height - 16) }} />
+      <div className="w-[2px] shrink-0 bg-heimdex-navy-500" style={{ height: Math.max(0, height - 16) }} />
     </div>
   );
 }

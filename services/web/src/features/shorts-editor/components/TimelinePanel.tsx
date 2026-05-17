@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EditorClip, EditorSubtitle } from "../lib/types";
-import { msToPixels, formatTimelineTimestamp } from "../lib/timeline-math";
+import { msToPixels, formatVideoTimestampHMS } from "../lib/timeline-math";
 import { TimelineRuler } from "./TimelineRuler";
 import { ClipTrack } from "./ClipTrack";
 import { SubtitleTrack } from "./SubtitleTrack";
@@ -263,7 +263,7 @@ export function TimelinePanel({
           </button>
           <div className="h-[26px] w-[2px] bg-grayscale-100" />
           <span className="text-[14px] font-semibold tracking-[-0.35px] text-grayscale-500">
-            {formatTimelineTimestamp(playheadMs)} / {formatTimelineTimestamp(totalDurationMs)}
+            {formatVideoTimestampHMS(playheadMs)} / {formatVideoTimestampHMS(totalDurationMs)}
           </span>
         </div>
 
