@@ -33,6 +33,7 @@ import { useOrgSettings } from "@/lib/orgSettings";
 import { useSceneGroups } from "@/features/videos/hooks/useSceneGroups";
 import { getDetailThumbnailClass, getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 import { Pagination } from "@/components/ui/Pagination";
+import { useTopHeaderBack } from "@/components/layout/TopHeaderActionsContext";
 
 type ViewMode = "overview" | "scenes" | "people" | "auto-shorts";
 
@@ -133,14 +134,6 @@ function CcIcon() {
   return (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-    </svg>
-  );
-}
-
-function ChevronLeftIcon() {
-  return (
-    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
     </svg>
   );
 }
@@ -1528,6 +1521,12 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
   const videoTitle = meta?.video_title || videoId;
 
+  const backSlot = useMemo(
+    () => ({ label: "동영상 검색", onClick: () => router.back() }),
+    [router],
+  );
+  useTopHeaderBack(backSlot);
+
   if (isLoading) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
@@ -1567,25 +1566,6 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
   return (
     <div className="mx-auto max-w-6xl pt-4">
-      {/* figma: 1713:270773 Frame 1707484886 — 뒤로가기 + Frame 174(제목 + 씬카운트) */}
-      <div className="mb-2 flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => router.back()}
-          className="flex shrink-0 items-center gap-1 rounded-full p-1 text-grayscale-500 hover:bg-grayscale-100"
-          aria-label="동영상 검색"
-        >
-          <ChevronLeftIcon />
-          <span className="text-base font-medium">동영상 검색</span>
-        </button>
-      </div>
-      <div className="mb-4 flex items-baseline gap-2 min-w-0">
-        <h1 className="truncate text-lg font-semibold text-grayscale-800">{videoTitle}</h1>
-        {totalScenes > 0 && (
-          <span className="shrink-0 text-xs font-medium text-grayscale-500">{totalScenes}개 장면</span>
-        )}
-      </div>
-
       {reprocessStatus && !reprocessDismissed && (
         <div className={cn(
           "mb-6 rounded-lg p-4 text-sm font-medium flex items-center justify-between",
