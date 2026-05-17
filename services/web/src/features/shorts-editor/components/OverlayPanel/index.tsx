@@ -111,20 +111,11 @@ export function OverlayPanel({
   }, [getAccessToken]);
 
   return (
-    <div className="flex h-full flex-col bg-white">
-      <div className="flex items-center gap-4 border-b border-grayscale-200 px-4 pt-4">
-        <TabButton active={tab === "text"} onClick={() => setTab("text")}>
-          {t.tabs.text}
-        </TabButton>
-        <TabButton
-          active={tab === "background"}
-          onClick={() => setTab("background")}
-        >
-          {t.tabs.background}
-        </TabButton>
-      </div>
-
-      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+    <div className="flex h-full flex-col">
+      {/* RightPanel hosts the outer 텍스트/배경/템플릿 tab strip, so the
+          panel-internal tab bar is intentionally omitted here to avoid
+          rendering a duplicate row inside the same surface. */}
+      <div className="flex-1 space-y-4 overflow-y-auto">
         <ActionBar
           kind={tab}
           onAdd={tab === "text" ? onAddTextOverlay : onAddBackgroundOverlay}
@@ -181,31 +172,6 @@ export function OverlayPanel({
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "pb-2 text-sm transition-colors",
-        active
-          ? "border-b-2 border-heimdex-navy-500 font-semibold text-grayscale-800"
-          : "border-b-2 border-transparent font-medium text-grayscale-400 hover:text-grayscale-800",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Text editing body
 // ---------------------------------------------------------------------------
@@ -223,9 +189,11 @@ function TextEditingBody({
         value={overlay.text}
         onChange={(e) => onUpdate({ text: e.target.value.slice(0, 500) })}
         placeholder={t.text.contentPlaceholder}
-        rows={3}
+        rows={4}
         maxLength={500}
-        className="w-full resize-none rounded-lg border border-grayscale-200 bg-white px-3 py-2 text-sm text-grayscale-800 placeholder-grayscale-400 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
+        // figma 1663:45770 — Text Area Section: h-114 2px heimdex-navy/500
+        // border, 10px radius, px-14 py-16.
+        className="h-[114px] w-full resize-none rounded-[10px] border-2 border-heimdex-navy-500 bg-white px-[14px] py-[16px] text-[14px] tracking-[-0.35px] text-neutral-h-800 placeholder-neutral-h-300 focus:outline-none"
       />
 
       <div className="grid grid-cols-[1fr_120px] gap-2">
