@@ -1242,11 +1242,11 @@ function ScenesPanel({
           </span>
         </div>
         {/* figma: 1602:39047 — 결과 헤더 우측 [블러 처리][쇼츠 제작] */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <button
             type="button"
             onClick={onBlurClick}
-            className="inline-flex h-8 items-center justify-center rounded-lg border border-grayscale-500 bg-white px-3 text-xs font-semibold text-grayscale-500 transition-colors hover:bg-grayscale-100"
+            className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-100"
           >
             블러 처리
           </button>
@@ -1259,13 +1259,12 @@ function ScenesPanel({
               }
             }}
             className={cn(
-              "inline-flex h-8 items-center gap-2 rounded-lg px-3 text-xs font-semibold transition-colors",
+              "inline-flex h-8 items-center justify-center rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors",
               selectedIds.size > 0
                 ? "bg-heimdex-navy-500 text-white hover:bg-heimdex-navy-600"
                 : "bg-grayscale-200 text-grayscale-500 cursor-not-allowed",
             )}
           >
-            <ScissorsIcon />
             쇼츠 제작
           </button>
         </div>
