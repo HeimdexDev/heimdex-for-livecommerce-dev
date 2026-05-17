@@ -16,7 +16,7 @@
 import { useMemo } from "react";
 
 import { Button } from "@/components/ui/figma-index";
-import { useTopHeaderActions } from "@/components/layout/TopHeaderActionsContext";
+import { useTopHeaderLeftActions } from "@/components/layout/TopHeaderActionsContext";
 import type { ProductDistribution } from "@/lib/types/shorts-auto-product-wizard";
 
 import { InlineCountSelector } from "./InlineCountSelector";
@@ -95,7 +95,7 @@ export function InlineWizardCriteriaPanel({
     () => <InlineWizardBreadcrumb currentStep={1} />,
     [],
   );
-  useTopHeaderActions(headerSlot);
+  useTopHeaderLeftActions(headerSlot);
 
   return (
     <div className="space-y-[20px] font-pretendard">

@@ -23,7 +23,7 @@ import { Check } from "lucide-react";
 import { useMemo } from "react";
 
 import { Button } from "@/components/ui/figma-index";
-import { useTopHeaderActions } from "@/components/layout/TopHeaderActionsContext";
+import { useTopHeaderLeftActions } from "@/components/layout/TopHeaderActionsContext";
 import { formatVideoTimestampHMS } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
@@ -99,7 +99,7 @@ export function IndexingProgressPanel({
     () => <InlineWizardBreadcrumb currentStep={3} />,
     [],
   );
-  useTopHeaderActions(headerSlot);
+  useTopHeaderLeftActions(headerSlot);
 
   return (
     <div className="space-y-[20px] font-pretendard">

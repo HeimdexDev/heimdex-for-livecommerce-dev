@@ -24,7 +24,7 @@ import { Check } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button, Snackbar } from "@/components/ui/figma-index";
-import { useTopHeaderActions } from "@/components/layout/TopHeaderActionsContext";
+import { useTopHeaderLeftActions } from "@/components/layout/TopHeaderActionsContext";
 import {
   WizardBudgetExceededError,
   WizardFeatureDisabledError,
@@ -280,7 +280,7 @@ export function InlineWizardProductPanel({
     () => <InlineWizardBreadcrumb currentStep={2} />,
     [],
   );
-  useTopHeaderActions(headerSlot);
+  useTopHeaderLeftActions(headerSlot);
 
   return (
     <div className="space-y-[20px] font-pretendard">

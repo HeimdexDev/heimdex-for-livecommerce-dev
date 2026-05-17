@@ -10,7 +10,12 @@ import {
 
 function HeaderActionsProbe() {
   const ctx = useContext(TopHeaderActionsContext);
-  return <div data-testid="header-actions-probe">{ctx?.actions ?? null}</div>;
+  return (
+    <div data-testid="header-actions-probe">
+      {ctx?.leftActions ?? null}
+      {ctx?.actions ?? null}
+    </div>
+  );
 }
 
 function renderWithHeader(ui: React.ReactNode) {

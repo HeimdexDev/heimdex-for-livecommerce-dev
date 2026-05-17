@@ -16,7 +16,12 @@ const FIVE_MIN_MS = 300_000;
 
 function HeaderActionsProbe() {
   const ctx = useContext(TopHeaderActionsContext);
-  return <div data-testid="header-actions-probe">{ctx?.actions ?? null}</div>;
+  return (
+    <div data-testid="header-actions-probe">
+      {ctx?.leftActions ?? null}
+      {ctx?.actions ?? null}
+    </div>
+  );
 }
 
 function renderPanel(overrides: Partial<WizardCriteriaDraft> = {}) {
