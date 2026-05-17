@@ -13,7 +13,10 @@
 
 "use client";
 
+import { useMemo } from "react";
+
 import { Button } from "@/components/ui/figma-index";
+import { useTopHeaderActions } from "@/components/layout/TopHeaderActionsContext";
 import type { ProductDistribution } from "@/lib/types/shorts-auto-product-wizard";
 
 import { InlineCountSelector } from "./InlineCountSelector";
@@ -86,12 +89,16 @@ export function InlineWizardCriteriaPanel({
     onCriteriaChange({ ...criteria, [key]: value });
   };
 
+  // Step indicator lives in the global TopHeader (GNB) per Figma 1602:36766.
+  // The wizard body intentionally omits its own breadcrumb header.
+  const headerSlot = useMemo(
+    () => <InlineWizardBreadcrumb currentStep={1} />,
+    [],
+  );
+  useTopHeaderActions(headerSlot);
+
   return (
     <div className="space-y-[20px] font-pretendard">
-      <header className="flex items-center justify-between gap-4">
-        <InlineWizardBreadcrumb currentStep={1} />
-      </header>
-
       <div className="rounded-card bg-white p-[20px] shadow-card">
         <div className="flex items-center justify-between gap-4 pb-[20px]">
           <h2 className="text-[20px] font-semibold tracking-[-0.5px] text-grayscale-800">

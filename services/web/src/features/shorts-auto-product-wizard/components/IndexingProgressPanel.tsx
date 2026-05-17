@@ -20,8 +20,10 @@
 "use client";
 
 import { Check } from "lucide-react";
+import { useMemo } from "react";
 
 import { Button } from "@/components/ui/figma-index";
+import { useTopHeaderActions } from "@/components/layout/TopHeaderActionsContext";
 import { formatVideoTimestampHMS } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
@@ -92,12 +94,15 @@ export function IndexingProgressPanel({
   const percent = clampPercent(progress);
   const completedSet = new Set(completedStages);
 
+  // Step indicator lives in the global TopHeader (GNB) per Figma 1602:36766.
+  const headerSlot = useMemo(
+    () => <InlineWizardBreadcrumb currentStep={3} />,
+    [],
+  );
+  useTopHeaderActions(headerSlot);
+
   return (
     <div className="space-y-[20px] font-pretendard">
-      <header className="flex items-center justify-between gap-4">
-        <InlineWizardBreadcrumb currentStep={3} />
-      </header>
-
       <div className="space-y-[40px] rounded-card bg-white p-[20px] shadow-card">
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-[20px] font-semibold tracking-[-0.5px] text-grayscale-800">

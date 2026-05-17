@@ -21,9 +21,10 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button, Snackbar } from "@/components/ui/figma-index";
+import { useTopHeaderActions } from "@/components/layout/TopHeaderActionsContext";
 import {
   WizardBudgetExceededError,
   WizardFeatureDisabledError,
@@ -274,9 +275,16 @@ export function InlineWizardProductPanel({
     ? `선택한 상품마다 하나씩, 별도의 쇼츠 ${criteria.requested_count}개를 생성합니다. 상품은 최대 ${cap}개까지 선택 가능합니다.`
     : `선택한 상품을 모두 포함한 쇼츠 ${criteria.requested_count}개를 생성합니다.`;
 
+  // Step indicator lives in the global TopHeader (GNB) per Figma 1602:36766.
+  const headerSlot = useMemo(
+    () => <InlineWizardBreadcrumb currentStep={2} />,
+    [],
+  );
+  useTopHeaderActions(headerSlot);
+
   return (
     <div className="space-y-[20px] font-pretendard">
-      <header className="flex items-center justify-between gap-4">
+      <header className="flex items-center gap-4">
         <button
           type="button"
           onClick={onBack}
@@ -285,7 +293,6 @@ export function InlineWizardProductPanel({
         >
           &lt; 뒤로가기
         </button>
-        <InlineWizardBreadcrumb currentStep={2} />
       </header>
 
       <div className="space-y-5 rounded-card bg-white p-5 shadow-card">
