@@ -339,19 +339,7 @@ export function TimelinePanel({
           {/* Ruler */}
           <TimelineRuler totalDurationMs={totalDurationMs} zoom={zoom} />
 
-          {/* Clip track */}
-          <ClipTrack
-            clips={clips}
-            zoom={zoom}
-            selectedClipIndex={selectedClipIndex}
-            totalDurationMs={totalDurationMs}
-            onSelectClip={onSelectClip}
-            onTrimClip={onTrimClip}
-            onReorderClips={onReorderClips}
-            onSeek={onSeek}
-          />
-
-          {/* Subtitle track */}
+          {/* Subtitle track — figma 1669:49003: subtitles row sits ABOVE clips */}
           <SubtitleTrack
             subtitles={subtitles}
             zoom={zoom}
@@ -362,6 +350,18 @@ export function TimelinePanel({
             onUpdateSubtitle={onUpdateSubtitle}
             onAddSubtitle={onAddSubtitle}
             expanded={isSubtitleExpanded}
+          />
+
+          {/* Clip track — figma 1669:49030: scene row below the subtitle row */}
+          <ClipTrack
+            clips={clips}
+            zoom={zoom}
+            selectedClipIndex={selectedClipIndex}
+            totalDurationMs={totalDurationMs}
+            onSelectClip={onSelectClip}
+            onTrimClip={onTrimClip}
+            onReorderClips={onReorderClips}
+            onSeek={onSeek}
           />
 
           {/* Playhead cursor — spans ruler + all tracks */}
