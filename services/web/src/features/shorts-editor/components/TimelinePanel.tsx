@@ -1,8 +1,18 @@
 "use client";
 
-// figma: 1713:271669  (cache: .figma-cache/1713-271669_phase5_editor-1.api.json)
-// node-name: Timeline 상단바 · spec: h=32 padL/R=12, 타임코드 fs=14 fw=600 → h-8 / text-sm font-semibold
+// figma: 1669:48897 (default) / 1669:48312 (compressed) — timeline shell
+// figma: 1669:153949 (toolbar row) — trash + timecode • transport • controls • zoom
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
+import {
+  Maximize,
+  Pause,
+  Play,
+  SkipBack,
+  SkipForward,
+  Trash2,
+  Volume2,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 import type { EditorClip, EditorSubtitle } from "../lib/types";
 import { msToPixels, formatTimelineTimestamp } from "../lib/timeline-math";
 import { TimelineRuler } from "./TimelineRuler";
@@ -41,124 +51,122 @@ interface TimelinePanelProps {
   onToggleFullscreen?: () => void;
 }
 
-// figma: 1670:185907 + 1670:186278 — 배속 토글 1.0 → 1.5 → 2.0 → 1.0
-const PLAYBACK_RATES = [1.0, 1.5, 2.0] as const;
+// figma: 1669:153949 — toolbar buttons are 32×32 r-8 bg neutral-50.
+const PILL_BUTTON =
+  "flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-neutral-h-50 text-neutral-h-800 transition-colors hover:bg-neutral-h-100 disabled:cursor-not-allowed disabled:opacity-30";
 
-function nextPlaybackRate(current: number): number {
-  const idx = PLAYBACK_RATES.findIndex((r) => Math.abs(r - current) < 0.01);
-  return PLAYBACK_RATES[(idx + 1) % PLAYBACK_RATES.length] ?? 1.0;
-}
+const PLAYBACK_OPTIONS = [2.0, 1.5, 1.0] as const;
 
-function parseTimestampInput(value: string): number | null {
-  const parts = value.split(":").map((p) => parseInt(p, 10));
-  if (parts.some(isNaN)) return null;
-  if (parts.length === 3) return (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
-  if (parts.length === 2) return (parts[0] * 60 + parts[1]) * 1000;
-  if (parts.length === 1) return parts[0] * 1000;
-  return null;
-}
+// figma: 1669:154051 — vertical 2.0 / 1.5 / 1.0 menu, active option gets a
+// neutral/200 pill behind it.
+function SpeedPopover({
+  rate,
+  onChange,
+}: {
+  rate: number;
+  onChange?: (rate: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
 
-function TimestampInput({ playheadMs, onSeek }: { playheadMs: number; onSeek: (ms: number) => void }) {
-  const [editing, setEditing] = useState(false);
-  const [inputValue, setInputValue] = useState("");
-
-  const displayValue = formatTimelineTimestamp(playheadMs);
-
-  const handleCommit = () => {
-    const ms = parseTimestampInput(inputValue);
-    if (ms != null && ms >= 0) {
-      onSeek(ms);
+  useEffect(() => {
+    if (!open) return;
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
     }
-    setEditing(false);
-  };
-
-  if (editing) {
-    return (
-      <input
-        type="text"
-        value={inputValue}
-        onChange={(e) => setInputValue(e.target.value)}
-        onBlur={handleCommit}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") handleCommit();
-          if (e.key === "Escape") setEditing(false);
-        }}
-        autoFocus
-        className="w-20 rounded border border-heimdex-navy-400 bg-white px-1.5 py-0.5 text-center text-sm font-semibold text-grayscale-800 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
-      />
-    );
-  }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [open]);
 
   return (
-    <button
-      type="button"
-      onClick={() => {
-        setInputValue(displayValue);
-        setEditing(true);
-      }}
-      className="w-20 rounded border border-grayscale-200 bg-white px-1.5 py-0.5 text-center text-sm font-semibold text-grayscale-500 hover:border-heimdex-navy-400 hover:text-grayscale-800"
-    >
-      {displayValue}
-    </button>
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => onChange && setOpen((v) => !v)}
+        disabled={!onChange}
+        aria-label={`재생 속도 ${rate.toFixed(1)}x`}
+        className="flex h-8 items-center justify-center rounded-[8px] bg-neutral-h-50 px-[10px] py-[2px] text-[14px] font-semibold tracking-[-0.35px] text-neutral-h-800 transition-colors hover:bg-neutral-h-100 disabled:cursor-not-allowed disabled:opacity-30"
+      >
+        {rate.toFixed(1)}x
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-1/2 z-40 mb-2 flex -translate-x-1/2 flex-col items-center gap-[10px] rounded-[6px] bg-neutral-h-50 p-[6px] shadow-dialog">
+          {PLAYBACK_OPTIONS.map((r) => {
+            const selected = Math.abs(r - rate) < 0.01;
+            return (
+              <button
+                key={r}
+                type="button"
+                onClick={() => {
+                  onChange?.(r);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "flex items-center justify-center rounded-[4px] px-1 text-[14px] font-semibold tracking-[-0.35px] text-neutral-h-800",
+                  selected && "bg-neutral-h-200",
+                )}
+              >
+                {r.toFixed(1)}x
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
-function TrashIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-    </svg>
-  );
-}
+// figma: 1669:154040 — vertical slider popover, ~100×14 surface with -90deg
+// rotated range input so drag-up = volume-up.
+function VolumePopover({
+  volume,
+  onChange,
+}: {
+  volume: number;
+  onChange?: (volume: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
 
-function SkipPrevIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M6 6h2v12H6V6zm3.5 6L18 6v12l-8.5-6z" />
-    </svg>
-  );
-}
+  useEffect(() => {
+    if (!open) return;
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [open]);
 
-function SkipNextIcon() {
   return (
-    <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M6 18l8.5-6L6 6v12zM16 6h2v12h-2V6z" />
-    </svg>
-  );
-}
-
-function PlayIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M8 5v14l11-7z" />
-    </svg>
-  );
-}
-
-function VolumeIcon() {
-  // lucide/volume-2
-  return (
-    <svg className="h-4 w-4 text-grayscale-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M11 5L6 9H2v6h4l5 4V5z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" />
-    </svg>
-  );
-}
-
-function MaximizeIcon() {
-  // lucide/maximize
-  return (
-    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
-    </svg>
-  );
-}
-
-function PauseIcon() {
-  return (
-    <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
-    </svg>
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => onChange && setOpen((v) => !v)}
+        disabled={!onChange}
+        aria-label={`볼륨 ${Math.round(volume * 100)}%`}
+        className={PILL_BUTTON}
+      >
+        <Volume2 className="h-5 w-5" strokeWidth={1.5} />
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-1/2 z-40 mb-2 flex h-[112px] w-[28px] -translate-x-1/2 items-center justify-center rounded-[4px] bg-neutral-h-50 px-[9px] py-[2px] shadow-dialog">
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={volume}
+            onChange={(e) => onChange?.(Number(e.target.value))}
+            aria-label={`볼륨 ${Math.round(volume * 100)}%`}
+            className="h-[2px] w-[88px] -rotate-90 cursor-pointer accent-grayscale-800"
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -240,92 +248,78 @@ export function TimelinePanel({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Toolbar — trash + timestamp (left), transport (center), zoom (right) */}
-      <div className="grid h-8 flex-shrink-0 grid-cols-3 items-center border-b border-gray-300 bg-gray-100 px-3">
-        <div className="flex items-center gap-2">
+      {/* Toolbar — figma 1669:153949 (상단바) */}
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-grayscale-100 px-3">
+        {/* LEFT cluster: trash icon + divider + playhead/total timecode */}
+        <div className="flex w-[304px] shrink-0 items-center gap-3">
           <button
             type="button"
             onClick={handleDeleteSelection}
             disabled={!hasSelection}
             aria-label="선택 항목 삭제"
-            className="rounded p-1 text-gray-500 transition-colors hover:bg-gray-200 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-30"
+            className="rounded p-1 text-grayscale-700 transition-colors hover:bg-grayscale-100 hover:text-red-h-500 disabled:cursor-not-allowed disabled:opacity-30"
           >
-            <TrashIcon />
+            <Trash2 className="h-5 w-5" strokeWidth={1.5} />
           </button>
-          <TimestampInput playheadMs={playheadMs} onSeek={onSeek} />
-          <span className="text-sm font-semibold text-grayscale-500">
-            / {formatTimelineTimestamp(totalDurationMs)}
+          <div className="h-[26px] w-[2px] bg-grayscale-100" />
+          <span className="text-[14px] font-semibold tracking-[-0.35px] text-grayscale-500">
+            {formatTimelineTimestamp(playheadMs)} / {formatTimelineTimestamp(totalDurationMs)}
           </span>
         </div>
 
-        <div className="flex items-center justify-center gap-1">
+        {/* CENTER cluster: skip-back / play / skip-forward */}
+        <div className="flex flex-1 items-center justify-center gap-[10px]">
           <button
             type="button"
             onClick={handleSkipPrev}
             disabled={playheadMs <= SEEK_TOLERANCE_MS}
             aria-label="이전 클립으로"
-            className="rounded p-1 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-30"
+            className={PILL_BUTTON}
           >
-            <SkipPrevIcon />
+            <SkipBack className="h-5 w-5" strokeWidth={1.5} />
           </button>
           <button
             type="button"
             onClick={onTogglePlay}
             disabled={clips.length === 0}
             aria-label={isPlaying ? "일시정지" : "재생"}
-            className="rounded p-1 text-gray-700 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-30"
+            className={PILL_BUTTON}
           >
-            {isPlaying ? <PauseIcon /> : <PlayIcon />}
+            {isPlaying ? (
+              <Pause className="h-5 w-5" strokeWidth={1.5} />
+            ) : (
+              <Play className="h-5 w-5" strokeWidth={1.5} />
+            )}
           </button>
           <button
             type="button"
             onClick={handleSkipNext}
             disabled={playheadMs >= totalDurationMs - SEEK_TOLERANCE_MS}
             aria-label="다음 클립으로"
-            className="rounded p-1 text-gray-500 transition-colors hover:bg-gray-200 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-30"
+            className={PILL_BUTTON}
           >
-            <SkipNextIcon />
+            <SkipForward className="h-5 w-5" strokeWidth={1.5} />
           </button>
         </div>
 
-        <div className="flex items-center justify-end gap-1">
-          {/* figma: 1670:185907 — volume slider (lucide/volume-2 + 88px slider) */}
-          {onVolumeChange && (
-            <div className="mr-1 flex items-center gap-1">
-              <VolumeIcon />
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={volume}
-                onChange={(e) => onVolumeChange(Number(e.target.value))}
-                aria-label={`볼륨 ${Math.round(volume * 100)}%`}
-                className="h-1 w-16 cursor-pointer accent-grayscale-800"
-              />
-            </div>
-          )}
-          {/* figma: 1670:185907 + 1670:186278 — 배속 토글 1.0 → 1.5 → 2.0 cycle */}
-          <button
-            type="button"
-            onClick={() => onPlaybackRateChange?.(nextPlaybackRate(playbackRate))}
-            disabled={!onPlaybackRateChange}
-            aria-label={`재생속도 ${playbackRate.toFixed(1)}x (클릭하여 변경)`}
-            className="mr-1 rounded px-1.5 py-0.5 text-sm font-semibold text-grayscale-700 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-30"
-          >
-            {playbackRate.toFixed(1)}x
-          </button>
-          {/* figma: 1670:185907 + 1669:48897 — 전체화면 트리거 */}
+        {/* RIGHT cluster: volume popover • speed popover • fullscreen */}
+        <div className="flex items-center gap-[10px]">
+          <VolumePopover volume={volume} onChange={onVolumeChange} />
+          <SpeedPopover rate={playbackRate} onChange={onPlaybackRateChange} />
           {onToggleFullscreen && (
             <button
               type="button"
               onClick={onToggleFullscreen}
               aria-label="전체화면 미리보기"
-              className="mr-1 rounded p-1 text-grayscale-700 transition-colors hover:bg-gray-200"
+              className={PILL_BUTTON}
             >
-              <MaximizeIcon />
+              <Maximize className="h-5 w-5" strokeWidth={1.5} />
             </button>
           )}
+        </div>
+
+        {/* FAR RIGHT: zoom slider (figma 1669:122130 — minus + 88px track + plus) */}
+        <div className="w-[156px] shrink-0">
           <TimelineZoomControl zoom={zoom} onZoomChange={onZoomChange} />
         </div>
       </div>
