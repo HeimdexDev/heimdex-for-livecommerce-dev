@@ -1,17 +1,23 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { getVideoScenes } from "@/lib/api/videos";
 import { getShortComposition } from "@/lib/api/shorts-render";
 import type { VideoScenesResponse } from "@/lib/types";
+import {
+  useTopHeaderActions,
+  useTopHeaderBack,
+  useTopHeaderLeftActions,
+} from "@/components/layout/TopHeaderActionsContext";
+import { cn } from "@/lib/utils";
 import { useEditorState, createClipFromScene, generateSubtitlesFromTranscript } from "../hooks/useEditorState";
 import { useCompositionExport } from "../hooks/useCompositionExport";
+import type { RenderStatus } from "../hooks/useCompositionExport";
 import { usePresets } from "../hooks/usePresets";
 import { EditorLayout } from "./EditorLayout";
-import { EditorHeader } from "./EditorHeader";
 import { FullscreenOverlay } from "./FullscreenOverlay";
 import { PreviewPanel } from "./PreviewPanel";
 import { TimelinePanel } from "./TimelinePanel";
@@ -36,8 +42,27 @@ function BackArrowIcon() {
   );
 }
 
+function DownloadIcon() {
+  return (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+    </svg>
+  );
+}
+
+const RENDER_STATUS_LABELS: Record<RenderStatus, string> = {
+  idle: "내보내기",
+  submitting: "제출 중...",
+  queued: "대기 중...",
+  rendering: "렌더링 중...",
+  completed: "완료",
+  failed: "실패",
+  rate_limited: "요청 제한",
+};
+
 export function ShortsEditorPage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const { getAccessToken } = useAuth();
 
   const videoId = searchParams.get("videoId") ?? "";
@@ -257,15 +282,134 @@ export function ShortsEditorPage() {
     [selectedOverlay, presetsApi],
   );
 
-  const headerMenu = useMemo(
-    () => (
-      <TemplateSaveMenu
-        onClick={() => setTemplateDialogOpen(true)}
-        disabled={!v2Enabled || selectedOverlay == null}
-      />
-    ),
-    [v2Enabled, selectedOverlay],
+  // figma: 1602:37719 — editor GNB merges into the global TopHeader.
+  // Back lives in the dedicated back slot, title/scene-count in the left
+  // actions slot, render controls in the right actions slot.
+  const handleHeaderBack = useCallback(() => {
+    if (state.isDirty && !window.confirm("저장하지 않은 변경사항이 있습니다. 나가시겠습니까?")) {
+      return;
+    }
+    router.push("/export/shorts");
+  }, [router, state.isDirty]);
+
+  const headerBackSlot = useMemo(
+    () => ({ label: "뒤로가기", onClick: handleHeaderBack }),
+    [handleHeaderBack],
   );
+  useTopHeaderBack(headerBackSlot);
+
+  const headerLeftSlot = useMemo(() => {
+    if (isLoading || loadError) return null;
+    // figma: 1602:37719 — title input + "N개 장면" pair, gap=10.
+    return (
+      <div className="flex items-center gap-[10px]">
+        <input
+          type="text"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder={meta?.video_title ?? "제목 없음"}
+          aria-label="영상 제목"
+          className="max-w-64 truncate rounded-md border border-transparent px-1 text-[18px] font-semibold leading-[1.4] tracking-[-0.45px] text-black placeholder-grayscale-300 hover:border-grayscale-100 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
+        />
+        <span className="whitespace-nowrap text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-neutral-h-500">
+          {state.clips.length}개 장면
+          {state.isDirty && <span className="ml-1 text-amber-h-500">*</span>}
+        </span>
+      </div>
+    );
+  }, [isLoading, loadError, title, meta?.video_title, state.clips.length, state.isDirty]);
+  useTopHeaderLeftActions(headerLeftSlot);
+
+  const isRenderWorking =
+    renderStatus === "submitting" || renderStatus === "queued" || renderStatus === "rendering";
+  const canRender =
+    state.clips.length > 0 && !isRenderWorking && renderStatus !== "completed";
+
+  const handleRenderDownload = useCallback(() => {
+    if (!renderJob?.download_url) return;
+    const a = document.createElement("a");
+    a.href = renderJob.download_url;
+    a.download = `short_${renderJob.id}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, [renderJob]);
+
+  const headerRightSlot = useMemo(() => {
+    if (isLoading || loadError) return null;
+    // figma: 1602:37719 — right side buttons h=32 px=10 py=6 r=8 fs=12.
+    return (
+      <div className="flex items-center gap-2">
+        {renderError && (
+          <span className="max-w-48 truncate text-xs text-red-h-500">{renderError}</span>
+        )}
+        <TemplateSaveMenu
+          onClick={() => setTemplateDialogOpen(true)}
+          disabled={!v2Enabled || selectedOverlay == null}
+        />
+        {renderStatus === "completed" && renderJob && (
+          <>
+            <button
+              type="button"
+              onClick={handleRenderDownload}
+              className="inline-flex h-8 items-center gap-1.5 rounded-[8px] bg-heimdex-navy-500 px-[10px] py-[6px] text-[12px] font-semibold text-white transition-colors hover:bg-heimdex-navy-600"
+            >
+              <DownloadIcon />
+              다운로드
+            </button>
+            <button
+              type="button"
+              onClick={resetRender}
+              className="h-8 rounded-[8px] border border-neutral-h-500 bg-white px-[10px] py-[6px] text-[12px] font-semibold text-neutral-h-500 transition-colors hover:bg-grayscale-10"
+            >
+              다시 렌더링
+            </button>
+          </>
+        )}
+        {renderStatus === "failed" && (
+          <button
+            type="button"
+            onClick={resetRender}
+            className="h-8 rounded-[8px] border border-neutral-h-500 bg-white px-[10px] py-[6px] text-[12px] font-semibold text-neutral-h-500 transition-colors hover:bg-grayscale-10"
+          >
+            재시도
+          </button>
+        )}
+        {renderStatus !== "completed" && (
+          <button
+            type="button"
+            onClick={submitComposition}
+            disabled={!canRender}
+            className={cn(
+              "inline-flex h-8 items-center gap-2 rounded-[8px] px-[10px] py-[6px] text-[12px] font-semibold leading-none transition-colors",
+              canRender
+                ? "bg-heimdex-navy-500 text-white hover:bg-heimdex-navy-600"
+                : "cursor-not-allowed bg-neutral-h-100 text-neutral-h-300",
+            )}
+          >
+            {isRenderWorking && (
+              <div className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+            )}
+            {RENDER_STATUS_LABELS[renderStatus]}
+          </button>
+        )}
+      </div>
+    );
+  }, [
+    isLoading,
+    loadError,
+    renderError,
+    v2Enabled,
+    selectedOverlay,
+    renderStatus,
+    renderJob,
+    handleRenderDownload,
+    resetRender,
+    submitComposition,
+    canRender,
+    isRenderWorking,
+  ]);
+  useTopHeaderActions(headerRightSlot);
 
   // Load from scene IDs (entry from ShortsCreatePage or ShortsPlanPanel)
   useEffect(() => {
@@ -450,21 +594,6 @@ export function ShortsEditorPage() {
 
   return (
     <div className="font-pretendard h-screen overflow-hidden bg-grayscale-10">
-      <EditorHeader
-        videoTitle={meta?.video_title ?? null}
-        title={title}
-        onTitleChange={setTitle}
-        clipCount={state.clips.length}
-        totalDurationMs={state.totalDurationMs}
-        isDirty={state.isDirty}
-        renderStatus={renderStatus}
-        renderJob={renderJob}
-        renderError={renderError}
-        onRender={submitComposition}
-        onRenderReset={resetRender}
-        templateSaveSlot={headerMenu}
-      />
-
       <EditorLayout
         leftPanel={
           // figma: 1607:65302 left column (자막 패널)
