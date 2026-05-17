@@ -9,29 +9,26 @@ interface EditorLayoutProps {
   timeline: ReactNode;
 }
 
+// figma: 1602:37722 / 1602:37844 / 1663:45752 — editor body = three cards
+// in the upper row (subtitle, video preview, text/bg/template) plus the
+// timeline anchored at the bottom. All wrappers share the dialog radius
+// and card shadow and are separated by 20px gaps so each pane reads as a
+// distinct surface against the grayscale-10 page background.
 export function EditorLayout({ leftPanel, preview, rightPanel, timeline }: EditorLayoutProps) {
   return (
-    <div className="grid h-[calc(100vh-64px)] grid-cols-[360px_1fr_420px] grid-rows-[1fr_260px] gap-0 overflow-hidden">
-      {/* Left panel — overlay authoring (V2) or clip properties.
-          Widened from 300px → 360px so V2 transform/effects sections fit
-          without horizontal overflow (3-column X/Y/rotation row, stroke
-          stepper + color swatch row). */}
-      <div className="overflow-y-auto overflow-x-hidden border-r border-grayscale-100 bg-white">
-        {leftPanel}
+    <div className="flex h-full flex-col gap-[20px] overflow-hidden bg-grayscale-10">
+      <div className="flex min-h-0 flex-1 gap-[20px]">
+        <div className="flex w-[360px] flex-col overflow-y-auto overflow-x-hidden rounded-dialog bg-white shadow-card">
+          {leftPanel}
+        </div>
+        <div className="flex min-w-0 flex-1 items-center justify-center overflow-hidden rounded-dialog bg-white shadow-card">
+          {preview}
+        </div>
+        <div className="flex w-[420px] flex-col overflow-hidden rounded-dialog bg-white shadow-card">
+          {rightPanel}
+        </div>
       </div>
-
-      {/* Preview panel — center canvas surface */}
-      <div className="flex items-center justify-center overflow-auto bg-grayscale-10">
-        {preview}
-      </div>
-
-      {/* Right panel — 텍스트/배경/템플릿 3탭 (figma 1607:65302) */}
-      <div className="overflow-y-auto border-l border-grayscale-100 bg-white">
-        {rightPanel}
-      </div>
-
-      {/* Timeline panel — bottom, full width */}
-      <div className="col-span-3 overflow-hidden border-t border-grayscale-100 bg-grayscale-10">
+      <div className="h-[260px] overflow-hidden rounded-dialog bg-white shadow-card">
         {timeline}
       </div>
     </div>

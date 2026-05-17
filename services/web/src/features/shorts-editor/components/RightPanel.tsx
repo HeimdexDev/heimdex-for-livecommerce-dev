@@ -31,7 +31,7 @@ export function RightPanel({
   }
 
   return (
-    <div className="flex h-full flex-col rounded-card bg-white shadow-card">
+    <div className="flex h-full flex-col">
       <RightPanelTabs active={activeTab} onChange={setActiveTab} />
       <div className="flex-1 overflow-y-auto">{body}</div>
     </div>

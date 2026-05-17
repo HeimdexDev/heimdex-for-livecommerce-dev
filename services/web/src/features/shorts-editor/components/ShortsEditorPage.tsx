@@ -599,7 +599,7 @@ export function ShortsEditorPage() {
 
 
   return (
-    <div className="font-pretendard h-screen overflow-hidden bg-grayscale-10">
+    <div className="font-pretendard h-full overflow-hidden bg-grayscale-10">
       <EditorLayout
         leftPanel={
           // figma: 1607:65302 left column (자막 패널)
