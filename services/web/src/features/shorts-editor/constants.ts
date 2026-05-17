@@ -19,9 +19,12 @@ export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
   backgroundOpacity: 0.6,
 };
 
-export const ZOOM_PRESETS = [25, 50, 100, 150, 200, 300] as const;
+export const ZOOM_PRESETS = [5, 25, 50, 100, 150, 200, 300] as const;
 export const DEFAULT_ZOOM = 100; // px per second
-export const MIN_ZOOM = 25;
+// MIN_ZOOM dropped to 5 so the user can collapse a multi-minute video into
+// the visible timeline width — useful for grabbing a coarse overview before
+// drilling into a clip. 5 px/sec ≈ 1500px for a 5-minute video.
+export const MIN_ZOOM = 5;
 export const MAX_ZOOM = 300;
 
 export const DEFAULT_SUBTITLE_DURATION_MS = 3000;

@@ -38,13 +38,13 @@ export function TimelineZoomControl({ zoom, onZoomChange }: TimelineZoomControlP
   }, [zoom, onZoomChange]);
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-2">
       <button
         type="button"
         onClick={handleDec}
         disabled={zoom <= MIN_ZOOM}
         aria-label="타임라인 축소"
-        className="rounded p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-30"
+        className="rounded p-0.5 text-grayscale-700 hover:bg-grayscale-100 disabled:cursor-not-allowed disabled:opacity-30"
       >
         <MinusIcon />
       </button>
@@ -56,18 +56,17 @@ export function TimelineZoomControl({ zoom, onZoomChange }: TimelineZoomControlP
         value={zoom}
         onChange={(e) => onZoomChange(Number(e.target.value))}
         aria-label={`타임라인 배율 ${zoom}%`}
-        className="h-1 w-20 cursor-pointer accent-grayscale-800"
+        className="h-[2px] w-[88px] cursor-pointer accent-grayscale-800"
       />
       <button
         type="button"
         onClick={handleInc}
         disabled={zoom >= MAX_ZOOM}
         aria-label="타임라인 확대"
-        className="rounded p-0.5 text-gray-500 hover:bg-gray-200 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-30"
+        className="rounded p-0.5 text-grayscale-700 hover:bg-grayscale-100 disabled:cursor-not-allowed disabled:opacity-30"
       >
         <PlusIcon />
       </button>
-      <span className="w-9 text-center text-[10px] text-gray-500">{zoom}%</span>
     </div>
   );
 }
