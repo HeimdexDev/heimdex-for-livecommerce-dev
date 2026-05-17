@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useContext } from "react";
 import Link from "next/link";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, ChevronLeft } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { getDevices } from "@/lib/api/devices";
 import { ApiError } from "@/lib/types";
@@ -101,6 +101,7 @@ export function TopHeader({ sidebarCollapsed, onToggleSidebar }: TopHeaderProps)
 
   const headerActionsCtx = useContext(TopHeaderActionsContext);
   const headerActions = headerActionsCtx?.actions ?? null;
+  const backSlot = headerActionsCtx?.back ?? null;
 
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -119,8 +120,8 @@ export function TopHeader({ sidebarCollapsed, onToggleSidebar }: TopHeaderProps)
   }, []);
 
   return (
-    <header className="flex h-[60px] items-center justify-between px-6">
-      <div className="flex items-center">
+    <header className="flex h-20 items-center justify-between px-8">
+      <div className="flex items-center gap-5">
         {sidebarCollapsed && (
           <button
             type="button"
@@ -129,6 +130,19 @@ export function TopHeader({ sidebarCollapsed, onToggleSidebar }: TopHeaderProps)
             aria-label="사이드바 열기"
           >
             <PanelLeft className="h-5 w-5" strokeWidth={2} />
+          </button>
+        )}
+        {backSlot && (
+          <button
+            type="button"
+            onClick={backSlot.onClick}
+            className="flex shrink-0 items-center gap-1 rounded-full text-grayscale-500 hover:text-grayscale-800"
+            aria-label={backSlot.label}
+          >
+            <ChevronLeft className="h-6 w-6" strokeWidth={2} />
+            <span className="text-base font-medium tracking-[-0.4px]">
+              {backSlot.label}
+            </span>
           </button>
         )}
       </div>
