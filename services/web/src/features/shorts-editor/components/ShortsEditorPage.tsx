@@ -602,8 +602,10 @@ export function ShortsEditorPage() {
     <div className="font-pretendard h-full overflow-hidden bg-grayscale-10">
       <EditorLayout
         leftPanel={
-          // figma: 1607:65302 left column (자막 패널)
-          <>
+          // figma: 1607:65302 left column (자막 패널) — wrapper height is fixed
+          // by EditorLayout; SubtitleListNav fills the remaining space and
+          // scrolls internally so the card itself never grows.
+          <div className="flex h-full min-h-0 flex-col">
             {/* figma: 1670:186255 (자막 좌측 패널) — timeline-ordered subtitle nav */}
             {/* figma: 1670:186095 — row click seeks playhead to subtitle.startMs */}
             <SubtitleListNav
@@ -629,7 +631,7 @@ export function ShortsEditorPage() {
                 onRemove={editor.removeSubtitle}
               />
             ) : null}
-          </>
+          </div>
         }
         preview={
           <PreviewPanel

@@ -19,7 +19,7 @@ export function EditorLayout({ leftPanel, preview, rightPanel, timeline }: Edito
   return (
     <div className="flex h-full flex-col gap-[20px] overflow-hidden bg-grayscale-10">
       <div className="flex h-[626px] shrink-0 items-stretch gap-[20px]">
-        <div className="flex h-full w-[474px] flex-col overflow-y-auto overflow-x-hidden rounded-dialog bg-white shadow-card">
+        <div className="flex h-full w-[474px] min-w-0 flex-col overflow-hidden rounded-dialog bg-white shadow-card">
           {leftPanel}
         </div>
         <div className="flex h-full w-[352px] shrink-0 items-center justify-center overflow-hidden rounded-[10px] bg-black shadow-card">
