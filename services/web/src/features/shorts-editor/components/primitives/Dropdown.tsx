@@ -44,7 +44,9 @@ export function Dropdown<T extends string | number>({
       disabled={disabled}
       aria-label={ariaLabel}
       className={cn(
-        "rounded-lg border border-grayscale-200 bg-white px-3 py-2 text-sm text-grayscale-800 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500 disabled:cursor-not-allowed disabled:bg-grayscale-100",
+        // figma 1663:45778 — Accordion-style select: rounded-10, grayscale-300
+        // border, p-12 (10/14) so font/spacing matches the figma right panel.
+        "rounded-[10px] border border-grayscale-300 bg-white px-[12px] py-[10px] text-[14px] tracking-[-0.35px] text-grayscale-800 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500 disabled:cursor-not-allowed disabled:bg-grayscale-100",
         className,
       )}
     >
