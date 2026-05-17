@@ -1,12 +1,24 @@
 "use client";
 
 import { useMemo } from "react";
-import { msToPixels, formatTimelineTimestamp } from "./timeline-math";
+import { msToPixels } from "./timeline-math";
 import type { TimelineMark } from "./types";
 
 interface TimelineRulerProps {
   totalDurationMs: number;
   zoom: number;
+}
+
+// figma: 1669:49089 — "0s, 10s, ..., 1m, 1:10" style labels with a 2px line
+// (Frame 1707484546) between each, and a Ellipse 12 dot cluster decorating
+// the tail of the ruler.
+function formatRulerLabel(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  if (s === 0) return `${m}m`;
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 export function TimelineRuler({ totalDurationMs, zoom }: TimelineRulerProps) {
@@ -30,7 +42,7 @@ export function TimelineRuler({ totalDurationMs, zoom }: TimelineRulerProps) {
       result.push({
         ms,
         px: msToPixels(ms, zoom),
-        label: isMajor ? formatTimelineTimestamp(ms) : "",
+        label: isMajor ? formatRulerLabel(ms) : "",
         isMajor,
       });
     }
@@ -41,23 +53,35 @@ export function TimelineRuler({ totalDurationMs, zoom }: TimelineRulerProps) {
   const totalWidth = msToPixels(totalDurationMs + 2000, zoom);
 
   return (
-    <div className="relative h-6 border-b border-gray-300 bg-gray-100 select-none" style={{ width: totalWidth }}>
+    <div
+      className="relative h-6 select-none border-b border-grayscale-100 bg-white"
+      style={{ width: totalWidth }}
+    >
       {marks.map((mark) => (
-        <div
-          key={mark.ms}
-          className="absolute top-0"
-          style={{ left: mark.px }}
-        >
+        <div key={mark.ms} className="absolute top-0" style={{ left: mark.px }}>
           <div
-            className={mark.isMajor ? "h-3 w-px bg-gray-400" : "h-2 w-px bg-gray-300"}
+            className={mark.isMajor ? "h-3 w-px bg-grayscale-300" : "h-2 w-px bg-grayscale-200"}
           />
           {mark.label && (
-            <span className="absolute left-0.5 top-3 text-[9px] leading-none text-gray-500 whitespace-nowrap">
+            <span className="absolute left-1 top-3 whitespace-nowrap text-[12px] font-medium leading-none tracking-[-0.3px] text-grayscale-800">
               {mark.label}
             </span>
           )}
         </div>
       ))}
+      {/* figma asset Ellipse 12 ×4 — tail-end ellipsis decoration */}
+      <div
+        className="absolute top-1 flex items-center gap-4"
+        style={{ left: Math.max(0, totalWidth - 56) }}
+        aria-hidden="true"
+      >
+        {[0, 1, 2, 3].map((i) => (
+          <span
+            key={i}
+            className="block h-[2px] w-[2px] rounded-full bg-grayscale-800"
+          />
+        ))}
+      </div>
     </div>
   );
 }

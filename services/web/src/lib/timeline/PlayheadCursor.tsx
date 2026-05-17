@@ -80,10 +80,16 @@ export function PlayheadCursor({
     >
       {tooltipVisible && (
         <div
-          className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[10px] leading-none text-white shadow"
+          className="pointer-events-none absolute -top-6 left-1/2 flex -translate-x-1/2 flex-col items-center"
           aria-hidden="true"
         >
-          {formatTimelineTimestamp(playheadMs)}
+          <div className="whitespace-nowrap rounded-md bg-grayscale-800 px-1.5 py-0.5 font-mono text-[10px] leading-none text-white shadow">
+            {formatTimelineTimestamp(playheadMs)}
+          </div>
+          {/* figma asset Polygon 1 — downward arrow under the tooltip */}
+          <svg width="10" height="8" viewBox="0 0 10 8" fill="none" className="-mt-px">
+            <path d="M5 8L6.99382e-07 -8.74228e-07L10 0L5 8Z" fill="#272833" />
+          </svg>
         </div>
       )}
       {/* figma: 1669:48428 — rounded chevron-down pointer (12×10 path) inside
