@@ -504,6 +504,8 @@ export function ShortsEditorPage() {
             selectedOverlayId={state.selectedOverlayId}
             onSelectOverlay={editor.selectOverlay}
             onUpdateOverlay={editor.updateOverlay}
+            onRemoveOverlay={editor.removeOverlay}
+            onRemoveSubtitle={editor.removeSubtitle}
             playheadMs={state.playheadMs}
             isPlaying={state.isPlaying}
             totalDurationMs={state.totalDurationMs}
@@ -615,6 +617,8 @@ export function ShortsEditorPage() {
           selectedOverlayId={state.selectedOverlayId}
           onSelectOverlay={editor.selectOverlay}
           onUpdateOverlay={editor.updateOverlay}
+          onRemoveOverlay={editor.removeOverlay}
+          onRemoveSubtitle={editor.removeSubtitle}
           playheadMs={state.playheadMs}
           isPlaying={state.isPlaying}
           totalDurationMs={state.totalDurationMs}

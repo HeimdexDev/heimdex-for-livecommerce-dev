@@ -17,6 +17,8 @@ interface FullscreenOverlayProps {
   selectedOverlayId?: string | null;
   onSelectOverlay?: (id: string | null) => void;
   onUpdateOverlay?: (id: string, updates: Partial<EditorOverlay>) => void;
+  onRemoveOverlay?: (id: string) => void;
+  onRemoveSubtitle?: (index: number) => void;
   playheadMs: number;
   isPlaying: boolean;
   totalDurationMs: number;

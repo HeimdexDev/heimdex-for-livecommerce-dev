@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import type { EditorClip, EditorSubtitle } from "../lib/types";
 import type { EditorOverlay } from "../lib/overlay-types";
 import { OverlayRenderer } from "./preview/OverlayRenderer";
+import { SubtitleCancelActionBar } from "./SubtitleCancelActionBar";
 import { getActiveSubtitles } from "../lib/source-time";
 import { formatTimelineTimestamp } from "../lib/timeline-math";
 import { resolveFontFamily } from "@/lib/fonts";
@@ -22,6 +23,11 @@ interface PreviewPanelProps {
   // V2 update callback — used for drag (transform.x/y) and resize
   // (fontSizePx for text, transform.widthPx/heightPx for background).
   onUpdateOverlay?: (id: string, updates: Partial<EditorOverlay>) => void;
+  // figma 1669:49437 — element selection action bar fires these to delete
+  // the currently selected V2 overlay / V1 subtitle. Optional so existing
+  // callers don't break; the bar simply hides when omitted.
+  onRemoveOverlay?: (id: string) => void;
+  onRemoveSubtitle?: (index: number) => void;
   playheadMs: number;
   isPlaying: boolean;
   totalDurationMs: number;
@@ -61,6 +67,8 @@ export function PreviewPanel({
   selectedOverlayId = null,
   onSelectOverlay,
   onUpdateOverlay,
+  onRemoveOverlay,
+  onRemoveSubtitle,
   playheadMs,
   isPlaying,
   totalDurationMs,
@@ -444,6 +452,46 @@ export function PreviewPanel({
               onPointerUp={handlePointerUp}
             />
           ))}
+
+        {/* figma 1669:49437 — element selection action bar (선택 + content + trash) */}
+        {(() => {
+          const selectedOverlay = overlays.find((o) => o.id === selectedOverlayId);
+          const selectedSubtitle =
+            selectedSubtitleIndex != null && selectedSubtitleIndex < subtitles.length
+              ? subtitles[selectedSubtitleIndex]
+              : null;
+          if (selectedOverlay && onRemoveOverlay) {
+            const label =
+              selectedOverlay.kind === "text"
+                ? selectedOverlay.text
+                : "단색 배경";
+            return (
+              <div
+                className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <SubtitleCancelActionBar
+                  text={label}
+                  onRemove={() => onRemoveOverlay(selectedOverlay.id)}
+                />
+              </div>
+            );
+          }
+          if (selectedSubtitle && onRemoveSubtitle && selectedSubtitleIndex != null) {
+            return (
+              <div
+                className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <SubtitleCancelActionBar
+                  text={selectedSubtitle.text}
+                  onRemove={() => onRemoveSubtitle(selectedSubtitleIndex)}
+                />
+              </div>
+            );
+          }
+          return null;
+        })()}
 
         {/* No clips placeholder */}
         {clips.length === 0 && (
