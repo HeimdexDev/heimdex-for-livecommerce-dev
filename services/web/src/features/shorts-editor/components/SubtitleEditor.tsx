@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { Search } from "lucide-react";
 import type { EditorSubtitle } from "../lib/types";
 import { FONT_OPTIONS } from "../constants";
 import { SubtitleCancelActionBar } from "./SubtitleCancelActionBar";
@@ -247,27 +248,51 @@ function formatTimecode(ms: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
 
-// figma: 1670:186255 (자막 좌측 패널)
-// figma: 1670:186095 (자막 클릭 → playhead 이동)
+// figma: 1602:37844 (left subtitle panel) — wrapper bg-white r-20 padding-20 gap-16
+// figma: 1602:37863 (search bar) — h~44 r=10 border-grayscale-500 px=14 py=10 gap=10
+// figma: 1670:186095 (subtitle list — row click seeks playhead to subtitle.startMs)
 export function SubtitleListNav({
   subtitles,
   selectedSubtitleIndex,
   onSelectSubtitle,
   onSeek,
 }: SubtitleListNavProps) {
+  const [query, setQuery] = useState("");
+
   const order = useMemo(() => {
-    return subtitles
+    const indexes = subtitles
       .map((_, i) => i)
       .sort((a, b) => subtitles[a].startMs - subtitles[b].startMs);
-  }, [subtitles]);
+    const q = query.trim().toLowerCase();
+    if (!q) return indexes;
+    return indexes.filter((i) =>
+      subtitles[i].text.toLowerCase().includes(q),
+    );
+  }, [subtitles, query]);
 
   return (
-    <div className="flex flex-col border-b border-grayscale-100">
-      <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-        <h3 className="text-sm font-semibold text-grayscale-800">자막 목록</h3>
-        <span className="text-[10px] text-gray-400">{subtitles.length}개</span>
+    <div className="flex flex-col gap-4 p-5">
+      {/* figma 1602:37863 search bar */}
+      <div className="flex items-center gap-[10px] rounded-[10px] border border-grayscale-500 bg-white px-[14px] py-[10px]">
+        <Search className="h-6 w-6 shrink-0 text-grayscale-500" strokeWidth={2} />
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="찾고 싶은 자막을 검색하세요."
+          aria-label="자막 검색"
+          className="flex-1 bg-transparent text-[14px] font-medium leading-[1.4] tracking-[-0.35px] text-grayscale-800 placeholder:text-neutral-h-300 focus:outline-none"
+        />
       </div>
-      <ul className="max-h-[280px] overflow-y-auto">
+
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-grayscale-800">자막 목록</h3>
+        <span className="text-[10px] text-grayscale-400">
+          {order.length}/{subtitles.length}개
+        </span>
+      </div>
+
+      <ul className="flex max-h-[420px] flex-col gap-[10px] overflow-y-auto pr-1">
         {order.map((i) => {
           const sub = subtitles[i];
           const isSelected = i === selectedSubtitleIndex;
@@ -281,29 +306,37 @@ export function SubtitleListNav({
                 }}
                 aria-pressed={isSelected}
                 className={cn(
-                  "block w-full border-b border-grayscale-100 px-4 py-2 text-left transition-colors hover:bg-grayscale-10",
-                  isSelected &&
-                    "border-l-4 border-l-heimdex-navy-500 bg-grayscale-10 ring-1 ring-inset ring-heimdex-navy-400",
+                  // figma 1663:48041 selected: border-2 heimdex-navy-500
+                  // figma 1663:48057 default: border neutral-h-100
+                  "block w-full rounded-[10px] p-3 text-left transition-colors",
+                  isSelected
+                    ? "border-2 border-heimdex-navy-500 bg-white"
+                    : "border border-neutral-h-100 bg-white hover:bg-grayscale-10",
                 )}
               >
-                <div className="mb-0.5 flex items-center justify-between gap-2">
-                  <span className="font-mono text-[10px] text-gray-500">
-                    {formatTimecode(sub.startMs)}
+                <div className="mb-1.5 flex items-center gap-[10px]">
+                  <span className="text-[12px] font-semibold tracking-[-0.3px] text-grayscale-800">
+                    #{i + 1}
                   </span>
-                  <span className="font-mono text-[9px] text-gray-400">
-                    {Math.max(0, sub.endMs - sub.startMs)}ms
+                  <span className="rounded-[4px] bg-grayscale-100 px-1 py-0.5 text-[10px] font-medium tracking-[-0.25px] text-grayscale-500">
+                    {formatTimecode(sub.startMs)} - {formatTimecode(sub.endMs)}
                   </span>
                 </div>
-                <p className="line-clamp-2 text-xs text-grayscale-800">
+                <p
+                  className={cn(
+                    "line-clamp-2 text-[14px] font-medium leading-[1.6] tracking-[-0.35px]",
+                    isSelected ? "text-heimdex-navy-500" : "text-grayscale-800",
+                  )}
+                >
                   {sub.text || "(빈 자막)"}
                 </p>
               </button>
             </li>
           );
         })}
-        {subtitles.length === 0 && (
-          <li className="px-4 py-6 text-center text-xs text-gray-400">
-            자막이 없습니다
+        {order.length === 0 && (
+          <li className="px-4 py-6 text-center text-xs text-grayscale-400">
+            {query ? "검색 결과 없음" : "자막이 없습니다"}
           </li>
         )}
       </ul>
