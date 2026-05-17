@@ -13,6 +13,7 @@ import { getAgentPlaybackUrl, getAgentThumbnailUrl, getCloudPlaybackUrl, getClou
 import { SceneThumbnail } from "@/components/SceneThumbnail";
 import { CopyIcon } from "@/components/icons";
 import { formatTimestamp } from "@/lib/api/utils";
+import { formatVideoTimestampHMS } from "@/lib/timeline";
 import type { VideoScene, VideoScenesResponse, VideoSummaryResponse, ReprocessJobResponse, ReprocessParams } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
@@ -639,7 +640,7 @@ export function SceneCard({
   }, [isSelected]);
 
   const durationSec = Math.round((scene.end_ms - scene.start_ms) / 1000);
-  const timeRange = `${formatTimestamp(scene.start_ms)} - ${formatTimestamp(scene.end_ms)}`;
+  const timeRange = `${formatVideoTimestampHMS(scene.start_ms)} - ${formatVideoTimestampHMS(scene.end_ms)}`;
   const transcriptPreview = scene.transcript_raw.length > 100
     ? scene.transcript_raw.slice(0, 100) + "..."
     : scene.transcript_raw;
