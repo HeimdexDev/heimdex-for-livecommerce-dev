@@ -511,172 +511,201 @@ export function SavedShortsPage() {
             <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-heimdex-navy-500" />
           </div>
         ) : !forceEmpty && paged.length > 0 ? (
-          // figma: card grid · spec: gap-x=16 gap-y=24 → gap-x-4 gap-y-6 (tokens)
-          <div className="mt-[20px] grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4">
-            {paged.map((item) => (
-              <div key={item.id} className="group flex flex-col gap-[8px]">
-                {/* Thumbnail: 200×337 portrait (Figma 영상 섹션) */}
-                <div className="relative w-full overflow-hidden rounded-card border border-grayscale-100 bg-neutral-h-100 aspect-[200/337]">
-                  {item.type === "saved" && item.scene_ids ? (
-                    <Link
-                      href={`/export/shorts/editor?videoId=${item.video_id}&sceneIds=${item.scene_ids.join(",")}`}
-                      className="block h-full w-full"
-                    >
-                      <SceneThumbnail
-                        videoId={item.video_id}
-                        sceneId={item.scene_ids[0]}
-                        agentAvailable={true}
-                        className="h-full w-full"
-                      />
-                    </Link>
-                  ) : (
-                    <div className="relative h-full w-full bg-neutral-h-700">
-                      {item.scene_id && item.video_id ? (
+          // figma: 1699:252725 — vertical list of horizontal row cards
+          // (150×253 thumbnail on the left, content column on the right with
+          // title, length/progress meta, caption, and a status pill).
+          <div className="mt-[20px] flex flex-col gap-[16px]">
+            {paged.map((item) => {
+              const sceneCount = item.scene_ids?.length ?? 0;
+              const statusLabel = item.type === "saved"
+                ? "저장됨"
+                : isRendering(item)
+                  ? "대기 중"
+                  : isCompleted(item)
+                    ? "완료"
+                    : isFailed(item)
+                      ? "실패"
+                      : "준비";
+              const statusClass =
+                item.type === "saved" || isCompleted(item)
+                  ? "bg-green-h-50 text-green-h-500"
+                  : isFailed(item)
+                    ? "bg-red-h-50 text-red-h-500"
+                    : "bg-neutral-h-100 text-neutral-h-500";
+              return (
+                <div
+                  key={item.id}
+                  className="group flex items-stretch overflow-hidden rounded-card border border-neutral-h-100 bg-white"
+                >
+                  {/* Thumbnail 150×253 — portrait shorts thumb */}
+                  <div className="relative h-[253px] w-[150px] flex-shrink-0 overflow-hidden bg-neutral-h-100 p-2">
+                    {item.type === "saved" && item.scene_ids ? (
+                      <Link
+                        href={`/export/shorts/editor?videoId=${item.video_id}&sceneIds=${item.scene_ids.join(",")}`}
+                        className="absolute inset-0 block"
+                      >
                         <SceneThumbnail
                           videoId={item.video_id}
-                          sceneId={item.scene_id}
+                          sceneId={item.scene_ids[0]}
                           agentAvailable={true}
-                          className="h-full w-full"
+                          className="h-full w-full object-cover"
                         />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center">
-                          <Film className="h-8 w-8 text-neutral-h-400" />
-                        </div>
-                      )}
+                      </Link>
+                    ) : (
+                      <div className="absolute inset-0 bg-neutral-h-700">
+                        {item.scene_id && item.video_id ? (
+                          <SceneThumbnail
+                            videoId={item.video_id}
+                            sceneId={item.scene_id}
+                            agentAvailable={true}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center">
+                            <Film className="h-8 w-8 text-neutral-h-400" />
+                          </div>
+                        )}
+                        {isRendering(item) && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                            <CircularProgress />
+                          </div>
+                        )}
+                        {isCompleted(item) && (
+                          <button
+                            type="button"
+                            onClick={() => handleRenderDownload(item.id)}
+                            className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition-opacity hover:opacity-100"
+                          >
+                            <div className="flex flex-col items-center text-white">
+                              <Download className="h-5 w-5" />
+                              <span className="mt-1 text-xs">다운로드</span>
+                            </div>
+                          </button>
+                        )}
+                        {isFailed(item) && (
+                          <div className="absolute inset-0 flex items-center justify-center bg-red-h-500/30">
+                            <AlertCircle className="h-6 w-6 text-red-h-400" />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* product tag overlay (figma 1699:252747) */}
+                    {item.type === "saved" && (
+                      <span className="absolute bottom-2 left-2 inline-flex items-center rounded bg-black/50 px-[4px] py-[2px] text-[8px] font-medium text-white">
+                        쇼츠 · {sceneCount}장면
+                      </span>
+                    )}
+                  </div>
 
-                      {isRendering(item) && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                          <CircularProgress />
-                        </div>
-                      )}
-
-                      {isCompleted(item) && (
+                  {/* Content column */}
+                  <div className="flex min-w-0 flex-1 flex-col items-end gap-[20px] self-stretch px-[12px] py-[16px]">
+                    <div className="flex w-full items-start justify-between gap-[12px]">
+                      <p
+                        className="truncate text-[14px] font-semibold tracking-[-0.35px] text-grayscale-800"
+                        title={item.title ?? undefined}
+                      >
+                        {item.title ?? (item.type === "render" ? "하이라이트 릴" : `쇼츠 ${sceneCount}장면`)}
+                      </p>
+                      <div className="flex flex-shrink-0 items-center gap-[8px]">
+                        {item.type === "saved" && item.scene_ids && (
+                          <Link
+                            href={`/export/shorts/editor?shortId=${item.id}`}
+                            className="text-[12px] font-medium text-heimdex-navy-500 hover:text-heimdex-navy-600"
+                          >
+                            편집
+                          </Link>
+                        )}
+                        {item.type === "render" && isCompleted(item) && (
+                          <Link
+                            href={`/export/shorts/${encodeURIComponent(item.id)}/edit`}
+                            className="text-[12px] font-medium text-heimdex-navy-500 hover:text-heimdex-navy-600"
+                            data-testid="saved-shorts-render-edit-link"
+                          >
+                            편집
+                          </Link>
+                        )}
                         <button
                           type="button"
-                          onClick={() => handleRenderDownload(item.id)}
-                          className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition-opacity hover:opacity-100"
+                          onClick={() => handleDelete(item)}
+                          aria-label="삭제"
+                          className="text-neutral-h-400 transition-colors hover:text-red-h-500"
                         >
-                          <div className="flex flex-col items-center text-white">
-                            <Download className="h-5 w-5" />
-                            <span className="mt-1 text-xs">다운로드</span>
-                          </div>
+                          <Trash2 className="h-4 w-4" strokeWidth={1.5} />
                         </button>
-                      )}
+                        {item.type === "saved" && (
+                          <button
+                            type="button"
+                            aria-label={selectedIds.has(item.id) ? "선택 해제" : "선택"}
+                            onClick={() => toggleSelect(item.id)}
+                            className={cn(
+                              "inline-flex h-5 w-5 items-center justify-center rounded-[4px] border-2 transition-colors",
+                              selectedIds.has(item.id)
+                                ? "border-heimdex-navy-500 bg-heimdex-navy-500 text-white"
+                                : "border-grayscale-300 bg-white hover:border-heimdex-navy-400",
+                            )}
+                          >
+                            {selectedIds.has(item.id) && (
+                              <svg className="h-3 w-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M2.5 6.5L5 9l4.5-5" />
+                              </svg>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-                      {isFailed(item) && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-red-h-500/30">
-                          <AlertCircle className="h-6 w-6 text-red-h-400" />
+                    <div className="flex w-full gap-[10px] text-[12px] font-medium tracking-[-0.3px]">
+                      <div className="flex flex-col gap-[10px] text-neutral-h-500">
+                        <span>장면 수</span>
+                        <span>상태</span>
+                      </div>
+                      <div className="flex flex-col gap-[10px] text-grayscale-800">
+                        <span>{sceneCount ? `${sceneCount}개` : "—"}</span>
+                        <span>{statusLabel}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex w-full flex-1 items-start">
+                      {item.type === "render" && isCompleted(item) ? (
+                        <div data-testid="saved-shorts-summary" className="flex-1">
+                          {item.summary ? (
+                            <p className="line-clamp-3 text-[12px] leading-[1.5] text-neutral-h-800">
+                              {item.summary}
+                            </p>
+                          ) : summarizingIds.has(item.id) ? (
+                            <p className="text-[12px] text-neutral-h-400">요약 생성 중...</p>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleGenerateSummary(item.id)}
+                              className="text-[12px] text-heimdex-navy-500 transition-colors hover:text-heimdex-navy-600"
+                              data-testid="saved-shorts-generate-summary"
+                            >
+                              요약 생성
+                            </button>
+                          )}
+                          {summaryErrors.has(item.id) && (
+                            <p className="mt-[2px] text-[12px] text-red-h-500">
+                              {summaryErrors.get(item.id)}
+                            </p>
+                          )}
                         </div>
+                      ) : (
+                        <p className="line-clamp-3 flex-1 text-[12px] leading-[1.5] text-neutral-h-500">
+                          {item.type === "saved"
+                            ? `편집기에서 ${sceneCount}장면을 결합한 쇼츠입니다.`
+                            : "렌더링 결과가 준비되면 요약이 표시됩니다."}
+                        </p>
                       )}
                     </div>
-                  )}
 
-                  {/* Selection checkbox — saved only */}
-                  {item.type === "saved" && (
-                    <button
-                      type="button"
-                      aria-label={selectedIds.has(item.id) ? "선택 해제" : "선택"}
-                      onClick={(e) => { e.preventDefault(); toggleSelect(item.id); }}
-                      className={cn(
-                        "absolute right-[8px] top-[8px] inline-flex h-[20px] w-[20px] items-center justify-center rounded-[4px] border-2 transition-colors",
-                        selectedIds.has(item.id)
-                          ? "border-heimdex-navy-500 bg-heimdex-navy-500 text-white"
-                          : "border-white bg-white/70 hover:border-heimdex-navy-400",
-                      )}
-                    >
-                      {selectedIds.has(item.id) && (
-                        <svg className="h-3 w-3" fill="none" viewBox="0 0 12 12" stroke="currentColor" strokeWidth={2.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.5 6.5L5 9l4.5-5" />
-                        </svg>
-                      )}
-                    </button>
-                  )}
-
-                  {/* Status badge — render only */}
-                  {item.type === "render" && (
-                    <span
-                      className={cn(
-                        "absolute left-[8px] top-[8px] inline-flex h-[20px] items-center rounded-[4px] px-[6px] text-[10px] font-medium",
-                        isRendering(item) && "bg-amber-h-50 text-amber-h-500",
-                        isCompleted(item) && "bg-green-h-50 text-green-h-500",
-                        isFailed(item) && "bg-red-h-50 text-red-h-500",
-                      )}
-                    >
-                      {isRendering(item) && "렌더링 중"}
-                      {isCompleted(item) && "완료"}
-                      {isFailed(item) && "실패"}
+                    <span className={cn("inline-flex items-center rounded-[4px] px-[6px] py-[3px] text-[12px] font-semibold", statusClass)}>
+                      {statusLabel}
                     </span>
-                  )}
-                </div>
-
-                {/* Label row (Figma Frame 204 — 200×40) */}
-                <div className="flex items-start justify-between gap-[8px]">
-                  <div className="min-w-0 flex-1">
-                    <p
-                      className="truncate text-[13px] font-medium tracking-[-0.3px] text-neutral-h-800"
-                      title={item.title ?? undefined}
-                    >
-                      {item.title ?? (item.type === "render" ? "하이라이트 릴" : `쇼츠 ${item.scene_ids?.length ?? 0}장면`)}
-                    </p>
-                    <p className="text-[11px] text-neutral-h-400">.mp4</p>
-                  </div>
-                  <div className="flex flex-shrink-0 items-center gap-[6px]">
-                    {item.type === "saved" && item.scene_ids && (
-                      <Link
-                        href={`/export/shorts/editor?shortId=${item.id}`}
-                        className="text-[11px] text-heimdex-navy-500 hover:text-heimdex-navy-600"
-                      >
-                        편집
-                      </Link>
-                    )}
-                    {item.type === "render" && isCompleted(item) && (
-                      <Link
-                        href={`/export/shorts/${encodeURIComponent(item.id)}/edit`}
-                        className="text-[11px] text-heimdex-navy-500 hover:text-heimdex-navy-600"
-                        data-testid="saved-shorts-render-edit-link"
-                      >
-                        편집
-                      </Link>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(item)}
-                      aria-label="삭제"
-                      className="text-neutral-h-400 transition-colors hover:text-red-h-500"
-                    >
-                      <Trash2 className="h-4 w-4" strokeWidth={1.5} />
-                    </button>
                   </div>
                 </div>
-
-                {/* Per-short summary (migration 059) */}
-                {item.type === "render" && isCompleted(item) && (
-                  <div data-testid="saved-shorts-summary">
-                    {item.summary ? (
-                      <p className="line-clamp-3 text-[11px] leading-snug text-neutral-h-500">
-                        {item.summary}
-                      </p>
-                    ) : summarizingIds.has(item.id) ? (
-                      <p className="text-[11px] text-neutral-h-400">요약 생성 중...</p>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleGenerateSummary(item.id)}
-                        className="text-[11px] text-heimdex-navy-500 transition-colors hover:text-heimdex-navy-600"
-                        data-testid="saved-shorts-generate-summary"
-                      >
-                        요약 생성
-                      </button>
-                    )}
-                    {summaryErrors.has(item.id) && (
-                      <p className="mt-[2px] text-[11px] text-red-h-500">
-                        {summaryErrors.get(item.id)}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : searchQuery && !forceEmpty ? (
           // figma: 검색 결과 없음 (간이 안내)
