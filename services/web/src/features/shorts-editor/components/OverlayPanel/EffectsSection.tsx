@@ -17,6 +17,10 @@ import type {
 interface EffectsSectionProps {
   effects: EffectsProps;
   onChange: (effects: EffectsProps) => void;
+  // figma 1663:45821 / 1607:65622 — stroke is rendered alongside Transform
+  // in a 2-col row, so EffectsSection skips it when the panel chooses to
+  // host it separately.
+  hideStroke?: boolean;
 }
 
 const DEFAULT_STROKE: StrokeProps = { color: "#FF0000", widthPx: 2 };
@@ -35,7 +39,7 @@ const DEFAULT_SHADOW: ShadowProps = {
  * have an "off" state (null) that the toggle blanks out the sub-controls
  * with a default object on enable.
  */
-export function EffectsSection({ effects, onChange }: EffectsSectionProps) {
+export function EffectsSection({ effects, onChange, hideStroke = false }: EffectsSectionProps) {
   const update = (patch: Partial<EffectsProps>) => {
     onChange({ ...effects, ...patch });
   };
@@ -55,28 +59,30 @@ export function EffectsSection({ effects, onChange }: EffectsSectionProps) {
         />
       </section>
 
-      {/* Stroke -------------------------------------------------------------- */}
-      <section>
-        <Header
-          label={t.effects.stroke}
-          enabled={effects.stroke != null}
-          onToggle={() =>
-            update({ stroke: effects.stroke ? null : { ...DEFAULT_STROKE } })
-          }
-        />
-        {effects.stroke && (
-          <BorderControl
-            width={effects.stroke.widthPx}
-            color={effects.stroke.color}
-            onWidthChange={(widthPx) =>
-              update({ stroke: { ...(effects.stroke as StrokeProps), widthPx } })
-            }
-            onColorChange={(color) =>
-              update({ stroke: { ...(effects.stroke as StrokeProps), color } })
+      {/* Stroke — hidden when the panel hosts it alongside Transform ------------ */}
+      {!hideStroke && (
+        <section>
+          <Header
+            label={t.effects.stroke}
+            enabled={effects.stroke != null}
+            onToggle={() =>
+              update({ stroke: effects.stroke ? null : { ...DEFAULT_STROKE } })
             }
           />
-        )}
-      </section>
+          {effects.stroke && (
+            <BorderControl
+              width={effects.stroke.widthPx}
+              color={effects.stroke.color}
+              onWidthChange={(widthPx) =>
+                update({ stroke: { ...(effects.stroke as StrokeProps), widthPx } })
+              }
+              onColorChange={(color) =>
+                update({ stroke: { ...(effects.stroke as StrokeProps), color } })
+              }
+            />
+          )}
+        </section>
+      )}
 
       {/* Shadow -------------------------------------------------------------- */}
       <section>
@@ -109,6 +115,49 @@ export function EffectsSection({ effects, onChange }: EffectsSectionProps) {
         )}
       </section>
     </div>
+  );
+}
+
+// Standalone stroke section — same content as EffectsSection's stroke block.
+// Used by panels that pair stroke with Transform in a 2-col row.
+export function StrokeBlock({
+  effects,
+  onChange,
+}: {
+  effects: EffectsProps;
+  onChange: (effects: EffectsProps) => void;
+}) {
+  return (
+    <section>
+      <Header
+        label={t.effects.stroke}
+        enabled={effects.stroke != null}
+        onToggle={() =>
+          onChange({
+            ...effects,
+            stroke: effects.stroke ? null : { ...DEFAULT_STROKE },
+          })
+        }
+      />
+      {effects.stroke && (
+        <BorderControl
+          width={effects.stroke.widthPx}
+          color={effects.stroke.color}
+          onWidthChange={(widthPx) =>
+            onChange({
+              ...effects,
+              stroke: { ...(effects.stroke as StrokeProps), widthPx },
+            })
+          }
+          onColorChange={(color) =>
+            onChange({
+              ...effects,
+              stroke: { ...(effects.stroke as StrokeProps), color },
+            })
+          }
+        />
+      )}
+    </section>
   );
 }
 

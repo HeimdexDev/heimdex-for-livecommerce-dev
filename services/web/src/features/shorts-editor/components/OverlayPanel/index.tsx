@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Dropdown } from "../primitives/Dropdown";
 import { ActionBar } from "./ActionBar";
 import { BackgroundToolbar } from "./BackgroundToolbar";
-import { EffectsSection } from "./EffectsSection";
+import { EffectsSection, StrokeBlock } from "./EffectsSection";
 import { PresetSection } from "./PresetSection";
 import { TextToolbar } from "./TextToolbar";
 import { TransformSection } from "./TransformSection";
@@ -250,16 +250,24 @@ function TextEditingBody({
 
       <hr className="border-grayscale-100" />
 
-      <TransformSection
-        overlay={overlay}
-        onChange={(transform: TransformProps) => onUpdate({ transform })}
-      />
+      {/* figma 1663:45821 — 변형 + 윤곽선 nudged into a 2-col row */}
+      <div className="grid grid-cols-2 gap-3">
+        <TransformSection
+          overlay={overlay}
+          onChange={(transform: TransformProps) => onUpdate({ transform })}
+        />
+        <StrokeBlock
+          effects={overlay.effects}
+          onChange={(effects: EffectsProps) => onUpdate({ effects })}
+        />
+      </div>
 
       <hr className="border-grayscale-100" />
 
       <EffectsSection
         effects={overlay.effects}
         onChange={(effects: EffectsProps) => onUpdate({ effects })}
+        hideStroke
       />
     </div>
   );
@@ -288,16 +296,24 @@ function BackgroundEditingBody({
 
       <hr className="border-grayscale-100" />
 
-      <TransformSection
-        overlay={overlay}
-        onChange={(transform: TransformProps) => onUpdate({ transform })}
-      />
+      {/* figma 1607:65622 — 변형 + 윤곽선 in one row, size/rotation lives only on Transform side */}
+      <div className="grid grid-cols-2 gap-3">
+        <TransformSection
+          overlay={overlay}
+          onChange={(transform: TransformProps) => onUpdate({ transform })}
+        />
+        <StrokeBlock
+          effects={overlay.effects}
+          onChange={(effects: EffectsProps) => onUpdate({ effects })}
+        />
+      </div>
 
       <hr className="border-grayscale-100" />
 
       <EffectsSection
         effects={overlay.effects}
         onChange={(effects: EffectsProps) => onUpdate({ effects })}
+        hideStroke
       />
     </div>
   );
