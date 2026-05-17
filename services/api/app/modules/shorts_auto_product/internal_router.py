@@ -382,6 +382,21 @@ async def complete(
             claimed_by=body.claimed_by,
             cost_delta_usd=body.cost_delta_usd,
         )
+        # v0.17.0 — post-enumeration consolidation. Fire-and-forget so
+        # the worker callback returns immediately; the task sleeps
+        # ``consolidate_grace_s`` (default 105s) to let the parallel STT
+        # path land its rows before running one gpt-4o call that
+        # consolidates duplicates and filters non-sellable rows. Failure
+        # is silent (raw catalog stays visible). No-op when the feature
+        # flag is off or there's no OpenAI key.
+        from app.modules.shorts_auto_product.consolidate.service import (
+            schedule_consolidation_task,
+        )
+        schedule_consolidation_task(
+            settings=_settings,
+            org_id=job.org_id,
+            video_db_id=job.video_id,
+        )
     else:
         # ``legacy_tracking`` derives catalog_entry_id from the job row;
         # ``scan_order`` reads it from each appearance's payload.

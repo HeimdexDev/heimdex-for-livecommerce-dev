@@ -561,6 +561,39 @@ class Settings(BaseSettings):
     # take that long; surface as ``enumeration_llm_failed``.
     auto_shorts_product_v2_stt_enum_timeout_s: float = 90.0
 
+    # --- Auto-shorts: post-enumeration catalog consolidation ---
+    #
+    # One LLM call that does TWO things in lockstep on the union of
+    # vision + STT enumerated catalog rows: (a) merges rows that refer
+    # to the same physical product into a canonical row (Korean /
+    # branded label preferred), and (b) marks non-sellable rows
+    # (host equipment, ambient props, on-screen graphics, generic
+    # English nouns) as rejected. Reuses existing ``rejected_at`` /
+    # ``rejected_reason`` columns — no schema change. The rejected_reason
+    # encodes the decision: ``duplicate_of:<canonical_uuid>`` or
+    # ``non_sellable:<category>``. Fire-and-forget from the vision
+    # ``/complete`` callback after an STT grace sleep so the consolidate
+    # pass sees both sources.
+    auto_shorts_product_v2_consolidate_enabled: bool = False
+    # gpt-4o (not mini) recommended — the classification is more
+    # nuanced than enumeration; gpt-4o-mini sometimes drops branded
+    # Korean labels because the prompt has more rules to balance.
+    auto_shorts_product_v2_consolidate_model: str = "gpt-4o"
+    # Wall-time ceiling on the consolidation LLM call.
+    auto_shorts_product_v2_consolidate_timeout_s: float = 120.0
+    # How long to wait after the vision ``/complete`` callback before
+    # starting consolidation, to let the parallel STT path land its
+    # rows. STT's own ceiling is 90s (see ``stt_enum_timeout_s``); the
+    # extra ~15s covers DB-write tail latency. Tune in lockstep with
+    # ``stt_enum_timeout_s`` — keeping consolidate_grace_s >=
+    # stt_enum_timeout_s + a small buffer ensures consolidate rarely
+    # races the STT writer.
+    auto_shorts_product_v2_consolidate_grace_s: float = 105.0
+    # Prompt version stamp — bumping forces a re-consolidation pass
+    # on the next scan even when the catalog set hasn't changed.
+    # Goldens-eval gate, same shape as the STT enum prompt version.
+    auto_shorts_product_v2_consolidate_prompt_version: str = "v1.0"
+
     # --- Auto-shorts: caption-source switch ---
     # Decoupled from OS speaker_transcript on 2026-05-07: Whisper
     # post-render is the only caption source for auto-shorts so a
