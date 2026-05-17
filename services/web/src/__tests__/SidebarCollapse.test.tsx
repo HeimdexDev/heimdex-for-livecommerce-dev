@@ -147,7 +147,7 @@ describe("NavGroup — 내보내기", () => {
   it("auto-expands on deep child route", () => {
     localStorage.setItem("heimdex-export-group-expanded", "false");
 
-    mockUsePathname.mockReturnValue("/export/shorts/create");
+    mockUsePathname.mockReturnValue("/export/shorts/editor");
     render(<Sidebar collapsed={false} onToggle={vi.fn()} />);
 
     expect(screen.getByText("쇼츠")).toBeInTheDocument();

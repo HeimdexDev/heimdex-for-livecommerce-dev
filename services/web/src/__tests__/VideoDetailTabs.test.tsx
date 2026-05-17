@@ -233,7 +233,7 @@ describe("VideoDetailPage tab bar", () => {
     await renderVideoDetail();
 
     await user.click(screen.getByRole("button", { name: /내보내기/ }));
-    expect(mockPush).toHaveBeenCalledWith("/export/shorts/create?videoId=test-video-123");
+    expect(mockPush).toHaveBeenCalledWith("/export/shorts/editor?videoId=test-video-123");
   });
 
   it("ignores invalid ?view= values and defaults to overview", async () => {
