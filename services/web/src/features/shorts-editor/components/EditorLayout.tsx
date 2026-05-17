@@ -21,7 +21,7 @@ export function EditorLayout({ leftPanel, preview, rightPanel, timeline }: Edito
       </div>
 
       {/* Preview panel — center canvas surface */}
-      <div className="flex items-center justify-center overflow-hidden bg-grayscale-10">
+      <div className="flex items-center justify-center overflow-auto bg-grayscale-10">
         {preview}
       </div>
 
