@@ -24,7 +24,7 @@ import { TimelinePanel } from "./TimelinePanel";
 import { ClipProperties } from "./ClipProperties";
 import { TextOverlayPanel } from "./TextOverlayPanel";
 import { OverlayPanel } from "./OverlayPanel";
-import { SubtitleEditor, SubtitleListNav } from "./SubtitleEditor";
+import { SubtitleListNav } from "./SubtitleEditor";
 import { TemplateSaveDialog } from "./TemplateSaveDialog";
 import { TemplateSaveMenu } from "./TemplateSaveMenu";
 import { isShortsEditorV2Enabled } from "@/lib/feature-flags";
@@ -623,14 +623,9 @@ export function ShortsEditorPage() {
                 onRemove={editor.removeClip}
               />
             ) : null}
-            {state.selectedSubtitleIndex != null && state.selectedSubtitleIndex < state.subtitles.length ? (
-              <SubtitleEditor
-                subtitle={state.subtitles[state.selectedSubtitleIndex]}
-                index={state.selectedSubtitleIndex}
-                onUpdate={editor.updateSubtitle}
-                onRemove={editor.removeSubtitle}
-              />
-            ) : null}
+            {/* Legacy SubtitleEditor intentionally omitted — subtitle/text
+                overlay editing happens in the V2 right panel (OverlayPanel)
+                via the text tab so the left card stays a clean list. */}
           </div>
         }
         preview={
