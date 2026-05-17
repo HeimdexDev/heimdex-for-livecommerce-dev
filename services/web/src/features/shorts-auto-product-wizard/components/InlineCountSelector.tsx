@@ -112,14 +112,21 @@ export function InlineCountSelector({
       </div>
       {suggestion ? (
         <p
-          className="rounded-[8px] bg-neutral-h-50 px-[12px] py-[8px] text-[12px] font-medium tracking-[-0.3px] text-grayscale-500"
+          className="rounded-[8px] bg-neutral-h-50 px-[12px] py-[8px] text-center text-[12px] font-medium tracking-[-0.3px] text-grayscale-500"
           data-testid="inline-count-suggestion"
         >
-          {suggestion.rangeLabel} 영상에서 {lengthSeconds}초 쇼츠라면{" "}
-          <span className="font-semibold text-grayscale-800">
-            {suggestion.lo}~{suggestion.hi}개
+          <span className="font-semibold text-heimdex-navy-500">
+            {suggestion.rangeLabel}
+          </span>{" "}
+          영상에서{" "}
+          <span className="font-semibold text-heimdex-navy-500">
+            {lengthSeconds}초
+          </span>{" "}
+          쇼츠라면{" "}
+          <span className="font-semibold text-heimdex-navy-500">
+            {suggestion.lo}~{suggestion.hi}개가 적합
           </span>
-          가 적합합니다.
+          합니다.
         </p>
       ) : null}
     </div>
