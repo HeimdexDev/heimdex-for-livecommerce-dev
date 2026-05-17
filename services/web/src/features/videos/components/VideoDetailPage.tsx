@@ -1641,11 +1641,6 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               scenes={scenes}
               seekMs={seekMs}
               seekKey={seekKey}
-              onReprocessClick={() => setIsReprocessDialogOpen(true)}
-              isReprocessing={isReprocessing}
-              onBlurClick={handleBlurClick}
-              hasBlurJob={hasBlurJob}
-              blurDisabled={blurDisabled}
             />
           </div>
         )}
