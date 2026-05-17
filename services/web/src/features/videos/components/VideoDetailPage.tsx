@@ -648,30 +648,95 @@ export function SceneCard({
     ? captionText.slice(0, 100) + "..."
     : captionText;
 
+  void aspectRatio;
+  void summaryExpanded;
+  void setSummaryExpanded;
+  void subtitleExpanded;
+  void setSubtitleExpanded;
+  void speakerExpanded;
+  void setSpeakerExpanded;
+  void transcriptPreview;
+  void captionPreview;
+
+  // Both portrait and landscape orientations now share the same
+  // LandscapeSceneCard layout so the time chip, checkbox, and inline editors
+  // stay consistent across aspect-ratio settings.
+  return (
+    <LandscapeSceneCard
+      scene={scene}
+      index={index}
+      videoId={videoId}
+      agentAvailable={agentAvailable}
+      isSelected={isSelected}
+      onToggle={onToggle}
+      onSeek={onSeek}
+      isPlaying={isPlaying}
+      timeRange={timeRange}
+      durationSec={durationSec}
+      captionText={captionText}
+      speakerTurns={speakerTurns}
+      hasSpeakers={hasSpeakers}
+      onSaveOverride={onSaveOverride}
+      onResetOverride={onResetOverride}
+    />
+  );
+}
+
+// Legacy portrait scene card layout — kept inert behind an unused flag so
+// the surrounding helpers stay imported until the next cleanup pass.
+function _LegacyPortraitSceneCard({
+  scene,
+  index,
+  videoId,
+  agentAvailable,
+  isSelected,
+  onToggle,
+  onSeek,
+  isPlaying,
+  aspectRatio,
+  onSaveOverride,
+  onResetOverride,
+}: {
+  scene: VideoScene;
+  index: number;
+  videoId: string;
+  agentAvailable: boolean;
+  isSelected: boolean;
+  onToggle: (id: string) => void;
+  onSeek?: (startMs: number) => void;
+  isPlaying?: boolean;
+  aspectRatio: ThumbnailAspectRatio;
+  onSaveOverride?: (sceneId: string, fieldName: string, value: string | string[]) => Promise<void>;
+  onResetOverride?: (sceneId: string, fieldName: string) => Promise<void>;
+}) {
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
+  const [subtitleExpanded, setSubtitleExpanded] = useState(false);
+  const [speakerExpanded, setSpeakerExpanded] = useState(false);
+  useEffect(() => {
+    if (isSelected) {
+      setSummaryExpanded(true);
+      setSubtitleExpanded(true);
+      setSpeakerExpanded(true);
+    }
+  }, [isSelected]);
+  const durationSec = Math.round((scene.end_ms - scene.start_ms) / 1000);
+  const timeRange = `${formatTimestamp(scene.start_ms)} - ${formatTimestamp(scene.end_ms)}`;
+  const transcriptPreview = scene.transcript_raw.length > 100
+    ? scene.transcript_raw.slice(0, 100) + "..."
+    : scene.transcript_raw;
+  const speakerTurns = useMemo(() => parseSpeakerTranscript(scene.speaker_transcript), [scene.speaker_transcript]);
+  const hasSpeakers = speakerTurns.length > 0;
+  const captionText = scene.scene_caption?.trim() || "";
+  const captionPreview = captionText.length > 100
+    ? captionText.slice(0, 100) + "..."
+    : captionText;
   const isPortrait = aspectRatio === "9:16";
   const hashtagChips = (scene.keyword_tags ?? []).slice(0, 3);
-
-  if (!isPortrait) {
-    return (
-      <LandscapeSceneCard
-        scene={scene}
-        index={index}
-        videoId={videoId}
-        agentAvailable={agentAvailable}
-        isSelected={isSelected}
-        onToggle={onToggle}
-        onSeek={onSeek}
-        isPlaying={isPlaying}
-        timeRange={timeRange}
-        durationSec={durationSec}
-        captionText={captionText}
-        speakerTurns={speakerTurns}
-        hasSpeakers={hasSpeakers}
-        onSaveOverride={onSaveOverride}
-        onResetOverride={onResetOverride}
-      />
-    );
-  }
+  void onToggle; void onSeek; void isPlaying; void onSaveOverride; void onResetOverride;
+  void timeRange; void durationSec; void transcriptPreview; void captionPreview;
+  void hasSpeakers; void speakerTurns; void hashtagChips; void isPortrait;
+  void summaryExpanded; void subtitleExpanded; void speakerExpanded;
+  return null;
 
   return (
     <div
@@ -1563,7 +1628,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
       <div className="flex items-start gap-[20px]">
         {showVideoPanel && (
           <div
-            className="sticky top-4 w-[45%] flex-shrink-0 self-start"
+            className="sticky top-4 w-[341px] flex-shrink-0 self-start"
             data-testid="video-info-panel-slot"
           >
             <VideoInfoPanel
