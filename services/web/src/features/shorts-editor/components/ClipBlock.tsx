@@ -60,10 +60,11 @@ export function ClipBlock({
     <div
       ref={setNodeRef}
       className={cn(
-        "group absolute bottom-1 top-1 flex cursor-pointer overflow-hidden rounded-md border transition-shadow",
+        // figma 1669:49034 selected: border-2 border-white r-8 + inner 3px×35px white pill at each edge
+        "group absolute bottom-1 top-1 flex cursor-pointer overflow-hidden rounded-[8px] transition-shadow",
         isSelected
-          ? "z-10 border-white shadow-lg ring-1 ring-white"
-          : "border-white/10 hover:border-white/30",
+          ? "z-10 border-2 border-white shadow-lg"
+          : "border border-neutral-h-400/40 hover:border-neutral-h-400/80",
         isDragging && "z-20 shadow-xl",
         CLIP_BLOCK_BG,
       )}
@@ -73,13 +74,19 @@ export function ClipBlock({
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelect(); }}
     >
-      {/* Left trim handle */}
+      {/* Left trim handle + figma white vertical pill when selected */}
       <div
-        className="absolute left-0 top-0 bottom-0 z-20 w-2 cursor-col-resize opacity-0 transition-opacity group-hover:opacity-100 hover:!opacity-100 bg-white/40"
+        className="absolute left-0 top-0 bottom-0 z-20 w-2 cursor-col-resize bg-white/40 opacity-0 transition-opacity group-hover:opacity-100 hover:!opacity-100"
         onPointerDown={onTrimStartDown}
       >
         <div className="absolute left-0.5 top-1/2 -translate-y-1/2 h-6 w-0.5 rounded-full bg-white" />
       </div>
+      {isSelected && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute left-[6px] top-1/2 z-10 h-[35px] w-[3px] -translate-y-1/2 rounded-[100px] bg-white"
+        />
+      )}
 
       {/* Drag handle area (center content) */}
       <div
@@ -127,13 +134,19 @@ export function ClipBlock({
         )}
       </div>
 
-      {/* Right trim handle */}
+      {/* Right trim handle + figma white vertical pill when selected */}
       <div
-        className="absolute right-0 top-0 bottom-0 z-20 w-2 cursor-col-resize opacity-0 transition-opacity group-hover:opacity-100 hover:!opacity-100 bg-white/40"
+        className="absolute right-0 top-0 bottom-0 z-20 w-2 cursor-col-resize bg-white/40 opacity-0 transition-opacity group-hover:opacity-100 hover:!opacity-100"
         onPointerDown={onTrimEndDown}
       >
         <div className="absolute right-0.5 top-1/2 -translate-y-1/2 h-6 w-0.5 rounded-full bg-white" />
       </div>
+      {isSelected && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute right-[6px] top-1/2 z-10 h-[35px] w-[3px] -translate-y-1/2 rounded-[100px] bg-white"
+        />
+      )}
     </div>
   );
 }
