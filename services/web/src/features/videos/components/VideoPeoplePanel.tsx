@@ -303,20 +303,29 @@ export function VideoPeoplePanel({
           <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-heimdex-navy-500" />
         </div>
       ) : people.length === 0 ? (
-        // figma layout preview — renders 7 placeholder avatars so the 4-col
-        // grid wrap is visible while no real people exist on this video yet.
+        // figma layout preview — renders 7 placeholder avatars (varied colors
+        // + Korean initials) so the 4-col grid wrap reads naturally even
+        // before face recognition runs on this video.
         <div className="flex flex-col gap-4">
           <p className="text-xs text-neutral-h-500">
             예시 데이터 (인식된 인물이 없습니다)
           </p>
           <div className="grid grid-cols-4 gap-x-10 gap-y-6">
-            {Array.from({ length: 7 }, (_, i) => i).map((i) => (
+            {[
+              { name: "김민지", initial: "민", bg: "bg-heimdex-navy-500" },
+              { name: "이서연", initial: "서", bg: "bg-red-h-500" },
+              { name: "박지훈", initial: "지", bg: "bg-green-h-500" },
+              { name: "최도윤", initial: "도", bg: "bg-amber-h-500" },
+              { name: "정하늘", initial: "하", bg: "bg-heimdex-navy-300" },
+              { name: "장유나", initial: "유", bg: "bg-grayscale-500" },
+              { name: "조시우", initial: "시", bg: "bg-heimdex-navy-400" },
+            ].map((person, i) => (
               <div key={i} className="flex flex-col items-center gap-1">
-                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-neutral-h-100">
-                  <PersonIcon className="h-8 w-8 text-neutral-h-400" />
+                <div className={cn("flex h-16 w-16 items-center justify-center rounded-full text-white", person.bg)}>
+                  <span className="text-[24px] font-semibold">{person.initial}</span>
                 </div>
-                <span className="text-[12px] font-medium tracking-[-0.3px] text-grayscale-500">
-                  인물 {i + 1}
+                <span className="text-[12px] font-medium tracking-[-0.3px] text-grayscale-800">
+                  {person.name}
                 </span>
               </div>
             ))}
