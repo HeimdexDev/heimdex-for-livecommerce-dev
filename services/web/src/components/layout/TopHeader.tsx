@@ -101,6 +101,7 @@ export function TopHeader({ sidebarCollapsed, onToggleSidebar }: TopHeaderProps)
 
   const headerActionsCtx = useContext(TopHeaderActionsContext);
   const headerActions = headerActionsCtx?.actions ?? null;
+  const leftActions = headerActionsCtx?.leftActions ?? null;
   const backSlot = headerActionsCtx?.back ?? null;
 
   const [showDropdown, setShowDropdown] = useState(false);
@@ -145,6 +146,7 @@ export function TopHeader({ sidebarCollapsed, onToggleSidebar }: TopHeaderProps)
             </span>
           </button>
         )}
+        {leftActions}
       </div>
       <div className="flex items-center gap-4">
         {headerActions}

@@ -18,6 +18,8 @@ export interface TopHeaderBackSlot {
 interface TopHeaderActionsContextValue {
   actions: ReactNode | null;
   setActions: (node: ReactNode | null) => void;
+  leftActions: ReactNode | null;
+  setLeftActions: (node: ReactNode | null) => void;
   back: TopHeaderBackSlot | null;
   setBack: (slot: TopHeaderBackSlot | null) => void;
 }
@@ -31,10 +33,15 @@ interface ProviderProps {
 
 export function TopHeaderActionsProvider({ children }: ProviderProps) {
   const [actions, setActionsState] = useState<ReactNode | null>(null);
+  const [leftActions, setLeftActionsState] = useState<ReactNode | null>(null);
   const [back, setBackState] = useState<TopHeaderBackSlot | null>(null);
 
   const setActions = useCallback((node: ReactNode | null) => {
     setActionsState(node);
+  }, []);
+
+  const setLeftActions = useCallback((node: ReactNode | null) => {
+    setLeftActionsState(node);
   }, []);
 
   const setBack = useCallback((slot: TopHeaderBackSlot | null) => {
@@ -42,8 +49,8 @@ export function TopHeaderActionsProvider({ children }: ProviderProps) {
   }, []);
 
   const value = useMemo(
-    () => ({ actions, setActions, back, setBack }),
-    [actions, setActions, back, setBack],
+    () => ({ actions, setActions, leftActions, setLeftActions, back, setBack }),
+    [actions, setActions, leftActions, setLeftActions, back, setBack],
   );
 
   return (
@@ -80,4 +87,19 @@ export function useTopHeaderBack(slot: TopHeaderBackSlot | null): void {
       ctx.setBack(null);
     };
   }, [ctx, slot]);
+}
+
+// Mounts `node` next to the back slot on the TopHeader's left side, used by
+// editor-style routes that need title/metadata alongside the back button.
+// Cleared on unmount.
+export function useTopHeaderLeftActions(node: ReactNode | null): void {
+  const ctx = useContext(TopHeaderActionsContext);
+
+  useEffect(() => {
+    if (!ctx) return;
+    ctx.setLeftActions(node);
+    return () => {
+      ctx.setLeftActions(null);
+    };
+  }, [ctx, node]);
 }
