@@ -10,6 +10,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { PanelLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { HeimdexBrand } from "@/components/icons/figma";
 
 function SettingsCubeIcon({ className }: { className?: string }) {
   return (
@@ -138,14 +139,14 @@ export function EditorSidebar({ collapsed }: EditorSidebarProps) {
           expanded ? "w-[270px]" : "w-16",
         )}
       >
-        {/* 2026-05-17: 64px LNB 에서 heimdex 로고 영역 제거 (깨짐 이슈 — 사용자 spec). */}
-        {/* PanelLeft 클릭 → 64↔270 토글 (overlay) */}
+        {/* Header — logo restored when expanded (collapsed stays icon-only). */}
         <div
           className={cn(
             "flex items-center pt-6 pb-2",
-            expanded ? "justify-end pr-3" : "justify-center",
+            expanded ? "justify-between px-3" : "justify-center",
           )}
         >
+          {expanded && <HeimdexBrand className="h-[33px] shrink-0" />}
           <button
             type="button"
             onClick={() => setExpanded((prev) => !prev)}

@@ -496,11 +496,12 @@ function OverviewPanel({
   }, []);
 
   return (
-    <div>
+    // figma: 1602:38512 — 행동요약 + 스크립트 wrapper card (p-20, gap-24)
+    <div className="flex flex-col gap-6 rounded-card bg-white p-5 shadow-card">
       {/* figma: 1602:38474 (행동요약) — 제목 우측에 복사 아이콘 + AI/수정/재생성 뱃지 */}
-      <div className="mt-2">
+      <section className="flex flex-col gap-5">
         <div className="flex items-center gap-3">
-          <h3 className="text-lg font-bold text-gray-900">행동 요약</h3>
+          <h3 className="text-lg font-semibold tracking-[-0.45px] text-neutral-h-black">행동 요약</h3>
           <button
             type="button"
             onClick={() => handleCopy(summaryText, "summary")}
@@ -532,29 +533,27 @@ function OverviewPanel({
           )}
         </div>
         {hasSummary ? (
-          <div className="mt-4">
-            <InlineEditField
-              value={summaryData?.summary ?? ""}
-              fieldName="video_summary"
-              isEdited={summaryData?.is_edited}
-              onSave={handleSaveSummary}
-              onReset={summaryData?.is_edited ? handleResetSummary : undefined}
-              multiline
-              maxLength={5000}
-              placeholder="요약 정보가 없습니다."
-            />
-          </div>
+          <InlineEditField
+            value={summaryData?.summary ?? ""}
+            fieldName="video_summary"
+            isEdited={summaryData?.is_edited}
+            onSave={handleSaveSummary}
+            onReset={summaryData?.is_edited ? handleResetSummary : undefined}
+            multiline
+            maxLength={5000}
+            placeholder="요약 정보가 없습니다."
+          />
         ) : (
-          <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+          <p className="whitespace-pre-wrap text-sm leading-[1.6] text-grayscale-600">
             {displaySummary || "요약 정보가 없습니다."}
           </p>
         )}
-      </div>
+      </section>
 
-      {/* figma: 1602:38542 (스크립트) — 제목 우측에 복사 아이콘 */}
-      <div className="mt-8">
+      {/* figma: 1602:38542 (스크립트) — 제목 우측에 복사 아이콘, 본문만 독립 스크롤 */}
+      <section className="flex flex-col gap-5">
         <div className="flex items-center gap-3">
-          <h3 className="text-lg font-bold text-gray-900">스크립트</h3>
+          <h3 className="text-lg font-semibold tracking-[-0.45px] text-neutral-h-black">스크립트</h3>
           <button
             type="button"
             onClick={() => handleCopy(fullTranscript, "script")}
@@ -566,7 +565,7 @@ function OverviewPanel({
           </button>
         </div>
         {hasDiarization ? (
-          <div className="mt-4 max-h-[500px] overflow-y-auto space-y-3">
+          <div className="max-h-[500px] overflow-y-auto space-y-3">
             {diarizedScenes.map((ds, si) => (
               <div key={si}>
                 <div className="space-y-1">
@@ -586,11 +585,11 @@ function OverviewPanel({
             ))}
           </div>
         ) : (
-          <div className="mt-4 max-h-[500px] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+          <div className="max-h-[500px] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
             {fullTranscript || "스크립트가 없습니다."}
           </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }
