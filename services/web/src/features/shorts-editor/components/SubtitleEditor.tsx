@@ -271,7 +271,7 @@ export function SubtitleListNav({
   }, [subtitles, query]);
 
   return (
-    <div className="flex flex-col gap-4 p-5">
+    <div className="flex min-h-0 flex-1 flex-col gap-[16px] p-[20px]">
       {/* figma 1602:37863 search bar */}
       <div className="flex items-center gap-[10px] rounded-[10px] border border-grayscale-500 bg-white px-[14px] py-[10px]">
         <Search className="h-6 w-6 shrink-0 text-grayscale-500" strokeWidth={2} />
@@ -285,14 +285,7 @@ export function SubtitleListNav({
         />
       </div>
 
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-grayscale-800">자막 목록</h3>
-        <span className="text-[10px] text-grayscale-400">
-          {order.length}/{subtitles.length}개
-        </span>
-      </div>
-
-      <ul className="flex max-h-[420px] flex-col gap-[10px] overflow-y-auto pr-1">
+      <ul className="flex min-h-0 flex-1 flex-col gap-[10px] overflow-y-auto">
         {order.map((i) => {
           const sub = subtitles[i];
           const isSelected = i === selectedSubtitleIndex;
