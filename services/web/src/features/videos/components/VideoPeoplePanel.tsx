@@ -278,7 +278,9 @@ export function VideoPeoplePanel({
   }, []);
 
   return (
-    <div className="flex flex-col gap-6 rounded-card bg-white p-[20px] shadow-card-lg">
+    // figma: 1602:38985 — outer card lives in VideoDetailPage's right wrapper;
+    // this panel renders sections only so we don't double-shadow.
+    <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <h2 className="text-[18px] font-semibold tracking-[-0.45px] text-black">인물 관리</h2>
         <Link
@@ -301,16 +303,24 @@ export function VideoPeoplePanel({
           <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-heimdex-navy-500" />
         </div>
       ) : people.length === 0 ? (
-        <div className="flex flex-col items-center py-12">
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-neutral-h-100">
-            <PersonIcon className="h-8 w-8 text-neutral-h-400" />
-          </div>
-          <h3 className="mt-4 text-sm font-medium text-grayscale-800">
-            이 영상에서 인식된 인물이 없습니다.
-          </h3>
-          <p className="mt-1 text-xs text-neutral-h-500">
-            얼굴 인식은 영상 업로드 후 자동으로 처리됩니다.
+        // figma layout preview — renders 7 placeholder avatars so the 4-col
+        // grid wrap is visible while no real people exist on this video yet.
+        <div className="flex flex-col gap-4">
+          <p className="text-xs text-neutral-h-500">
+            예시 데이터 (인식된 인물이 없습니다)
           </p>
+          <div className="grid grid-cols-4 gap-x-10 gap-y-6">
+            {Array.from({ length: 7 }, (_, i) => i).map((i) => (
+              <div key={i} className="flex flex-col items-center gap-1">
+                <div className="flex h-16 w-16 items-center justify-center rounded-full bg-neutral-h-100">
+                  <PersonIcon className="h-8 w-8 text-neutral-h-400" />
+                </div>
+                <span className="text-[12px] font-medium tracking-[-0.3px] text-grayscale-500">
+                  인물 {i + 1}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-6">
