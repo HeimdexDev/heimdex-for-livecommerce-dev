@@ -288,22 +288,24 @@ function VideoInfoPanel({
   return (
     // figma: 1602:38477 — 좌측 영상 카드 (rounded-10 shadow-card, no border)
     <div className="flex flex-col overflow-hidden rounded-card bg-white shadow-card">
-      {/* figma 1602:38478 — 제목 영역 (pt-20 pb-10 px-20) */}
-      <div className="flex items-center gap-2 min-w-0 px-5 pt-5 pb-2.5">
-        <h2
-          className="min-w-0 text-lg font-semibold tracking-[-0.45px] text-neutral-h-black"
-          title={title}
-        >
-          {middleTruncate(title, 30)}
-        </h2>
-        <OpenInDriveButton
-          sourceType={meta?.source_type ?? "local"}
-          webViewLink={meta?.web_view_link}
-        />
+      {/* figma 1602:38478 — 제목 영역 flex-col items-start gap-6, pt-20 pb-10 px-20 */}
+      <div className="flex min-w-0 flex-col items-start gap-1.5 px-5 pb-2.5 pt-5">
+        <div className="flex min-w-0 items-center gap-2">
+          <h2
+            className="min-w-0 text-lg font-semibold tracking-[-0.45px] text-neutral-h-black"
+            title={title}
+          >
+            {middleTruncate(title, 30)}
+          </h2>
+          <OpenInDriveButton
+            sourceType={meta?.source_type ?? "local"}
+            webViewLink={meta?.web_view_link}
+          />
+        </div>
       </div>
 
-      {/* figma 1602:38480 — 비디오 frame (9:16 고정) with overlay 컨트롤 */}
-      <div className="relative w-full aspect-[9/16] overflow-hidden bg-black">
+      {/* figma 1602:38480 — 비디오 frame 341×606 with overlay 컨트롤 */}
+      <div className="relative h-[606px] w-full overflow-hidden bg-black">
         <video
           ref={videoRef}
           src={playbackUrl}
