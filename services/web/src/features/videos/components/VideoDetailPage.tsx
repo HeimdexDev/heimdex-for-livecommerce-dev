@@ -367,15 +367,15 @@ function VideoInfoPanel({
         </div>
       </div>
 
-      {/* figma 1602:38496 / 1607:64939 — 메타 정보 (p-20, items-end, 2 column gap-32) */}
-      <div className="flex flex-col items-end p-5">
-        <div className="flex gap-8 items-start text-sm font-medium leading-[1.4] tracking-[-0.35px]">
-          <div className="flex flex-col gap-5 items-start text-neutral-500 whitespace-nowrap">
+      {/* figma 1602:38496 / 1607:64939 — 메타 정보 (p-20, left-aligned 2 col) */}
+      <div className="flex flex-col items-start p-5">
+        <div className="flex items-start gap-8 text-sm font-medium leading-[1.4] tracking-[-0.35px]">
+          <div className="flex flex-col items-start gap-5 whitespace-nowrap text-neutral-500">
             {rows.map(([label]) => (
               <p key={label}>{label}</p>
             ))}
           </div>
-          <div className="flex flex-col gap-5 items-start text-grayscale-800 whitespace-nowrap">
+          <div className="flex flex-col items-start gap-5 whitespace-nowrap text-grayscale-800">
             {rows.map(([label, value]) => (
               <p key={label}>{value}</p>
             ))}
@@ -500,8 +500,9 @@ function OverviewPanel({
   }, []);
 
   return (
-    // figma: 1602:38512 — 행동요약 + 스크립트 wrapper card (p-20, gap-24)
-    <div className="flex flex-col gap-6 rounded-card bg-white p-5 shadow-card">
+    // figma: 1602:38512 — 행동요약 + 스크립트 sections; the surrounding card
+    // (radius/shadow/padding) is provided by VideoDetailPage's outer wrapper.
+    <div className="flex flex-col gap-6">
       {/* figma: 1602:38474 (행동요약) — 제목 우측에 복사 아이콘 + AI/수정/재생성 뱃지 */}
       <section className="flex flex-col gap-5">
         <div className="flex items-center gap-3">
@@ -569,7 +570,7 @@ function OverviewPanel({
           </button>
         </div>
         {hasDiarization ? (
-          <div className="max-h-[500px] overflow-y-auto space-y-3">
+          <div className="max-h-[800px] overflow-y-auto space-y-3">
             {diarizedScenes.map((ds, si) => (
               <div key={si}>
                 <div className="space-y-1">
@@ -589,7 +590,7 @@ function OverviewPanel({
             ))}
           </div>
         ) : (
-          <div className="max-h-[500px] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+          <div className="max-h-[800px] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
             {fullTranscript || "스크립트가 없습니다."}
           </div>
         )}
