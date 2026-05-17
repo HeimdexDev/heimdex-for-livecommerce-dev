@@ -300,16 +300,22 @@ export function ShortsEditorPage() {
 
   const headerLeftSlot = useMemo(() => {
     if (isLoading || loadError) return null;
-    // figma: 1602:37719 — title input + "N개 장면" pair, gap=10.
+    // figma: 1669:48308 — title input + "N개 장면" pair, gap=10. Input width
+    // hugs the content via the `size` attribute capped at 10 chars so short
+    // titles sit tight next to the scene count, long titles clip at ~10ch.
+    const placeholder = meta?.video_title ?? "제목 없음";
+    const measureSource = title || placeholder;
+    const sizeChars = Math.max(4, Math.min(measureSource.length, 10));
     return (
       <div className="flex items-center gap-[10px]">
         <input
           type="text"
+          size={sizeChars}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder={meta?.video_title ?? "제목 없음"}
+          placeholder={placeholder}
           aria-label="영상 제목"
-          className="max-w-64 truncate rounded-md border border-transparent px-1 text-[18px] font-semibold leading-[1.4] tracking-[-0.45px] text-black placeholder-grayscale-300 hover:border-grayscale-100 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
+          className="min-w-[60px] max-w-[160px] rounded-md border border-transparent px-1 text-[18px] font-semibold leading-[1.4] tracking-[-0.45px] text-black placeholder-grayscale-300 hover:border-grayscale-100 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
         />
         <span className="whitespace-nowrap text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-neutral-h-500">
           {state.clips.length}개 장면
