@@ -1,7 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useContext } from "react";
 
 import { InlineWizardContainer } from "../components/InlineWizardContainer";
+import {
+  TopHeaderActionsContext,
+  TopHeaderActionsProvider,
+} from "@/components/layout/TopHeaderActionsContext";
+
+function HeaderActionsProbe() {
+  const ctx = useContext(TopHeaderActionsContext);
+  return <div data-testid="header-actions-probe">{ctx?.actions ?? null}</div>;
+}
+
+function renderWithHeader(ui: React.ReactNode) {
+  return render(
+    <TopHeaderActionsProvider>
+      {ui}
+      <HeaderActionsProbe />
+    </TopHeaderActionsProvider>,
+  );
+}
 
 const pushMock = vi.fn();
 
@@ -47,7 +66,7 @@ describe("InlineWizardContainer", () => {
   });
 
   it("starts on the criteria step", () => {
-    render(
+    renderWithHeader(
       <InlineWizardContainer videoId="gd_test" videoDurationMs={FIVE_MIN_MS} />,
     );
     expect(
@@ -58,7 +77,7 @@ describe("InlineWizardContainer", () => {
 
   it("advances to product step on Next", async () => {
     const onStepChange = vi.fn();
-    render(
+    renderWithHeader(
       <InlineWizardContainer
         videoId="gd_test"
         videoDurationMs={FIVE_MIN_MS}
@@ -76,7 +95,7 @@ describe("InlineWizardContainer", () => {
   });
 
   it("preserves criteria when going back and forward", async () => {
-    render(
+    renderWithHeader(
       <InlineWizardContainer videoId="gd_test" videoDurationMs={FIVE_MIN_MS} />,
     );
     // Change length to 90 + count to 7 on the criteria step
@@ -128,7 +147,7 @@ describe("InlineWizardContainer", () => {
       parent_job_id: "00000000-0000-0000-0000-000000000999",
       run_id: "run-1",
     });
-    render(
+    renderWithHeader(
       <InlineWizardContainer videoId="gd_test" videoDurationMs={FIVE_MIN_MS} />,
     );
     fireEvent.click(screen.getByTestId("inline-criteria-next"));
