@@ -75,7 +75,7 @@ export function PlayheadCursor({
 
   return (
     <div
-      className="pointer-events-none absolute top-0 z-30"
+      className="pointer-events-none absolute top-0 z-30 flex -translate-x-1/2 flex-col items-center"
       style={{ left: leftPx, height }}
     >
       {tooltipVisible && (
@@ -86,18 +86,20 @@ export function PlayheadCursor({
           {formatTimelineTimestamp(playheadMs)}
         </div>
       )}
-      {/* figma: 1669:48417 — head 16px / line 2px, both centered on playhead position */}
+      {/* figma: 1669:48427 — 16x16 chevron-down head sits on top of the 2px
+          heimdex-navy bar; flex + items-center keeps both shapes centered on
+          the same column so the column accurately marks the playhead time. */}
       <div
-        className="pointer-events-auto relative -left-[8px] cursor-grab active:cursor-grabbing"
+        className="pointer-events-auto cursor-grab active:cursor-grabbing"
         onPointerDown={onPointerDown}
         onPointerEnter={() => setIsHovering(true)}
         onPointerLeave={() => setIsHovering(false)}
       >
-        <svg width="16" height="12" viewBox="0 0 16 12" className="fill-red-500">
-          <path d="M0 0h16L8 12z" />
+        <svg width="16" height="16" viewBox="0 0 16 16" className="fill-heimdex-navy-500">
+          <path d="M0 0h16v6L8 16 0 6z" />
         </svg>
       </div>
-      <div className="-ml-px w-0.5 bg-red-500" style={{ height: height - 12 }} />
+      <div className="w-[2px] bg-heimdex-navy-500" style={{ height: Math.max(0, height - 16) }} />
     </div>
   );
 }
