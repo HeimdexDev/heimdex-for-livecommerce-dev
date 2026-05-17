@@ -10,7 +10,6 @@ import { getActiveSubtitles } from "../lib/source-time";
 import { formatTimelineTimestamp } from "../lib/timeline-math";
 import { resolveFontFamily } from "@/lib/fonts";
 import { usePlaybackSync } from "../hooks/usePlaybackSync";
-import { useOrgSettings } from "@/lib/orgSettings";
 import { getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
 interface PreviewPanelProps {
@@ -96,8 +95,9 @@ export function PreviewPanel({
     rate: playbackRate,
   });
 
-  const { settings } = useOrgSettings();
-  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
+  // The shorts editor canvas is always 9:16 (vertical reels/shorts output);
+  // the org-wide thumbnail_aspect_ratio setting governs other surfaces.
+  const aspectRatio: ThumbnailAspectRatio = "9:16";
 
   const activeSubtitles = getActiveSubtitles(subtitles, playheadMs);
   const progressPct = totalDurationMs > 0 ? (playheadMs / totalDurationMs) * 100 : 0;
