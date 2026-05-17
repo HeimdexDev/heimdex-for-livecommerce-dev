@@ -1150,16 +1150,17 @@ function ScenesPanel({
 
   return (
     <div>
-      {/* figma: 1602:39045 (장면 검색 박스) */}
-      <form onSubmit={handleSearch} className="flex items-center gap-3">
-        <div className="relative flex-1">
-          <SearchIcon className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+      {/* figma: 1602:39045 — border-grayscale/500 p-16 r-10, Enter to submit;
+          no trailing 검색 button per the new spec. */}
+      <form onSubmit={handleSearch}>
+        <div className="relative">
+          <SearchIcon className="absolute left-4 top-1/2 h-6 w-6 -translate-y-1/2 text-grayscale-500" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="영상 내에서 원하는 장면을 검색하여 찾아보세요."
-            className="w-full rounded-lg border border-gray-200 bg-gray-50 py-3 pl-12 pr-10 text-sm placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            className="w-full rounded-[10px] border border-grayscale-500 bg-white p-[16px] pl-[52px] pr-10 text-[16px] font-medium leading-[1.4] tracking-[-0.4px] text-grayscale-800 placeholder:text-neutral-h-300 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
           />
           {activeSearch && (
             <button
@@ -1171,7 +1172,8 @@ function ScenesPanel({
                 setSearchTotal(0);
                 setCurrentPage(1);
               }}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-grayscale-400 hover:text-grayscale-800"
+              aria-label="검색어 지우기"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
@@ -1179,12 +1181,6 @@ function ScenesPanel({
             </button>
           )}
         </div>
-        <button
-          type="submit"
-          className="rounded-lg bg-indigo-500 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
-        >
-          검색
-        </button>
       </form>
 
       {initialTotal >= 5 && !activeSearch && (
@@ -1563,58 +1559,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
         </div>
       )}
 
-      <nav className="mb-6 flex items-center border-b border-grayscale-100">
-        {([
-          { key: "overview" as const, label: "개요", badge: undefined as number | undefined },
-          { key: "scenes" as const, label: "장면 분석", badge: undefined as number | undefined },
-          { key: "people" as const, label: "인물 관리", badge: undefined as number | undefined },
-        ]).map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => handleViewChange(tab.key)}
-            className={cn(
-              "relative px-4 py-2.5 text-sm font-medium -mb-px border-b-2 transition-colors",
-              view === tab.key
-                ? "border-heimdex-navy-500 text-heimdex-navy-500"
-                : "border-transparent text-grayscale-500 hover:text-grayscale-800 hover:border-grayscale-200",
-            )}
-          >
-            {tab.label}
-            {tab.badge != null && (
-              <span className="ml-1.5 inline-flex items-center rounded-full bg-grayscale-100 px-2 py-0.5 text-xs font-medium text-grayscale-500">
-                {tab.badge}
-              </span>
-            )}
-          </button>
-        ))}
-        {/* figma: 1602:38512 — 카테고리 탭 우측 [장면 재분석][AI 쇼츠 생성] */}
-        <div className="ml-auto mb-1 flex items-center gap-2.5">
-          {!isReprocessing && (
-            <button
-              type="button"
-              onClick={() => setIsReprocessDialogOpen(true)}
-              className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-10"
-            >
-              장면 재분석
-            </button>
-          )}
-          <AutoShortsCTA
-            videoId={videoId}
-            onClick={() => handleViewChange("auto-shorts")}
-            renderWhileProbing
-          />
-          <button
-            type="button"
-            onClick={() => router.push(`/export/shorts/editor?videoId=${videoId}`)}
-            className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-10"
-          >
-            내보내기
-          </button>
-        </div>
-      </nav>
-
-      <div className="flex items-start gap-8">
+      <div className="flex items-start gap-[20px]">
         {showVideoPanel && (
           <div
             className="sticky top-4 w-[45%] flex-shrink-0 self-start"
@@ -1630,7 +1575,60 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
           </div>
         )}
 
-        <div className="flex-1 min-w-0">
+        {/* figma: 1602:38985 — right card holds the view tabs and the
+            active panel (overview / scenes / people / auto-shorts) so
+            행동요약, 스크립트, 장면분석, 인물관리 all share one wrapper. */}
+        <div className="min-w-0 flex-1 rounded-dialog bg-white p-[20px] shadow-card">
+          <nav className="mb-6 flex items-center border-b border-grayscale-100">
+            {([
+              { key: "overview" as const, label: "개요", badge: undefined as number | undefined },
+              { key: "scenes" as const, label: "장면 분석", badge: undefined as number | undefined },
+              { key: "people" as const, label: "인물 관리", badge: undefined as number | undefined },
+            ]).map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => handleViewChange(tab.key)}
+                className={cn(
+                  "relative -mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+                  view === tab.key
+                    ? "border-heimdex-navy-500 text-heimdex-navy-500"
+                    : "border-transparent text-grayscale-500 hover:border-grayscale-200 hover:text-grayscale-800",
+                )}
+              >
+                {tab.label}
+                {tab.badge != null && (
+                  <span className="ml-1.5 inline-flex items-center rounded-full bg-grayscale-100 px-2 py-0.5 text-xs font-medium text-grayscale-500">
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            ))}
+            <div className="mb-1 ml-auto flex items-center gap-2.5">
+              {!isReprocessing && (
+                <button
+                  type="button"
+                  onClick={() => setIsReprocessDialogOpen(true)}
+                  className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-10"
+                >
+                  장면 재분석
+                </button>
+              )}
+              <AutoShortsCTA
+                videoId={videoId}
+                onClick={() => handleViewChange("auto-shorts")}
+                renderWhileProbing
+              />
+              <button
+                type="button"
+                onClick={() => router.push(`/export/shorts/editor?videoId=${videoId}`)}
+                className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-10"
+              >
+                내보내기
+              </button>
+            </div>
+          </nav>
+
           {view === "overview" ? (
             <OverviewPanel
               scenes={scenes}
