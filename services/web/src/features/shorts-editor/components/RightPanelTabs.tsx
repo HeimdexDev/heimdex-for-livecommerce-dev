@@ -16,17 +16,18 @@ const TABS: { id: RightPanelTab; label: string }[] = [
 ];
 
 export function RightPanelTabs({ active, onChange }: RightPanelTabsProps) {
+  // figma 1663:45754 — h=32 border-b border-neutral-h-100 / tabs flex-1 equal width
   return (
-    <div className="flex items-center gap-4 border-b border-grayscale-200 px-4 pt-4">
+    <div className="flex h-8 items-start border-b border-neutral-h-100 px-5 pt-5">
       {TABS.map((tab) => (
         <button
           key={tab.id}
           type="button"
           onClick={() => onChange(tab.id)}
-          className={`pb-2 text-sm transition-colors ${
+          className={`flex flex-1 items-start justify-center pb-[2px] text-[16px] tracking-[-0.4px] transition-colors ${
             active === tab.id
               ? "border-b-2 border-heimdex-navy-500 font-semibold text-grayscale-800"
-              : "border-b-2 border-transparent font-medium text-grayscale-400 hover:text-grayscale-800"
+              : "border-b-2 border-transparent font-semibold text-neutral-h-500 hover:text-grayscale-800"
           }`}
         >
           {tab.label}
