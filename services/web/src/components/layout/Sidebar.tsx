@@ -3,9 +3,37 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PanelLeft, Settings } from "lucide-react";
+import { PanelLeft } from "lucide-react";
 import { HeimdexBrand } from "@/components/icons/figma";
 import { cn } from "@/lib/utils";
+
+function SettingsCubeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden
+    >
+      <path
+        d="M17.5 13.3329V6.66626C17.4997 6.37399 17.4225 6.08693 17.2763 5.8339C17.13 5.58086 16.9198 5.37073 16.6667 5.22459L10.8333 1.89126C10.58 1.74498 10.2926 1.66797 10 1.66797C9.70744 1.66797 9.42003 1.74498 9.16667 1.89126L3.33333 5.22459C3.08022 5.37073 2.86998 5.58086 2.72372 5.8339C2.57745 6.08693 2.5003 6.37399 2.5 6.66626V13.3329C2.5003 13.6252 2.57745 13.9123 2.72372 14.1653C2.86998 14.4183 3.08022 14.6285 3.33333 14.7746L9.16667 18.1079C9.42003 18.2542 9.70744 18.3312 10 18.3312C10.2926 18.3312 10.58 18.2542 10.8333 18.1079L16.6667 14.7746C16.9198 14.6285 17.13 14.4183 17.2763 14.1653C17.4225 13.9123 17.4997 13.6252 17.5 13.3329Z"
+        stroke="currentColor"
+        strokeWidth="1.66667"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M10 13.3329C11.8409 13.3329 13.3333 11.8405 13.3333 9.99959C13.3333 8.15864 11.8409 6.66626 10 6.66626C8.15905 6.66626 6.66667 8.15864 6.66667 9.99959C6.66667 11.8405 8.15905 13.3329 10 13.3329Z"
+        stroke="currentColor"
+        strokeWidth="1.66667"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 type NavLinkItem = { kind: "link"; label: string; href: string; badge?: string };
 type NavGroupItem = {
@@ -241,7 +269,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                 : "text-gray-600 hover:bg-gray-50",
             )}
           >
-            <Settings className="h-4 w-4" strokeWidth={2} />
+            <SettingsCubeIcon className="h-5 w-5" />
             <span>설정</span>
           </Link>
         </div>
