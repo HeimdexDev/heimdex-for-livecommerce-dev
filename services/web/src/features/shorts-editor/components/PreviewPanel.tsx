@@ -319,20 +319,21 @@ export function PreviewPanel({
 
   return (
     <div
-      className="flex h-full flex-col items-center justify-center gap-3 p-4"
+      className="relative h-full w-full"
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >
-      {/* Preview container — figma 1602:37722: w=352 h=626, rounded-[10px] */}
+      {/* Preview container — figma 1602:37722: shorts canvas fills the card
+          surface so the editor center is the 9:16 stage with no padding. */}
       <div
         ref={containerRef}
         className={cn(
-          "relative overflow-hidden rounded-[10px] bg-black",
+          "relative overflow-hidden bg-black",
           aspectRatio === "9:16"
-            ? "w-[352px] h-[626px]"
+            ? "h-full w-full"
             : fullscreen
-              ? "aspect-video w-full max-w-[626px]"
-              : "aspect-video w-full max-w-[480px]",
+              ? "aspect-video w-full max-w-[626px] rounded-[10px]"
+              : "aspect-video w-full max-w-[480px] rounded-[10px]",
         )}
         onClick={() => onSelectSubtitle(null)}
       >
