@@ -40,6 +40,13 @@ _FALLBACK_COST_PER_BATCHED_CALL_USD = 0.005
 
 _RESPONSE_SCHEMA = {
     "name": "product_enumeration_response",
+    # Without strict=True, OpenAI's json_schema is advisory: the model
+    # is free to omit "required" fields and the validator silently
+    # drops every partial item. Staging vision enumeration was
+    # consistently returning 0 clusters 2026-05-17/18 because of this
+    # exact gap. Same silent-fail-open pattern as the OCR Aircloud
+    # incident — see memory `feedback_external_lib_eager_init_fail_loud`.
+    "strict": True,
     "schema": {
         "type": "object",
         "additionalProperties": False,
@@ -176,8 +183,15 @@ class OpenAIVlmClient:
                     )
                 )
             except (KeyError, TypeError, ValueError) as exc:
+                # Inline the item + error in the message body — Aircloud's
+                # log formatter strips `extra=` keys, leaving us blind
+                # when the model returns partial items. Keep the extra
+                # dict too so structured loggers downstream still index.
+                item_repr = json.dumps(item, ensure_ascii=False, default=str)[:500]
                 logger.warning(
-                    "openai_vlm_dropped_malformed_item",
+                    "openai_vlm_dropped_malformed_item err=%s item=%s",
+                    exc,
+                    item_repr,
                     extra={"item": item, "error": str(exc)},
                 )
 
