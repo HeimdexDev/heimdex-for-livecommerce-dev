@@ -144,10 +144,6 @@ export function OverlayPanel({
           kind={tab}
           onAddText={onAddTextOverlay}
           onAddBackground={onAddBackgroundOverlay}
-          onDelete={() => {
-            if (selectedForTab) onRemoveOverlay(selectedForTab.id);
-          }}
-          canDelete={selectedForTab != null}
         />
 
         {tab === "text" ? (

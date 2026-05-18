@@ -319,7 +319,6 @@ export function ShortsEditorPage() {
         />
         <span className="whitespace-nowrap text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-neutral-h-500">
           {state.clips.length}개 장면
-          {state.isDirty && <span className="ml-1 text-amber-h-500">*</span>}
         </span>
       </div>
     );
