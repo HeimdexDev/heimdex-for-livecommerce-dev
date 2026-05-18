@@ -294,16 +294,17 @@ async def assemble_stt_clip(
         or max_score < min_mention_score
     ):
         logger.info(
-            "stt_pipeline_mention_too_weak",
-            extra={
-                "org_id": str(org_id),
-                "catalog_entry_id": str(catalog_entry_id),
-                "video_id": os_video_id,
-                "mention_scene_count": len(mentioned),
-                "max_bm25_score": max_score,
-                "min_mention_scenes": min_mention_scenes,
-                "min_mention_score": min_mention_score,
-            },
+            "stt_pipeline_mention_too_weak "
+            "org_id=%s catalog_entry_id=%s video_id=%s "
+            "mention_scene_count=%d max_bm25_score=%.4f "
+            "min_mention_scenes=%d min_mention_score=%s",
+            org_id,
+            catalog_entry_id,
+            os_video_id,
+            len(mentioned),
+            max_score,
+            min_mention_scenes,
+            min_mention_score,
         )
         raise NoMentionsFoundError(
             f"catalog entry {catalog_entry_id} mention too weak on "
