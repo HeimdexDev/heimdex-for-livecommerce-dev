@@ -132,10 +132,10 @@ class ShortsRenderSummaryService:
         # output (single-source clip selector). Take the first.
         source_video_id = scene_clips[0].get("video_id") or render_job.video_id
         windows = [
-            (int(c["source_start_ms"]), int(c["source_end_ms"]))
+            (int(c["start_ms"]), int(c["end_ms"]))
             for c in scene_clips
-            if c.get("source_start_ms") is not None
-            and c.get("source_end_ms") is not None
+            if c.get("start_ms") is not None
+            and c.get("end_ms") is not None
         ]
         total_duration_ms = sum(end - start for start, end in windows)
 

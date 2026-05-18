@@ -187,8 +187,8 @@ def _render_job(
             "scene_clips": [
                 {
                     "video_id": "gd_test",
-                    "source_start_ms": 0,
-                    "source_end_ms": 20_000,
+                    "start_ms": 0,
+                    "end_ms": 20_000,
                 }
             ]
         },
