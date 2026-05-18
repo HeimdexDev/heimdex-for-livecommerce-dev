@@ -466,15 +466,36 @@ export function generateSubtitlesFromTranscript(
 
   const subtitles: EditorSubtitle[] = [];
 
+  // Transcripts can store timestamps two ways: absolute video time
+  // (offset from video start, so offsetMs ≥ clip.trimStartMs) or
+  // scene-relative (offset from scene start, so offsetMs ≥ 0 and
+  // < clipDuration). Detect at the turn-batch level by sampling the
+  // first timestamp — once we know the convention, both modes share
+  // the same slot-distribution math below. Mixed-mode transcripts are
+  // not supported (we'd need per-line probing); the assumption is the
+  // indexer uses one or the other consistently.
+  const interpretAbs = (offsetMs: number) => offsetMs - clip.trimStartMs;
+  const interpretRel = (offsetMs: number) => offsetMs;
+  let interpretMs: (offsetMs: number) => number = interpretAbs;
+  if (turnsWithTs.length > 0) {
+    const first = interpretAbs(turnsWithTs[0].ms);
+    if (first < 0 || first >= clipDuration) {
+      const altFirst = interpretRel(turnsWithTs[0].ms);
+      if (altFirst >= 0 && altFirst < clipDuration) {
+        interpretMs = interpretRel;
+      }
+    }
+  }
+
   if (turnsWithTs.length > 0) {
     // Timestamp-based: chunk each turn, distribute chunks within the turn's time slot
     for (let i = 0; i < turnsWithTs.length; i++) {
       const { turn, ms: offsetMs } = turnsWithTs[i];
-      const relativeMs = offsetMs - clip.trimStartMs;
+      const relativeMs = interpretMs(offsetMs);
       if (relativeMs < 0 || relativeMs >= clipDuration) continue;
 
       const nextRelative = i + 1 < turnsWithTs.length
-        ? turnsWithTs[i + 1].ms - clip.trimStartMs
+        ? interpretMs(turnsWithTs[i + 1].ms)
         : clipDuration;
       const slotDuration = Math.min(nextRelative - relativeMs, DEFAULT_SUBTITLE_DURATION_MS * 3);
 

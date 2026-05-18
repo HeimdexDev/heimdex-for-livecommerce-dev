@@ -158,9 +158,26 @@ export function FullscreenOverlay({
 
           {/* Bottom transport row — figma 1682:187750 */}
           <div className="relative z-10 flex w-full flex-col gap-3 p-[10px]">
-            <div className="relative h-1 w-full bg-white">
+            {/* Click anywhere on the bar to seek the playhead to that
+                runtime. Mirrors the timeline-ruler click-to-seek the
+                editor body already exposes, so the fullscreen surface
+                doesn't lose that affordance. */}
+            <div
+              className="relative h-1 w-full cursor-pointer bg-white"
+              role="slider"
+              aria-label="재생 위치 이동"
+              aria-valuemin={0}
+              aria-valuemax={totalDurationMs}
+              aria-valuenow={playheadMs}
+              onClick={(e) => {
+                if (totalDurationMs <= 0) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+                onPlayheadChange(Math.round(ratio * totalDurationMs));
+              }}
+            >
               <div
-                className="h-full bg-heimdex-navy-500 transition-[width]"
+                className="pointer-events-none h-full bg-heimdex-navy-500 transition-[width]"
                 style={{ width: `${progressPct}%` }}
               />
             </div>

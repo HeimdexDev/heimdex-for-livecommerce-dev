@@ -360,37 +360,7 @@ function NumericFieldWithUnit({
   );
 }
 
-function OverlaySelectorRow({
-  state,
-  onSelect,
-}: {
-  state: EditorState;
-  onSelect: (id: string | null) => void;
-}) {
-  const sorted = [...state.overlays].sort(
-    (a, b) => b.layerIndex - a.layerIndex,
-  );
-  return (
-    <div className="border-t border-grayscale-200 p-2">
-      <div className="flex flex-wrap gap-1">
-        {sorted.map((o) => (
-          <button
-            key={o.id}
-            type="button"
-            onClick={() => onSelect(o.id)}
-            className={cn(
-              "rounded border px-2 py-1 text-[10px]",
-              state.selectedOverlayId === o.id
-                ? "border-heimdex-navy-400 bg-grayscale-10 text-heimdex-navy-500"
-                : "border-grayscale-200 text-grayscale-500 hover:bg-grayscale-10",
-            )}
-          >
-            {o.kind === "text"
-              ? `T: ${(o as EditorTextOverlay).text.slice(0, 12) || "…"}`
-              : "BG"}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+// OverlaySelectorRow (the every-overlay ``T: ...`` chip strip) was
+// removed entirely on 2026-05-18 — it filled the right wrapper once
+// auto-subtitle wiring added many text overlays. Function definition
+// dropped to make sure nothing accidentally re-mounts it.
