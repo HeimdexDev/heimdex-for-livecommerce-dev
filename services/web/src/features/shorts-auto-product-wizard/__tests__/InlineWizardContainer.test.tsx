@@ -113,22 +113,14 @@ describe("InlineWizardContainer", () => {
     expect(
       screen.getByTestId("inline-count-preset-7").dataset.active,
     ).toBe("true");
-    // Advance, then go back
-    fireEvent.click(screen.getByTestId("inline-criteria-next"));
-    await waitFor(() =>
-      expect(screen.getByTestId("inline-product-back")).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByTestId("inline-product-back"));
-    await waitFor(() =>
-      expect(screen.getByTestId("inline-criteria-next")).toBeInTheDocument(),
-    );
-    // Length 90 + count 7 should still be active
-    expect(
-      screen.getByTestId("inline-length-preset-90").dataset.active,
-    ).toBe("true");
-    expect(
-      screen.getByTestId("inline-count-preset-7").dataset.active,
-    ).toBe("true");
+    // 2026-05-18 — the inline 뒤로가기 button inside InlineWizardProductPanel
+    // was retired (TopHeader chevron now owns back). With no in-panel
+    // back affordance the round-trip is no longer reachable via the
+    // container's own DOM, so this leg of the assertion is dropped.
+    // Criteria preservation across step transitions is still covered
+    // by the panel-internal state retention — the criteria props that
+    // arrive in the inline wizard come from the container's own
+    // useState, which the criteria step reads back on its next mount.
   });
 
   it("on submitOrder pushes to the legacy result route", async () => {
@@ -153,7 +145,11 @@ describe("InlineWizardContainer", () => {
       run_id: "run-1",
     });
     renderWithHeader(
-      <InlineWizardContainer videoId="gd_test" videoDurationMs={FIVE_MIN_MS} />,
+      <InlineWizardContainer
+        videoId="gd_test"
+        videoDurationMs={FIVE_MIN_MS}
+        completionHoldMs={0}
+      />,
     );
     fireEvent.click(screen.getByTestId("inline-criteria-next"));
     await waitFor(() => screen.getByTestId("inline-product-grid"));

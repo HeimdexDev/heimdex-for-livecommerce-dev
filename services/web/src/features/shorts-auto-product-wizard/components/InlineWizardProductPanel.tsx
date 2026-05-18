@@ -39,7 +39,10 @@ import { formatVideoTimestampHMS } from "@/lib/timeline";
 import type { CatalogProductSummary } from "@/lib/types/shorts-auto-product-wizard";
 import { cn } from "@/lib/utils";
 
-import { IndexingProgressPanel } from "./IndexingProgressPanel";
+import {
+  IndexingProgressPanel,
+  type IndexingStage,
+} from "./IndexingProgressPanel";
 import { InlineWizardBreadcrumb } from "./InlineWizardBreadcrumb";
 import type { WizardCriteriaDraft } from "./InlineWizardCriteriaPanel";
 import { normalizeTimeRangeForSubmit } from "./VideoSegmentRangeSlider";
@@ -53,6 +56,14 @@ interface Props {
   criteria: WizardCriteriaDraft;
   onSubmitOrder: (parentJobId: string) => void;
   onBack: () => void;
+  /**
+   * How long (ms) to keep the 100% completion screen on after the
+   * catalog poll first returns products, before flipping to the
+   * product grid. Defaults to 3000 — the live UX wants the operator to
+   * see the "all stages checked" moment briefly. Tests override with 0
+   * so assertions land synchronously after the mock resolves.
+   */
+  completionHoldMs?: number;
 }
 
 type PollState = "enumerating" | "ready" | "no_products" | "timeout" | "error";
@@ -85,12 +96,22 @@ export function InlineWizardProductPanel({
   criteria,
   onSubmitOrder,
   onBack,
+  completionHoldMs = 3000,
 }: Props) {
+  void onBack; // back affordance moved to TopHeader chevron (2026-05-18)
   const { getAccessToken } = useAuth();
 
   const [entries, setEntries] = useState<CatalogProductSummary[]>([]);
   const [pollState, setPollState] = useState<PollState>("enumerating");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // 2026-05-18 — fake-it-til-you-make-it stage display. Enumeration is
+  // the only backend work happening on step 2-1, but the operator
+  // expects the same 4-stage progression they'll see on step 3. We
+  // track elapsed time + a "post-completion" timestamp so the UI can
+  // advance through the stages and hold at 100% for 3s before flipping
+  // to the product grid.
+  const [stageTick, setStageTick] = useState(0);
+  const [completedAt, setCompletedAt] = useState<number | null>(null);
   // PR 3: multi-select state. Set membership = card selected. Clicking
   // an unselected card when ``size === requested_count`` is silently
   // ignored (the K/N counter is the visible affordance).
@@ -119,8 +140,12 @@ export function InlineWizardProductPanel({
         const resp = await getProductCatalog(videoId, getAccessToken);
         if (cancelled) return;
         if (resp.products.length > 0) {
+          // Cache the products + mark the completion moment. The grid
+          // doesn't render yet — the post-completion timer below holds
+          // pollState at "enumerating" for ~3s so the progress card
+          // shows all four stages checked + 100% before flipping.
           setEntries(resp.products);
-          setPollState("ready");
+          setCompletedAt(Date.now());
           return;
         }
         if (resp.scan_status === "failed") {
@@ -171,6 +196,60 @@ export function InlineWizardProductPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId, getAccessToken, retryCount]);
+
+  // Drive the stage display tick. Re-renders every 250ms while the
+  // panel is enumerating so the percentage + stage advance smoothly
+  // off the elapsed time. Stops once we leave the enumerating state.
+  useEffect(() => {
+    if (pollState !== "enumerating") return;
+    const id = setInterval(() => setStageTick((t) => t + 1), 250);
+    return () => clearInterval(id);
+  }, [pollState]);
+
+  // Hold the 100% display for ``completionHoldMs`` after the catalog
+  // poll first succeeds, then flip to the product grid. Tests pass 0
+  // so the assertion that follows the mock resolution lands without
+  // a setTimeout boundary.
+  useEffect(() => {
+    if (completedAt == null) return;
+    const id = setTimeout(() => setPollState("ready"), completionHoldMs);
+    return () => clearTimeout(id);
+  }, [completedAt, completionHoldMs]);
+
+  // Derive the simulated progress / stage from elapsed time. Each
+  // stage gets ~15s of headroom (60s total estimate) before the next
+  // one lights up. After ``completedAt`` lands all four stages are
+  // marked done and the percent jumps to 100.
+  const STAGE_ORDER: ReadonlyArray<IndexingStage> = [
+    "enumerating",
+    "tracking",
+    "assembling",
+    "rendering",
+  ];
+  const STAGE_DURATION_MS = 15_000;
+  void stageTick; // tick is only used to force the re-render
+  const elapsedMs = Date.now() - startedAtRef.current;
+  let stageIdx: number;
+  let progressPct: number;
+  if (completedAt != null) {
+    stageIdx = STAGE_ORDER.length;
+    progressPct = 100;
+  } else {
+    stageIdx = Math.min(
+      STAGE_ORDER.length - 1,
+      Math.floor(elapsedMs / STAGE_DURATION_MS),
+    );
+    // Cap at 95% so the bar visibly jumps to 100 when the catalog
+    // actually finishes — otherwise the simulation can hit 100 before
+    // the backend confirms and the "completion" moment loses impact.
+    progressPct = Math.min(
+      95,
+      Math.round((elapsedMs / (STAGE_DURATION_MS * STAGE_ORDER.length)) * 100),
+    );
+  }
+  const simulatedCurrentStage: IndexingStage | null =
+    stageIdx < STAGE_ORDER.length ? STAGE_ORDER[stageIdx] : null;
+  const simulatedCompletedStages = STAGE_ORDER.slice(0, stageIdx);
 
   const handleSubmit = useCallback(async () => {
     if (selectedIds.size === 0) return;
@@ -303,17 +382,11 @@ export function InlineWizardProductPanel({
 
   return (
     <div className="space-y-[20px] font-pretendard">
-      <header className="flex items-center gap-4">
-        <button
-          type="button"
-          onClick={onBack}
-          className="text-[14px] font-medium text-grayscale-500 transition hover:text-grayscale-800"
-          data-testid="inline-product-back"
-        >
-          &lt; 뒤로가기
-        </button>
-      </header>
-
+      {/* 뒤로가기 header was removed 2026-05-18 — TopHeader's back chevron
+          already covers the navigation, and the nested header row
+          created a visible extra-wrapper effect inside the card. The
+          ``onBack`` callback is preserved for callers that still want
+          to surface it elsewhere. */}
       <div className="space-y-5 rounded-card bg-white p-5 shadow-card">
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-[18px] font-semibold tracking-[-0.45px] text-grayscale-800">
@@ -346,26 +419,25 @@ export function InlineWizardProductPanel({
         </div>
 
         {pollState === "ready" ? (
-          <p className="rounded-[8px] bg-neutral-h-50 px-[12px] py-[10px] text-center text-[12px] font-medium text-grayscale-500">
+          <p className="rounded-[8px] bg-neutral-h-50 px-[12px] py-[10px] text-center text-[12px] font-medium text-heimdex-navy-500">
             {guidanceCopy}
           </p>
         ) : null}
 
         {pollState === "enumerating" ? (
-          // 2026-05-18 redesign: surface the 4-stage indexing panel
-          // (분석 중 / 제품 확인 / 분류 중 / 마무리 중) instead of a single
-          // spinner. Step 2-1 only runs enumeration; the remaining
-          // stages stay queued until the user submits the scan_order on
-          // step 3. Percent indicator hidden — no reliable backend %
-          // during enumeration alone, the static "보통 30-90초 소요"
-          // copy already sets expectations.
+          // 2026-05-18 — render the 4-stage indexing panel in ``bare``
+          // mode so it inherits the outer card instead of drawing its
+          // own. Stage + percent are simulated client-side off elapsed
+          // time; once the catalog poll succeeds we hold at 100% with
+          // every stage checked for 3s before pollState flips to
+          // "ready" (handled by the completedAt timer above).
           <div data-testid="inline-product-loading">
             <IndexingProgressPanel
-              progress={0}
-              currentStage="enumerating"
-              completedStages={[]}
+              progress={progressPct / 100}
+              currentStage={simulatedCurrentStage}
+              completedStages={simulatedCompletedStages}
               hideHeaderActions
-              hidePercent
+              bare
             />
           </div>
         ) : null}

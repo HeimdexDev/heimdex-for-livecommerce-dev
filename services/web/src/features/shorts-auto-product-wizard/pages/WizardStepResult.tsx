@@ -173,12 +173,25 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
   const anyCompleted = completedCount > 0;
 
   const openEditor = (child: JobStatusResponse) => {
+    // 2026-05-18 — route into the new ShortsEditorPage which loads the
+    // saved composition (scene clips + subtitles + overlay styles) via
+    // ``shortId={render_job_id}``. The legacy ``/edit-clips`` page is
+    // still routable but was the pre-redesign editor; the operator
+    // expects the new editor surface so timing / fonts / overlay
+    // styles render exactly as they're stored on the render job.
+    // When the render job isn't ready yet we fall back to the legacy
+    // path so the operator at least lands somewhere meaningful.
     const renderJobId = child.render_job_id;
-    const url =
+    if (renderJobId) {
+      router.push(
+        `/export/shorts/editor?shortId=${encodeURIComponent(renderJobId)}`,
+      );
+      return;
+    }
+    router.push(
       `/export/shorts/auto/wizard/${encodeURIComponent(videoId)}` +
-      `/result/${encodeURIComponent(parentJobId)}/edit-clips` +
-      (renderJobId ? `?clip=${encodeURIComponent(renderJobId)}` : "");
-    router.push(url);
+        `/result/${encodeURIComponent(parentJobId)}/edit-clips`,
+    );
   };
 
   // Persist a completed auto-shorts child to the SavedShort library so it
@@ -326,7 +339,10 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
       );
       try {
         for (let i = 0; i < targets.length; i++) {
-          await saveChildToLibrary(targets[i], (targets[i].shorts_index ?? i) + 1);
+          await saveChildToLibrary(
+            targets[i],
+            targets[i].shorts_index ?? i + 1,
+          );
         }
         router.push("/export/shorts");
       } catch (err) {
@@ -345,7 +361,10 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
       // throttling without making the operator wait noticeably.
       for (let i = 0; i < targets.length; i++) {
         try {
-          await downloadChild(targets[i], (targets[i].shorts_index ?? i) + 1);
+          await downloadChild(
+            targets[i],
+            targets[i].shorts_index ?? i + 1,
+          );
         } catch (err) {
           console.error("[wizard] bulk export item failed", err);
         }
@@ -440,8 +459,13 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
             status?.criteria?.requested_count ?? 0,
           );
           const lengthSeconds = status?.criteria?.length_seconds ?? null;
+          // Backend assigns ``shorts_index`` from 1..N (see
+          // ``repositories/job.py`` fan-out). The slot iterator is 0..N-1
+          // so we offset by +1 when matching — otherwise slot 0 never
+          // finds a backing child and the first card sticks on the
+          // PendingResultCard placeholder forever (2026-05-18 bug).
           const slots = Array.from({ length: requestedCount }, (_, i) =>
-            children.find((c) => (c.shorts_index ?? -1) === i) ?? null,
+            children.find((c) => (c.shorts_index ?? -1) === i + 1) ?? null,
           );
           return (
             <div
@@ -458,7 +482,10 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
                     />
                   );
                 }
-                const ordinal = (child.shorts_index ?? i) + 1;
+                // ``shorts_index`` is already 1-based on the backend,
+                // so map it through unchanged; only fall back to the
+                // slot index + 1 when the field is missing.
+                const ordinal = child.shorts_index ?? i + 1;
                 const renamedTitle =
                   child.render_job_id != null
                     ? renamedTitles[child.render_job_id]

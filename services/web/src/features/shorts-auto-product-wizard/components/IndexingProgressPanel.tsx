@@ -59,6 +59,13 @@ interface Props {
   hidePercent?: boolean;
   /** Legacy ETA prop — now always replaced with the static "보통 30-90초" copy. */
   estimatedRemainingSeconds?: number;
+  /**
+   * When true, drop the outer white card + heading row so the panel
+   * sits flush inside a parent surface (step 2-1's product picker
+   * already provides its own wrapper). The stage list + percent + ETA
+   * still render — just without their own framing.
+   */
+  bare?: boolean;
 }
 
 function distributionLabel(value: WizardCriteriaDraft["product_distribution"]) {
@@ -92,6 +99,7 @@ export function IndexingProgressPanel({
   completedStages = [],
   hideHeaderActions = false,
   hidePercent = false,
+  bare = false,
 }: Props) {
   const percent = clampPercent(progress);
   const completedSet = new Set(completedStages);
@@ -102,9 +110,9 @@ export function IndexingProgressPanel({
   // also renders for the result-grid path. Leaving it here too would
   // double-set the slot when both components mount on the same render.
 
-  return (
-    <div className="space-y-[20px] font-pretendard">
-      <div className="space-y-[40px] rounded-card bg-white p-[20px] shadow-card">
+  const body = (
+    <>
+      {!bare ? (
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-[20px] font-semibold tracking-[-0.5px] text-grayscale-800">
             AI 쇼츠 생성
@@ -123,6 +131,7 @@ export function IndexingProgressPanel({
             </div>
           ) : null}
         </div>
+      ) : null}
 
         <ol
           className="flex items-center gap-[12px]"
@@ -180,24 +189,39 @@ export function IndexingProgressPanel({
           })}
         </ol>
 
-        <div className="flex flex-col items-center gap-[8px] pb-[20px] pt-[12px]">
-          {!hidePercent ? (
-            <p
-              className="text-[16px] font-semibold leading-[1.4] tracking-[-0.4px] text-heimdex-navy-500"
-              data-testid="indexing-progress-percent"
-            >
-              {percent}%
-            </p>
-          ) : null}
-          {/* Static guidance — accurate per-stage ETA isn't reliable yet,
-              so the 2026-05-18 spec asks for a fixed range message. */}
+      <div className="flex flex-col items-center gap-[8px] pb-[20px] pt-[12px]">
+        {!hidePercent ? (
           <p
-            className="text-[14px] font-medium tracking-[-0.35px] text-neutral-h-600"
-            data-testid="indexing-progress-eta"
+            className="text-[16px] font-semibold leading-[1.4] tracking-[-0.4px] text-heimdex-navy-500"
+            data-testid="indexing-progress-percent"
           >
-            보통 30-90초 소요
+            진행률 {percent}%
           </p>
-        </div>
+        ) : null}
+        {/* Static guidance — accurate per-stage ETA isn't reliable yet,
+            so the 2026-05-18 spec asks for a fixed range message. */}
+        <p
+          className="text-[14px] font-medium tracking-[-0.35px] text-neutral-h-600"
+          data-testid="indexing-progress-eta"
+        >
+          보통 30-90초 소요
+        </p>
+      </div>
+    </>
+  );
+
+  if (bare) {
+    return (
+      <div className="space-y-[28px] font-pretendard" data-testid="indexing-progress-bare">
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-[20px] font-pretendard">
+      <div className="space-y-[40px] rounded-card bg-white p-[20px] shadow-card">
+        {body}
       </div>
     </div>
   );
