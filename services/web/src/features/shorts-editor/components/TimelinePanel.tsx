@@ -3,15 +3,7 @@
 // figma: 1669:48897 (default) / 1669:48312 (compressed) — timeline shell
 // figma: 1669:153949 (toolbar row) — trash + timecode • transport • controls • zoom
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
-import {
-  Maximize,
-  Pause,
-  Play,
-  SkipBack,
-  SkipForward,
-  Trash2,
-  Volume2,
-} from "lucide-react";
+import { Maximize, Pause, Trash2, Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EditorClip, EditorSubtitle } from "../lib/types";
 import { msToPixels, formatVideoTimestampHMS } from "../lib/timeline-math";
@@ -115,6 +107,66 @@ function SpeedPopover({
         </div>
       )}
     </div>
+  );
+}
+
+// figma export `2-5.a 쇼츠 편집(자막 선택)/상품 선택/lucide/play.svg` —
+// solid filled triangle (no stroke). Replaces lucide-react's hollow
+// Play so the transport cluster matches the figma spec exactly.
+function PlayIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M4.16675 4.16716C4.16666 3.8739 4.24395 3.58582 4.39082 3.33199C4.53768 3.07816 4.74892 2.86757 5.00321 2.72149C5.25749 2.57541 5.54582 2.49901 5.83907 2.50001C6.13233 2.50101 6.42013 2.57936 6.67341 2.72716L16.6709 8.55883C16.9232 8.70523 17.1327 8.91528 17.2784 9.168C17.4241 9.42071 17.5009 9.70724 17.5011 9.99894C17.5014 10.2906 17.4251 10.5773 17.2798 10.8303C17.1346 11.0832 16.9255 11.2937 16.6734 11.4405L6.67341 17.2738C6.42013 17.4216 6.13233 17.5 5.83907 17.501C5.54582 17.502 5.25749 17.4256 5.00321 17.2795C4.74892 17.1334 4.53768 16.9228 4.39082 16.669C4.24395 16.4152 4.16666 16.1271 4.16675 15.8338V4.16716Z" />
+    </svg>
+  );
+}
+
+// figma export `... skip-back.svg` — left triangle + leading vertical
+// bar. Fill + stroke share currentColor so the parent can recolor it
+// (disabled state etc.) with the existing PILL_BUTTON text classes.
+function SkipBackIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="1.66667"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M2.5 16.6664V3.33302" fill="none" />
+      <path d="M14.9758 3.57052C15.2287 3.41878 15.5174 3.33686 15.8123 3.33314C16.1072 3.32942 16.3978 3.40403 16.6545 3.54934C16.9112 3.69466 17.1247 3.90548 17.2732 4.16029C17.4217 4.41509 17.5 4.70475 17.5 4.99969V14.9997C17.5 15.2946 17.4217 15.5843 17.2732 15.8391C17.1247 16.0939 16.9112 16.3047 16.6545 16.45C16.3978 16.5954 16.1072 16.67 15.8123 16.6662C15.5174 16.6625 15.2287 16.5806 14.9758 16.4289L6.645 11.4305C6.39769 11.2828 6.19291 11.0734 6.05062 10.8229C5.90834 10.5724 5.83342 10.2893 5.83317 10.0012C5.83291 9.71314 5.90734 9.42991 6.04919 9.17916C6.19103 8.92842 6.39545 8.71872 6.6425 8.57052L14.9758 3.57052Z" />
+    </svg>
+  );
+}
+
+// figma export `... skip-forward.svg` — mirror of skip-back: right
+// triangle + trailing vertical bar.
+function SkipForwardIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="1.66667"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M17.5 3.33302V16.6664" fill="none" />
+      <path d="M5.02417 3.57052C4.77126 3.41878 4.48261 3.33686 4.18769 3.33314C3.89278 3.32942 3.60216 3.40403 3.3455 3.54934C3.08884 3.69466 2.87534 3.90548 2.7268 4.16029C2.57826 4.41509 2.5 4.70475 2.5 4.99969V14.9997C2.5 15.2946 2.57826 15.5843 2.7268 15.8391C2.87534 16.0939 3.08884 16.3047 3.3455 16.45C3.60216 16.5954 3.89278 16.67 4.18769 16.6662C4.48261 16.6625 4.77126 16.5806 5.02417 16.4289L13.355 11.4305C13.6023 11.2828 13.8071 11.0734 13.9494 10.8229C14.0917 10.5724 14.1666 10.2893 14.1668 10.0012C14.1671 9.71314 14.0927 9.42991 13.9508 9.17916C13.809 8.92842 13.6045 8.71872 13.3575 8.57052L5.02417 3.57052Z" />
+    </svg>
   );
 }
 
@@ -276,7 +328,7 @@ export function TimelinePanel({
             aria-label="이전 클립으로"
             className={PILL_BUTTON}
           >
-            <SkipBack className="h-5 w-5" strokeWidth={1.5} />
+            <SkipBackIcon className="h-5 w-5" />
           </button>
           <button
             type="button"
@@ -288,7 +340,7 @@ export function TimelinePanel({
             {isPlaying ? (
               <Pause className="h-5 w-5" strokeWidth={1.5} />
             ) : (
-              <Play className="h-5 w-5" strokeWidth={1.5} />
+              <PlayIcon className="h-5 w-5" />
             )}
           </button>
           <button
@@ -298,7 +350,7 @@ export function TimelinePanel({
             aria-label="다음 클립으로"
             className={PILL_BUTTON}
           >
-            <SkipForward className="h-5 w-5" strokeWidth={1.5} />
+            <SkipForwardIcon className="h-5 w-5" />
           </button>
         </div>
 
