@@ -124,6 +124,16 @@ services:
       - IMAGE_CAPTION_DAILY_BUDGET_USD=${IMAGE_CAPTION_DAILY_BUDGET_USD:-50.0}
       - IMAGE_CAPTION_ESTIMATED_COST_PER_CALL_USD=${IMAGE_CAPTION_ESTIMATED_COST_PER_CALL_USD:-0.012}
       - IMAGE_CAPTION_PROMPT_VERSION=${IMAGE_CAPTION_PROMPT_VERSION:-2026-04-13-v1}
+      # Per-short Korean summary (POST /api/shorts/render/{id}/summary).
+      # Drives the bottom-right caption on every auto-shorts result card;
+      # when disabled the card sticks on "요약 생성 중…" forever. Defaults
+      # to true so a fresh deploy lights up the summaries — flip via
+      # `export SHORTS_RENDER_SUMMARY_ENABLED=false` on the host if the
+      # OpenAI bill needs a brake.
+      - SHORTS_RENDER_SUMMARY_ENABLED=${SHORTS_RENDER_SUMMARY_ENABLED:-true}
+      - SHORTS_RENDER_SUMMARY_LLM_MODEL=${SHORTS_RENDER_SUMMARY_LLM_MODEL:-gpt-4o-mini}
+      - SHORTS_RENDER_SUMMARY_LLM_TIMEOUT_S=${SHORTS_RENDER_SUMMARY_LLM_TIMEOUT_S:-8.0}
+      - SHORTS_RENDER_SUMMARY_PROMPT_VERSION=${SHORTS_RENDER_SUMMARY_PROMPT_VERSION:-v1}
       # Auto-shorts product mode v2 (wizard) — pass-through to api so .env
       # toggles propagate. Without this block the api silently uses
       # config.py defaults (every flag false) regardless of host .env state.
