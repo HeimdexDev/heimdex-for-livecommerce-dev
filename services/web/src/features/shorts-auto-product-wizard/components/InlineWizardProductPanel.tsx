@@ -395,9 +395,17 @@ export function InlineWizardProductPanel({
         Inline style so the pixel-perfect frame survives Tailwind's
         purge and doesn't depend on the parent's responsive width.
       */}
+      {/*
+        Hotfix 2026-05-18: ``justify-content: center`` + a fixed 454px
+        height was pushing the header row (which carries the 다음
+        button) above the visible area whenever the product grid grew
+        past the frame. Switched to ``justify-content: flex-start`` and
+        ``min-height`` so the header stays anchored at the top while
+        the wrapper can grow to fit overflowing content.
+      */}
       <div
-        className="flex flex-col items-start justify-center gap-[20px] p-[20px]"
-        style={{ width: 943, height: 454 }}
+        className="flex flex-col items-start justify-start gap-[20px] p-[20px]"
+        style={{ width: 943, minHeight: 454 }}
       >
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-[18px] font-semibold tracking-[-0.45px] text-grayscale-800">
