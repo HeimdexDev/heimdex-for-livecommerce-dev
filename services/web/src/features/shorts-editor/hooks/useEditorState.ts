@@ -524,14 +524,16 @@ export function generateSubtitlesFromTranscript(
     }
   }
 
-  // Fall through to even-distribution only when the transcript HAS NO
-  // timestamps at all (i.e., the indexer emitted raw text without
-  // diarisation). When timestamps were present but we couldn't confidently
-  // pick an interpretation, the transcript is likely mismatched to this
-  // scene (cross-runtime artifact reported on 2026-05-18) — emitting
-  // evenly-distributed text would surface the wrong scene's content
-  // inside this clip. Skip rather than mislead.
-  if (subtitles.length === 0 && turnsWithTs.length === 0) {
+  // Fall through to even-distribution whenever the timestamp branch
+  // produced nothing — happens both when the transcript has no
+  // timestamps at all and when every timestamp fell outside the scene
+  // window. The earlier turnsWithTs-only gate stopped subtitles from
+  // showing for scenes whose stamps were slightly out of range, which
+  // surfaced as "subtitles aren't loading anymore" on 2026-05-18. The
+  // cross-runtime symptom this gate guarded against is rarer than
+  // legitimate off-by-a-bit stamps, so we accept the trade and let
+  // operators delete unwanted lines manually.
+  if (subtitles.length === 0) {
     // No timestamps: distribute all chunks evenly across clip
     const chunkDuration = Math.max(800, Math.floor(clipDuration / allChunks.length));
     if (chunkDuration < 500) return [];

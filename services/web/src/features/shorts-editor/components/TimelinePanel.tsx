@@ -133,8 +133,13 @@ function AnchoredAbovePopover({
   // Position the popover above the anchor, centred horizontally over it.
   // The actual width is content-driven, so we render to the DOM first,
   // measure, then recompute — handles both the speed list (auto width)
-  // and the vertical volume slider (28px wide).
+  // and the vertical volume slider (28px wide). Depending on ``mounted``
+  // is critical: the position effect needs to fire AFTER createPortal
+  // attaches the popover to the DOM, otherwise popoverRef.current is
+  // null and the popover stays at (-9999, -9999) (the regression
+  // surfaced 2026-05-18 as "volume/speed buttons do nothing").
   useEffect(() => {
+    if (!mounted) return;
     const place = () => {
       const anchor = anchorRef.current;
       const popover = popoverRef.current;
@@ -158,7 +163,7 @@ function AnchoredAbovePopover({
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [anchorRef]);
+  }, [anchorRef, mounted]);
 
   useEffect(() => {
     function handle(e: MouseEvent) {
@@ -454,7 +459,12 @@ export function TimelinePanel({
         ref={scrollContainerRef}
         className="flex-1 overflow-x-auto overflow-y-hidden"
       >
-        <div className="relative" style={{ minWidth: "100%" }}>
+        {/* 12px left inset so the "0s" label and the first clip don't
+            sit flush against the wrapper's left edge — matches the
+            2026-05-18 spec ("타임라인 0S는 wrapper 좌측끝으로부터 12PX 띄움").
+            Padding lives on the inner container so ruler / clips /
+            subtitles / playhead all shift together and stay aligned. */}
+        <div className="relative pl-[12px]" style={{ minWidth: "100%" }}>
           {/* Ruler — clicking anywhere on the ruler seeks the playhead
               to that timecode. Reuses the same onSeek the playhead drag
               already calls, so audio + preview sync paths converge on

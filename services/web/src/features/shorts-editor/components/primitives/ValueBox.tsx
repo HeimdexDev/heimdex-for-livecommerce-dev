@@ -93,17 +93,20 @@ export function ValueBoxXY({
   className,
   ariaLabel,
 }: ValueBoxXYProps) {
+  // Tightened on 2026-05-18 — px-1 / gap-0.5 / no extra ml on the Y
+  // label so "X00 Y00" fits inside the narrow column the 위치 sub-
+  // control sits in. Letter prefixes hug the numeric values directly.
   return (
     <div
       className={cn(
-        "flex h-9 items-center justify-center gap-1.5 rounded-lg border border-grayscale-200 bg-white px-2",
+        "flex h-9 items-center justify-center gap-0.5 rounded-lg border border-grayscale-200 bg-white px-1",
         className,
       )}
       aria-label={ariaLabel}
     >
       <span className="text-[10px] font-medium text-grayscale-400">X</span>
       <ValueInput value={x} onChange={onChangeX} min={min} max={max} ariaLabel={`${ariaLabel ?? ""} X`} />
-      <span className="ml-1 text-[10px] font-medium text-grayscale-400">Y</span>
+      <span className="text-[10px] font-medium text-grayscale-400">Y</span>
       <ValueInput value={y} onChange={onChangeY} min={min} max={max} ariaLabel={`${ariaLabel ?? ""} Y`} />
     </div>
   );

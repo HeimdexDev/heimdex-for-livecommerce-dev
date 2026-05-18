@@ -274,7 +274,7 @@ function TextEditingBody({
 // Background editing body
 // ---------------------------------------------------------------------------
 
-function BackgroundEditingBody({
+export function BackgroundEditingBody({
   overlay,
   onUpdate,
   onReorder,

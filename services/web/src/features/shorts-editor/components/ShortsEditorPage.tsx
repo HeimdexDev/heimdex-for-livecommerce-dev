@@ -682,7 +682,11 @@ export function ShortsEditorPage() {
           (() => {
             const backgroundTab = (
               <BackgroundPanel
+                state={state}
                 onAddSolidBackground={editor.addBackgroundOverlayAtPlayhead}
+                onAddImageBackground={editor.addImageBackgroundOverlayAtPlayhead}
+                onUpdateOverlay={editor.updateOverlay}
+                onReorderOverlay={editor.reorderOverlay}
               />
             );
             const templateTab = (
