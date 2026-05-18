@@ -669,7 +669,10 @@ export function SavedShortsPage() {
                       {item.type === "render" && isCompleted(item) ? (
                         <div data-testid="saved-shorts-summary" className="flex-1">
                           {item.summary ? (
-                            <p className="line-clamp-3 text-[12px] leading-[1.5] text-neutral-h-800">
+                            // break-keep = word-break: keep-all so the
+                            // Korean summary wraps at spaces instead of
+                            // breaking inside a word/morpheme.
+                            <p className="line-clamp-3 break-keep text-[12px] leading-[1.5] text-neutral-h-800">
                               {item.summary}
                             </p>
                           ) : summarizingIds.has(item.id) ? (
@@ -691,7 +694,7 @@ export function SavedShortsPage() {
                           )}
                         </div>
                       ) : (
-                        <p className="line-clamp-3 flex-1 text-[12px] leading-[1.5] text-neutral-h-500">
+                        <p className="line-clamp-3 flex-1 break-keep text-[12px] leading-[1.5] text-neutral-h-500">
                           {item.type === "saved"
                             ? `편집기에서 ${sceneCount}장면을 결합한 쇼츠입니다.`
                             : "렌더링 결과가 준비되면 요약이 표시됩니다."}
