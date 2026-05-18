@@ -602,9 +602,9 @@ export function ShortsEditorPage() {
     <div className="font-pretendard h-full overflow-hidden bg-grayscale-10">
       <EditorLayout
         leftPanel={
-          // figma: 1607:65302 left column (자막 패널) — wrapper height is fixed
-          // by EditorLayout; SubtitleListNav fills the remaining space and
-          // scrolls internally so the card itself never grows.
+          // figma: 1602:37844 (left subtitle panel) — wrapper hosts only the
+          // subtitle nav (search + timeline-ordered list). Text/background
+          // overlay editing lives in the right wrapper (figma 1602:40004).
           <div className="flex h-full min-h-0 flex-col">
             {/* figma: 1670:186255 (자막 좌측 패널) — timeline-ordered subtitle nav */}
             {/* figma: 1670:186095 — row click seeks playhead to subtitle.startMs */}
@@ -623,9 +623,6 @@ export function ShortsEditorPage() {
                 onRemove={editor.removeClip}
               />
             ) : null}
-            {/* Legacy SubtitleEditor intentionally omitted — subtitle/text
-                overlay editing happens in the V2 right panel (OverlayPanel)
-                via the text tab so the left card stays a clean list. */}
           </div>
         }
         preview={

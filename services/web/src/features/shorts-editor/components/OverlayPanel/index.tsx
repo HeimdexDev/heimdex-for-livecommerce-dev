@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,10 @@ import { TransformSection } from "./TransformSection";
 import { useOverlaySelection } from "../../hooks/useOverlaySelection";
 import { usePresets } from "../../hooks/usePresets";
 import { t } from "../../lib/i18n/strings";
+import {
+  createDefaultBackgroundOverlay,
+  createDefaultTextOverlay,
+} from "../../lib/overlay-defaults";
 import { runOneTimePresetMigration } from "../../lib/preset-migration";
 import type {
   EditorBackgroundOverlay,
@@ -34,7 +38,10 @@ const FONT_OPTIONS = [
 interface OverlayPanelProps {
   state: EditorState;
   onAddTextOverlay: () => void;
-  onAddBackgroundOverlay: () => void;
+  // figma 1602:40004 (배경 섹션) — 단색 배경 추가 버튼은 색상 팔레트
+  // 팝업을 띄우고, 선택한 색이 신규 background overlay 의 fillColor 로
+  // 주입된다. 인자가 없으면 기본 색이 적용된다.
+  onAddBackgroundOverlay: (fillColor?: string) => void;
   onUpdateOverlay: (id: string, updates: Partial<EditorOverlay>) => void;
   onRemoveOverlay: (id: string) => void;
   onSelectOverlay: (id: string | null) => void;
@@ -78,10 +85,27 @@ export function OverlayPanel({
     }
   }, [selected, tab]);
 
-  // Selected overlay only counts when its kind matches the current tab —
-  // otherwise the empty state for the current tab takes over.
+  // Selected overlay only counts when its kind matches the current tab.
+  // When no overlay is selected we still render the full control surface
+  // (figma 1663:45752 expects controls present at all times) — the
+  // editor body just binds to a stable default overlay so the inputs
+  // show sensible default values and onUpdate is a no-op until the user
+  // explicitly adds an overlay via the "+ 텍스트 추가" / "+ 단색 배경
+  // 추가" button or selects an existing one in the timeline / preview.
   const selectedForTab =
     selected && selected.kind === tab ? selected : null;
+
+  // Stable defaults so the controls render with stable identities. startMs
+  // = 0 is meaningless here because the overlay never enters state — these
+  // objects only feed the editor body's value props.
+  const defaultTextOverlay = useMemo(
+    () => createDefaultTextOverlay({ startMs: 0 }),
+    [],
+  );
+  const defaultBgOverlay = useMemo(
+    () => createDefaultBackgroundOverlay({ startMs: 0 }),
+    [],
+  );
 
   const presetsApi = usePresets({
     kind: tab,
@@ -118,33 +142,38 @@ export function OverlayPanel({
       <div className="flex-1 space-y-4 overflow-y-auto">
         <ActionBar
           kind={tab}
-          onAdd={tab === "text" ? onAddTextOverlay : onAddBackgroundOverlay}
+          onAddText={onAddTextOverlay}
+          onAddBackground={onAddBackgroundOverlay}
           onDelete={() => {
             if (selectedForTab) onRemoveOverlay(selectedForTab.id);
           }}
           canDelete={selectedForTab != null}
         />
 
-        {selectedForTab == null ? (
-          <p className="rounded-lg bg-grayscale-10 px-3 py-8 text-center text-xs text-grayscale-400">
-            {t.empty.panelHint}
-          </p>
-        ) : selectedForTab.kind === "text" ? (
+        {tab === "text" ? (
           <TextEditingBody
-            overlay={selectedForTab as EditorTextOverlay}
-            onUpdate={(updates) =>
-              onUpdateOverlay(selectedForTab.id, updates)
+            overlay={
+              (selectedForTab as EditorTextOverlay | null) ?? defaultTextOverlay
             }
+            onUpdate={(updates) => {
+              if (selectedForTab) onUpdateOverlay(selectedForTab.id, updates);
+            }}
+            isPlaceholder={selectedForTab == null}
           />
         ) : (
           <BackgroundEditingBody
-            overlay={selectedForTab as EditorBackgroundOverlay}
-            onUpdate={(updates) =>
-              onUpdateOverlay(selectedForTab.id, updates)
+            overlay={
+              (selectedForTab as EditorBackgroundOverlay | null) ??
+              defaultBgOverlay
             }
-            onReorder={(direction) =>
-              onReorderOverlay(selectedForTab.id, direction)
-            }
+            onUpdate={(updates) => {
+              if (selectedForTab) onUpdateOverlay(selectedForTab.id, updates);
+            }}
+            onReorder={(direction) => {
+              if (selectedForTab)
+                onReorderOverlay(selectedForTab.id, direction);
+            }}
+            isPlaceholder={selectedForTab == null}
           />
         )}
 
@@ -179,18 +208,24 @@ export function OverlayPanel({
 function TextEditingBody({
   overlay,
   onUpdate,
+  isPlaceholder = false,
 }: {
   overlay: EditorTextOverlay;
   onUpdate: (updates: Partial<EditorTextOverlay>) => void;
+  // figma 1663:45752 — when no overlay is selected the controls still
+  // render with default values; isPlaceholder dims the surface so it's
+  // visually clear inputs won't persist until an overlay is added.
+  isPlaceholder?: boolean;
 }) {
   return (
-    <div className="space-y-4">
+    <div className={cn("space-y-4", isPlaceholder && "opacity-60")}>
       <textarea
         value={overlay.text}
         onChange={(e) => onUpdate({ text: e.target.value.slice(0, 500) })}
         placeholder={t.text.contentPlaceholder}
         rows={4}
         maxLength={500}
+        readOnly={isPlaceholder}
         // figma 1663:45770 — Text Area Section: h-114 2px heimdex-navy/500
         // border, 10px radius, px-14 py-16.
         className="h-[114px] w-full resize-none rounded-[10px] border-2 border-heimdex-navy-500 bg-white px-[14px] py-[16px] text-[14px] tracking-[-0.35px] text-neutral-h-800 placeholder-neutral-h-300 focus:outline-none"
@@ -249,13 +284,15 @@ function BackgroundEditingBody({
   overlay,
   onUpdate,
   onReorder,
+  isPlaceholder = false,
 }: {
   overlay: EditorBackgroundOverlay;
   onUpdate: (updates: Partial<EditorBackgroundOverlay>) => void;
   onReorder: (direction: "front" | "back" | "forward" | "backward") => void;
+  isPlaceholder?: boolean;
 }) {
   return (
-    <div className="space-y-4">
+    <div className={cn("space-y-4", isPlaceholder && "opacity-60")}>
       <BackgroundToolbar
         overlay={overlay}
         onChange={onUpdate}
