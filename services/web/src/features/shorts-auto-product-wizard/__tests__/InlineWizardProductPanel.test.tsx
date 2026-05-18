@@ -185,7 +185,7 @@ describe("InlineWizardProductPanel", () => {
     expect(cards[2]!.className).toContain("opacity-60");
   });
 
-  it("counter renders K/N format", async () => {
+  it("counter renders catalog total + selected count", async () => {
     triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
     getProductCatalogMock.mockResolvedValue({
       video_id: "gd_test",
@@ -194,9 +194,12 @@ describe("InlineWizardProductPanel", () => {
     });
     renderPanel({ criteria: { requested_count: 4 } });
     await waitFor(() => screen.getByTestId("inline-product-grid"));
-    expect(screen.getByText(/2개 중 0\/4개 선택/)).toBeInTheDocument();
+    // The cap divisor was dropped on 2026-05-18 so the chip reads as
+    // plain progress against the catalog total. The cap is still
+    // surfaced in the header copy / snackbar elsewhere on the panel.
+    expect(screen.getByText(/2개 중 0개 선택/)).toBeInTheDocument();
     fireEvent.click(screen.getAllByTestId("inline-product-card")[0]!);
-    expect(screen.getByText(/2개 중 1\/4개 선택/)).toBeInTheDocument();
+    expect(screen.getByText(/2개 중 1개 선택/)).toBeInTheDocument();
   });
 
   it("submits with hardcoded language=ko + intent=commit + sorted catalog_entry_ids", async () => {
