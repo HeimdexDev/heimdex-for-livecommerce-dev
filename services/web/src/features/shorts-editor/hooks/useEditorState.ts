@@ -598,16 +598,19 @@ export function useEditorState() {
     });
   }, [state.playheadMs, state.totalDurationMs]);
 
-  const addBackgroundOverlayAtPlayhead = useCallback(() => {
-    const { startMs, endMs } = _clampOverlayWindow(
-      state.playheadMs,
-      state.totalDurationMs,
-    );
-    dispatch({
-      type: "ADD_OVERLAY",
-      overlay: createDefaultBackgroundOverlay({ startMs, endMs }),
-    });
-  }, [state.playheadMs, state.totalDurationMs]);
+  const addBackgroundOverlayAtPlayhead = useCallback(
+    (fillColor?: string) => {
+      const { startMs, endMs } = _clampOverlayWindow(
+        state.playheadMs,
+        state.totalDurationMs,
+      );
+      dispatch({
+        type: "ADD_OVERLAY",
+        overlay: createDefaultBackgroundOverlay({ startMs, endMs, fillColor }),
+      });
+    },
+    [state.playheadMs, state.totalDurationMs],
+  );
 
   const updateOverlay = useCallback(
     (id: string, updates: Partial<EditorOverlay>) => {
