@@ -426,8 +426,27 @@ export function generateSubtitlesFromTranscript(
   speakerTranscript: string | undefined | null,
   clip: EditorClip,
 ): EditorSubtitle[] {
-  const turns = parseSpeakerTranscript(speakerTranscript);
-  if (turns.length === 0) return [];
+  let turns = parseSpeakerTranscript(speakerTranscript);
+  // Fallback: scenes without the ``SPEAKER_XX [m:ss]: text`` envelope
+  // (e.g., raw transcripts piped in from older indexing runs) parse to
+  // zero turns even when they carry usable text. When that happens we
+  // synthesize a single untimed turn from the original string so the
+  // even-distribution branch below still produces subtitles. Without
+  // this, /videos → editor entries with non-speaker-tagged transcripts
+  // landed in the editor with an empty subtitle list.
+  if (turns.length === 0) {
+    const raw = (speakerTranscript ?? "").trim();
+    if (!raw) return [];
+    turns = [
+      {
+        rawId: "UNTAGGED",
+        label: "A",
+        color: { bg: "", text: "", border: "" },
+        text: raw,
+        timestamp: null,
+      },
+    ];
+  }
 
   const clipDuration = clip.trimEndMs - clip.trimStartMs;
   const style = { ...DEFAULT_SUBTITLE_STYLE, fontSizePx: SUBTITLE_FONT_SIZE };
@@ -476,7 +495,13 @@ export function generateSubtitlesFromTranscript(
         });
       }
     }
-  } else {
+  }
+
+  // Fall through to even-distribution when the timestamp branch produced
+  // nothing — happens when the transcript carries scene-relative offsets
+  // (e.g., "0:00" means "scene start") that the absolute-timestamp math
+  // above filters out as negative relativeMs.
+  if (subtitles.length === 0) {
     // No timestamps: distribute all chunks evenly across clip
     const chunkDuration = Math.max(800, Math.floor(clipDuration / allChunks.length));
     if (chunkDuration < 500) return [];
