@@ -566,6 +566,46 @@ export function ShortsEditorPage() {
           if (!cancelled) {
             setMeta(scenesRes);
             if (!comp.title) setTitle(scenesRes.video_title ?? "");
+
+            // Auto-generate subtitles from each clip's source scene when
+            // the saved composition didn't carry any. Mirrors the scene-
+            // ids entry path so users landing from /export/shorts see
+            // editable subtitles instead of an empty panel. We skip
+            // generation when the composition already has subtitles
+            // (op-saved overrides should win).
+            const hasSavedSubtitles =
+              (comp.subtitles?.length ?? 0) > 0;
+            if (!hasSavedSubtitles) {
+              const v2Active = isShortsEditorV2Enabled();
+              for (let i = 0; i < clips.length; i++) {
+                const sceneId = clips[i].sceneId;
+                const scene = scenesRes.scenes.find(
+                  (s) => s.scene_id === sceneId,
+                );
+                if (!scene) continue;
+                const speaker = scene.speaker_transcript;
+                const sourceText =
+                  speaker && speaker.trim().length > 0
+                    ? speaker
+                    : scene.transcript_raw;
+                if (!sourceText) continue;
+                const subs = generateSubtitlesFromTranscript(
+                  sourceText,
+                  clips[i],
+                );
+                for (const sub of subs) {
+                  if (v2Active) {
+                    editor.addTextOverlay({
+                      text: sub.text,
+                      startMs: sub.startMs,
+                      endMs: sub.endMs,
+                    });
+                  } else {
+                    editor.addSubtitle(sub);
+                  }
+                }
+              }
+            }
           }
         }
       } catch (err) {

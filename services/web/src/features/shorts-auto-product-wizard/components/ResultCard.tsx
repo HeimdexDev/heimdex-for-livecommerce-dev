@@ -14,10 +14,12 @@
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { JobStatusResponse } from "@/lib/types/shorts-auto-product-wizard";
-import { getAgentThumbnailUrl } from "@/lib/agent";
+import { getAgentThumbnailUrl, getCloudThumbnailUrl } from "@/lib/agent";
+import { getRenderJob } from "@/lib/api/shorts-render";
+import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 import {
@@ -98,11 +100,64 @@ export function ResultCard({
   // "+N" overflow tag when there are more labels than slots.
   const visibleChips = productLabels.slice(0, MAX_VISIBLE_PRODUCT_CHIPS);
   const overflowCount = Math.max(0, productLabels.length - visibleChips.length);
-  // ``getAgentThumbnailUrl(videoId)`` returns the video-level keyframe
-  // when the per-scene id is unknown. If the agent isn't reachable the
-  // <img> falls back to the dark placeholder via onError.
-  const [hasThumbError, setHasThumbError] = useState(false);
-  const thumbnailSrc = videoId && !hasThumbError ? getAgentThumbnailUrl(videoId) : null;
+  // Each render-job carries thumbnail_video_id + thumbnail_scene_id —
+  // the backend extracts them from input_spec.scene_clips[0] when the
+  // job is created. We fetch the render-job lazily once per card and
+  // prefer the cloud thumbnail (presigned S3) so cards render even
+  // when no local agent is reachable. Fallback chain: cloud → agent
+  // → dark placeholder.
+  const { getAccessToken } = useAuth();
+  const [thumbScene, setThumbScene] = useState<{
+    videoId: string;
+    sceneId: string;
+  } | null>(null);
+  const [thumbStage, setThumbStage] = useState<"cloud" | "agent" | "placeholder">("cloud");
+
+  useEffect(() => {
+    if (!child.render_job_id) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const job = await getRenderJob(
+          child.render_job_id as string,
+          getAccessToken,
+        );
+        if (cancelled) return;
+        if (job.thumbnail_video_id && job.thumbnail_scene_id) {
+          setThumbScene({
+            videoId: job.thumbnail_video_id,
+            sceneId: job.thumbnail_scene_id,
+          });
+        }
+      } catch {
+        // Card sticks to the agent / placeholder fallback chain.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [child.render_job_id, getAccessToken]);
+
+  const thumbnailSrc = (() => {
+    if (thumbStage === "placeholder") return null;
+    if (thumbStage === "cloud" && thumbScene) {
+      return getCloudThumbnailUrl(thumbScene.videoId, thumbScene.sceneId);
+    }
+    if (thumbStage === "agent") {
+      return getAgentThumbnailUrl(
+        thumbScene?.videoId ?? videoId,
+        thumbScene?.sceneId,
+      );
+    }
+    // No scene resolved yet — show the parent video's agent keyframe
+    // so the card has visual context while the render-job fetch
+    // resolves.
+    return videoId ? getAgentThumbnailUrl(videoId) : null;
+  })();
+
+  const handleThumbError = () => {
+    setThumbStage((prev) => (prev === "cloud" ? "agent" : "placeholder"));
+  };
 
   return (
     <article
@@ -124,7 +179,7 @@ export function ResultCard({
             loading="lazy"
             decoding="async"
             className="absolute inset-0 h-full w-full object-cover"
-            onError={() => setHasThumbError(true)}
+            onError={handleThumbError}
           />
         ) : null}
         {visibleChips.length > 0 || overflowCount > 0 ? (

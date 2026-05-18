@@ -49,7 +49,10 @@ import { InlineWizardBreadcrumb } from "../components/InlineWizardBreadcrumb";
 import type { WizardCriteriaDraft } from "../components/InlineWizardCriteriaPanel";
 import type { CriteriaSummary } from "@/lib/types/shorts-auto-product-wizard";
 import { useScanOrder } from "../hooks/useScanOrder";
-import { useTopHeaderLeftActions } from "@/components/layout/TopHeaderActionsContext";
+import {
+  useTopHeaderBack,
+  useTopHeaderLeftActions,
+} from "@/components/layout/TopHeaderActionsContext";
 
 // Map the backend CriteriaSummary shape to the wizard's WizardCriteriaDraft
 // so IndexingProgressPanel can render its option summary badge directly.
@@ -135,6 +138,15 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
     [],
   );
   useTopHeaderLeftActions(breadcrumbSlot);
+  // 뒤로가기 — the wizard pages don't set a TopHeader back slot, so
+  // step 3 landed with no way to return to step 2 via the GNB. Wire
+  // router.back so the chevron pops the user back to the product
+  // selection screen they came from.
+  const backSlot = useMemo(
+    () => ({ label: "뒤로가기", onClick: () => router.back() }),
+    [router],
+  );
+  useTopHeaderBack(backSlot);
   // ``cancel`` from useScanOrder is the whole-order cancel — replaced by
   // per-child cancelAutoShortJob below so a single card's cancel doesn't
   // kill the rest of the batch.
