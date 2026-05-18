@@ -63,10 +63,7 @@ describe("IndexingProgressPanel", () => {
     );
   });
 
-  it("always renders the static ETA copy", () => {
-    // Per the 2026-05-18 spec the panel now shows a fixed "보통 30-90초
-    // 소요" copy instead of a backend-driven countdown — the legacy
-    // ``estimatedRemainingSeconds`` prop is accepted but ignored.
+  it("hides the ETA when not provided and shows it otherwise", () => {
     const { rerender } = render(
       <IndexingProgressPanel
         criteria={baseCriteria}
@@ -75,9 +72,7 @@ describe("IndexingProgressPanel", () => {
         currentStage="enumerating"
       />,
     );
-    expect(screen.getByTestId("indexing-progress-eta")).toHaveTextContent(
-      "보통 30-90초 소요",
-    );
+    expect(screen.queryByTestId("indexing-progress-eta")).toBeNull();
 
     rerender(
       <IndexingProgressPanel
@@ -89,7 +84,7 @@ describe("IndexingProgressPanel", () => {
       />,
     );
     expect(screen.getByTestId("indexing-progress-eta")).toHaveTextContent(
-      "보통 30-90초 소요",
+      "약 40초 남았습니다.",
     );
   });
 

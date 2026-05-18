@@ -53,19 +53,8 @@ interface Props {
   currentStage: IndexingStage | null;
   /** Stages already finished, in pipeline order. */
   completedStages?: ReadonlyArray<IndexingStage>;
-  /** Hide the option-summary chip + 다음 button on the right (step 2-1). */
-  hideHeaderActions?: boolean;
-  /** Hide the percent indicator (some hosts already show their own). */
-  hidePercent?: boolean;
-  /** Legacy ETA prop — now always replaced with the static "보통 30-90초" copy. */
+  /** Optional ETA in seconds. Hidden when undefined. */
   estimatedRemainingSeconds?: number;
-  /**
-   * When true, drop the outer white card + heading row so the panel
-   * sits flush inside a parent surface (step 2-1's product picker
-   * already provides its own wrapper). The stage list + percent + ETA
-   * still render — just without their own framing.
-   */
-  bare?: boolean;
 }
 
 function distributionLabel(value: WizardCriteriaDraft["product_distribution"]) {
@@ -97,33 +86,29 @@ export function IndexingProgressPanel({
   progress,
   currentStage,
   completedStages = [],
-  hideHeaderActions = false,
-  hidePercent = false,
-  bare = false,
+  estimatedRemainingSeconds,
 }: Props) {
   const percent = clampPercent(progress);
   const completedSet = new Set(completedStages);
-  const showHeaderActions =
-    !hideHeaderActions && criteria != null && videoDurationMs != null;
 
   // Breadcrumb (step indicator) was moved up to WizardStepResult so it
   // also renders for the result-grid path. Leaving it here too would
   // double-set the slot when both components mount on the same render.
 
-  const body = (
-    <>
-      {!bare ? (
+  return (
+    <div className="space-y-[20px] font-pretendard">
+      <div className="space-y-[40px] rounded-card bg-white p-[20px] shadow-card">
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-[20px] font-semibold tracking-[-0.5px] text-grayscale-800">
             AI 쇼츠 생성
           </h2>
-          {showHeaderActions ? (
+          {criteria && videoDurationMs != null ? (
             <div className="flex items-center gap-[12px]">
               <span
                 className="rounded-full bg-neutral-h-50 px-[12px] py-[6px] text-[12px] font-medium text-grayscale-500"
                 data-testid="indexing-summary-chip"
               >
-                {summaryChip(criteria!, videoDurationMs!)}
+                {summaryChip(criteria, videoDurationMs)}
               </span>
               <Button variant="primary" size="sm" disabled>
                 다음
@@ -131,7 +116,6 @@ export function IndexingProgressPanel({
             </div>
           ) : null}
         </div>
-      ) : null}
 
         <ol
           className="flex items-center gap-[12px]"
@@ -189,39 +173,23 @@ export function IndexingProgressPanel({
           })}
         </ol>
 
-      <div className="flex flex-col items-center gap-[8px] pb-[20px] pt-[12px]">
-        {!hidePercent ? (
+        <div className="flex flex-col items-center gap-[8px] pb-[20px] pt-[12px]">
           <p
             className="text-[16px] font-semibold leading-[1.4] tracking-[-0.4px] text-heimdex-navy-500"
             data-testid="indexing-progress-percent"
           >
-            진행률 {percent}%
+            {percent}%
           </p>
-        ) : null}
-        {/* Static guidance — accurate per-stage ETA isn't reliable yet,
-            so the 2026-05-18 spec asks for a fixed range message. */}
-        <p
-          className="text-[14px] font-medium tracking-[-0.35px] text-neutral-h-600"
-          data-testid="indexing-progress-eta"
-        >
-          보통 30-90초 소요
-        </p>
-      </div>
-    </>
-  );
-
-  if (bare) {
-    return (
-      <div className="space-y-[28px] font-pretendard" data-testid="indexing-progress-bare">
-        {body}
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-[20px] font-pretendard">
-      <div className="space-y-[40px] rounded-card bg-white p-[20px] shadow-card">
-        {body}
+          {estimatedRemainingSeconds != null ? (
+            <p
+              className="text-[14px] font-medium tracking-[-0.35px] text-neutral-h-600"
+              data-testid="indexing-progress-eta"
+            >
+              약 {Math.max(0, Math.round(estimatedRemainingSeconds))}초
+              남았습니다.
+            </p>
+          ) : null}
+        </div>
       </div>
     </div>
   );

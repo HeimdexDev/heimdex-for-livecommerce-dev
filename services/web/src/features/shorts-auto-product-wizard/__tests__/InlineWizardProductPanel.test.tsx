@@ -65,7 +65,6 @@ function renderPanel(
       criteria={{ ...DEFAULT_CRITERIA, ...overrides.criteria }}
       onSubmitOrder={onSubmitOrder}
       onBack={onBack}
-      completionHoldMs={0}
     />,
   );
   return { ...utils, onSubmitOrder, onBack };
@@ -320,12 +319,10 @@ describe("InlineWizardProductPanel", () => {
     expect(screen.getByTestId("inline-product-retry")).toBeInTheDocument();
   });
 
-  // The inline 뒤로가기 button was retired on 2026-05-18 — the
-  // TopHeader chevron now owns the back affordance. The ``onBack``
-  // prop is preserved for callers that still want to wire one
-  // elsewhere; the in-panel header row that used to render the link
-  // is gone, so the corresponding "Back button fires onBack" test was
-  // removed alongside the DOM element.
+  // 2026-05-18 — the inline 뒤로가기 button was retired in favor of the
+  // TopHeader chevron; the panel no longer renders ``inline-product-back``.
+  // The ``onBack`` prop is preserved for callers but no in-panel DOM
+  // element wires to it, so the corresponding click test was dropped.
 
   it("normalizes XOR-mismatched time range at submit (belt-and-braces)", async () => {
     // The slider already emits both-or-neither, but if criteria arrives

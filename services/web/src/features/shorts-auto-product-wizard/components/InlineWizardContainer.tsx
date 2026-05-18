@@ -43,11 +43,6 @@ interface Props {
    * collapse to full-width (select-product step).
    */
   onStepChange?: (step: InlineWizardStep) => void;
-  /**
-   * Forwarded to ``InlineWizardProductPanel``. Tests pass 0 to skip the
-   * 100% completion hold so assertions land synchronously.
-   */
-  completionHoldMs?: number;
 }
 
 export function InlineWizardContainer({
@@ -55,7 +50,6 @@ export function InlineWizardContainer({
   videoDurationMs,
   snapTargetsMs,
   onStepChange,
-  completionHoldMs,
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<InlineWizardStep>("criteria");
@@ -85,7 +79,6 @@ export function InlineWizardContainer({
       videoId={videoId}
       videoDurationMs={videoDurationMs}
       criteria={criteria}
-      completionHoldMs={completionHoldMs}
       onSubmitOrder={(parentJobId) => {
         // Result step stays at the legacy route per Decision #6 — once
         // it gets the inline treatment in a follow-up PR, this push
