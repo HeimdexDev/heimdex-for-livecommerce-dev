@@ -698,6 +698,24 @@ export function useEditorState() {
     [state.playheadMs, state.totalDurationMs],
   );
 
+  // "Insert image" path — seeds a new background overlay with the
+  // data URL the file picker returned. Kept separate from the solid-
+  // background factory so the call sites don't have to juggle a
+  // discriminated argument shape.
+  const addImageBackgroundOverlayAtPlayhead = useCallback(
+    (imageUrl: string) => {
+      const { startMs, endMs } = _clampOverlayWindow(
+        state.playheadMs,
+        state.totalDurationMs,
+      );
+      dispatch({
+        type: "ADD_OVERLAY",
+        overlay: createDefaultBackgroundOverlay({ startMs, endMs, imageUrl }),
+      });
+    },
+    [state.playheadMs, state.totalDurationMs],
+  );
+
   const updateOverlay = useCallback(
     (id: string, updates: Partial<EditorOverlay>) => {
       dispatch({ type: "UPDATE_OVERLAY", id, updates });
@@ -756,6 +774,7 @@ export function useEditorState() {
     addTextOverlay,
     addTextOverlayAtPlayhead,
     addBackgroundOverlayAtPlayhead,
+    addImageBackgroundOverlayAtPlayhead,
     updateOverlay,
     removeOverlay,
     selectOverlay,

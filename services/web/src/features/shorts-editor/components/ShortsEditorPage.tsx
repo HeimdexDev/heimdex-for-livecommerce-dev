@@ -710,6 +710,7 @@ export function ShortsEditorPage() {
                   state={state}
                   onAddTextOverlay={editor.addTextOverlayAtPlayhead}
                   onAddBackgroundOverlay={editor.addBackgroundOverlayAtPlayhead}
+                  onAddImageBackgroundOverlay={editor.addImageBackgroundOverlayAtPlayhead}
                   onUpdateOverlay={editor.updateOverlay}
                   onRemoveOverlay={editor.removeOverlay}
                   onSelectOverlay={editor.selectOverlay}

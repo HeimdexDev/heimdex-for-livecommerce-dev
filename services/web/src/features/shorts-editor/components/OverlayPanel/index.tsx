@@ -40,6 +40,9 @@ interface OverlayPanelProps {
   // 팝업을 띄우고, 선택한 색이 신규 background overlay 의 fillColor 로
   // 주입된다. 인자가 없으면 기본 색이 적용된다.
   onAddBackgroundOverlay: (fillColor?: string) => void;
+  // "Insert image" — seeds a new background overlay with the data URL
+  // the file picker returned, painted on top of a transparent fill.
+  onAddImageBackgroundOverlay: (imageUrl: string) => void;
   onUpdateOverlay: (id: string, updates: Partial<EditorOverlay>) => void;
   onRemoveOverlay: (id: string) => void;
   onSelectOverlay: (id: string | null) => void;
@@ -66,6 +69,7 @@ export function OverlayPanel({
   state,
   onAddTextOverlay,
   onAddBackgroundOverlay,
+  onAddImageBackgroundOverlay,
   onUpdateOverlay,
   onRemoveOverlay,
   onSelectOverlay,
@@ -142,6 +146,7 @@ export function OverlayPanel({
           kind={tab}
           onAddText={onAddTextOverlay}
           onAddBackground={onAddBackgroundOverlay}
+          onAddImage={onAddImageBackgroundOverlay}
         />
 
         {tab === "text" ? (
