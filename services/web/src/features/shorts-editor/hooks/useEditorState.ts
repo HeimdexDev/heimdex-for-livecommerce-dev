@@ -598,6 +598,26 @@ export function useEditorState() {
     });
   }, [state.playheadMs, state.totalDurationMs]);
 
+  // Auto-subtitle path needs explicit timing + pre-filled text. The
+  // playhead-based helper above can't fill text, and the V2 timeline only
+  // renders text overlays — V1 subtitles in state.subtitles never make it
+  // onto the timeline when isShortsEditorV2Enabled() is true. This helper
+  // lets the page-level effect insert a fully-formed overlay (timing+text)
+  // so generated subtitles light up the V2 timeline immediately.
+  const addTextOverlay = useCallback(
+    (params: { text: string; startMs: number; endMs: number }) => {
+      const overlay = createDefaultTextOverlay({
+        startMs: params.startMs,
+        endMs: params.endMs,
+      });
+      dispatch({
+        type: "ADD_OVERLAY",
+        overlay: { ...overlay, text: params.text },
+      });
+    },
+    [],
+  );
+
   const addBackgroundOverlayAtPlayhead = useCallback(
     (fillColor?: string) => {
       const { startMs, endMs } = _clampOverlayWindow(
@@ -667,6 +687,7 @@ export function useEditorState() {
     removeSubtitle,
     selectSubtitle,
     // V2 overlay actions
+    addTextOverlay,
     addTextOverlayAtPlayhead,
     addBackgroundOverlayAtPlayhead,
     updateOverlay,

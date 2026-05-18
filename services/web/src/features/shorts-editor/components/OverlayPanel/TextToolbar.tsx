@@ -191,7 +191,10 @@ function ColorTriggerButton({
         />
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-2">
+        // right-0 으로 펼침 — 텍스트 툴바 의 색상 트리거가 우측 wrapper 우측 절반에
+        // 위치하므로 좌측 anchor 이면 팔레트 (260px) 가 wrapper 를 넘쳐 가로 스크롤이
+        // 발생한다. wrapper 안쪽으로 펼치도록 right-0 으로 통일.
+        <div className="absolute right-0 top-full z-50 mt-2">
           <ColorPalettePopover
             color={color}
             onChange={(next) => {

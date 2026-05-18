@@ -21,7 +21,6 @@ import { EditorLayout } from "./EditorLayout";
 import { FullscreenOverlay } from "./FullscreenOverlay";
 import { PreviewPanel } from "./PreviewPanel";
 import { TimelinePanel } from "./TimelinePanel";
-import { ClipProperties } from "./ClipProperties";
 import { TextOverlayPanel } from "./TextOverlayPanel";
 import { OverlayPanel } from "./OverlayPanel";
 import { SubtitleListNav } from "./SubtitleEditor";
@@ -301,11 +300,12 @@ export function ShortsEditorPage() {
   const headerLeftSlot = useMemo(() => {
     if (isLoading || loadError) return null;
     // figma: 1669:48308 — title input + "N개 장면" pair, gap=10. Input width
-    // hugs the content via the `size` attribute capped at 10 chars so short
-    // titles sit tight next to the scene count, long titles clip at ~10ch.
+    // hugs the content via the `size` attribute so the "N개 장면" label sits
+    // 10px to the right of the title's last character. Cap raised so longer
+    // titles render fully instead of clipping at ~10ch.
     const placeholder = meta?.video_title ?? "제목 없음";
     const measureSource = title || placeholder;
-    const sizeChars = Math.max(4, Math.min(measureSource.length, 10));
+    const sizeChars = Math.max(4, Math.min(measureSource.length + 1, 40));
     return (
       <div className="flex items-center gap-[10px]">
         <input
@@ -315,7 +315,7 @@ export function ShortsEditorPage() {
           onChange={(e) => setTitle(e.target.value)}
           placeholder={placeholder}
           aria-label="영상 제목"
-          className="min-w-[60px] max-w-[160px] rounded-md border border-transparent px-1 text-[18px] font-semibold leading-[1.4] tracking-[-0.45px] text-black placeholder-grayscale-300 hover:border-grayscale-100 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
+          className="min-w-[60px] max-w-[480px] rounded-md border border-transparent px-1 text-[18px] font-semibold leading-[1.4] tracking-[-0.45px] text-black placeholder-grayscale-300 hover:border-grayscale-100 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
         />
         <span className="whitespace-nowrap text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-neutral-h-500">
           {state.clips.length}개 장면
@@ -448,14 +448,29 @@ export function ShortsEditorPage() {
         // generator returns [] for scenes without speaker_transcript,
         // so this is safe across the whole flow — operators always
         // see an editable subtitle list rather than an empty panel.
+        //
+        // V2 timeline reads from state.overlays, not state.subtitles
+        // (see ShortsEditorPage timelineSubtitles memo + feature-flag
+        // default-on). Subtitles inserted via addSubtitle never reach
+        // the V2 timeline / left-panel list. Route through addTextOverlay
+        // so the generated lines render as text overlays on both surfaces.
         if (sceneIdsParam && scenes.length > 0) {
+          const v2Active = isShortsEditorV2Enabled();
           for (let i = 0; i < scenes.length; i++) {
             const subs = generateSubtitlesFromTranscript(
               scenes[i].speaker_transcript,
               clips[i],
             );
             for (const sub of subs) {
-              editor.addSubtitle(sub);
+              if (v2Active) {
+                editor.addTextOverlay({
+                  text: sub.text,
+                  startMs: sub.startMs,
+                  endMs: sub.endMs,
+                });
+              } else {
+                editor.addSubtitle(sub);
+              }
             }
           }
         }
@@ -605,7 +620,10 @@ export function ShortsEditorPage() {
           // subtitle nav (search + timeline-ordered list). Text/background
           // overlay editing lives in the right wrapper (figma 1602:40004).
           <div className="flex h-full min-h-0 flex-col">
-            {/* figma: 1670:186255 (자막 좌측 패널) — timeline-ordered subtitle nav */}
+            {/* figma: 1670:186255 (자막 좌측 패널) — timeline-ordered subtitle nav.
+                좌측 wrapper 는 검색 + 자막 리스트만 노출한다. 타임라인의 클립을
+                선택해도 여기서 클립 속성을 띄우지 않는다 — 자막 외 편집 UI 는
+                전부 우측 wrapper (figma 1602:40004) 로 격리되어야 한다. */}
             {/* figma: 1670:186095 — row click seeks playhead to subtitle.startMs */}
             <SubtitleListNav
               subtitles={timelineSubtitles}
@@ -613,15 +631,6 @@ export function ShortsEditorPage() {
               onSelectSubtitle={handleTimelineSelectSubtitle}
               onSeek={setPlayhead}
             />
-            {state.selectedClipIndex != null && state.selectedClipIndex < state.clips.length ? (
-              <ClipProperties
-                clip={state.clips[state.selectedClipIndex]}
-                index={state.selectedClipIndex}
-                onTrim={editor.trimClip}
-                onVolumeChange={editor.setClipVolume}
-                onRemove={editor.removeClip}
-              />
-            ) : null}
           </div>
         }
         preview={

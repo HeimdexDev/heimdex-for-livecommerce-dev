@@ -50,7 +50,10 @@ export function ColorSwatchButton({
         />
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-2">
+        // right-0 anchor 으로 변경 — 트리거가 우측 wrapper 안쪽의 우측에 위치할 때
+        // 좌상단 기준이면 팔레트 (260px) 가 wrapper 우측을 넘쳐 가로 스크롤이 생긴다.
+        // 우측 기준으로 펼치면 트리거 위치와 상관없이 wrapper 안쪽으로 확장된다.
+        <div className="absolute right-0 top-full z-50 mt-2">
           <ColorPalettePopover
             color={color}
             onChange={(next) => {

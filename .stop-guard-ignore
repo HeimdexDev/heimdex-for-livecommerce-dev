@@ -1,0 +1,4 @@
+./services/api/app/cli/export_analytics.py
+./services/api/app/modules/shorts_auto_product/aliases/generator.py
+./services/api/app/modules/shorts_auto_product/children/runner.py
+./services/api/app/modules/shorts_auto_product/track_stt/storyboard/factory.py

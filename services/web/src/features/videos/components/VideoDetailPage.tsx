@@ -1408,8 +1408,13 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             active panel (overview / scenes / people / auto-shorts).
             In auto-shorts view we hide the nav (tabs + action row) per
             figma 1602:36766 so the wizard takes the full card height,
-            visually matching the left VideoInfoPanel. */}
-        <div className="min-w-0 flex-1 rounded-dialog bg-white p-[20px] shadow-card">
+            visually matching the left VideoInfoPanel.
+
+            Card length is locked to 653×841 across every tab (figma 통일
+            요청, 2026-05-18) so switching between 개요 / 장면 분석 / 인물 관리
+            never reflows the surrounding layout; the active panel scrolls
+            internally if its content exceeds the available height. */}
+        <div className="flex h-[841px] w-[653px] flex-shrink-0 flex-col rounded-dialog bg-white p-[20px] shadow-card">
           {view !== "auto-shorts" && (
             <nav className="mb-6 flex items-center border-b border-grayscale-100">
               {([
@@ -1462,40 +1467,45 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             </nav>
           )}
 
-          {view === "overview" ? (
-            <OverviewPanel
-              scenes={scenes}
-              videoId={videoId}
-              getToken={getAccessToken}
-            />
-          ) : view === "scenes" ? (
-            <ScenesPanel
-              scenes={scenes}
-              totalScenes={totalScenes}
-              videoId={videoId}
-              agentAvailable={agentAvailable}
-              onSeekToScene={handleSeekToScene}
-              onBlurClick={handleBlurClick}
-              activeSceneMs={seekMs}
-              getToken={getAccessToken}
-              aspectRatio={aspectRatio}
-            />
-          ) : view === "people" ? (
-            <VideoPeoplePanel
-              videoId={videoId}
-              scenes={scenes}
-              onSeekToScene={handleSeekToScene}
-              agentAvailable={agentAvailable}
-              aspectRatio={aspectRatio}
-            />
-          ) : (
-            <InlineWizardContainer
-              videoId={videoId}
-              videoDurationMs={pageDurationMs}
-              snapTargetsMs={sceneBoundariesMs}
-              onStepChange={setAutoShortsStep}
-            />
-          )}
+          {/* Active panel scroll surface — fixed-height card keeps the
+              outer layout stable; long lists scroll inside the card so
+              the surrounding columns never reflow. */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {view === "overview" ? (
+              <OverviewPanel
+                scenes={scenes}
+                videoId={videoId}
+                getToken={getAccessToken}
+              />
+            ) : view === "scenes" ? (
+              <ScenesPanel
+                scenes={scenes}
+                totalScenes={totalScenes}
+                videoId={videoId}
+                agentAvailable={agentAvailable}
+                onSeekToScene={handleSeekToScene}
+                onBlurClick={handleBlurClick}
+                activeSceneMs={seekMs}
+                getToken={getAccessToken}
+                aspectRatio={aspectRatio}
+              />
+            ) : view === "people" ? (
+              <VideoPeoplePanel
+                videoId={videoId}
+                scenes={scenes}
+                onSeekToScene={handleSeekToScene}
+                agentAvailable={agentAvailable}
+                aspectRatio={aspectRatio}
+              />
+            ) : (
+              <InlineWizardContainer
+                videoId={videoId}
+                videoDurationMs={pageDurationMs}
+                snapTargetsMs={sceneBoundariesMs}
+                onStepChange={setAutoShortsStep}
+              />
+            )}
+          </div>
         </div>
       </div>
 

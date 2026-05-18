@@ -23,7 +23,16 @@ function formatRulerLabel(ms: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
+// figma reference uses 12s as the default landing extent; short clips
+// should still show a "1s ㆍㆍㆍㆍ 2s ㆍㆍㆍㆍ … 12s ㆍㆍㆍ" baseline so the
+// ruler doesn't collapse when totalDurationMs is small or zero. Zooming
+// in/out only changes how many seconds the visible width covers — the
+// label cadence (1s per major mark) stays constant at zoom ≥ 100.
+const RULER_MIN_EXTENT_MS = 12_000;
+
 export function TimelineRuler({ totalDurationMs, zoom }: TimelineRulerProps) {
+  const endMs = Math.max(totalDurationMs + 2000, RULER_MIN_EXTENT_MS);
+
   const marks = useMemo(() => {
     let intervalMs: number;
     if (zoom >= 100) {
@@ -37,8 +46,6 @@ export function TimelineRuler({ totalDurationMs, zoom }: TimelineRulerProps) {
     }
 
     const result: TimelineMark[] = [];
-    const endMs = totalDurationMs + 2000;
-
     for (let ms = 0; ms <= endMs; ms += intervalMs) {
       result.push({
         ms,
@@ -49,9 +56,9 @@ export function TimelineRuler({ totalDurationMs, zoom }: TimelineRulerProps) {
     }
 
     return result;
-  }, [totalDurationMs, zoom]);
+  }, [endMs, zoom]);
 
-  const totalWidth = msToPixels(totalDurationMs + 2000, zoom);
+  const totalWidth = msToPixels(endMs, zoom);
 
   return (
     <div
@@ -71,16 +78,16 @@ export function TimelineRuler({ totalDurationMs, zoom }: TimelineRulerProps) {
         return (
           <span key={mark.ms}>
             <span
-              className="absolute top-[6px] whitespace-nowrap text-[12px] font-medium leading-none tracking-[-0.3px] text-grayscale-800"
-              style={{ left: mark.px, transform: "translateX(0)" }}
+              className="absolute inset-y-0 flex items-center whitespace-nowrap text-[12px] font-medium leading-none tracking-[-0.3px] text-grayscale-800"
+              style={{ left: mark.px }}
             >
               {mark.label}
             </span>
             {dots.map((x, j) => (
               <span
                 key={`${mark.ms}-${j}`}
-                className="absolute block h-[2px] w-[2px] rounded-full bg-grayscale-800"
-                style={{ left: x, top: 11 }}
+                className="absolute top-1/2 -translate-y-1/2 block h-[2px] w-[2px] rounded-full bg-grayscale-800"
+                style={{ left: x }}
                 aria-hidden="true"
               />
             ))}

@@ -59,7 +59,9 @@ export function ActionBar({
           {kind === "text" ? t.actions.addText : t.actions.addBackground}
         </button>
         {kind === "background" && pickerOpen && (
-          <div className="absolute left-0 top-full z-50 mt-2">
+          // 우측 wrapper 안쪽으로 펼쳐지도록 right-0 기준 — wrapper 가 653×841
+          // 고정폭이 되면서 좌측 기준이면 팔레트가 우측을 넘어 잘렸다.
+          <div className="absolute right-0 top-full z-50 mt-2">
             <ColorPalettePopover
               color={pendingFill}
               onChange={(next) => {
