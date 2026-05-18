@@ -46,11 +46,11 @@ describe("Sidebar", () => {
     expect(aside).toHaveClass("overflow-hidden");
   });
 
-  it("applies w-[200px] when expanded", () => {
+  it("applies w-[270px] when expanded", () => {
     const { container } = render(<Sidebar collapsed={false} onToggle={vi.fn()} />);
 
     const aside = container.querySelector("aside");
-    expect(aside).toHaveClass("w-[200px]");
+    expect(aside).toHaveClass("w-[270px]");
     expect(aside).not.toHaveClass("overflow-hidden");
   });
 
@@ -147,7 +147,7 @@ describe("NavGroup — 내보내기", () => {
   it("auto-expands on deep child route", () => {
     localStorage.setItem("heimdex-export-group-expanded", "false");
 
-    mockUsePathname.mockReturnValue("/export/shorts/create");
+    mockUsePathname.mockReturnValue("/export/shorts/editor");
     render(<Sidebar collapsed={false} onToggle={vi.fn()} />);
 
     expect(screen.getByText("쇼츠")).toBeInTheDocument();

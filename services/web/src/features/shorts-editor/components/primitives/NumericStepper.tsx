@@ -35,9 +35,11 @@ export function NumericStepper({
   const clamp = (v: number) => Math.min(max, Math.max(min, v));
 
   return (
+    // figma 1663:45782 — Accordion-style stepper: rounded-10 border
+    // grayscale/300, minus/plus icons flank the centered value+unit.
     <div
       className={cn(
-        "flex items-center rounded-lg border border-gray-200 bg-white",
+        "flex h-9 items-center rounded-[10px] border border-grayscale-300 bg-white",
         disabled && "opacity-60",
         className,
       )}
@@ -47,7 +49,7 @@ export function NumericStepper({
         type="button"
         onClick={() => onChange(clamp(value - step))}
         disabled={disabled || value <= min}
-        className="flex h-8 w-8 items-center justify-center text-gray-500 transition-colors hover:text-gray-900 disabled:cursor-not-allowed disabled:text-gray-300"
+        className="flex h-full w-8 items-center justify-center text-grayscale-500 transition-colors hover:text-grayscale-800 disabled:cursor-not-allowed disabled:text-grayscale-300"
         aria-label="감소"
       >
         −
@@ -63,16 +65,16 @@ export function NumericStepper({
           onChange(clamp(next));
         }}
         disabled={disabled}
-        className="w-full min-w-0 border-x border-transparent bg-transparent py-1 text-center text-sm text-gray-900 focus:border-indigo-200 focus:outline-none disabled:cursor-not-allowed"
+        className="w-full min-w-0 border-x border-transparent bg-transparent py-1 text-center text-[14px] tracking-[-0.35px] text-grayscale-800 focus:border-heimdex-navy-400 focus:outline-none disabled:cursor-not-allowed"
       />
       {unit && (
-        <span className="px-1 text-[10px] text-gray-400 select-none">{unit}</span>
+        <span className="select-none px-1 text-[12px] text-grayscale-500">{unit}</span>
       )}
       <button
         type="button"
         onClick={() => onChange(clamp(value + step))}
         disabled={disabled || value >= max}
-        className="flex h-8 w-8 items-center justify-center text-gray-500 transition-colors hover:text-gray-900 disabled:cursor-not-allowed disabled:text-gray-300"
+        className="flex h-full w-8 items-center justify-center text-grayscale-500 transition-colors hover:text-grayscale-800 disabled:cursor-not-allowed disabled:text-grayscale-300"
         aria-label="증가"
       >
         +

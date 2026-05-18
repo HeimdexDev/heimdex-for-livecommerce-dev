@@ -1,5 +1,7 @@
 "use client";
 
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 
 interface PaginationProps {
@@ -22,10 +24,10 @@ interface PaginationProps {
  *
  *     1 … 4 5 [6] 7 8 … 12
  *
- * Prev/next buttons guard the edges (disabled on page 1 / totalPages).
- * ``aria-current="page"`` marks the active page; the whole control
- * lives inside a ``<nav>`` with ``aria-label`` so screen readers can
- * jump past it.
+ * Prev/next + first/last chevron buttons guard the edges (disabled
+ * on page 1 / totalPages). ``aria-current="page"`` marks the active
+ * page; the whole control lives inside a ``<nav>`` with ``aria-label``
+ * so screen readers can jump past it.
  *
  * Contract:
  *   - ``onPageChange`` is called with the clicked page; callers own
@@ -45,100 +47,115 @@ export function Pagination({
 
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
   const pages = buildPageList(safePage, totalPages, windowSize);
+  const atFirst = safePage === 1;
+  const atLast = safePage === totalPages;
 
-  const btnBase =
-    "inline-flex h-8 min-w-[2rem] items-center justify-center rounded px-2 text-sm transition-colors";
+  // Numbered slot + double-chevron edge buttons: 24×24, rounded-4.
+  const slotBase =
+    "inline-flex size-[24px] items-center justify-center rounded-[4px] p-[2px] font-pretendard text-[16px] font-medium leading-[1.4] tracking-[-0.4px] transition-colors";
+  // Single-chevron prev/next buttons sit at 20×20 per figma.
+  const chevBase =
+    "inline-flex size-[20px] items-center justify-center rounded-[4px] p-[2px] transition-colors";
 
   return (
     <nav
       aria-label={ariaLabel}
-      className={cn("flex items-center justify-center gap-1", className)}
-    >
-      <button
-        type="button"
-        disabled={safePage === 1}
-        onClick={() => onPageChange(1)}
-        aria-label="첫 페이지"
-        className={cn(
-          btnBase,
-          safePage === 1
-            ? "cursor-not-allowed text-gray-300"
-            : "text-gray-500 hover:bg-gray-100",
-        )}
-      >
-        &laquo;
-      </button>
-      <button
-        type="button"
-        disabled={safePage === 1}
-        onClick={() => onPageChange(safePage - 1)}
-        aria-label="이전 페이지"
-        className={cn(
-          btnBase,
-          safePage === 1
-            ? "cursor-not-allowed text-gray-300"
-            : "text-gray-500 hover:bg-gray-100",
-        )}
-      >
-        &lsaquo;
-      </button>
-
-      {pages.map((p, i) =>
-        p === "…" ? (
-          <span
-            key={`gap-${i}`}
-            aria-hidden="true"
-            className="px-1 text-gray-400"
-          >
-            …
-          </span>
-        ) : (
-          <button
-            key={p}
-            type="button"
-            onClick={() => onPageChange(p)}
-            aria-current={p === safePage ? "page" : undefined}
-            aria-label={`${p} 페이지`}
-            className={cn(
-              btnBase,
-              p === safePage
-                ? "bg-indigo-500 font-medium text-white"
-                : "text-gray-600 hover:bg-gray-100",
-            )}
-          >
-            {p}
-          </button>
-        ),
+      className={cn(
+        "flex flex-wrap items-center justify-center gap-y-0 gap-x-[16px]",
+        className,
       )}
+    >
+      <div className="flex items-center">
+        <button
+          type="button"
+          disabled={atFirst}
+          onClick={() => onPageChange(1)}
+          aria-label="첫 페이지"
+          className={cn(
+            slotBase,
+            atFirst
+              ? "cursor-not-allowed text-neutral-h-300"
+              : "text-neutral-h-500 hover:bg-neutral-h-50",
+          )}
+        >
+          <ChevronsLeft className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          disabled={atFirst}
+          onClick={() => onPageChange(safePage - 1)}
+          aria-label="이전 페이지"
+          className={cn(
+            chevBase,
+            atFirst
+              ? "cursor-not-allowed text-neutral-h-300"
+              : "text-neutral-h-500 hover:bg-neutral-h-50",
+          )}
+        >
+          <ChevronLeft className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      </div>
 
-      <button
-        type="button"
-        disabled={safePage === totalPages}
-        onClick={() => onPageChange(safePage + 1)}
-        aria-label="다음 페이지"
-        className={cn(
-          btnBase,
-          safePage === totalPages
-            ? "cursor-not-allowed text-gray-300"
-            : "text-gray-500 hover:bg-gray-100",
+      <div className="flex items-center">
+        {pages.map((p, i) =>
+          p === "…" ? (
+            <span
+              key={`gap-${i}`}
+              aria-hidden="true"
+              className={cn(slotBase, "text-neutral-h-500")}
+            >
+              …
+            </span>
+          ) : (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onPageChange(p)}
+              aria-current={p === safePage ? "page" : undefined}
+              aria-label={`${p} 페이지`}
+              className={cn(
+                slotBase,
+                p === safePage
+                  ? "bg-heimdex-navy-500 text-white"
+                  : "text-neutral-h-500 hover:bg-neutral-h-50",
+              )}
+            >
+              {p}
+            </button>
+          ),
         )}
-      >
-        &rsaquo;
-      </button>
-      <button
-        type="button"
-        disabled={safePage === totalPages}
-        onClick={() => onPageChange(totalPages)}
-        aria-label="마지막 페이지"
-        className={cn(
-          btnBase,
-          safePage === totalPages
-            ? "cursor-not-allowed text-gray-300"
-            : "text-gray-500 hover:bg-gray-100",
-        )}
-      >
-        &raquo;
-      </button>
+      </div>
+
+      <div className="flex items-center">
+        <button
+          type="button"
+          disabled={atLast}
+          onClick={() => onPageChange(safePage + 1)}
+          aria-label="다음 페이지"
+          className={cn(
+            chevBase,
+            atLast
+              ? "cursor-not-allowed text-neutral-h-300"
+              : "text-neutral-h-500 hover:bg-neutral-h-50",
+          )}
+        >
+          <ChevronRight className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          disabled={atLast}
+          onClick={() => onPageChange(totalPages)}
+          aria-label="마지막 페이지"
+          className={cn(
+            slotBase,
+            atLast
+              ? "cursor-not-allowed text-neutral-h-300"
+              : "text-neutral-h-500 hover:bg-neutral-h-50",
+          )}
+        >
+          <ChevronsRight className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      </div>
     </nav>
   );
 }
@@ -164,15 +181,10 @@ export function buildPageList(
     return Array.from({ length: totalPages }, (_, i) => i + 1);
   }
 
-  // Window always includes first + last; windowSize counts numbered
-  // slots. Allocate up to 5 interior slots around currentPage so the
-  // default totals 7 (1 + gap + 3 interior + gap + last).
   const half = Math.max(1, Math.floor((windowSize - 2) / 2));
   let start = Math.max(2, currentPage - half);
   let end = Math.min(totalPages - 1, currentPage + half);
 
-  // Expand in whichever direction has headroom so the visible count
-  // stays close to windowSize even near the edges.
   while (end - start + 1 < windowSize - 2 && (start > 2 || end < totalPages - 1)) {
     if (start > 2) start -= 1;
     else if (end < totalPages - 1) end += 1;

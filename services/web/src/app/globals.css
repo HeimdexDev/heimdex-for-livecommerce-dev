@@ -4,8 +4,43 @@
 
 @layer base {
   html {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-      Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: var(--font-pretendard), "Pretendard", system-ui, -apple-system,
+      BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  :root {
+    --heimdex-navy-400: #496a94;
+    --heimdex-navy-500: #234c77;
+    --heimdex-navy-600: #1c456f;
+
+    --grayscale-10: #fcfcff;
+    --grayscale-100: #e8e9f8;
+    --grayscale-200: #d9dae9;
+    --grayscale-300: #c4c5d4;
+    --grayscale-400: #9e9fae;
+    --grayscale-500: #7c7d8b;
+    --grayscale-800: #272833;
+
+    --neutral-50: #f5f5f5;
+    --neutral-100: #e9e9e9;
+    --neutral-200: #d9d9d9;
+    --neutral-300: #c4c4c4;
+    --neutral-400: #9d9d9d;
+    --neutral-500: #7b7b7b;
+    --neutral-600: #555555;
+    --neutral-700: #444551;
+    --neutral-800: #262626;
+
+    --red-50: #f7e9ec;
+    --red-400: #d53b49;
+    --red-500: #d81d2f;
+
+    --green-50: #e5f4eb;
+    --green-400: #3fb675;
+    --green-500: #00a95e;
+
+    --amber-50: #ffefda;
+    --amber-500: #e07f00;
   }
 }
 

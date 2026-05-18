@@ -10,6 +10,9 @@ interface PlaybackSyncOptions {
   isPlaying: boolean;
   onPlayheadChange: (ms: number) => void;
   onPlayingChange: (playing: boolean) => void;
+  // playback rate (1.0 default, 1.5 fast). Optional so existing
+  // callers don't need to pass it; applied to <video>.playbackRate.
+  rate?: number;
 }
 
 function getVideoUrl(videoId: string, sourceType: string): string {
@@ -29,6 +32,7 @@ export function usePlaybackSync({
   isPlaying,
   onPlayheadChange,
   onPlayingChange,
+  rate,
 }: PlaybackSyncOptions) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const preloadRef = useRef<HTMLVideoElement>(null);
@@ -69,6 +73,16 @@ export function usePlaybackSync({
       video.currentTime = targetTime;
     }
   }, [currentClipIndex, currentSource?.videoId, currentSource?.sourceType]);
+
+  // apply playbackRate whenever it changes or after a source reload.
+  // Kept separate from seek/sync logic so playhead math stays untouched.
+  // Browsers reset playbackRate to 1.0 on `video.src = ...; video.load()`,
+  // so we re-apply on currentClipIndex change as well as rate change.
+  useEffect(() => {
+    if (videoRef.current && rate != null) {
+      videoRef.current.playbackRate = rate;
+    }
+  }, [rate, currentClipIndex]);
 
   // Seek video when playhead changes while paused (user scrubbing)
   useEffect(() => {

@@ -5,11 +5,11 @@ import { cn } from "@/lib/utils";
 import type { EditorClip, EditorSubtitle } from "../lib/types";
 import type { EditorOverlay } from "../lib/overlay-types";
 import { OverlayRenderer } from "./preview/OverlayRenderer";
+import { SubtitleCancelActionBar } from "./SubtitleCancelActionBar";
 import { getActiveSubtitles } from "../lib/source-time";
 import { formatTimelineTimestamp } from "../lib/timeline-math";
 import { resolveFontFamily } from "@/lib/fonts";
 import { usePlaybackSync } from "../hooks/usePlaybackSync";
-import { useOrgSettings } from "@/lib/orgSettings";
 import { getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 
 interface PreviewPanelProps {
@@ -22,6 +22,11 @@ interface PreviewPanelProps {
   // V2 update callback — used for drag (transform.x/y) and resize
   // (fontSizePx for text, transform.widthPx/heightPx for background).
   onUpdateOverlay?: (id: string, updates: Partial<EditorOverlay>) => void;
+  // figma 1669:49437 — element selection action bar fires these to delete
+  // the currently selected V2 overlay / V1 subtitle. Optional so existing
+  // callers don't break; the bar simply hides when omitted.
+  onRemoveOverlay?: (id: string) => void;
+  onRemoveSubtitle?: (index: number) => void;
   playheadMs: number;
   isPlaying: boolean;
   totalDurationMs: number;
@@ -31,6 +36,11 @@ interface PreviewPanelProps {
   onSelectSubtitle: (index: number | null) => void;
   onUpdateSubtitlePosition: (index: number, positionX: number, positionY: number) => void;
   onUpdateSubtitleFontSize: (index: number, fontSizePx: number) => void;
+  // when true, the preview container expands to the 352×626 iPhone
+  // mockup size used inside FullscreenOverlay. Layout/logic otherwise identical.
+  fullscreen?: boolean;
+  // playback rate forwarded to <video>. Optional (1.0 default).
+  playbackRate?: number;
 }
 
 function PlayIcon() {
@@ -56,6 +66,8 @@ export function PreviewPanel({
   selectedOverlayId = null,
   onSelectOverlay,
   onUpdateOverlay,
+  onRemoveOverlay,
+  onRemoveSubtitle,
   playheadMs,
   isPlaying,
   totalDurationMs,
@@ -65,6 +77,8 @@ export function PreviewPanel({
   onSelectSubtitle,
   onUpdateSubtitlePosition,
   onUpdateSubtitleFontSize,
+  fullscreen = false,
+  playbackRate,
 }: PreviewPanelProps) {
   const {
     videoRef,
@@ -78,10 +92,12 @@ export function PreviewPanel({
     isPlaying,
     onPlayheadChange,
     onPlayingChange,
+    rate: playbackRate,
   });
 
-  const { settings } = useOrgSettings();
-  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
+  // The shorts editor canvas is always 9:16 (vertical reels/shorts output);
+  // the org-wide thumbnail_aspect_ratio setting governs other surfaces.
+  const aspectRatio: ThumbnailAspectRatio = "9:16";
 
   const activeSubtitles = getActiveSubtitles(subtitles, playheadMs);
   const progressPct = totalDurationMs > 0 ? (playheadMs / totalDurationMs) * 100 : 0;
@@ -303,16 +319,21 @@ export function PreviewPanel({
 
   return (
     <div
-      className="flex h-full flex-col items-center justify-center gap-3 p-4"
+      className="relative h-full w-full"
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
     >
-      {/* Preview container — matches org aspect ratio */}
+      {/* Preview container — figma 1602:37722: shorts canvas fills the card
+          surface so the editor center is the 9:16 stage with no padding. */}
       <div
         ref={containerRef}
         className={cn(
-          "relative w-full overflow-hidden rounded-lg bg-black",
-          aspectRatio === "9:16" ? "aspect-[9/16] max-w-[280px]" : "aspect-video max-w-[480px]",
+          "relative overflow-hidden bg-black",
+          aspectRatio === "9:16"
+            ? "h-full w-full"
+            : fullscreen
+              ? "aspect-video w-full max-w-[626px] rounded-[10px]"
+              : "aspect-video w-full max-w-[480px] rounded-[10px]",
         )}
         onClick={() => onSelectSubtitle(null)}
       >
@@ -358,14 +379,14 @@ export function PreviewPanel({
                   aria-label="empty text overlay placeholder"
                   className={cn(
                     "h-16 w-16 rounded bg-red-500",
-                    isSelected && "ring-2 ring-indigo-400 ring-offset-1",
+                    isSelected && "ring-2 ring-heimdex-navy-500 ring-offset-1",
                   )}
                 />
               ) : (
                 <p
                   className={cn(
                     "whitespace-pre-wrap select-none text-center",
-                    isSelected && "rounded ring-2 ring-indigo-400 ring-offset-1",
+                    isSelected && "rounded ring-2 ring-heimdex-navy-500 ring-offset-1",
                   )}
                   style={{
                     fontFamily: resolveFontFamily(sub.style.fontFamily),
@@ -394,7 +415,7 @@ export function PreviewPanel({
                     <div
                       key={corner}
                       className={cn(
-                        "absolute h-3 w-3 rounded-full bg-indigo-500 border-2 border-white",
+                        "absolute h-3 w-3 rounded-full bg-heimdex-navy-500 border-2 border-white",
                         corner === "nw" && "-top-1.5 -left-1.5 cursor-nwse-resize",
                         corner === "ne" && "-top-1.5 -right-1.5 cursor-nesw-resize",
                         corner === "sw" && "-bottom-1.5 -left-1.5 cursor-nesw-resize",
@@ -433,9 +454,49 @@ export function PreviewPanel({
             />
           ))}
 
+        {/* figma 1669:49437 — element selection action bar (선택 + content + trash) */}
+        {(() => {
+          const selectedOverlay = overlays.find((o) => o.id === selectedOverlayId);
+          const selectedSubtitle =
+            selectedSubtitleIndex != null && selectedSubtitleIndex < subtitles.length
+              ? subtitles[selectedSubtitleIndex]
+              : null;
+          if (selectedOverlay && onRemoveOverlay) {
+            const label =
+              selectedOverlay.kind === "text"
+                ? selectedOverlay.text
+                : "단색 배경";
+            return (
+              <div
+                className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <SubtitleCancelActionBar
+                  text={label}
+                  onRemove={() => onRemoveOverlay(selectedOverlay.id)}
+                />
+              </div>
+            );
+          }
+          if (selectedSubtitle && onRemoveSubtitle && selectedSubtitleIndex != null) {
+            return (
+              <div
+                className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <SubtitleCancelActionBar
+                  text={selectedSubtitle.text}
+                  onRemove={() => onRemoveSubtitle(selectedSubtitleIndex)}
+                />
+              </div>
+            );
+          }
+          return null;
+        })()}
+
         {/* No clips placeholder */}
         {clips.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center text-gray-500">
+          <div className="absolute inset-0 flex items-center justify-center text-grayscale-500">
             <span className="text-xs">장면을 추가하세요</span>
           </div>
         )}
@@ -453,14 +514,14 @@ export function PreviewPanel({
       {/* Transport controls — fade on idle, always shown while playing */}
       <div
         className={cn(
-          "flex w-full max-w-[280px] flex-col gap-2 transition-opacity duration-200",
+          "flex w-full flex-col gap-2 transition-opacity duration-200 max-w-[352px]",
           showTransport ? "opacity-100" : "pointer-events-none opacity-0",
         )}
       >
         {/* Progress bar */}
-        <div className="relative h-1 w-full rounded-full bg-gray-300">
+        <div className="relative h-1 w-full rounded-full bg-grayscale-200">
           <div
-            className="absolute left-0 top-0 h-full rounded-full bg-indigo-500 transition-[width] duration-75"
+            className="absolute left-0 top-0 h-full rounded-full bg-heimdex-navy-500 transition-[width] duration-75"
             style={{ width: `${Math.min(100, progressPct)}%` }}
           />
         </div>
@@ -474,14 +535,14 @@ export function PreviewPanel({
             className={cn(
               "flex h-8 w-8 items-center justify-center rounded-full transition-colors",
               clips.length > 0
-                ? "bg-gray-900 text-white hover:bg-gray-700"
-                : "cursor-not-allowed bg-gray-200 text-gray-400",
+                ? "bg-heimdex-navy-500 text-white hover:bg-heimdex-navy-600"
+                : "cursor-not-allowed bg-grayscale-100 text-grayscale-400",
             )}
           >
             {isPlaying ? <PauseIcon /> : <PlayIcon />}
           </button>
 
-          <span className="font-mono text-xs text-gray-600">
+          <span className="font-mono text-xs text-grayscale-500">
             {formatTimelineTimestamp(playheadMs)} / {formatTimelineTimestamp(totalDurationMs)}
           </span>
         </div>

@@ -1,8 +1,12 @@
 "use client";
 
-import { ColorSwatchButton } from "../primitives/ColorSwatchButton";
+// figma: 1602:41198 (배경 섹션) / 1607:65302 (텍스트·템플릿 패널 효과 영역)
+// 효과 섹션 — 불투명도 LabeledSlider + 윤곽선(BorderControl) + 그림자(ShadowControl)
+// 텍스트·배경 패널 공용. radius·padding 은 primitive 에 위임.
+
 import { LabeledSlider } from "../primitives/LabeledSlider";
-import { NumericStepper } from "../primitives/NumericStepper";
+import { BorderControl } from "./BorderControl";
+import { ShadowControl } from "./ShadowControl";
 import { t } from "../../lib/i18n/strings";
 import type {
   EffectsProps,
@@ -13,6 +17,10 @@ import type {
 interface EffectsSectionProps {
   effects: EffectsProps;
   onChange: (effects: EffectsProps) => void;
+  // figma 1663:45821 / 1607:65622 — stroke is rendered alongside Transform
+  // in a 2-col row, so EffectsSection skips it when the panel chooses to
+  // host it separately.
+  hideStroke?: boolean;
 }
 
 const DEFAULT_STROKE: StrokeProps = { color: "#FF0000", widthPx: 2 };
@@ -31,14 +39,9 @@ const DEFAULT_SHADOW: ShadowProps = {
  * have an "off" state (null) that the toggle blanks out the sub-controls
  * with a default object on enable.
  */
-export function EffectsSection({ effects, onChange }: EffectsSectionProps) {
+export function EffectsSection({ effects, onChange, hideStroke = false }: EffectsSectionProps) {
   const update = (patch: Partial<EffectsProps>) => {
     onChange({ ...effects, ...patch });
-  };
-
-  const updateShadow = (patch: Partial<ShadowProps>) => {
-    if (!effects.shadow) return;
-    update({ shadow: { ...effects.shadow, ...patch } });
   };
 
   return (
@@ -56,41 +59,30 @@ export function EffectsSection({ effects, onChange }: EffectsSectionProps) {
         />
       </section>
 
-      {/* Stroke -------------------------------------------------------------- */}
-      <section>
-        <Header
-          label={t.effects.stroke}
-          enabled={effects.stroke != null}
-          onToggle={() =>
-            update({ stroke: effects.stroke ? null : { ...DEFAULT_STROKE } })
-          }
-        />
-        {effects.stroke && (
-          <div className="grid grid-cols-[80px_1fr_auto] items-center gap-2">
-            <span className="text-xs text-gray-500">{t.effects.stroke}</span>
-            <NumericStepper
-              value={effects.stroke.widthPx}
-              min={0}
-              max={50}
-              onChange={(v) =>
-                update({
-                  stroke: { ...effects.stroke!, widthPx: v },
-                })
-              }
-              unit="px"
-              ariaLabel="stroke width"
-            />
-            <ColorSwatchButton
+      {/* Stroke — hidden when the panel hosts it alongside Transform ------------ */}
+      {!hideStroke && (
+        <section>
+          <Header
+            label={t.effects.stroke}
+            enabled={effects.stroke != null}
+            onToggle={() =>
+              update({ stroke: effects.stroke ? null : { ...DEFAULT_STROKE } })
+            }
+          />
+          {effects.stroke && (
+            <BorderControl
+              width={effects.stroke.widthPx}
               color={effects.stroke.color}
-              onChange={(color) =>
-                update({ stroke: { ...effects.stroke!, color } })
+              onWidthChange={(widthPx) =>
+                update({ stroke: { ...(effects.stroke as StrokeProps), widthPx } })
               }
-              ariaLabel={`${t.effects.stroke} color`}
-              size="md"
+              onColorChange={(color) =>
+                update({ stroke: { ...(effects.stroke as StrokeProps), color } })
+              }
             />
-          </div>
-        )}
-      </section>
+          )}
+        </section>
+      )}
 
       {/* Shadow -------------------------------------------------------------- */}
       <section>
@@ -102,66 +94,70 @@ export function EffectsSection({ effects, onChange }: EffectsSectionProps) {
           }
         />
         {effects.shadow && (
-          <div className="space-y-2">
-            <div className="grid grid-cols-[80px_1fr_auto] items-center gap-2">
-              <span className="text-xs text-gray-500">
-                {t.effects.shadowPositionColor}
-              </span>
-              <div className="flex gap-2">
-                <NumericStepper
-                  value={effects.shadow.offsetX}
-                  min={-100}
-                  max={100}
-                  onChange={(v) => updateShadow({ offsetX: v })}
-                  unit="X"
-                  ariaLabel="shadow offset X"
-                  className="flex-1"
-                />
-                <NumericStepper
-                  value={effects.shadow.offsetY}
-                  min={-100}
-                  max={100}
-                  onChange={(v) => updateShadow({ offsetY: v })}
-                  unit="Y"
-                  ariaLabel="shadow offset Y"
-                  className="flex-1"
-                />
-              </div>
-              <ColorSwatchButton
-                color={effects.shadow.color}
-                onChange={(color) => updateShadow({ color })}
-                ariaLabel={`${t.effects.shadow} color`}
-                size="md"
-              />
-            </div>
-
-            <div className="grid grid-cols-[80px_1fr] items-center gap-2">
-              <span className="text-xs text-gray-500">{t.effects.blur}</span>
-              <LabeledSlider
-                value={effects.shadow.blurPx}
-                onChange={(v) => updateShadow({ blurPx: v })}
-                min={0}
-                max={200}
-                formatReadout={(v) => `${v}px`}
-                ariaLabel={t.effects.blur}
-              />
-            </div>
-
-            <div className="grid grid-cols-[80px_1fr] items-center gap-2">
-              <span className="text-xs text-gray-500">{t.effects.spread}</span>
-              <NumericStepper
-                value={effects.shadow.spreadPx}
-                min={0}
-                max={100}
-                onChange={(v) => updateShadow({ spreadPx: v })}
-                unit="px"
-                ariaLabel={t.effects.spread}
-              />
-            </div>
-          </div>
+          <ShadowControl
+            offsetX={effects.shadow.offsetX}
+            offsetY={effects.shadow.offsetY}
+            spread={effects.shadow.spreadPx}
+            blur={effects.shadow.blurPx}
+            color={effects.shadow.color}
+            onChange={(next) =>
+              update({
+                shadow: {
+                  color: next.color,
+                  offsetX: next.offsetX,
+                  offsetY: next.offsetY,
+                  blurPx: next.blur,
+                  spreadPx: next.spread,
+                },
+              })
+            }
+          />
         )}
       </section>
     </div>
+  );
+}
+
+// Standalone stroke section — same content as EffectsSection's stroke block.
+// Used by panels that pair stroke with Transform in a 2-col row.
+export function StrokeBlock({
+  effects,
+  onChange,
+}: {
+  effects: EffectsProps;
+  onChange: (effects: EffectsProps) => void;
+}) {
+  return (
+    <section>
+      <Header
+        label={t.effects.stroke}
+        enabled={effects.stroke != null}
+        onToggle={() =>
+          onChange({
+            ...effects,
+            stroke: effects.stroke ? null : { ...DEFAULT_STROKE },
+          })
+        }
+      />
+      {effects.stroke && (
+        <BorderControl
+          width={effects.stroke.widthPx}
+          color={effects.stroke.color}
+          onWidthChange={(widthPx) =>
+            onChange({
+              ...effects,
+              stroke: { ...(effects.stroke as StrokeProps), widthPx },
+            })
+          }
+          onColorChange={(color) =>
+            onChange({
+              ...effects,
+              stroke: { ...(effects.stroke as StrokeProps), color },
+            })
+          }
+        />
+      )}
+    </section>
   );
 }
 
@@ -176,18 +172,18 @@ function Header({
 }) {
   if (onToggle == null) {
     return (
-      <h3 className="mb-2 text-xs font-semibold text-gray-700">{label}</h3>
+      <h3 className="mb-2 text-xs font-semibold text-grayscale-800">{label}</h3>
     );
   }
   return (
     <button
       type="button"
       onClick={onToggle}
-      className="mb-2 flex w-full items-center justify-between text-xs font-semibold text-gray-700 hover:text-gray-900"
+      className="mb-2 flex w-full items-center justify-between text-xs font-semibold text-grayscale-800 hover:text-heimdex-navy-500"
     >
       <span>{label}</span>
       <span
-        className={enabled ? "text-indigo-600" : "text-gray-300"}
+        className={enabled ? "text-heimdex-navy-500" : "text-grayscale-300"}
       >{enabled ? "ON" : "OFF"}</span>
     </button>
   );

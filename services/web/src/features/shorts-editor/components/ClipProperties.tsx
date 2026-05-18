@@ -47,7 +47,7 @@ export function ClipProperties({
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-900">클립 속성</h3>
+        <h3 className="text-sm font-semibold text-grayscale-800">클립 속성</h3>
         <button
           type="button"
           onClick={() => onRemove(index)}
@@ -58,42 +58,42 @@ export function ClipProperties({
       </div>
 
       {/* Scene info */}
-      <div className="rounded-lg bg-gray-50 p-3 space-y-1">
-        <p className="text-[10px] font-medium text-gray-500">장면 정보</p>
-        <p className="text-xs text-gray-700">장면 {index + 1}</p>
-        <p className="text-[10px] text-gray-500">
+      <div className="rounded-lg bg-grayscale-100 p-3 space-y-1">
+        <p className="text-[10px] font-medium text-grayscale-500">장면 정보</p>
+        <p className="text-xs text-grayscale-500">장면 {index + 1}</p>
+        <p className="text-[10px] text-grayscale-500">
           원본 범위: {formatTimelineTimestamp(clip.originalStartMs)} - {formatTimelineTimestamp(clip.originalEndMs)}
         </p>
       </div>
 
       {/* Trim controls */}
       <div className="space-y-2">
-        <p className="text-[10px] font-medium text-gray-500">트리밍 (ms)</p>
+        <p className="text-[10px] font-medium text-grayscale-500">트리밍 (ms)</p>
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[10px] text-gray-400">시작</label>
+            <label className="text-[10px] text-grayscale-400">시작</label>
             <input
               type="number"
               value={clip.trimStartMs}
               min={clip.originalStartMs}
               max={clip.trimEndMs - 1}
               onChange={handleStartChange}
-              className="w-full rounded border border-gray-300 px-2 py-1 text-xs text-gray-900 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="w-full rounded border border-grayscale-200 px-2 py-1 text-xs text-grayscale-800 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
             />
           </div>
           <div>
-            <label className="text-[10px] text-gray-400">종료</label>
+            <label className="text-[10px] text-grayscale-400">종료</label>
             <input
               type="number"
               value={clip.trimEndMs}
               min={clip.trimStartMs + 1}
               max={clip.originalEndMs}
               onChange={handleEndChange}
-              className="w-full rounded border border-gray-300 px-2 py-1 text-xs text-gray-900 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="w-full rounded border border-grayscale-200 px-2 py-1 text-xs text-grayscale-800 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
             />
           </div>
         </div>
-        <p className="text-[10px] text-gray-400">
+        <p className="text-[10px] text-grayscale-400">
           길이: {(duration / 1000).toFixed(1)}초
         </p>
       </div>
@@ -101,8 +101,8 @@ export function ClipProperties({
       {/* Volume */}
       <div className="space-y-1">
         <div className="flex items-center justify-between">
-          <p className="text-[10px] font-medium text-gray-500">볼륨</p>
-          <span className="text-[10px] text-gray-400">{Math.round(clip.volume * 100)}%</span>
+          <p className="text-[10px] font-medium text-grayscale-500">볼륨</p>
+          <span className="text-[10px] text-grayscale-400">{Math.round(clip.volume * 100)}%</span>
         </div>
         <input
           type="range"
@@ -113,7 +113,7 @@ export function ClipProperties({
           onChange={handleVolumeChange}
           className="w-full accent-indigo-500"
         />
-        <div className="flex justify-between text-[9px] text-gray-400">
+        <div className="flex justify-between text-[9px] text-grayscale-400">
           <span>음소거</span>
           <span>300%</span>
         </div>

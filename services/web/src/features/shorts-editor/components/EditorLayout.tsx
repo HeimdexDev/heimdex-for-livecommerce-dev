@@ -9,29 +9,27 @@ interface EditorLayoutProps {
   timeline: ReactNode;
 }
 
+// figma: 1602:37722 / 1602:37844 / 1663:45752 — editor body = three cards
+// in the upper row (subtitle 434×586, video 352×626, text/bg/template 331×586
+// — left/right wrappers add 20px padding on every side) plus the timeline
+// anchored at the bottom. All wrappers share the dialog radius and card
+// shadow, separated by 63px gaps in the top row per Figma. Top row uses the
+// figma 626px outer height so the visible content matches the figma frame.
 export function EditorLayout({ leftPanel, preview, rightPanel, timeline }: EditorLayoutProps) {
   return (
-    <div className="grid h-[calc(100vh-64px)] grid-cols-[360px_1fr_420px] grid-rows-[1fr_260px] gap-0 overflow-hidden">
-      {/* Left panel — overlay authoring (V2) or clip properties.
-          Widened from 300px → 360px so V2 transform/effects sections fit
-          without horizontal overflow (3-column X/Y/rotation row, stroke
-          stepper + color swatch row). */}
-      <div className="overflow-y-auto overflow-x-hidden border-r border-gray-200 bg-white">
-        {leftPanel}
+    <div className="flex h-full flex-col gap-[20px] overflow-hidden bg-grayscale-10">
+      <div className="flex h-[626px] shrink-0 items-stretch gap-[63px]">
+        <div className="flex h-full w-[474px] min-w-0 flex-col overflow-hidden rounded-dialog bg-white shadow-card">
+          {leftPanel}
+        </div>
+        <div className="flex h-full w-[352px] shrink-0 items-center justify-center overflow-hidden rounded-[10px] bg-black shadow-card">
+          {preview}
+        </div>
+        <div className="flex h-full w-[371px] flex-col overflow-hidden rounded-dialog bg-white shadow-card">
+          {rightPanel}
+        </div>
       </div>
-
-      {/* Preview panel — center canvas surface */}
-      <div className="flex items-center justify-center overflow-hidden bg-neutral-100">
-        {preview}
-      </div>
-
-      {/* Right panel — scene list */}
-      <div className="overflow-y-auto border-l border-gray-200 bg-white">
-        {rightPanel}
-      </div>
-
-      {/* Timeline panel — bottom, full width */}
-      <div className="col-span-3 overflow-hidden border-t border-gray-200 bg-gray-50">
+      <div className="h-[260px] overflow-hidden rounded-dialog bg-white shadow-card">
         {timeline}
       </div>
     </div>

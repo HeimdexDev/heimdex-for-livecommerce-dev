@@ -1,5 +1,7 @@
 "use client";
 
+// figma: 1713:271669  (cache: .figma-cache/1713-271669_phase5_editor-1.api.json)
+// node-name: Subtitle Block · spec: Block 자막 미리보기 fs=10 fw=500 → text-[10px] font-medium
 import { useCallback, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import type { EditorSubtitle } from "../lib/types";
@@ -85,27 +87,31 @@ export function SubtitleBlock({
   return (
     <div
       className={cn(
-        "group absolute bottom-1 top-1 flex items-center overflow-hidden rounded border",
+        // figma 1669:49004 — bg heimdex-navy/300 default with white SemiBold
+        // text; selected = heimdex-navy/100 (light blue) to read against the
+        // neutral-50 lane. Compressed columns (≤14px wide) drop text but keep
+        // the same fill so the user can still hover/select.
+        "group absolute bottom-1 top-1 flex items-center overflow-hidden rounded-[10px]",
         isSelected
-          ? "z-10 border-gray-700 bg-white ring-1 ring-gray-700"
-          : "border-gray-300 bg-white hover:border-gray-500",
+          ? "z-10 bg-heimdex-navy-300/40 ring-2 ring-heimdex-navy-500"
+          : "bg-heimdex-navy-300 hover:brightness-110",
       )}
       style={{ left: leftPx, width: Math.max(widthPx, 8) }}
       onClick={(e) => { e.stopPropagation(); onSelect(); }}
     >
       {/* Left resize handle */}
       <div
-        className="absolute bottom-0 left-0 top-0 z-20 w-1.5 cursor-col-resize bg-gray-400 opacity-0 group-hover:opacity-100"
+        className="absolute bottom-0 left-0 top-0 z-20 w-1.5 cursor-col-resize bg-white/40 opacity-0 group-hover:opacity-100"
         onPointerDown={handlePointerDown("start")}
       />
 
       {/* Draggable body */}
       <div
-        className="flex-1 min-w-0 px-1.5 cursor-grab active:cursor-grabbing select-none"
+        className="flex-1 min-w-0 cursor-grab select-none px-[10px] py-[12px] active:cursor-grabbing"
         onPointerDown={handlePointerDown("move")}
       >
         {widthPx > 30 && (
-          <p className="truncate text-[9px] font-medium text-gray-700">
+          <p className="truncate text-[14px] font-semibold leading-[1.4] tracking-[-0.35px] text-white">
             {subtitle.text || "자막"}
           </p>
         )}
@@ -113,7 +119,7 @@ export function SubtitleBlock({
 
       {/* Right resize handle */}
       <div
-        className="absolute bottom-0 right-0 top-0 z-20 w-1.5 cursor-col-resize bg-gray-400 opacity-0 group-hover:opacity-100"
+        className="absolute bottom-0 right-0 top-0 z-20 w-1.5 cursor-col-resize bg-grayscale-300 opacity-0 group-hover:opacity-100"
         onPointerDown={handlePointerDown("end")}
       />
     </div>

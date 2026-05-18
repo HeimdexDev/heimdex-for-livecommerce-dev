@@ -1,6 +1,12 @@
 import type { EditorClip } from "./types";
 
-export { msToPixels, pixelsToMs, snapToGrid, formatTimelineTimestamp } from "@/lib/timeline";
+export {
+  msToPixels,
+  pixelsToMs,
+  snapToGrid,
+  formatTimelineTimestamp,
+  formatVideoTimestampHMS,
+} from "@/lib/timeline";
 
 export function getClipDuration(clip: EditorClip): number {
   return clip.trimEndMs - clip.trimStartMs;

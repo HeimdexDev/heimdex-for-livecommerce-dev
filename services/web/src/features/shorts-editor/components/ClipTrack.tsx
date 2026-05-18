@@ -81,13 +81,13 @@ export function ClipTrack({
     >
       <SortableContext items={sortableIds} strategy={horizontalListSortingStrategy}>
         <div
-          className="relative h-12 bg-gray-800/50"
+          className="relative h-12 bg-grayscale-800/50"
           style={{ width: totalWidth }}
           onClick={handleTrackClick}
         >
           {/* Track label */}
           <div className="pointer-events-none absolute -left-0 top-0 z-10 flex h-full items-center">
-            <span className="rounded-r bg-gray-700/80 px-1.5 py-0.5 text-[9px] font-medium text-gray-400">
+            <span className="rounded-r bg-grayscale-800/60 px-1.5 py-0.5 text-[9px] font-medium text-grayscale-400">
               VIDEO
             </span>
           </div>

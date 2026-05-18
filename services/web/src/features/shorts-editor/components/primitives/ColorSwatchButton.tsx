@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { ColorPalettePopover } from "./ColorPalettePopover";
 
 interface ColorSwatchButtonProps {
   color: string; // hex, e.g. "#FF0000"
@@ -12,13 +14,10 @@ interface ColorSwatchButtonProps {
 }
 
 /**
- * Color swatch button — a square showing the current color, clicking opens
- * the OS native color picker. Wraps `<input type="color">` so the visual
- * stays consistent with the design system.
- *
- * The native picker has UX limitations (no recent colors, no opacity), but
- * it ships free and the redesign doesn't call out a custom picker. Swap
- * later if needed; the prop surface stays the same.
+ * Color swatch button — square showing the current color. Clicking opens the
+ * figma 1602:41332 color palette popover. The native browser picker was
+ * replaced with this custom popover so the palette matches the design and
+ * supports opacity controls.
  */
 export function ColorSwatchButton({
   color,
@@ -28,29 +27,41 @@ export function ColorSwatchButton({
   size = "md",
   className,
 }: ColorSwatchButtonProps) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <label
-      className={cn(
-        "relative inline-flex cursor-pointer items-center justify-center rounded-lg border border-gray-200 bg-white p-0.5",
-        size === "sm" ? "h-7 w-7" : "h-9 w-9",
-        disabled && "cursor-not-allowed opacity-40",
-        className,
-      )}
-      aria-label={ariaLabel}
-    >
-      <span
-        className={cn(
-          "block h-full w-full rounded",
-        )}
-        style={{ backgroundColor: color }}
-      />
-      <input
-        type="color"
-        value={color}
-        onChange={(e) => onChange(e.target.value.toUpperCase())}
+    <div className="relative inline-block">
+      <button
+        type="button"
         disabled={disabled}
-        className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
-      />
-    </label>
+        onClick={() => setOpen((v) => !v)}
+        aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        className={cn(
+          "relative inline-flex cursor-pointer items-center justify-center rounded-lg border border-grayscale-200 bg-white p-0.5",
+          size === "sm" ? "h-7 w-7" : "h-9 w-9",
+          disabled && "cursor-not-allowed opacity-40",
+          className,
+        )}
+      >
+        <span
+          className="block h-full w-full rounded"
+          style={{ backgroundColor: color }}
+        />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-2">
+          <ColorPalettePopover
+            color={color}
+            onChange={(next) => {
+              onChange(next.toUpperCase());
+              setOpen(false);
+            }}
+            onClose={() => setOpen(false)}
+            showOpacity={false}
+          />
+        </div>
+      )}
+    </div>
   );
 }

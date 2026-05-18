@@ -75,28 +75,41 @@ export function PlayheadCursor({
 
   return (
     <div
-      className="pointer-events-none absolute top-0 z-30"
+      className="pointer-events-none absolute top-0 z-30 flex -translate-x-1/2 flex-col items-center"
       style={{ left: leftPx, height }}
     >
       {tooltipVisible && (
         <div
-          className="pointer-events-none absolute -top-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-gray-900 px-1.5 py-0.5 font-mono text-[10px] leading-none text-white shadow"
+          className="pointer-events-none absolute -top-6 left-1/2 flex -translate-x-1/2 flex-col items-center"
           aria-hidden="true"
         >
-          {formatTimelineTimestamp(playheadMs)}
+          <div className="whitespace-nowrap rounded-md bg-grayscale-800 px-1.5 py-0.5 font-mono text-[10px] leading-none text-white shadow">
+            {formatTimelineTimestamp(playheadMs)}
+          </div>
+          {/* figma asset Polygon 1 — downward arrow under the tooltip */}
+          <svg width="10" height="8" viewBox="0 0 10 8" fill="none" className="-mt-px">
+            <path d="M5 8L6.99382e-07 -8.74228e-07L10 0L5 8Z" fill="#272833" />
+          </svg>
         </div>
       )}
+      {/* figma: 1669:48428 — rounded chevron-down pointer (12×10 path) inside
+          a 16×16 hit area; sits flush on top of the 2px heimdex-navy bar. */}
       <div
-        className="pointer-events-auto relative -left-[5px] cursor-grab active:cursor-grabbing"
+        className="pointer-events-auto flex h-4 w-4 shrink-0 cursor-grab items-center justify-center active:cursor-grabbing"
         onPointerDown={onPointerDown}
         onPointerEnter={() => setIsHovering(true)}
         onPointerLeave={() => setIsHovering(false)}
       >
-        <svg width="11" height="8" viewBox="0 0 11 8" className="fill-red-500">
-          <path d="M0 0h11L5.5 8z" />
+        <svg width="12" height="10" viewBox="0 0 12 10" fill="none" className="shrink-0">
+          <path
+            fillRule="evenodd"
+            clipRule="evenodd"
+            d="M10.6641 0C11.7423 0.000245073 12.3739 1.21401 11.7559 2.09766L7.09179 8.76562C6.56102 9.52428 5.438 9.52428 4.90722 8.76562L0.243159 2.09766C-0.374937 1.214 0.256651 0.000226545 1.33496 0H10.6641Z"
+            fill="#234C77"
+          />
         </svg>
       </div>
-      <div className="w-px bg-red-500" style={{ height: height - 8 }} />
+      <div className="w-[2px] shrink-0 bg-heimdex-navy-500" style={{ height: Math.max(0, height - 16) }} />
     </div>
   );
 }

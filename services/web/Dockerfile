@@ -22,6 +22,18 @@ ARG NEXT_PUBLIC_GA_MEASUREMENT_ID
 # time, so flipping the flag requires `docker compose build web` + restart.
 ARG NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED
 
+# Promote build ARGs to ENV so Next.js inlines them into the client bundle
+# at build time. Without this, NEXT_PUBLIC_* vars stay undefined in
+# `npm run build` and every feature gate that reads them falls back to its
+# default.
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_AUTH0_ENABLED=$NEXT_PUBLIC_AUTH0_ENABLED \
+    NEXT_PUBLIC_AUTH0_DOMAIN=$NEXT_PUBLIC_AUTH0_DOMAIN \
+    NEXT_PUBLIC_AUTH0_CLIENT_ID=$NEXT_PUBLIC_AUTH0_CLIENT_ID \
+    NEXT_PUBLIC_AUTH0_AUDIENCE=$NEXT_PUBLIC_AUTH0_AUDIENCE \
+    NEXT_PUBLIC_GA_MEASUREMENT_ID=$NEXT_PUBLIC_GA_MEASUREMENT_ID \
+    NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED=$NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED
+
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
@@ -37,6 +49,9 @@ RUN addgroup --system --gid 1001 nodejs && \
 
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# Next.js standalone output does not include the public/ folder by default;
+# copy it explicitly so login logo, fonts, and figma assets resolve at runtime.
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 USER nextjs
 EXPOSE 3000
