@@ -720,3 +720,39 @@ class TestInvalidateVideoCatalogClearsConsolidationMarkers:
         marker_sql = _compile(session.execute.await_args_list[1].args[0])
         assert str(org_id) in marker_sql
         assert str(video_id) in marker_sql
+
+
+class TestPromoteLatestEnumerationDoneStt:
+    """STT-only never reaches ENUMERATION_DONE (complete_enumeration is
+    vision-only) -> enqueue_scan freeze never engages -> catalog grows.
+    This claimless promotion is the symmetric half of P1."""
+
+    @pytest.mark.asyncio
+    async def test_promotes_latest_catalog_null_job(self, repo, session):
+        session.execute = AsyncMock(
+            return_value=_make_update_result(object()),
+        )
+        out = await repo.promote_latest_enumeration_done_stt(
+            org_id=uuid4(), video_id=uuid4(),
+        )
+        assert out is not None
+        sql = _compile(session.execute.await_args.args[0])
+        assert "product_scan_jobs" in sql
+        assert "enumeration_done" in sql
+        assert "claimed_by" in sql
+        assert "catalog_entry_id IS NULL" in sql
+        assert "created_at" in sql and "DESC" in sql.upper()
+
+    @pytest.mark.asyncio
+    async def test_scoped_to_org_and_video(self, repo, session):
+        session.execute = AsyncMock(
+            return_value=_make_update_result(None),
+        )
+        org_id, video_id = uuid4(), uuid4()
+        out = await repo.promote_latest_enumeration_done_stt(
+            org_id=org_id, video_id=video_id,
+        )
+        assert out is None
+        sql = _compile(session.execute.await_args.args[0])
+        assert str(org_id) in sql
+        assert str(video_id) in sql
