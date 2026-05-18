@@ -295,7 +295,16 @@ export function SubtitleListNav({
                 type="button"
                 onClick={() => {
                   onSelectSubtitle(i);
-                  onSeek(sub.startMs);
+                  // 2026-05-18 — land the playhead ~1s past the
+                  // subtitle's start so the bar visibly sits inside
+                  // the block instead of straddling its left edge.
+                  // Capped at endMs - 100ms so we never overshoot
+                  // very short subtitles.
+                  const target = Math.min(
+                    sub.startMs + 1000,
+                    Math.max(sub.startMs, sub.endMs - 100),
+                  );
+                  onSeek(target);
                 }}
                 aria-pressed={isSelected}
                 className={cn(

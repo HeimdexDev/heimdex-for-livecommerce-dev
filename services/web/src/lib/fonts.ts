@@ -13,12 +13,13 @@
 const FONT_FAMILY_CSS_MAP: Record<string, string> = {
   Pretendard: "var(--font-pretendard), 'Pretendard'",
   "Noto Sans KR": "var(--font-noto-kr), 'Noto Sans KR'",
-  // 2026-05-18 — local OTF files dropped into public/fonts/<NAME>/.
-  // CSS variables registered in app/fonts.ts.
-  "S-Core Dream": "var(--font-score-dream), sans-serif",
-  NanumSquare: "var(--font-nanum-square), sans-serif",
-  SUIT: "var(--font-suit), sans-serif",
-  KoPubWorldDotum: "var(--font-kopub-dotum), serif",
+  // 2026-05-18 — declared via @font-face in globals.css with sources
+  // pointing at /public/fonts/<NAME>/. The literal family names below
+  // match the @font-face declarations exactly.
+  "S-Core Dream": "'S-Core Dream', sans-serif",
+  NanumSquare: "'NanumSquare', sans-serif",
+  SUIT: "'SUIT', sans-serif",
+  KoPubWorldDotum: "'KoPubWorldDotum', serif",
 };
 
 export function resolveFontFamily(name: string | undefined | null): string {

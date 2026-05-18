@@ -2,14 +2,70 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Korean web fonts. Pretendard + Noto Sans KR ship locally via
-   next/font/local (see app/fonts.ts). The 2026-05-18 CDN @import
-   attempt for S-Core Dream / NanumSquare / SUIT / KoPub Dotum was
-   removed: the upstream paths drifted (or never matched the font-family
-   names we used) so the dropdown options silently fell back to the
-   default font. To enable them, drop the .ttf/.woff2 files into
-   public/fonts/<NAME>/ and wire next/font/local entries in app/fonts.ts
-   mirroring the existing Pretendard block. */
+/* Korean web fonts. Pretendard + Noto Sans KR ship via next/font/local
+   (see app/fonts.ts) and are exposed through CSS variables on <html>.
+   The four extra Korean families below are wired directly with
+   @font-face here so the dropdown's "fontFamily: <name>" selection
+   resolves immediately without going through Next's localFont
+   pipeline — switching away from next/font/local for these eliminated
+   a class of "selected font silently falls back" reports where the
+   build emitted hashed assets the browser couldn't always pick up. */
+@font-face {
+  font-family: "S-Core Dream";
+  src: url("/fonts/SCoreDream/SCDream4-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "S-Core Dream";
+  src: url("/fonts/SCoreDream/SCDream6-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "NanumSquare";
+  src: url("/fonts/NanumSquare/NanumSquare-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "NanumSquare";
+  src: url("/fonts/NanumSquare/NanumSquare-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "SUIT";
+  src: url("/fonts/SUIT/SUIT-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "SUIT";
+  src: url("/fonts/SUIT/SUIT-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "KoPubWorldDotum";
+  src: url("/fonts/KoPubWorldDotum/KoPubWorldDotum-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "KoPubWorldDotum";
+  src: url("/fonts/KoPubWorldDotum/KoPubWorldDotum-Bold.otf") format("opentype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
 
 @layer base {
   html {

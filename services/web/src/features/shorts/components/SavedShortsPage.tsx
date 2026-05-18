@@ -544,9 +544,17 @@ export function SavedShortsPage() {
                   : item.type === "render" && isCompleted(item)
                     ? `/export/shorts/${encodeURIComponent(item.id)}/edit`
                     : null;
+              // 2026-05-18 — both saved-shorts and completed render
+              // jobs share the same shortId-based hydration path on the
+              // editor. Routing every thumbnail there preserves the
+              // composition (scene clips + subtitles + overlay styles)
+              // that the legacy ``videoId+sceneIds`` URL was dropping.
+              // The thumbnail no longer triggers a download — exports
+              // happen from inside the editor instead.
               const thumbHref =
-                item.type === "saved" && item.scene_ids
-                  ? `/export/shorts/editor?videoId=${item.video_id}&sceneIds=${item.scene_ids.join(",")}`
+                (item.type === "saved" && item.scene_ids) ||
+                (item.type === "render" && isCompleted(item))
+                  ? `/export/shorts/editor?shortId=${encodeURIComponent(item.id)}`
                   : null;
               const isMenuOpen = openMenuId === item.id;
               return (
@@ -566,12 +574,30 @@ export function SavedShortsPage() {
                   >
                     {thumbHref ? (
                       <Link href={thumbHref} className="absolute inset-0 block">
-                        <SceneThumbnail
-                          videoId={item.video_id}
-                          sceneId={item.scene_ids![0]}
-                          agentAvailable={true}
-                          className="h-full w-full object-cover"
-                        />
+                        {/* Saved shorts get the first scene's frame as
+                            their thumbnail (item.scene_ids[0]); completed
+                            renders fall back to the parent video's
+                            thumbnail (item.scene_id) when no per-scene
+                            crop is on the render job. */}
+                        {item.type === "saved" && item.scene_ids ? (
+                          <SceneThumbnail
+                            videoId={item.video_id}
+                            sceneId={item.scene_ids[0]}
+                            agentAvailable={true}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : item.scene_id && item.video_id ? (
+                          <SceneThumbnail
+                            videoId={item.video_id}
+                            sceneId={item.scene_id}
+                            agentAvailable={true}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center bg-neutral-h-200">
+                            <Film className="h-8 w-8 text-neutral-h-400" />
+                          </div>
+                        )}
                       </Link>
                     ) : (
                       <div className="absolute inset-0 bg-neutral-h-200">
@@ -591,18 +617,6 @@ export function SavedShortsPage() {
                           <div className="absolute inset-0 flex items-center justify-center bg-black/50">
                             <CircularProgress />
                           </div>
-                        )}
-                        {isCompleted(item) && (
-                          <button
-                            type="button"
-                            onClick={() => handleRenderDownload(item.id)}
-                            className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 transition-opacity hover:opacity-100"
-                          >
-                            <div className="flex flex-col items-center text-white">
-                              <Download className="h-5 w-5" />
-                              <span className="mt-1 text-xs">다운로드</span>
-                            </div>
-                          </button>
                         )}
                         {isFailed(item) && (
                           <div className="absolute inset-0 flex items-center justify-center bg-red-h-500/30">

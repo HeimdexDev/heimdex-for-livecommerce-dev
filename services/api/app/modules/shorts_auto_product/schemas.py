@@ -216,6 +216,14 @@ class JobStatusResponse(BaseModel):
     # for the internal cost dashboard.
     cost_usd_estimate: Decimal
 
+    # 2026-05-18 — selected-product labels, scoped to the child that
+    # carries them. Filled in by the wizard's scan-order status
+    # endpoint (one ProductCatalogEntry lookup per distinct
+    # catalog_entry_id across the children list); always empty for
+    # parent / enumeration / tracking jobs. The frontend ResultCard
+    # renders these as the bottom-left chips on the thumbnail.
+    product_labels: list[str] = Field(default_factory=list)
+
 
 # ---------- POST /products/{video_id}/rescan ----------
 

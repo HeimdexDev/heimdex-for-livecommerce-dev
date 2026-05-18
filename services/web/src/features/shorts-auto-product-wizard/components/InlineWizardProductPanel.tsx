@@ -387,7 +387,18 @@ export function InlineWizardProductPanel({
           created a visible extra-wrapper effect inside the card. The
           ``onBack`` callback is preserved for callers that still want
           to surface it elsewhere. */}
-      <div className="space-y-5 rounded-card bg-white p-5 shadow-card">
+      {/*
+        Frame spec (2026-05-18, user-supplied):
+          display: flex; width: 943px; height: 454px;
+          padding: 20px; flex-direction: column;
+          justify-content: center; align-items: flex-start; gap: 20px;
+        Inline style so the pixel-perfect frame survives Tailwind's
+        purge and doesn't depend on the parent's responsive width.
+      */}
+      <div
+        className="flex flex-col items-start justify-center gap-[20px] rounded-card bg-white p-[20px] shadow-card"
+        style={{ width: 943, height: 454 }}
+      >
         <div className="flex items-center justify-between gap-4">
           <h2 className="text-[18px] font-semibold tracking-[-0.45px] text-grayscale-800">
             상품 선택{" "}

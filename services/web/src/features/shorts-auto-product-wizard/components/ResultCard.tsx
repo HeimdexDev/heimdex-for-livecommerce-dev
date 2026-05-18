@@ -14,11 +14,14 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { JobStatusResponse } from "@/lib/types/shorts-auto-product-wizard";
 import { getAgentThumbnailUrl, getCloudThumbnailUrl } from "@/lib/agent";
-import { getRenderJob } from "@/lib/api/shorts-render";
+import {
+  generateRenderJobSummary,
+  getRenderJob,
+} from "@/lib/api/shorts-render";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
@@ -112,6 +115,12 @@ export function ResultCard({
   } | null>(null);
   const [thumbStage, setThumbStage] = useState<"cloud" | "agent" | "placeholder">("cloud");
   const [renderSummary, setRenderSummary] = useState<string | null>(null);
+  // One-shot guard: once we've tried to generate a summary for this
+  // render job we don't fire again even if the polling cadence keeps
+  // the card alive. Avoids the auto-generation hammering the OpenAI
+  // endpoint when the feature flag is off (server returns 503 and the
+  // card would otherwise retry on every effect run).
+  const summaryTriedRef = useRef(false);
 
   useEffect(() => {
     if (!child.render_job_id) return;
@@ -136,6 +145,28 @@ export function ResultCard({
         // undefined in production) is null.
         if (job.summary) {
           setRenderSummary(job.summary);
+          return;
+        }
+        // 2026-05-18 — when the render is complete but the summary is
+        // still null, trigger generation once. Backend gates the
+        // endpoint on ``shorts_render_summary_enabled``; if it's off
+        // we hit 503, swallow it, and the card falls back to the
+        // "요약 생성 중…" placeholder forever (matching the previous
+        // behavior).
+        if (job.status === "completed" && !summaryTriedRef.current) {
+          summaryTriedRef.current = true;
+          try {
+            const result = await generateRenderJobSummary(
+              child.render_job_id as string,
+              getAccessToken,
+            );
+            if (!cancelled && result.summary) {
+              setRenderSummary(result.summary);
+            }
+          } catch {
+            // Feature flag off, OpenAI call failed, scene signals
+            // unavailable — leave the placeholder in place.
+          }
         }
       } catch {
         // Card sticks to the agent / placeholder fallback chain.

@@ -4,14 +4,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { SceneBasketProvider } from "@/features/basket/useSceneBasket";
 import { BasketPanel } from "@/features/basket/BasketPanel";
 import { GoogleAnalytics } from "@/components/GoogleAnalytics";
-import {
-  pretendard,
-  notoSansKR,
-  sCoreDream,
-  nanumSquare,
-  suit,
-  koPubWorldDotum,
-} from "./fonts";
+import { pretendard, notoSansKR } from "./fonts";
 import "./globals.css";
 
 export const dynamic = "force-dynamic";
@@ -27,10 +20,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html
-      lang="en"
-      className={`${pretendard.variable} ${notoSansKR.variable} ${sCoreDream.variable} ${nanumSquare.variable} ${suit.variable} ${koPubWorldDotum.variable}`}
-    >
+    <html lang="en" className={`${pretendard.variable} ${notoSansKR.variable}`}>
       <body className="bg-gray-50 text-gray-900 antialiased">
         <GoogleAnalytics />
         <Providers>
