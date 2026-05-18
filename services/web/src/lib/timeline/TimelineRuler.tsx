@@ -9,9 +9,11 @@ interface TimelineRulerProps {
   zoom: number;
 }
 
-// figma: 1669:49089 — "0s, 10s, ..., 1m, 1:10" style labels with a 2px line
-// (Frame 1707484546) between each, and a Ellipse 12 dot cluster decorating
-// the tail of the ruler.
+// figma: 1669:49089 — "0s ㆍㆍㆍㆍ 1s ㆍㆍㆍㆍ 2s ㆍ··" pattern. Every
+// interval gets a numeric label; between each pair of labels we draw 4
+// small dots (Ellipse 12/13/14/15 in the figma export). Only the
+// numbers change as zoom widens, the dot density between labels stays
+// the same.
 function formatRulerLabel(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
   if (totalSec < 60) return `${totalSec}s`;
@@ -24,26 +26,25 @@ function formatRulerLabel(ms: number): string {
 export function TimelineRuler({ totalDurationMs, zoom }: TimelineRulerProps) {
   const marks = useMemo(() => {
     let intervalMs: number;
-    if (zoom >= 200) {
-      intervalMs = 500;
-    } else if (zoom >= 100) {
+    if (zoom >= 100) {
       intervalMs = 1000;
     } else if (zoom >= 50) {
       intervalMs = 2000;
-    } else {
+    } else if (zoom >= 25) {
       intervalMs = 5000;
+    } else {
+      intervalMs = 10000;
     }
 
     const result: TimelineMark[] = [];
     const endMs = totalDurationMs + 2000;
 
     for (let ms = 0; ms <= endMs; ms += intervalMs) {
-      const isMajor = ms % (intervalMs * 2) === 0 || intervalMs >= 2000;
       result.push({
         ms,
         px: msToPixels(ms, zoom),
-        label: isMajor ? formatRulerLabel(ms) : "",
-        isMajor,
+        label: formatRulerLabel(ms),
+        isMajor: true,
       });
     }
 
@@ -57,31 +58,35 @@ export function TimelineRuler({ totalDurationMs, zoom }: TimelineRulerProps) {
       className="relative h-6 select-none border-b border-grayscale-100 bg-white"
       style={{ width: totalWidth }}
     >
-      {marks.map((mark) => (
-        <div key={mark.ms} className="absolute top-0" style={{ left: mark.px }}>
-          <div
-            className={mark.isMajor ? "h-3 w-px bg-grayscale-300" : "h-2 w-px bg-grayscale-200"}
-          />
-          {mark.label && (
-            <span className="absolute left-1 top-3 whitespace-nowrap text-[12px] font-medium leading-none tracking-[-0.3px] text-grayscale-800">
+      {marks.map((mark, idx) => {
+        const next = marks[idx + 1];
+        const dots: number[] = [];
+        if (next) {
+          const segment = next.px - mark.px;
+          // figma 1707484544 — 4 evenly-distributed dots between labels.
+          for (let j = 1; j <= 4; j++) {
+            dots.push(mark.px + (segment * j) / 5);
+          }
+        }
+        return (
+          <span key={mark.ms}>
+            <span
+              className="absolute top-[6px] whitespace-nowrap text-[12px] font-medium leading-none tracking-[-0.3px] text-grayscale-800"
+              style={{ left: mark.px, transform: "translateX(0)" }}
+            >
               {mark.label}
             </span>
-          )}
-        </div>
-      ))}
-      {/* figma asset Ellipse 12 ×4 — tail-end ellipsis decoration */}
-      <div
-        className="absolute top-1 flex items-center gap-4"
-        style={{ left: Math.max(0, totalWidth - 56) }}
-        aria-hidden="true"
-      >
-        {[0, 1, 2, 3].map((i) => (
-          <span
-            key={i}
-            className="block h-[2px] w-[2px] rounded-full bg-grayscale-800"
-          />
-        ))}
-      </div>
+            {dots.map((x, j) => (
+              <span
+                key={`${mark.ms}-${j}`}
+                className="absolute block h-[2px] w-[2px] rounded-full bg-grayscale-800"
+                style={{ left: x, top: 11 }}
+                aria-hidden="true"
+              />
+            ))}
+          </span>
+        );
+      })}
     </div>
   );
 }
