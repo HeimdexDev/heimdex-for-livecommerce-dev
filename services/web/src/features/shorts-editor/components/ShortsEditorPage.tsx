@@ -416,7 +416,7 @@ export function ShortsEditorPage() {
   ]);
   useTopHeaderActions(headerRightSlot);
 
-  // Load from scene IDs (entry from ShortsCreatePage or ShortsPlanPanel)
+  // Load from scene IDs (entry from ShortsPlanPanel or saved-shorts list)
   useEffect(() => {
     if (!videoId || shortId) return;
 
