@@ -448,6 +448,15 @@ def schedule_stt_enumeration_task(
                         enumerator=enumerator,
                     )
                     if inserted:
+                        from app.modules.shorts_auto_product.repositories.job import (
+                            ProductScanJobRepository,
+                        )
+                        await ProductScanJobRepository(
+                            session
+                        ).promote_latest_enumeration_done_stt(
+                            org_id=org_id,
+                            video_id=video_db_id,
+                        )
                         await session.commit()
                         from app.modules.shorts_auto_product.aliases.auto_hook import (
                             schedule_alias_generation,
