@@ -94,7 +94,7 @@ export function ResultCard({
   const displayTitle = title && title.trim().length > 0 ? title : `쇼츠 ${ordinal}`;
   const state = deriveResultChipState(child);
   const isCompleted = state === "done";
-  const progressPct = Math.max(0, Math.min(100, Math.round(child.progress_pct)));
+  const rawProgressPct = Math.max(0, Math.min(100, Math.round(child.progress_pct)));
   // Resolve product chip rows: up to MAX_VISIBLE chips plus a single
   // "+N" overflow tag when there are more labels than slots.
   const visibleChips = productLabels.slice(0, MAX_VISIBLE_PRODUCT_CHIPS);
@@ -174,6 +174,18 @@ export function ResultCard({
   const resolvedSummary = summary ?? renderSummary;
   const summaryText = truncateSummary(resolvedSummary);
 
+  // 2026-05-18 — gate the displayed 100% on the editor view being
+  // fully resolvable: the render must be complete AND we must have a
+  // thumbnail scene AND a summary string. Until both arrive we cap at
+  // 95% so the bar doesn't claim completion while the card is still
+  // hydrating. Pre-completion the backend's own progress_pct drives
+  // the display.
+  const editorReady =
+    isCompleted && thumbScene != null && resolvedSummary != null;
+  const progressPct = isCompleted && !editorReady
+    ? Math.min(95, rawProgressPct)
+    : rawProgressPct;
+
   return (
     <article
       className="relative flex h-[253px] w-[287px] items-start overflow-clip rounded-card border border-grayscale-100 bg-white"
@@ -191,20 +203,17 @@ export function ResultCard({
         className="group relative h-full w-[150px] shrink-0 overflow-hidden bg-[#E9E9E9] text-left transition-opacity"
       >
         {/* Neutral #E9E9E9 skeleton — visible until the thumbnail
-            resolves so the card never flashes a plain dark block while
-            the render-job fetch (or the slow cloud thumbnail) is in
-            flight. */}
+            resolves so the card never flashes a plain dark block. The
+            picture is painted via background-image (not <img>) so a
+            broken / 404 URL never renders the browser's default "broken
+            image" glyph in the top-left corner. */}
         <div
           aria-hidden
           className="absolute inset-0 animate-pulse bg-[#E9E9E9]"
         />
         {thumbnailSrc ? (
-          <img
+          <ThumbnailImage
             src={thumbnailSrc}
-            alt=""
-            loading="lazy"
-            decoding="async"
-            className="absolute inset-0 h-full w-full object-cover"
             onError={handleThumbError}
           />
         ) : null}
@@ -295,5 +304,44 @@ export function ResultCard({
         />
       </div>
     </article>
+  );
+}
+
+/**
+ * Thumbnail painter that uses background-image instead of an <img> tag.
+ *
+ * Why: when the backing video has no agent-rendered keyframe yet, the
+ * URL resolves but returns a non-image / 404, and the browser draws its
+ * default "broken image" glyph in the top-left of the box. Painting via
+ * background-image makes failures silent — the skeleton underneath
+ * stays visible. We still call ``onError`` so the fallback chain
+ * (cloud → agent → placeholder) advances exactly like before.
+ */
+function ThumbnailImage({
+  src,
+  onError,
+}: {
+  src: string;
+  onError: () => void;
+}) {
+  return (
+    <>
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+        style={{ backgroundImage: `url(${src})` }}
+      />
+      {/* Hidden probe <img> drives the onError handoff. ``display:none``
+          keeps the broken-image glyph from rendering visibly while the
+          load attempt is in flight. */}
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        onError={onError}
+        style={{ display: "none" }}
+      />
+    </>
   );
 }

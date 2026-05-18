@@ -79,6 +79,29 @@ async function detailMessage(res: Response): Promise<string> {
   }
 }
 
+/**
+ * Map a 404 response to the right error subclass.
+ *
+ * The backend service raises 404 for several distinct reasons:
+ *   - rollout gate / feature flag off ("product mode v2 is not enabled")
+ *   - missing video / parent / job rows
+ *   - cascading cancel found no rows to transition
+ *
+ * Previously every 404 was bucketed into ``WizardFeatureDisabledError``,
+ * so a missing-row case lit the "이 조직에는 마법사 기능이 활성화되지 않았습니다"
+ * banner intermittently when a stale tab hit a different code path.
+ * Match on the upstream detail string so only the true feature-flag
+ * cases surface that copy.
+ */
+async function classify404(res: Response, fallback: string): Promise<Error> {
+  const detail = await detailMessage(res);
+  const lower = detail.toLowerCase();
+  if (lower.includes("not enabled")) {
+    return new WizardFeatureDisabledError(detail);
+  }
+  return new Error(`${fallback}: ${detail}`);
+}
+
 // ----------------------------------------------------------------------
 // POST /api/shorts/auto/scan-orders/videos/{video_id}
 // ----------------------------------------------------------------------
@@ -98,9 +121,7 @@ export async function createScanOrder(
     },
   );
   if (res.status === 404) {
-    throw new WizardFeatureDisabledError(
-      "Wizard is not enabled for this org",
-    );
+    throw await classify404(res, "createScanOrder failed");
   }
   if (res.status === 402) {
     throw new WizardBudgetExceededError(await detailMessage(res));
@@ -134,9 +155,7 @@ export async function getScanOrderStatus(
     },
   );
   if (res.status === 404) {
-    throw new WizardFeatureDisabledError(
-      "Scan order not found or wizard disabled",
-    );
+    throw await classify404(res, "getScanOrderStatus failed");
   }
   if (!res.ok) {
     throw new Error(`getScanOrderStatus failed: ${await detailMessage(res)}`);
@@ -221,9 +240,7 @@ export async function triggerEnumeration(
     },
   );
   if (res.status === 404) {
-    throw new WizardFeatureDisabledError(
-      "Product mode v2 is not enabled for this org",
-    );
+    throw await classify404(res, "triggerEnumeration failed");
   }
   if (res.status === 402) {
     throw new WizardBudgetExceededError(await detailMessage(res));
@@ -259,9 +276,7 @@ export async function getProductCatalog(
     },
   );
   if (res.status === 404) {
-    throw new WizardFeatureDisabledError(
-      "Product mode v2 is not enabled for this org",
-    );
+    throw await classify404(res, "getProductCatalog failed");
   }
   if (!res.ok) {
     throw new Error(`getProductCatalog failed: ${await detailMessage(res)}`);

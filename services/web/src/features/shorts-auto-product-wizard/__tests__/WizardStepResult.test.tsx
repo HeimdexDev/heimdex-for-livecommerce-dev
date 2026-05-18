@@ -44,7 +44,10 @@ function makeChild(
     render_job_id: RENDER_ID_A,
     render_status: "completed",
     parent_job_id: "parent-1",
-    shorts_index: 0,
+    // ``shorts_index`` is 1-based on the backend (CHECK shorts_index>=1).
+    // Default to 1 here so the slot iterator (which now maps slot i to
+    // child with shorts_index === i + 1) finds this child in slot 0.
+    shorts_index: 1,
     cost_usd_estimate: "0.00",
     ...overrides,
   };
@@ -119,14 +122,14 @@ describe("WizardStepResult — header", () => {
           job_id: "child-a",
           render_job_id: RENDER_ID_A,
           render_status: "completed",
-          shorts_index: 0,
+          shorts_index: 1,
         }),
         makeChild({
           job_id: "child-b",
           render_job_id: RENDER_ID_B,
           stage: "rendering",
           render_status: "rendering",
-          shorts_index: 1,
+          shorts_index: 2,
           progress_pct: 50,
         }),
       ]),
@@ -143,8 +146,8 @@ describe("WizardStepResult — grid", () => {
   it("renders one ResultCard per child with 1-based ordinal", () => {
     useScanOrderMock.mockReturnValue({
       status: makeStatus("fanned_out", 2, [
-        makeChild({ job_id: "a", shorts_index: 0 }),
-        makeChild({ job_id: "b", shorts_index: 1 }),
+        makeChild({ job_id: "a", shorts_index: 1 }),
+        makeChild({ job_id: "b", shorts_index: 2 }),
       ]),
       error: null,
       cancel: cancelMock,
@@ -221,7 +224,7 @@ describe("WizardStepResult — status chip mapping", () => {
 });
 
 describe("WizardStepResult — open editor", () => {
-  it("clicking the open-editor icon navigates to /edit-clips with clip query param", () => {
+  it("clicking the open-editor icon navigates to the new ShortsEditor route with shortId", () => {
     useScanOrderMock.mockReturnValue({
       status: makeStatus("fanned_out", 1, [makeChild()]),
       error: null,
@@ -229,8 +232,12 @@ describe("WizardStepResult — open editor", () => {
     });
     render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
     fireEvent.click(screen.getByTestId("result-card-open-editor"));
+    // 2026-05-18 — route now points at the redesigned ShortsEditorPage
+    // which hydrates from ``shortId={render_job_id}``. The legacy
+    // ``/edit-clips`` page is only used as a fallback when the child
+    // has no render_job_id yet.
     expect(pushMock).toHaveBeenCalledWith(
-      `/export/shorts/auto/wizard/gd_test/result/parent-1/edit-clips?clip=${RENDER_ID_A}`,
+      `/export/shorts/editor?shortId=${RENDER_ID_A}`,
     );
   });
 
