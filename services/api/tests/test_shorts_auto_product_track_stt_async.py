@@ -417,6 +417,64 @@ class TestServiceEndToEnd:
                 openai_client=openai,
                 enqueue_render=_enqueue,
             )
+    
+    @pytest.mark.asyncio
+    async def test_mention_gate_rejects_when_too_few_scenes(self):
+        # 2 scenes but min_mention_scenes=3 -> gate raises before
+        # segment assembly. Reuses NoMentionsFoundError path.
+        os_client = _FakeOSClient(
+            hits=[
+                _hit("scene_001", 0, 10_000, transcript="달심 ABC 주스", score=3.0),
+                _hit("scene_002", 10_000, 20_000, transcript="달심 좋아요", score=2.0),
+            ],
+        )
+        openai = _FakeOpenAI()
+        async def _enqueue(spec): return uuid4()  # noqa: E306
+
+        with pytest.raises(NoMentionsFoundError, match="too weak"):
+            await service.assemble_stt_clip(
+                org_id=uuid4(),
+                catalog_entry_id=uuid4(),
+                llm_label="달심",
+                spoken_aliases=[],
+                os_video_id="gd_x",
+                target_duration_ms=30_000,
+                title=None,
+                os_client=os_client,
+                openai_client=openai,
+                enqueue_render=_enqueue,
+                min_mention_scenes=3,
+            )
+
+    @pytest.mark.asyncio
+    async def test_mention_gate_off_by_default_keeps_existing_behavior(self):
+        # Same 2 scenes, gate OFF (default 0/0.0) -> gate is a no-op,
+        # pipeline proceeds to a render id (existing behavior).
+        os_client = _FakeOSClient(
+            hits=[
+                _hit("scene_001", 0, 15_000, transcript="달심 ABC 주스", score=3.0),
+                _hit("scene_002", 15_000, 30_000, transcript="달심 좋아요", score=2.0),
+            ],
+        )
+        openai = _FakeOpenAI(
+            raw_text=json.dumps({"scores": [{"hook_score": 0.7, "has_cta": False, "importance_score": 0.9}, {"hook_score": 0.5, "has_cta": True, "importance_score": 0.7}]})
+        )
+        async def _enqueue(spec): return uuid4()  # noqa: E306
+
+        # No min_mention_* passed -> default 0 / 0.0 -> gate no-op.
+        result = await service.assemble_stt_clip(
+            org_id=uuid4(),
+            catalog_entry_id=uuid4(),
+            llm_label="달심",
+            spoken_aliases=[],
+            os_video_id="gd_x",
+            target_duration_ms=30_000,
+            title=None,
+            os_client=os_client,
+            openai_client=openai,
+            enqueue_render=_enqueue,
+        )
+        assert result.render_job_id is not None
 
     @pytest.mark.asyncio
     async def test_render_enqueue_failure_wraps_as_pipeline_error(self):
