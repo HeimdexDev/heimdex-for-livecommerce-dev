@@ -36,6 +36,7 @@ import type {
   ScanIntent,
 } from "@/lib/types/shorts-auto-product-wizard";
 
+import { IndexingProgressPanel } from "../components/IndexingProgressPanel";
 import { WizardLayout } from "../components/WizardLayout";
 
 interface Props {
@@ -280,17 +281,22 @@ export function WizardStepSelectProduct({ videoId }: Props) {
       backHref={backHref}
     >
       {pollState === "enumerating" ? (
-        <div
-          className="space-y-3 rounded-lg border border-gray-200 bg-white p-6 text-center"
-          data-testid="enumeration-loading"
-        >
-          <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
-          <p className="text-sm text-gray-700">
-            영상에서 제품을 찾고 있어요... (보통 30–90초 소요)
-          </p>
-          <p className="text-xs text-gray-500">
-            이미 스캔한 영상이라면 즉시 결과가 표시됩니다.
-          </p>
+        // Replace the V1 spinner with the 4-stage indexing panel
+        // (figma 1602-36023 — 분석 중 / 상품확인 / 분류 중 / 마무리 중).
+        // Step 2-1 only runs the enumeration pass; the remaining stages
+        // queue until the user submits the scan_order on step 3, so we
+        // mark "enumerating" as the active stage and leave the rest
+        // unfilled. The percent indicator is hidden here — there's no
+        // reliable backend % during enumeration alone, and the static
+        // "보통 30-90초 소요" copy already sets expectations.
+        <div data-testid="enumeration-loading">
+          <IndexingProgressPanel
+            progress={0}
+            currentStage="enumerating"
+            completedStages={[]}
+            hideHeaderActions
+            hidePercent
+          />
         </div>
       ) : null}
 

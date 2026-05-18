@@ -16,6 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.shorts_auto_product.models import ProductCatalogEntry
 
+# Prefixes encoded in ``rejected_reason`` by the consolidation pipeline.
+# ``has_consolidation_markers`` keys off these to make consolidation
+# idempotent without adding a new column. Mirrored by
+# ``consolidate.service`` when it formats the strings on write.
+_CONSOLIDATION_DUPLICATE_PREFIX = "duplicate_of:"
+_CONSOLIDATION_NON_SELLABLE_PREFIX = "non_sellable:"
+
 
 class ProductCatalogRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -211,6 +218,156 @@ class ProductCatalogRepository:
         result = await self.session.execute(stmt)
         return bool(result.rowcount or 0)
 
+    # ---------- v0.17.0 — post-enumeration consolidation ----------
+
+    async def has_consolidation_markers(
+        self,
+        *,
+        org_id: UUID,
+        video_id: UUID,
+    ) -> bool:
+        """Return True when this video's catalog has already been
+        consolidated.
+
+        We don't add a new column for the marker — instead, the
+        consolidation pipeline writes ``rejected_reason`` strings with
+        well-known prefixes (``duplicate_of:`` or ``non_sellable:``).
+        The presence of even one such row is a sufficient signal: an
+        un-consolidated video has only ``rescan_invalidated`` and
+        worker-emitted rejection reasons.
+
+        Cheap LIMIT 1 read; safe to call from the orchestrator before
+        the LLM round-trip to short-circuit double-runs.
+        """
+        stmt = (
+            select(ProductCatalogEntry.id)
+            .where(
+                ProductCatalogEntry.org_id == org_id,
+                ProductCatalogEntry.video_id == video_id,
+                ProductCatalogEntry.rejected_reason.is_not(None),
+                (
+                    ProductCatalogEntry.rejected_reason.like(
+                        f"{_CONSOLIDATION_DUPLICATE_PREFIX}%",
+                    )
+                    | ProductCatalogEntry.rejected_reason.like(
+                        f"{_CONSOLIDATION_NON_SELLABLE_PREFIX}%",
+                    )
+                ),
+            )
+            .limit(1)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none() is not None
+
+    async def apply_consolidation(
+        self,
+        *,
+        org_id: UUID,
+        video_id: UUID,
+        canonical_updates: list[dict[str, Any]],
+        duplicate_rejections: list[dict[str, Any]],
+        non_sellable_rejections: list[dict[str, Any]],
+        prompt_version: str,
+    ) -> tuple[int, int, int]:
+        """Apply one consolidation result in a single transactional
+        flush.
+
+        Args:
+            org_id, video_id: Tenant scope. Every UPDATE filters on
+                both to keep the multi-tenant boundary intact.
+            canonical_updates: Each dict has ``entry_id``,
+                ``llm_label``, ``spoken_aliases``. Updates the
+                canonical row's label + aliases in place; also bumps
+                ``aliases_generated_at`` and ``aliases_prompt_version``
+                so the backfill CLI won't pick this row up and
+                overwrite our work.
+            duplicate_rejections: Each dict has ``entry_id`` and
+                ``canonical_entry_id``. Soft-rejects the row with
+                reason ``duplicate_of:<canonical_uuid>``.
+            non_sellable_rejections: Each dict has ``entry_id`` and
+                ``category`` (host_equipment / ambient_object / ...).
+                Soft-rejects with reason ``non_sellable:<category>``.
+            prompt_version: Stamped onto
+                ``aliases_prompt_version`` for canonical rows. Used as
+                a goldens-eval gate downstream.
+
+        Returns ``(canonicals_updated, duplicates_rejected,
+        non_sellables_rejected)`` for observability. Caller is
+        responsible for the commit boundary; this method only flushes.
+        """
+        if not canonical_updates and not duplicate_rejections and not non_sellable_rejections:
+            return (0, 0, 0)
+
+        now = datetime.now(timezone.utc)
+
+        canonicals_updated = 0
+        for cu in canonical_updates:
+            stmt = (
+                update(ProductCatalogEntry)
+                .where(
+                    ProductCatalogEntry.id == cu["entry_id"],
+                    ProductCatalogEntry.org_id == org_id,
+                    ProductCatalogEntry.video_id == video_id,
+                    ProductCatalogEntry.rejected_at.is_(None),
+                )
+                .values(
+                    llm_label=cu["llm_label"],
+                    spoken_aliases=list(cu["spoken_aliases"]),
+                    aliases_generated_at=now,
+                    aliases_prompt_version=prompt_version,
+                )
+            )
+            result = await self.session.execute(stmt)
+            canonicals_updated += int(result.rowcount or 0)
+
+        duplicates_rejected = 0
+        for dr in duplicate_rejections:
+            stmt = (
+                update(ProductCatalogEntry)
+                .where(
+                    ProductCatalogEntry.id == dr["entry_id"],
+                    ProductCatalogEntry.org_id == org_id,
+                    ProductCatalogEntry.video_id == video_id,
+                    ProductCatalogEntry.rejected_at.is_(None),
+                )
+                .values(
+                    rejected_at=now,
+                    rejected_reason=(
+                        f"{_CONSOLIDATION_DUPLICATE_PREFIX}"
+                        f"{dr['canonical_entry_id']}"
+                    ),
+                )
+            )
+            result = await self.session.execute(stmt)
+            duplicates_rejected += int(result.rowcount or 0)
+
+        non_sellables_rejected = 0
+        for nr in non_sellable_rejections:
+            stmt = (
+                update(ProductCatalogEntry)
+                .where(
+                    ProductCatalogEntry.id == nr["entry_id"],
+                    ProductCatalogEntry.org_id == org_id,
+                    ProductCatalogEntry.video_id == video_id,
+                    ProductCatalogEntry.rejected_at.is_(None),
+                )
+                .values(
+                    rejected_at=now,
+                    rejected_reason=(
+                        f"{_CONSOLIDATION_NON_SELLABLE_PREFIX}"
+                        f"{nr['category']}"
+                    ),
+                )
+            )
+            result = await self.session.execute(stmt)
+            non_sellables_rejected += int(result.rowcount or 0)
+
+        await self.session.flush()
+        return (
+            canonicals_updated,
+            duplicates_rejected,
+            non_sellables_rejected,
+        )
+
     async def invalidate_video_catalog(
         self,
         *,
@@ -238,4 +395,28 @@ class ProductCatalogRepository:
             )
         )
         result = await self.session.execute(stmt)
+        # Rescan/version-bump must also clear stale consolidation markers,
+        # otherwise has_consolidation_markers() stays True forever and every
+        # future re-enumeration's consolidate short-circuits (the #182 idempotency
+        # guard's stated precondition is "un-consolidated video has only
+        # rescan_invalidated"). These rows are already rejected — only the
+        # reason string needs neutralizing, not rejected_at.
+        marker_stmt = (
+            update(ProductCatalogEntry)
+            .where(
+                ProductCatalogEntry.org_id == org_id,
+                ProductCatalogEntry.video_id == video_id,
+                ProductCatalogEntry.rejected_reason.is_not(None),
+                (
+                    ProductCatalogEntry.rejected_reason.like(
+                        f"{_CONSOLIDATION_DUPLICATE_PREFIX}%",
+                    )
+                    | ProductCatalogEntry.rejected_reason.like(
+                        f"{_CONSOLIDATION_NON_SELLABLE_PREFIX}%",
+                    )
+                ),
+            )
+            .values(rejected_reason=reason)
+        )
+        await self.session.execute(marker_stmt)
         return int(result.rowcount or 0)

@@ -602,7 +602,59 @@ class ProductScanJobRepository:
             .returning(ProductScanJob)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
+    
+    async def promote_latest_enumeration_done_stt(
+        self,
+        *,
+        org_id: UUID,
+        video_id: UUID,
+    ) -> ProductScanJob | None:
+        """STT-path enumeration completion.
 
+        Vision owns complete_enumeration (internal_router.py:380,
+        vision block only), so STT-only flows never reach
+        ENUMERATION_DONE and the enqueue_scan re-enumeration freeze
+        never engages — the catalog grows on every revisit. This
+        promotes the SAME job find_latest_enumeration_for_video (the
+        P2 guard's source) would return.
+
+        Claimless: STT never holds the worker lease, so it cannot go
+        through _complete (WHERE asserts claimed_by). Setting
+        claimed_by=None atomically revokes any in-flight vision lease,
+        so a later vision complete/fail matches 0 rows and no-ops.
+        Eligible from any non-done stage incl. 'failed' (vision
+        no_products_detected) — that recovery is the point. Idempotent
+        via the stage != ENUMERATION_DONE guard.
+        """
+        now = datetime.now(timezone.utc)
+        latest_id = (
+            select(ProductScanJob.id)
+            .where(
+                ProductScanJob.org_id == org_id,
+                ProductScanJob.video_id == video_id,
+                ProductScanJob.catalog_entry_id.is_(None),
+            )
+            .order_by(ProductScanJob.created_at.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        stmt = (
+            update(ProductScanJob)
+            .where(
+                ProductScanJob.id == latest_id,
+                ProductScanJob.stage != SCAN_STAGE_ENUMERATION_DONE,
+            )
+            .values(
+                stage=SCAN_STAGE_ENUMERATION_DONE,
+                completed_at=now,
+                progress_pct=100,
+                claimed_by=None,
+                lease_expires_at=None,
+            )
+            .returning(ProductScanJob)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+    
     async def fail(
         self,
         *,

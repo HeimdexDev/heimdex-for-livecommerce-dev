@@ -216,6 +216,14 @@ class JobStatusResponse(BaseModel):
     # for the internal cost dashboard.
     cost_usd_estimate: Decimal
 
+    # 2026-05-18 — selected-product labels, scoped to the child that
+    # carries them. Filled in by the wizard's scan-order status
+    # endpoint (one ProductCatalogEntry lookup per distinct
+    # catalog_entry_id across the children list); always empty for
+    # parent / enumeration / tracking jobs. The frontend ResultCard
+    # renders these as the bottom-left chips on the thumbnail.
+    product_labels: list[str] = Field(default_factory=list)
+
 
 # ---------- POST /products/{video_id}/rescan ----------
 
@@ -315,6 +323,23 @@ class ScanOrderResponse(BaseModel):
     deduped: bool = False
 
 
+class CriteriaSummary(BaseModel):
+    """Wizard option summary surfaced alongside scan-order status so the
+    result page can render 길이 / 개수 / 시간 범위 chips without a
+    second round-trip. All fields nullable for backward compat with
+    legacy parents predating the wizard schema.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    length_seconds: int | None = None
+    requested_count: int | None = None
+    time_range_start_ms: int | None = None
+    time_range_end_ms: int | None = None
+    product_distribution: str | None = None
+    intent: str | None = None
+
+
 class ScanOrderStatusResponse(BaseModel):
     """Response for ``GET /api/shorts/auto/scan-orders/{parent_job_id}``.
 
@@ -332,6 +357,11 @@ class ScanOrderStatusResponse(BaseModel):
     children_complete: int = Field(..., ge=0)
     children_failed: int = Field(..., ge=0)
     children_total: int = Field(..., ge=0)
+    # axis O — wizard step 1 inputs surfaced so the result page can
+    # render 쇼츠 길이 / 개수 / 시간 범위 without re-fetching the parent
+    # job directly. Null on legacy parents that predate the wizard
+    # schema.
+    criteria: CriteriaSummary | None = None
 
 
 class ScanOrderCommitRequest(BaseModel):

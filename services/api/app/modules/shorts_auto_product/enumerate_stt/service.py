@@ -448,7 +448,37 @@ def schedule_stt_enumeration_task(
                         enumerator=enumerator,
                     )
                     if inserted:
+                        from app.modules.shorts_auto_product.repositories.job import (
+                            ProductScanJobRepository,
+                        )
+                        await ProductScanJobRepository(
+                            session
+                        ).promote_latest_enumeration_done_stt(
+                            org_id=org_id,
+                            video_id=video_db_id,
+                        )
                         await session.commit()
+                        from app.modules.shorts_auto_product.aliases.auto_hook import (
+                            schedule_alias_generation,
+                        )
+                        schedule_alias_generation(
+                            org_id=org_id,
+                            video_db_id=video_db_id,
+                            settings=settings,
+                        )
+                # Mirror the vision-path trigger:
+                # consolidate also runs after STT enumeration so STT-only flows
+                # get dedup too. run_consolidation() is idempotent via
+                # has_consolidation_markers — when both vision and STT complete,
+                # the second scheduled task short-circuits.
+                from app.modules.shorts_auto_product.consolidate.service import (
+                    schedule_consolidation_task,
+                )
+                schedule_consolidation_task(
+                    settings=settings,
+                    org_id=org_id,
+                    video_db_id=video_db_id,
+                )
             finally:
                 # Best-effort cleanup — the OS / OpenAI clients hold
                 # connection pools we should release even on failure.

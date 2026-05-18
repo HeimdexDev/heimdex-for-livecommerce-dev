@@ -34,6 +34,7 @@ from app.config import Settings
 from app.logging_config import get_logger
 from app.modules.shorts_auto_product.models import (
     ACTIVE_SCAN_STAGES,
+    SCAN_STAGE_ENUMERATION_DONE,
     SCAN_STAGE_FAILED,
     SCAN_STAGE_FANNED_OUT,
     TERMINAL_SCAN_STAGES,
@@ -302,6 +303,18 @@ class ProductScanService:
         )
         if existing is not None:
             return ScanResponse(job_id=existing.id, deduped=True)
+        
+        # Completion signal: skip re-enumeration when this video already
+        # has a successfully completed enumeration. Prevents catalog row
+        # pile-up on repeated scans. FAILED stays re-scannable (stage !=
+        # ENUMERATION_DONE). 0-product videos count as done (no loop).
+        # rescan() is unaffected — it is a SEPARATE method that does not
+        # call enqueue_scan (verified service.py).
+        latest = await self.job_repo.find_latest_enumeration_for_video(
+            org_id=org_id, video_id=video_id,
+        )
+        if latest is not None and latest.stage == SCAN_STAGE_ENUMERATION_DONE:
+            return ScanResponse(job_id=latest.id, deduped=True)
 
         await self._require_concurrency_slot(org_id)
 
@@ -994,11 +1007,38 @@ class ProductScanService:
                 row.id: row.status for row in rows
             }
 
+        # 2026-05-18 — load the catalog labels for every distinct
+        # catalog_entry_id assigned to the children so the wizard's
+        # result card can render the bottom-left product chip without
+        # an N+1 round-trip from the frontend.
+        labels_by_catalog_id: dict[UUID, str] = {}
+        catalog_ids = {
+            c.catalog_entry_id for c in children if c.catalog_entry_id is not None
+        }
+        if catalog_ids:
+            from sqlalchemy import select as _select
+
+            stmt = _select(
+                ProductCatalogEntry.id,
+                ProductCatalogEntry.llm_label,
+                ProductCatalogEntry.user_label,
+            ).where(ProductCatalogEntry.id.in_(catalog_ids))
+            rows = (await self.session.execute(stmt)).all()
+            labels_by_catalog_id = {
+                row.id: (row.user_label or row.llm_label) for row in rows
+            }
+
         children_responses = [
             _job_to_status_response(
                 c,
                 render_status=render_status_by_id.get(c.render_job_id)
                 if c.render_job_id else None,
+                product_labels=(
+                    [labels_by_catalog_id[c.catalog_entry_id]]
+                    if c.catalog_entry_id is not None
+                    and c.catalog_entry_id in labels_by_catalog_id
+                    else []
+                ),
             )
             for c in children
         ]
@@ -1009,12 +1049,29 @@ class ProductScanService:
             1 for c in children_responses
             if c.failed_at is not None or c.cancelled_at is not None
         )
+        # Build the criteria summary from the parent scan_order job so
+        # the wizard's result page can render the 쇼츠 길이 / 개수 / 시간
+        # range chips without an extra round-trip. The parent always
+        # carries these fields for scan_order mode rows.
+        from app.modules.shorts_auto_product.schemas import (
+            CriteriaSummary as _CriteriaSummary,
+        )
+
+        criteria = _CriteriaSummary(
+            length_seconds=parent.length_seconds,
+            requested_count=parent.requested_count,
+            time_range_start_ms=parent.time_range_start_ms,
+            time_range_end_ms=parent.time_range_end_ms,
+            product_distribution=parent.product_distribution,
+            intent=parent.intent,
+        )
         return ScanOrderStatusResponse(
             parent=_job_to_status_response(parent),
             children=children_responses,
             children_complete=complete_count,
             children_failed=failed_count,
             children_total=len(children_responses),
+            criteria=criteria,
         )
 
     async def cancel_scan_order(
@@ -1277,6 +1334,7 @@ def _job_to_status_response(
     job: ProductScanJob,
     *,
     render_status: str | None = None,
+    product_labels: list[str] | None = None,
 ) -> JobStatusResponse:
     """Mode-aware projection of a ``ProductScanJob`` to the public
     ``JobStatusResponse`` shape.
@@ -1342,4 +1400,5 @@ def _job_to_status_response(
         parent_job_id=job.parent_job_id,
         shorts_index=job.shorts_index,
         cost_usd_estimate=job.cost_usd_estimate,
+        product_labels=product_labels or [],
     )

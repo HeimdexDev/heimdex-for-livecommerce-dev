@@ -984,6 +984,16 @@ class ChildRunner:
                         "auto_shorts_product_v2_mention_dominance_threshold",
                         0.0,
                     ),
+                    min_mention_scenes=getattr(
+                        self.settings,
+                        "auto_shorts_product_v2_stt_min_mention_scenes",
+                        0,
+                    ),
+                    min_mention_score=getattr(
+                        self.settings,
+                        "auto_shorts_product_v2_stt_min_mention_score",
+                        0.0,
+                    ),
                     # chunk-level LLM catalog match
                     other_catalog_names=other_catalog_names,
                     chunk_catalog_match_threshold=getattr(

@@ -142,6 +142,8 @@ async def assemble_stt_clip(
     mention_dominance_threshold: float = 0.0,
     other_catalog_names: list[str] | None = None,
     chunk_catalog_match_threshold: float = 0.0,
+    min_mention_scenes: int = 0,
+    min_mention_score: float = 0.0,
 ) -> SttClipResult:
     """End-to-end STT pipeline. Returns the render_job_id wrapped in
     :class:`SttClipResult`.
@@ -185,7 +187,8 @@ async def assemble_stt_clip(
         :class:`NoMentionsFoundError`: BM25 found no qualifying
             scenes, OR segment assembly produced nothing above the
             ``MIN_SEGMENT_MS`` floor, OR clip selection couldn't
-            assemble a window above ``_MIN_DURATION_FRACTION``.
+            assemble a window above ``_MIN_DURATION_FRACTION`` OR
+            mention strength below the configured gate.
         :class:`TranscriptUnavailableError`: BM25 hit some scenes
             but every one of them had empty ``transcript_raw`` AND
             empty ``scene_caption`` — there was nothing to score.
@@ -279,7 +282,36 @@ async def assemble_stt_clip(
             f"no scenes match catalog entry {catalog_entry_id} "
             f"on video {os_video_id}"
         )
-
+    
+    # ---- 1.5 Mention strength gate ----
+    # mentioned is BM25 _score-desc; mentioned[0].score is the max.
+    # When the catalog's STT mention is too weak, refuse to build a
+    # short rather than padding it with other products' scenes
+    # (decision 2026-05-17). Both thresholds default 0 = OFF.
+    max_score = mentioned[0].score if mentioned else 0.0
+    if (
+        len(mentioned) < min_mention_scenes
+        or max_score < min_mention_score
+    ):
+        logger.info(
+            "stt_pipeline_mention_too_weak "
+            "org_id=%s catalog_entry_id=%s video_id=%s "
+            "mention_scene_count=%d max_bm25_score=%.4f "
+            "min_mention_scenes=%d min_mention_score=%s",
+            org_id,
+            catalog_entry_id,
+            os_video_id,
+            len(mentioned),
+            max_score,
+            min_mention_scenes,
+            min_mention_score,
+        )
+        raise NoMentionsFoundError(
+            f"catalog entry {catalog_entry_id} mention too weak on "
+            f"video {os_video_id} "
+            f"(scenes={len(mentioned)}<{min_mention_scenes} or "
+            f"score={max_score:.2f}<{min_mention_score})"
+        )
     # Detect transcript_unavailable: all hits have empty transcript_raw
     # AND empty scene_caption. This shouldn't normally happen given
     # the BM25 boost ratios (we only match against those two fields),

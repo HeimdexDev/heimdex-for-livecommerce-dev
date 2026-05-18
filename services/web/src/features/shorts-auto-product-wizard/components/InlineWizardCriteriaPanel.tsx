@@ -8,8 +8,15 @@
 // compatibility — this panel does NOT subsume it.
 // ============================================================================
 
+// figma: 1713-288216  (cache: .figma-cache/1713-288216_phase2_wizard-criteria.api.json)
+// node-name: Wizard Criteria Step 1  · spec: section-label=16/600 grayscale-800, card padding=20, inner gap=60, header pb=20
+
 "use client";
 
+import { useMemo } from "react";
+
+import { Button } from "@/components/ui/figma-index";
+import { useTopHeaderLeftActions } from "@/components/layout/TopHeaderActionsContext";
 import type { ProductDistribution } from "@/lib/types/shorts-auto-product-wizard";
 
 import { InlineCountSelector } from "./InlineCountSelector";
@@ -82,33 +89,44 @@ export function InlineWizardCriteriaPanel({
     onCriteriaChange({ ...criteria, [key]: value });
   };
 
+  // Step indicator lives in the global TopHeader (GNB) per Figma 1602:36766.
+  // The wizard body intentionally omits its own breadcrumb header.
+  const headerSlot = useMemo(
+    () => <InlineWizardBreadcrumb currentStep={1} />,
+    [],
+  );
+  useTopHeaderLeftActions(headerSlot);
+
+  // Nested card removed (2026-05-18 goal capture) — the VideoDetailPage
+  // right wrapper now hosts the card chrome (rounded + shadow + padding),
+  // so an inner `rounded-card bg-white shadow-card p-[20px]` produced the
+  // double-wrapper look the user surfaced. We render the content directly
+  // and rely on the outer wrapper for surface chrome.
   return (
-    <div className="space-y-6">
-      <header className="flex items-center justify-between gap-4">
-        <InlineWizardBreadcrumb currentStep={1} />
-      </header>
+    <div className="font-pretendard">
+      <div className="flex items-center justify-between gap-4 pb-[20px]">
+        <h2 className="text-[20px] font-semibold tracking-[-0.5px] text-grayscale-800">
+          옵션 설정
+        </h2>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={onNext}
+          disabled={exceedsAggregateCap}
+          data-testid="inline-criteria-next"
+        >
+          다음
+        </Button>
+      </div>
 
-      <div className="space-y-6 rounded-xl border border-gray-200 bg-white p-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-gray-900">옵션 설정</h2>
-          <button
-            type="button"
-            onClick={onNext}
-            disabled={exceedsAggregateCap}
-            className="rounded-md bg-gray-900 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-gray-800 disabled:bg-gray-300 disabled:text-gray-500"
-            data-testid="inline-criteria-next"
-          >
-            다음
-          </button>
-        </div>
-
+      <div className="flex flex-col gap-[40px]">
         <InlineDistributionToggle
           value={criteria.product_distribution}
           onChange={(v) => update("product_distribution", v)}
         />
 
-        <div className="space-y-2">
-          <label className="block text-sm font-medium text-gray-900">
+        <div className="space-y-[12px]">
+          <label className="block text-[16px] font-semibold text-grayscale-800">
             영상 구간 설정
           </label>
           <VideoSegmentRangeSlider
@@ -137,18 +155,18 @@ export function InlineWizardCriteriaPanel({
           rangeMs={effectiveRangeMs}
           lengthSeconds={criteria.length_seconds}
         />
-
-        {exceedsAggregateCap ? (
-          <p
-            className="rounded-md bg-amber-50 p-3 text-sm text-amber-800"
-            data-testid="inline-aggregate-cap-warning"
-          >
-            총 출력 길이 한도(30분) 초과: {criteria.requested_count}개 ×{" "}
-            {criteria.length_seconds}초 = {aggregateSeconds}초. 개수 또는
-            길이를 줄여주세요.
-          </p>
-        ) : null}
       </div>
+
+      {exceedsAggregateCap ? (
+        <p
+          className="mt-[20px] rounded-[8px] bg-amber-h-50 p-[12px] text-[13px] font-medium text-amber-h-500"
+          data-testid="inline-aggregate-cap-warning"
+        >
+          총 출력 길이 한도(30분) 초과: {criteria.requested_count}개 ×{" "}
+          {criteria.length_seconds}초 = {aggregateSeconds}초. 개수 또는
+          길이를 줄여주세요.
+        </p>
+      ) : null}
     </div>
   );
 }
