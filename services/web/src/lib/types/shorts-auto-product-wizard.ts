@@ -172,6 +172,27 @@ export interface JobStatusResponse {
   parent_job_id: string | null;
   shorts_index: number | null;
   cost_usd_estimate: string;
+  // Per-short summary text and resolved catalog labels surfaced on
+  // render_child jobs. Optional / nullable so older API payloads and
+  // non-child jobs (scan_order parents) keep their original shape.
+  render_summary?: string | null;
+  render_summary_generated_at?: string | null;
+  product_labels?: string[];
+}
+
+/**
+ * Wizard option summary surfaced on the scan-order aggregate response so
+ * the step-4 result page can render the option-summary badge without
+ * re-fetching the parent. All fields are nullable for backward compat
+ * with legacy parents predating the wizard schema.
+ */
+export interface CriteriaSummary {
+  length_seconds: number | null;
+  requested_count: number | null;
+  time_range_start_ms: number | null;
+  time_range_end_ms: number | null;
+  product_distribution: string | null;
+  intent: string | null;
 }
 
 export interface ScanOrderStatusResponse {
@@ -180,6 +201,8 @@ export interface ScanOrderStatusResponse {
   children_complete: number;
   children_failed: number;
   children_total: number;
+  /** axisO — wizard step1 입력값. null 이면 legacy parent. */
+  criteria?: CriteriaSummary | null;
 }
 
 // ----------------------------------------------------------------------

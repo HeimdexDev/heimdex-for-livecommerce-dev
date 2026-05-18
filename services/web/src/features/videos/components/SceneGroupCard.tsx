@@ -29,16 +29,32 @@ export function SceneGroupCard({
   const repScene = group.scenes.find(
     (s) => s.scene_id === group.representative_scene_id,
   ) ?? group.scenes[0];
+  const isPortrait = aspectRatio === "9:16";
 
   return (
-    <div className="overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
+    <div
+      className={cn(
+        "overflow-hidden border",
+        isPortrait
+          ? "rounded-card border-grayscale-100 bg-grayscale-10"
+          : "rounded-xl border-gray-200 bg-gray-50",
+      )}
+    >
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex w-full items-center gap-4 px-4 py-3 text-left transition-colors hover:bg-gray-100"
+        className={cn(
+          "flex w-full items-center gap-4 px-4 py-3 text-left transition-colors",
+          isPortrait ? "hover:bg-grayscale-100/40" : "hover:bg-gray-100",
+        )}
       >
         {repScene && (
-          <div className="h-14 w-24 flex-shrink-0 overflow-hidden rounded-lg">
+          <div
+            className={cn(
+              "flex-shrink-0 overflow-hidden",
+              isPortrait ? "h-24 w-14 rounded-md" : "h-14 w-24 rounded-lg",
+            )}
+          >
             <SceneThumbnail
               videoId={videoId}
               sceneId={repScene.scene_id}
@@ -50,8 +66,22 @@ export function SceneGroupCard({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-gray-800">{timeRange}</span>
-            <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">
+            <span
+              className={cn(
+                "text-sm font-medium",
+                isPortrait ? "text-grayscale-800" : "text-gray-800",
+              )}
+            >
+              {timeRange}
+            </span>
+            <span
+              className={cn(
+                "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                isPortrait
+                  ? "border border-heimdex-navy-500 text-heimdex-navy-500"
+                  : "bg-indigo-50 text-indigo-600",
+              )}
+            >
               {group.scene_count}개 장면
             </span>
           </div>
@@ -59,7 +89,8 @@ export function SceneGroupCard({
 
         <svg
           className={cn(
-            "h-4 w-4 flex-shrink-0 text-gray-400 transition-transform",
+            "h-4 w-4 flex-shrink-0 transition-transform",
+            isPortrait ? "text-grayscale-500" : "text-gray-400",
             expanded && "rotate-180",
           )}
           fill="none"
@@ -72,7 +103,12 @@ export function SceneGroupCard({
       </button>
 
       {expanded && (
-        <div className="space-y-3 border-t border-gray-200 bg-white px-4 py-4">
+        <div
+          className={cn(
+            "space-y-3 border-t bg-white px-4 py-4",
+            isPortrait ? "border-grayscale-100" : "border-gray-200",
+          )}
+        >
           {group.scenes.map((scene, i) => (
             <SceneCard
               key={scene.scene_id}

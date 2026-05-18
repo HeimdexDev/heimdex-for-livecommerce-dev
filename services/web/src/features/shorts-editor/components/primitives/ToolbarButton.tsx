@@ -36,10 +36,13 @@ export function ToolbarButton({
       aria-pressed={active}
       title={tooltip ?? ariaLabel}
       className={cn(
-        "flex h-8 w-8 items-center justify-center rounded text-gray-700 transition-colors",
+        // figma 1663:45790 — toolbar buttons are 28×28 (icon 20 + p-4) with
+        // the active state lifted by a heimdex-navy/50 fill, matching the
+        // 텍스트/배경 figma palette.
+        "flex h-7 w-7 items-center justify-center rounded-[6px] text-grayscale-500 transition-colors",
         active
-          ? "bg-gray-200 text-gray-900"
-          : "hover:bg-gray-100",
+          ? "bg-heimdex-navy-50 text-heimdex-navy-500"
+          : "hover:bg-grayscale-100",
         disabled && "cursor-not-allowed opacity-40 hover:bg-transparent",
         className,
       )}

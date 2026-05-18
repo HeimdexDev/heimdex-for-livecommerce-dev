@@ -1,6 +1,13 @@
 "use client";
 
-import { ColorSwatchButton } from "../primitives/ColorSwatchButton";
+// figma: 1713:275432  (cache: .figma-cache/1713-275432_phase5_editor-3.api.json)
+// node-name: 텍스트 툴바 (B/I/U + align + line-spacing + color + highlight)
+// spec: gap=1 (separator=mx-1 1px), radius·padding 은 ToolbarButton/Dropdown primitive 사용
+
+import { useRef, useState } from "react";
+
+import { cn } from "@/lib/utils";
+import { ColorPalettePopover } from "../primitives/ColorPalettePopover";
 import { Dropdown } from "../primitives/Dropdown";
 import {
   AlignCenterIcon,
@@ -16,6 +23,8 @@ import {
 import { ToolbarButton } from "../primitives/ToolbarButton";
 import { t } from "../../lib/i18n/strings";
 import type { EditorTextOverlay } from "../../lib/overlay-types";
+
+const DEFAULT_HIGHLIGHT = "#FFE600";
 
 const LINE_SPACING_OPTIONS = [
   { value: 1.0, label: "1.0" },
@@ -73,7 +82,7 @@ export function TextToolbar({ overlay, onChange }: TextToolbarProps) {
         <UnderlineIcon />
       </ToolbarButton>
 
-      <span className="mx-1 h-5 w-px bg-gray-200" />
+      <span className="mx-1 h-5 w-px bg-grayscale-200" />
 
       {/* Alignment cycle: hidden details — clicking advances left → center → right */}
       <ToolbarButton
@@ -90,9 +99,9 @@ export function TextToolbar({ overlay, onChange }: TextToolbarProps) {
       >
         {alignIcon}
       </ToolbarButton>
-      <ChevronDownIcon className="h-3 w-3 text-gray-400" />
+      <ChevronDownIcon className="h-3 w-3 text-grayscale-400" />
 
-      <span className="mx-1 h-5 w-px bg-gray-200" />
+      <span className="mx-1 h-5 w-px bg-grayscale-200" />
 
       {/* Line spacing — dropdown */}
       <ToolbarButton ariaLabel={t.text.lineSpacing}>
@@ -109,31 +118,91 @@ export function TextToolbar({ overlay, onChange }: TextToolbarProps) {
         className="!px-1.5 !py-1 !text-xs"
       />
 
-      <span className="mx-1 h-5 w-px bg-gray-200" />
+      <span className="mx-1 h-5 w-px bg-grayscale-200" />
 
-      {/* Font color — A icon with a thin red-underline hint, native picker */}
-      <div className="relative">
-        <ColorSwatchButton
-          color={overlay.fontColor}
-          onChange={(color) => onChange({ fontColor: color })}
-          ariaLabel={t.text.color}
-          size="sm"
-        />
-      </div>
+      {/* figma 1602:40064 — 폰트 색상: "A" 글자 + 하단 색상 바.
+          클릭 시 ColorPalettePopover 가 열린다. */}
+      <ColorTriggerButton
+        ariaLabel={t.text.color}
+        color={overlay.fontColor}
+        onChange={(color) => onChange({ fontColor: color })}
+      >
+        <span className="text-[18px] font-medium leading-[1.4] tracking-[-0.45px] text-grayscale-800">
+          A
+        </span>
+      </ColorTriggerButton>
 
-      {/* Highlight color (paint-bucket) — toggles a non-null highlight on first
-          click, then opens picker on subsequent clicks. */}
-      <ToolbarButton
-        active={overlay.highlightColor != null}
-        onClick={() =>
-          onChange({
-            highlightColor: overlay.highlightColor ? null : "#FFE600",
-          })
-        }
+      {/* figma 1602:40066 — 하이라이트 색상: PaintBucket + 하단 색상 바.
+          클릭 시 팔레트 팝업이 열리고, 색상을 고르면 highlightColor 가
+          지정된다. 팔레트 안 "기본 색상" 영역에서 흰색·투명 계열을 골라
+          하이라이트를 끄는 식으로 비활성화한다. */}
+      <ColorTriggerButton
         ariaLabel={t.text.highlight}
+        color={overlay.highlightColor ?? DEFAULT_HIGHLIGHT}
+        muted={overlay.highlightColor == null}
+        onChange={(color) => onChange({ highlightColor: color })}
       >
         <PaintBucketIcon />
-      </ToolbarButton>
+      </ColorTriggerButton>
+    </div>
+  );
+}
+
+// figma 1602:40063~1602:40070 — 텍스트 색상/하이라이트 트리거.
+// 28×26 공간에 아이콘이 자리잡고 그 아래 4px 색상 바가 현재 값을 미리
+// 보여준다. 클릭 시 ColorPalettePopover 가 자식 트리거 바로 아래에 뜬다.
+function ColorTriggerButton({
+  ariaLabel,
+  color,
+  onChange,
+  children,
+  muted = false,
+}: {
+  ariaLabel: string;
+  color: string;
+  onChange: (color: string) => void;
+  children: React.ReactNode;
+  muted?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <div className="relative" ref={wrapRef}>
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-7 w-7 flex-col items-center justify-center gap-[2px] rounded"
+      >
+        <span
+          className={cn(
+            "flex h-5 w-5 items-center justify-center",
+            muted && "opacity-60",
+          )}
+        >
+          {children}
+        </span>
+        <span
+          aria-hidden
+          className="block h-[3px] w-[20px] rounded-[1px]"
+          style={{ backgroundColor: muted ? "transparent" : color }}
+        />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-2">
+          <ColorPalettePopover
+            color={color}
+            onChange={(next) => {
+              onChange(next.toUpperCase());
+              setOpen(false);
+            }}
+            onClose={() => setOpen(false)}
+            showOpacity={false}
+          />
+        </div>
+      )}
     </div>
   );
 }

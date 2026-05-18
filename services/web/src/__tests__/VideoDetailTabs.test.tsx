@@ -150,39 +150,39 @@ describe("VideoDetailPage tab bar", () => {
     expect(screen.getByRole("button", { name: /내보내기/ })).toBeInTheDocument();
   });
 
-  it("shows scene count badge on scenes tab", async () => {
+  it("renders scenes tab without count badge", async () => {
     await renderVideoDetail();
 
     const scenesTab = screen.getByRole("button", { name: /장면 분석/ });
-    expect(scenesTab.textContent).toContain("25");
+    expect(scenesTab.textContent?.replace(/장면\s*분석/g, "").trim()).toBe("");
   });
 
   it("defaults to overview tab when no URL params", async () => {
     await renderVideoDetail();
 
     const overviewTab = screen.getByRole("button", { name: /개요/ });
-    expect(overviewTab).toHaveClass("border-indigo-500");
+    expect(overviewTab).toHaveClass("border-heimdex-navy-500");
   });
 
   it("initializes to scenes tab when ?view=scenes", async () => {
     await renderVideoDetail("view=scenes");
 
     const scenesTab = screen.getByRole("button", { name: /장면 분석/ });
-    expect(scenesTab).toHaveClass("border-indigo-500");
+    expect(scenesTab).toHaveClass("border-heimdex-navy-500");
   });
 
   it("initializes to people tab when ?view=people", async () => {
     await renderVideoDetail("view=people");
 
     const peopleTab = screen.getByRole("button", { name: /인물 관리/ });
-    expect(peopleTab).toHaveClass("border-indigo-500");
+    expect(peopleTab).toHaveClass("border-heimdex-navy-500");
   });
 
   it("?t= parameter overrides ?view= and forces scenes tab", async () => {
     await renderVideoDetail("t=5000&view=people");
 
     const scenesTab = screen.getByRole("button", { name: /장면 분석/ });
-    expect(scenesTab).toHaveClass("border-indigo-500");
+    expect(scenesTab).toHaveClass("border-heimdex-navy-500");
   });
 
   it("switches view when tab is clicked", async () => {
@@ -191,15 +191,15 @@ describe("VideoDetailPage tab bar", () => {
 
     // Click scenes tab
     await user.click(screen.getByRole("button", { name: /장면 분석/ }));
-    expect(screen.getByRole("button", { name: /장면 분석/ })).toHaveClass("border-indigo-500");
+    expect(screen.getByRole("button", { name: /장면 분석/ })).toHaveClass("border-heimdex-navy-500");
 
     // Click people tab
     await user.click(screen.getByRole("button", { name: /인물 관리/ }));
-    expect(screen.getByRole("button", { name: /인물 관리/ })).toHaveClass("border-indigo-500");
+    expect(screen.getByRole("button", { name: /인물 관리/ })).toHaveClass("border-heimdex-navy-500");
 
     // Click back to overview
     await user.click(screen.getByRole("button", { name: /개요/ }));
-    expect(screen.getByRole("button", { name: /개요/ })).toHaveClass("border-indigo-500");
+    expect(screen.getByRole("button", { name: /개요/ })).toHaveClass("border-heimdex-navy-500");
   });
 
   it("updates URL when switching tabs via router.replace", async () => {
@@ -233,14 +233,14 @@ describe("VideoDetailPage tab bar", () => {
     await renderVideoDetail();
 
     await user.click(screen.getByRole("button", { name: /내보내기/ }));
-    expect(mockPush).toHaveBeenCalledWith("/export/shorts/create?videoId=test-video-123");
+    expect(mockPush).toHaveBeenCalledWith("/export/shorts/editor?videoId=test-video-123");
   });
 
   it("ignores invalid ?view= values and defaults to overview", async () => {
     await renderVideoDetail("view=invalid");
 
     const overviewTab = screen.getByRole("button", { name: /개요/ });
-    expect(overviewTab).toHaveClass("border-indigo-500");
+    expect(overviewTab).toHaveClass("border-heimdex-navy-500");
   });
 
   it("renders simplified breadcrumb with video title only", async () => {

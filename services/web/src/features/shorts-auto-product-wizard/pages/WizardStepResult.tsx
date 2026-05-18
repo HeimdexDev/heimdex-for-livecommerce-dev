@@ -1,26 +1,31 @@
+// figma: 1713:288042  (cache: .figma-cache/1713-288042_phase3_wizard-result.api.json)
+// node-name: Component2-6.e AI 쇼츠 생성(생성 결과)
+// spec: 외곽 카드 padL/R/T/B=20 radius=10(rounded-card) shadow=card bg=white
 // ============================================================================
-// Auto-shorts wizard — loading screen.
+// Auto-shorts wizard — result screen (Figma 1713:288042).
 //
-// Subscribes to the parent job's aggregate status via useScanOrder (3s
-// polling) and presents a progress bar + per-child status chips while
-// renders are in flight. As soon as ANY child render reaches
-// ``render_status === "completed"`` the page redirects to /edit-clips —
-// regardless of parent stage. EditClipsPage owns its own useScanOrder
-// instance and continues polling for late-arriving siblings.
+// Single-page result grid replacing the previous "loading + redirect"
+// pattern. Per Phase 3 redesign:
 //
-// Why not wait for parent terminal: parent stage only flips to
-// ``committed`` after *every* child reaches a terminal stage. In a
-// 1-of-N success scenario (one render finishes far ahead of its
-// siblings) the old "parent terminal AND any completed" predicate
-// stalled — the user had to reload to see results.
+//   1. Polls parent + children via useScanOrder (3s).
+//   2. Header shows "생성된 쇼츠 N개" + 모두 저장/내보내기 (bulk actions).
+//   3. Grid renders one ResultCard per child with per-clip status chip
+//      (대기/생성/완료/실패) + ⋮ menu + 편집 아이콘.
+//   4. Each card's ⋮ + open-in-new affordance lets the operator drill into
+//      the existing /edit-clips editor (Phase 5 redesign pending).
+//
+// Cancel/save/export per-clip backends are not wired yet — see the
+// // NOTE(export-backend-tbd) markers below. The whole-order cancel via
+// ``useScanOrder.cancel`` is preserved as the row-level cancel action so
+// the affordance is functional out of the box.
 // ============================================================================
 
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
 
+import { Button } from "@/components/ui/Button";
 import type {
   JobStatusResponse,
   ScanOrderStatusResponse,
@@ -28,78 +33,85 @@ import type {
 } from "@/lib/types/shorts-auto-product-wizard";
 import { useAuth } from "@/lib/auth";
 
-import { InlineWizardBreadcrumb } from "../components/InlineWizardBreadcrumb";
-import { LoadingShortsProgress } from "../components/LoadingShortsProgress";
-import { LoadingShortsSkeleton } from "../components/LoadingShortsSkeleton";
-import { LoadingShortsSpinner } from "../components/LoadingShortsSpinner";
+import { ResultCard } from "../components/ResultCard";
+import {
+  IndexingProgressPanel,
+  type IndexingStage,
+} from "../components/IndexingProgressPanel";
+import type { WizardCriteriaDraft } from "../components/InlineWizardCriteriaPanel";
+import type { CriteriaSummary } from "@/lib/types/shorts-auto-product-wizard";
 import { useScanOrder } from "../hooks/useScanOrder";
+
+// Map the backend CriteriaSummary shape to the wizard's WizardCriteriaDraft
+// so IndexingProgressPanel can render its option summary badge directly.
+// Missing fields fall back to DEFAULT_CRITERIA values.
+function summaryFromCriteria(
+  c: CriteriaSummary | null | undefined,
+): WizardCriteriaDraft | undefined {
+  if (!c) return undefined;
+  const dist =
+    c.product_distribution === "single" || c.product_distribution === "multi"
+      ? c.product_distribution
+      : "single";
+  return {
+    length_seconds: c.length_seconds ?? 60,
+    requested_count: c.requested_count ?? 5,
+    time_range_start_ms: c.time_range_start_ms,
+    time_range_end_ms: c.time_range_end_ms,
+    product_distribution: dist,
+  };
+}
+
+const INDEXING_STAGES: ReadonlyArray<IndexingStage> = [
+  "enumerating",
+  "tracking",
+  "assembling",
+  "rendering",
+];
+
+function mapStageToIndexing(stage: ScanStage | undefined): IndexingStage | null {
+  return stage === "enumerating" ||
+    stage === "tracking" ||
+    stage === "assembling" ||
+    stage === "rendering"
+    ? stage
+    : null;
+}
+
+function computeCompletedStages(
+  stage: ScanStage | undefined,
+): ReadonlyArray<IndexingStage> {
+  switch (stage) {
+    case "enumeration_done":
+    case "tracking":
+      return ["enumerating"];
+    case "assembling":
+      return ["enumerating", "tracking"];
+    case "rendering":
+      return ["enumerating", "tracking", "assembling"];
+    case "preview_ready":
+    case "fanned_out":
+    case "committed":
+    case "done":
+      return INDEXING_STAGES;
+    default:
+      return [];
+  }
+}
 
 interface Props {
   videoId: string;
   parentJobId: string;
 }
 
-const SUCCESS_STAGES: ReadonlySet<ScanStage> = new Set<ScanStage>([
-  "done",
-  "committed",
-]);
-
 const FAILURE_STAGES: ReadonlySet<ScanStage> = new Set<ScanStage>([
   "failed",
   "cancelled",
 ]);
 
-interface DerivedState {
-  /** Parent stage is failure-terminal, OR parent reached success-terminal
-   *  with every child in failed/cancelled state. */
-  failure: boolean;
-  /** At least one child has ``render_status === "completed"`` — an MP4
-   *  is viewable in /edit-clips regardless of parent stage. */
-  redirectable: boolean;
-}
-
-function deriveState(status: ScanOrderStatusResponse | null): DerivedState {
-  if (!status) return { failure: false, redirectable: false };
-  const parentStage = status.parent.stage;
-  // Parent explicitly failed or cancelled — no MP4 will ever land.
-  if (FAILURE_STAGES.has(parentStage)) {
-    return { failure: true, redirectable: false };
-  }
-  // Any child render produced an MP4 → redirect immediately. Parent
-  // stage is intentionally ignored: in a 1-of-N success scenario the
-  // parent sits at ``fanned_out`` until every sibling reaches a
-  // terminal stage, which can be tens of seconds after the first
-  // render lands.
-  const anyRenderCompleted = status.children.some(
-    (c: JobStatusResponse) => c.render_status === "completed",
-  );
-  if (anyRenderCompleted) {
-    return { failure: false, redirectable: true };
-  }
-  // Whole-batch failure: parent reached terminal-success AND every
-  // child settled into a no-MP4 terminal state. The terminal stages
-  // are ``done | failed | cancelled``; given the early return above
-  // we already know no child reached ``render_status === "completed"``,
-  // so a child stuck at ``done`` here was completed by
-  // ``children/runner.py::_complete_no_render`` (no-mentions /
-  // transcript-unavailable / live-block-too-short). Without this
-  // branch the user stares at the loading spinner forever — there's
-  // nothing for the redirect to point at, but the UI never surfaces
-  // a friendly message either.
-  if (
-    SUCCESS_STAGES.has(parentStage) &&
-    status.children_total > 0 &&
-    status.children.length === status.children_total &&
-    status.children.every(
-      (c: JobStatusResponse) =>
-        c.stage === "done" ||
-        c.stage === "failed" ||
-        c.stage === "cancelled",
-    )
-  ) {
-    return { failure: true, redirectable: false };
-  }
-  return { failure: false, redirectable: false };
+function isWholeOrderFailed(status: ScanOrderStatusResponse | null): boolean {
+  if (!status) return false;
+  return FAILURE_STAGES.has(status.parent.stage);
 }
 
 export function WizardStepResult({ videoId, parentJobId }: Props) {
@@ -107,104 +119,152 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
   const router = useRouter();
   const { status, error, cancel } = useScanOrder(parentJobId, getAccessToken);
 
-  const { failure, redirectable } = useMemo(() => deriveState(status), [status]);
+  const children = status?.children ?? [];
+  const childrenTotal = status?.children_total ?? 0;
+  const failure = useMemo(() => isWholeOrderFailed(status), [status]);
 
-  // Fire ``router.replace`` exactly once when the redirect predicate becomes
-  // true. ``router.replace`` (not push) keeps the browser back-button from
-  // trapping the user on a now-stale spinner. The ref guards against the
-  // effect firing multiple times if useScanOrder's status updates after the
-  // redirect has already kicked off (next.js navigation is async).
-  const redirectedRef = useRef(false);
-  useEffect(() => {
-    if (!redirectable || redirectedRef.current) return;
-    redirectedRef.current = true;
-    router.replace(
-      `/export/shorts/auto/wizard/${encodeURIComponent(
-        videoId,
-      )}/result/${encodeURIComponent(parentJobId)}/edit-clips`,
-    );
-  }, [redirectable, router, videoId, parentJobId]);
+  const completedCount = useMemo(
+    () =>
+      children.filter((c: JobStatusResponse) => c.render_status === "completed")
+        .length,
+    [children],
+  );
+  const anyCompleted = completedCount > 0;
+
+  const openEditor = (child: JobStatusResponse) => {
+    const renderJobId = child.render_job_id;
+    const url =
+      `/export/shorts/auto/wizard/${encodeURIComponent(videoId)}` +
+      `/result/${encodeURIComponent(parentJobId)}/edit-clips` +
+      (renderJobId ? `?clip=${encodeURIComponent(renderJobId)}` : "");
+    router.push(url);
+  };
 
   return (
     <div
-      className="mx-auto max-w-5xl space-y-6 p-6"
+      className="mx-auto flex max-w-[1024px] flex-col gap-[20px] p-[24px]"
       data-testid="wizard-step-result"
     >
-      <header className="flex items-center justify-between gap-4">
-        <Link
-          href={`/videos/${encodeURIComponent(videoId)}?view=auto-shorts`}
-          className="text-sm text-gray-500 hover:text-gray-700"
-          data-testid="result-back-link"
-        >
-          &lt; 뒤로가기
-        </Link>
-        <InlineWizardBreadcrumb variant="two-step" currentStep={2} />
+      <header className="flex items-center justify-between gap-[10px]">
+        <div className="flex items-baseline gap-[6px]">
+          <h1 className="font-pretendard text-[18px] font-bold tracking-[-0.45px] leading-[1.4] text-neutral-h-800">
+            생성된 쇼츠
+          </h1>
+          <span
+            className="font-pretendard text-[14px] font-semibold text-heimdex-navy-500"
+            data-testid="result-header-count"
+          >
+            {childrenTotal}개
+          </span>
+        </div>
+        <div className="flex items-center gap-[10px]">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!anyCompleted}
+            // NOTE(export-backend-tbd): bulk save endpoint TBD — wired
+            // through Phase 4 once the saved-shorts API ships.
+            onClick={() => {
+              /* TBD */
+            }}
+            data-testid="result-bulk-save"
+          >
+            모두 저장하기
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!anyCompleted}
+            // NOTE(export-backend-tbd): bulk export endpoint TBD.
+            onClick={() => {
+              /* TBD */
+            }}
+            data-testid="result-bulk-export"
+          >
+            모두 내보내기
+          </Button>
+        </div>
       </header>
 
       {error ? (
         <div
-          className="rounded-md bg-red-50 p-3 text-sm text-red-700"
+          className="rounded-card bg-red-h-50 p-[12px] font-pretendard text-[14px] text-red-h-500"
           data-testid="wizard-status-error"
         >
           상태 조회 실패: {error.message}
         </div>
       ) : null}
 
-      {failure && status ? (
-        <FailureState status={status} />
+      {failure && status ? <FailureBanner status={status} /> : null}
+
+      {childrenTotal === 0 ? (
+        <div data-testid="result-grid-empty">
+          <IndexingProgressPanel
+            progress={(status?.parent.progress_pct ?? 0) / 100}
+            currentStage={mapStageToIndexing(status?.parent.stage)}
+            completedStages={computeCompletedStages(status?.parent.stage)}
+            criteria={summaryFromCriteria(status?.criteria)}
+            videoDurationMs={
+              // No dedicated video-duration field on the response yet —
+              // fall back to time_range_end_ms (set when the user picked
+              // a range in step 1). undefined hides the badge.
+              status?.criteria?.time_range_end_ms ?? undefined
+            }
+          />
+        </div>
       ) : (
-        <LoadingState
-          count={status?.children_total ?? 0}
-          childJobs={status?.children ?? []}
-          // Cancellation is meaningful only while we're actually loading.
-          // Once redirect has fired the page is about to unmount; hide the
-          // button to avoid a doomed POST race.
-          onCancel={redirectedRef.current ? undefined : () => void cancel()}
-        />
+        <div
+          className="flex flex-wrap gap-[20px] rounded-card bg-white p-[20px] shadow-card"
+          data-testid="result-grid"
+        >
+          {children.map((child) => {
+            const ordinal = (child.shorts_index ?? 0) + 1;
+            return (
+              <ResultCard
+                key={child.job_id}
+                child={child}
+                ordinal={ordinal}
+                lengthSeconds={null}
+                productLabels={child.product_labels ?? []}
+                summary={child.render_summary ?? null}
+                // NOTE(export-backend-tbd): rename/save/export per-clip
+                // endpoints not wired. Cancel falls through to the
+                // whole-order cancel — Figma per-card cancel UX maps to
+                // the order-level POST until a per-child endpoint lands.
+                onRename={() => {
+                  /* TBD */
+                }}
+                onSave={() => {
+                  /* TBD */
+                }}
+                onExport={() => {
+                  /* TBD */
+                }}
+                onCancel={() => void cancel()}
+                onOpenEditor={() => openEditor(child)}
+              />
+            );
+          })}
+        </div>
       )}
     </div>
   );
 }
 
-interface FailureStateProps {
+interface FailureBannerProps {
   status: ScanOrderStatusResponse;
 }
 
-function FailureState({ status }: FailureStateProps) {
+function FailureBanner({ status }: FailureBannerProps) {
   const parentError = status.parent.error_code
     ? friendlyParentError(status.parent.error_code, status.parent.error_message)
     : null;
-  // Distinct failure shapes — distinguish so the user gets a precise
-  // explanation rather than a generic "something broke":
-  //   1. Parent has an error_code      → friendlyParentError
-  //   2. Parent stage = cancelled      → "취소되었어요"
-  //   3. All children completed without producing a render — covers
-  //      the ``_complete_no_render`` paths from the STT pipeline
-  //      (no_mentions / transcript_unavailable / live_block_too_short).
-  //      The runner doesn't set error_code on the parent for these,
-  //      so they reach FailureState via ``deriveState``'s
-  //      "all children terminal AND no render produced" predicate.
-  //      → "쇼츠를 만들 수 있는 구간을 찾지 못했어요"
-  //   4. All children failed (rare;    → "생성 요청한 모든 쇼츠가 실패했어요"
-  //      parent terminal-success but
-  //      children_failed === total)
-  const allChildrenDoneNoRender =
-    status.children_total > 0 &&
-    status.children.length === status.children_total &&
-    status.children.every(
-      (c) =>
-        c.stage === "done" && c.render_status !== "completed",
-    );
 
   let body: string;
   if (parentError) {
     body = parentError;
   } else if (status.parent.stage === "cancelled") {
     body = "취소되었어요.";
-  } else if (allChildrenDoneNoRender) {
-    body =
-      "선택하신 영상에서는 쇼츠를 만들 수 있는 구간을 찾지 못했어요. " +
-      "다른 길이나 다른 영상을 시도해 주세요.";
   } else if (
     status.children_total > 0 &&
     status.children_failed === status.children_total
@@ -213,49 +273,16 @@ function FailureState({ status }: FailureStateProps) {
   } else {
     body = "쇼츠 생성에 실패했어요. 잠시 후 다시 시도해 주세요.";
   }
+
   return (
     <div
-      className="space-y-2 rounded-lg border border-red-200 bg-red-50 p-6"
+      className="space-y-1 rounded-card border border-red-h-400 bg-red-h-50 p-[16px]"
       data-testid="wizard-failure-state"
     >
-      <h2 className="text-base font-semibold text-red-800">
+      <h2 className="font-pretendard text-[14px] font-semibold text-red-h-500">
         쇼츠 생성에 실패했어요
       </h2>
-      <p className="text-sm text-red-700">{body}</p>
-    </div>
-  );
-}
-
-interface LoadingStateProps {
-  count: number;
-  childJobs: JobStatusResponse[];
-  onCancel?: () => void;
-}
-
-function LoadingState({ count, childJobs, onCancel }: LoadingStateProps) {
-  // Before fan-out lands ``children_total`` is 0 — no per-clip data to
-  // show, so render the indeterminate spinner. Once the parent's
-  // children fan out we have a concrete N and live per-child stages,
-  // which the progress component visualizes as a determinate bar +
-  // chips.
-  const hasChildren = count > 0;
-  return (
-    <div
-      className="grid gap-6 md:grid-cols-[260px_1fr]"
-      data-testid="wizard-loading-state"
-    >
-      <LoadingShortsSkeleton count={count} />
-      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-gray-200 bg-white">
-        {hasChildren ? (
-          <LoadingShortsProgress
-            children={childJobs}
-            childrenTotal={count}
-            onCancel={onCancel}
-          />
-        ) : (
-          <LoadingShortsSpinner onCancel={onCancel} />
-        )}
-      </div>
+      <p className="font-pretendard text-[12px] text-red-h-500">{body}</p>
     </div>
   );
 }

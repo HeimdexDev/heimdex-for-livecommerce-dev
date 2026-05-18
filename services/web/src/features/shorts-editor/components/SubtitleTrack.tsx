@@ -16,6 +16,8 @@ interface SubtitleTrackProps {
   onSelectSubtitle: (index: number | null) => void;
   onUpdateSubtitle: (index: number, updates: Partial<Omit<EditorSubtitle, "id">>) => void;
   onAddSubtitle: (subtitle: EditorSubtitle) => void;
+  // figma: 1669:154010 (펼침) / 1669:49002 (접힘) — zoom 변동 시 자막 섹션 펼침/접힘
+  expanded?: boolean;
 }
 
 export function SubtitleTrack({
@@ -27,6 +29,7 @@ export function SubtitleTrack({
   onSelectSubtitle,
   onUpdateSubtitle,
   onAddSubtitle,
+  expanded = false,
 }: SubtitleTrackProps) {
   const totalWidth = msToPixels(totalDurationMs + 2000, zoom);
 
@@ -60,15 +63,15 @@ export function SubtitleTrack({
 
   return (
     <div className="relative">
-      {/* Track with blocks */}
+      {/* Track with blocks — figma 1669:154010 (펼침, h-12) / 1669:49002 (접힘, h-8) */}
       <div
-        className="relative h-8 bg-gray-100"
+        className={`relative ${expanded ? "h-12" : "h-8"} bg-grayscale-10 transition-[height] duration-150`}
         style={{ width: totalWidth }}
         onDoubleClick={handleTrackDoubleClick}
       >
         {/* Track label */}
         <div className="pointer-events-none absolute -left-0 top-0 z-10 flex h-full items-center">
-          <span className="rounded-r bg-gray-200 px-1.5 py-0.5 text-[9px] font-medium text-gray-500">
+          <span className="rounded-r bg-grayscale-100 px-1.5 py-0.5 text-[9px] font-medium text-grayscale-500">
             자막
           </span>
         </div>
@@ -78,7 +81,7 @@ export function SubtitleTrack({
           <button
             type="button"
             onClick={handleAddAtPlayhead}
-            className="rounded bg-gray-300 px-1.5 py-0.5 text-[9px] font-medium text-gray-700 transition-colors hover:bg-gray-400 hover:text-white"
+            className="rounded bg-grayscale-100 px-1.5 py-0.5 text-[9px] font-medium text-grayscale-800 transition-colors hover:bg-heimdex-navy-500 hover:text-white"
           >
             + 자막
           </button>

@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 
-import { MagicWandIcon } from "./icons";
 import {
   AutoShortsAvailabilityProvider,
   useAutoShortsAvailability,
@@ -42,28 +41,23 @@ function CTAInner({
   if (isLoading && !renderWhileProbing) return null;
 
   const sharedClassName = cn(
-    "inline-flex items-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 transition-colors hover:bg-indigo-100",
+    "inline-flex h-8 items-center justify-center rounded-lg bg-heimdex-navy-500 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-heimdex-navy-600",
     className,
   );
 
   if (onClick) {
     return (
       <button type="button" onClick={onClick} className={sharedClassName}>
-        <MagicWandIcon className="h-4 w-4" />
         AI 쇼츠 생성
       </button>
     );
   }
 
-  // Legacy fallback: deep link to the standalone wizard route. Kept
-  // for direct callers that don't supply onClick. The video detail
-  // page provides onClick so users land on the inline experience.
   return (
     <Link
       href={`/export/shorts/auto/wizard/${encodeURIComponent(videoId)}/criteria`}
       className={sharedClassName}
     >
-      <MagicWandIcon className="h-4 w-4" />
       AI 쇼츠 생성
     </Link>
   );

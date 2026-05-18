@@ -1,13 +1,19 @@
 "use client";
 
+// figma: 1713:270773 (cache: .figma-cache/1713-270773_phase1_video-detail-overview.api.json)
+// Video detail overview — card outer / custom controls / source chip / speaker chip / header.
+
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { SkipBack, SkipForward } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { useAgent } from "@/features/search/hooks/useAgent";
 import { getVideoScenes, getReprocessStatus, reprocessScenes, patchSceneOverride, resetSceneOverride, getVideoSummary, generateVideoSummary, editVideoSummary, resetVideoSummary } from "@/lib/api/videos";
 import { getAgentPlaybackUrl, getAgentThumbnailUrl, getCloudPlaybackUrl, getCloudThumbnailUrl } from "@/lib/agent";
 import { SceneThumbnail } from "@/components/SceneThumbnail";
+import { CopyIcon } from "@/components/icons";
 import { formatTimestamp } from "@/lib/api/utils";
+import { formatVideoTimestampHMS } from "@/lib/timeline";
 import type { VideoScene, VideoScenesResponse, VideoSummaryResponse, ReprocessJobResponse, ReprocessParams } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { OpenInDriveButton } from "@/components/OpenInDriveButton";
@@ -28,6 +34,8 @@ import {
 import { useOrgSettings } from "@/lib/orgSettings";
 import { useSceneGroups } from "@/features/videos/hooks/useSceneGroups";
 import { getDetailThumbnailClass, getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
+import { Pagination } from "@/components/ui/Pagination";
+import { useTopHeaderBack } from "@/components/layout/TopHeaderActionsContext";
 
 type ViewMode = "overview" | "scenes" | "people" | "auto-shorts";
 
@@ -48,6 +56,23 @@ function formatHms(ms: number): string {
   return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
+function middleTruncate(filename: string, max: number): string {
+  if (filename.length <= max) return filename;
+  const lastDot = filename.lastIndexOf(".");
+  const hasExt = lastDot > 0 && lastDot < filename.length - 1;
+  const ext = hasExt ? filename.slice(lastDot) : "";
+  const base = hasExt ? filename.slice(0, lastDot) : filename;
+  const ellipsis = "...";
+  const budget = max - ext.length - ellipsis.length;
+  if (budget <= 0) {
+    const head = Math.max(0, max - ellipsis.length);
+    return filename.slice(0, head) + ellipsis;
+  }
+  const front = Math.ceil(budget / 2);
+  const back = budget - front;
+  return base.slice(0, front) + ellipsis + base.slice(base.length - back) + ext;
+}
+
 function formatDatetime(iso: string): string {
   const d = new Date(iso);
   const y = d.getFullYear();
@@ -59,42 +84,10 @@ function formatDatetime(iso: string): string {
   return `${y}-${mo}-${day} ${hh}:${mm}:${ss}`;
 }
 
-function BackArrowIcon() {
-  return (
-    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
-    </svg>
-  );
-}
-
-function DownloadIcon() {
-  return (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
-    </svg>
-  );
-}
-
-function CopyIcon() {
-  return (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
-    </svg>
-  );
-}
-
 function SearchIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-    </svg>
-  );
-}
-
-function ScissorsIcon() {
-  return (
-    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7.848 8.25l1.536.887M7.848 8.25a3 3 0 11-5.196-3 3 3 0 015.196 3zm1.536.887a2.165 2.165 0 011.083 1.839c.005.351.054.695.14 1.024M9.384 9.137l2.077 1.199M7.848 15.75l1.536-.887m-1.536.887a3 3 0 11-5.196 3 3 3 0 015.196-3zm1.536-.887a2.165 2.165 0 001.083-1.838c.005-.352.054-.695.14-1.025m-1.223 2.863l2.077-1.199m0-3.328a4.323 4.323 0 012.068-1.379l5.325-1.628a4.5 4.5 0 012.48-.044l.803.215-7.794 4.5m-2.882-1.664A4.331 4.331 0 0010.607 12m3.736 0l7.794 4.5-.803.215a4.5 4.5 0 01-2.48-.043l-5.326-1.629a4.324 4.324 0 01-2.068-1.379M14.343 12l-2.882 1.664" />
     </svg>
   );
 }
@@ -131,6 +124,25 @@ function CcIcon() {
   );
 }
 
+function PlayIcon() {
+  // figma: 1602:38481 lucide/play (20×20, fill currentColor, rounded line joins)
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round">
+      <polygon points="6 3 21 12 6 21 6 3" />
+    </svg>
+  );
+}
+
+function PauseIcon() {
+  // figma: 1602:38481 lucide/pause (20×20)
+  return (
+    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round">
+      <rect x="14" y="4" width="4" height="16" rx="1" />
+      <rect x="6" y="4" width="4" height="16" rx="1" />
+    </svg>
+  );
+}
+
 function CheckCircleIcon({ filled }: { filled: boolean }) {
   if (filled) {
     return (
@@ -159,30 +171,23 @@ function VideoInfoPanel({
   scenes,
   seekMs,
   seekKey,
-  onReprocessClick,
-  isReprocessing,
-  onBlurClick,
-  hasBlurJob,
-  blurDisabled,
 }: {
   videoId: string;
   meta: VideoScenesResponse | null;
   scenes: VideoScene[];
   seekMs?: number | null;
   seekKey?: number;
-  onReprocessClick: () => void;
-  isReprocessing: boolean;
-  onBlurClick: () => void;
-  hasBlurJob: boolean;
-  blurDisabled: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { settings } = useOrgSettings();
-  const aspectRatio = settings.thumbnail_aspect_ratio as ThumbnailAspectRatio;
   const title = meta?.video_title || videoId;
   const lastEnd = scenes.length > 0 ? scenes[scenes.length - 1].end_ms : 0;
   const firstStart = scenes.length > 0 ? scenes[0].start_ms : 0;
   const durationMs = lastEnd - firstStart;
+
+  // figma 1602:38481 — overlay controls: progress bar + play + skip pill + time pill
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [totalTimeMs, setTotalTimeMs] = useState(0);
 
   const sourceLabel =
     meta?.source_type === "gdrive" ? "Google Drive"
@@ -204,7 +209,6 @@ function VideoInfoPanel({
     ["파일 위치", sourceLabel],
     ["폴더 제목", folderName],
     ["재생 시간", durationMs > 0 ? formatHms(durationMs) : "-"],
-    ["촬영 장소", "-"],
     ["업로드 일자", captureDate],
   ];
 
@@ -225,6 +229,51 @@ function VideoInfoPanel({
     }
   }, [seekMs, seekKey]);
 
+  // 커스텀 컨트롤용 video 이벤트 바인딩
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    const onTime = () => setCurrentTimeMs(video.currentTime * 1000);
+    const onLoaded = () => setTotalTimeMs((video.duration || 0) * 1000);
+    video.addEventListener("play", onPlay);
+    video.addEventListener("pause", onPause);
+    video.addEventListener("timeupdate", onTime);
+    video.addEventListener("loadedmetadata", onLoaded);
+    return () => {
+      video.removeEventListener("play", onPlay);
+      video.removeEventListener("pause", onPause);
+      video.removeEventListener("timeupdate", onTime);
+      video.removeEventListener("loadedmetadata", onLoaded);
+    };
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      void video.play().catch(() => {});
+    } else {
+      video.pause();
+    }
+  }, []);
+
+  const skipBy = useCallback((deltaSec: number) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(video.duration)) return;
+    const next = Math.min(video.duration, Math.max(0, video.currentTime + deltaSec));
+    video.currentTime = next;
+  }, []);
+
+  const handleProgressSeek = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const video = videoRef.current;
+    if (!video || !video.duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    video.currentTime = ratio * video.duration;
+  }, []);
+
   const isCloud = meta?.source_type === "gdrive";
   const playbackUrl = isCloud
     ? getCloudPlaybackUrl(videoId)
@@ -233,59 +282,109 @@ function VideoInfoPanel({
     ? (scenes.length > 0 ? getCloudThumbnailUrl(videoId, scenes[0].scene_id) : undefined)
     : getAgentThumbnailUrl(videoId);
 
+  const progressRatio = totalTimeMs > 0 ? (currentTimeMs / totalTimeMs) * 100 : 0;
+
+  const displayTotalMs = totalTimeMs > 0 ? totalTimeMs : durationMs;
+
   return (
-    <div>
-      <div className={cn(
-        "w-full overflow-hidden rounded-lg bg-black",
-        getThumbnailAspectClass(aspectRatio),
-      )}>
+    // figma: 1602:38477 — 좌측 영상 카드 (rounded-10 shadow-card, no border)
+    <div className="flex flex-col overflow-hidden rounded-card bg-white shadow-card">
+      {/* figma 1602:38478 — 제목 영역 flex-col items-start gap-6, pt-20 pb-10 px-20 */}
+      <div className="flex min-w-0 flex-col items-start gap-1.5 px-5 pb-2.5 pt-5">
+        <div className="flex min-w-0 items-center gap-2">
+          <h2
+            className="min-w-0 text-lg font-semibold tracking-[-0.45px] text-neutral-h-black"
+            title={title}
+          >
+            {middleTruncate(title, 30)}
+          </h2>
+          <OpenInDriveButton
+            sourceType={meta?.source_type ?? "local"}
+            webViewLink={meta?.web_view_link}
+          />
+        </div>
+      </div>
+
+      {/* figma 1602:38480 — 비디오 frame 341×606 with overlay 컨트롤 */}
+      <div className="relative h-[606px] w-full overflow-hidden bg-black">
         <video
           ref={videoRef}
           src={playbackUrl}
-          controls
-          className="h-full w-full object-contain"
+          className="absolute inset-0 h-full w-full object-contain"
           poster={posterUrl}
         />
-      </div>
 
-      <div className="mt-6 flex items-center gap-2">
-        <h2 className="text-xl font-bold text-gray-900">{title}</h2>
-        <OpenInDriveButton
-          sourceType={meta?.source_type ?? "local"}
-          webViewLink={meta?.web_view_link}
-        />
-        {!isReprocessing && (
-          <button
-            type="button"
-            onClick={onReprocessClick}
-            className="ml-auto rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+        {/* figma 1602:38481 — 컨트롤 overlay (absolute inset-0, justify-end, p-10, gap-12) */}
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-start justify-end gap-3 p-2.5">
+          {/* figma 1602:38482 — 진행바 (h-4 white track, navy fill) */}
+          <div
+            role="slider"
+            tabIndex={0}
+            aria-valuemin={0}
+            aria-valuemax={Math.max(0, Math.round(displayTotalMs / 1000))}
+            aria-valuenow={Math.round(currentTimeMs / 1000)}
+            aria-label="재생 진행"
+            onClick={handleProgressSeek}
+            className="pointer-events-auto relative h-1 w-full cursor-pointer overflow-hidden bg-white"
           >
-            장면 재분석
-          </button>
-        )}
-        {!blurDisabled && (
-          <button
-            type="button"
-            onClick={onBlurClick}
-            className={cn(
-              "rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-gray-50",
-              isReprocessing ? "ml-auto" : "ml-0",
-              "border-gray-300 bg-white text-gray-700",
-            )}
-          >
-            {hasBlurJob ? "블러 상세 보기" : "블러 처리"}
-          </button>
-        )}
-      </div>
-
-      <dl className="mt-4 space-y-3">
-        {rows.map(([label, value]) => (
-          <div key={label} className="flex items-baseline gap-4 text-sm">
-            <dt className="w-[140px] flex-shrink-0 text-gray-500">{label}</dt>
-            <dd className="text-gray-900">{value}</dd>
+            <div
+              className="absolute left-0 top-0 h-full bg-heimdex-navy-500"
+              style={{ width: `${progressRatio}%` }}
+            />
           </div>
-        ))}
-      </dl>
+
+          {/* figma 1602:38485 — 버튼 row (play 32, skip pill 72×32, time pill) */}
+          <div className="pointer-events-auto flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={togglePlay}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-[rgba(38,38,38,0.5)] text-white"
+              aria-label={isPlaying ? "일시정지" : "재생"}
+            >
+              {isPlaying ? <PauseIcon /> : <PlayIcon />}
+            </button>
+            <div className="flex h-8 w-[72px] items-center justify-between rounded-full bg-[rgba(38,38,38,0.5)] px-2 py-0.5">
+              <button
+                type="button"
+                onClick={() => skipBy(-5)}
+                className="text-white"
+                aria-label="5초 뒤로"
+              >
+                <SkipBack className="h-5 w-5" strokeWidth={1.667} />
+              </button>
+              <button
+                type="button"
+                onClick={() => skipBy(5)}
+                className="text-white"
+                aria-label="5초 앞으로"
+              >
+                <SkipForward className="h-5 w-5" strokeWidth={1.667} />
+              </button>
+            </div>
+            <div className="flex h-8 items-center rounded-full bg-[rgba(38,38,38,0.5)] px-2 py-0.5">
+              <span className="text-sm font-medium tracking-[-0.35px] text-white">
+                {formatHms(currentTimeMs)} / {formatHms(displayTotalMs)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* figma 1602:38496 / 1607:64939 — 메타 정보 (p-20, left-aligned 2 col) */}
+      <div className="flex flex-col items-start p-5">
+        <div className="flex items-start gap-8 text-sm font-medium leading-[1.4] tracking-[-0.35px]">
+          <div className="flex flex-col items-start gap-5 whitespace-nowrap text-neutral-500">
+            {rows.map(([label]) => (
+              <p key={label}>{label}</p>
+            ))}
+          </div>
+          <div className="flex flex-col items-start gap-5 whitespace-nowrap text-grayscale-800">
+            {rows.map(([label, value]) => (
+              <p key={label}>{value}</p>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -361,6 +460,15 @@ function OverviewPanel({
     [scenes],
   );
 
+  // 행동 요약 fallback은 타임스탬프 prefix 없는 평문 사용 (figma: 1602:38538 본문 spec)
+  const transcriptPlainForSummary = useMemo(
+    () => scenes
+      .filter((s) => s.transcript_raw)
+      .map((s) => s.transcript_raw)
+      .join("\n\n"),
+    [scenes],
+  );
+
   const diarizedScenes = useMemo(
     () => scenes
       .map((s) => ({ startMs: s.start_ms, turns: parseSpeakerTranscript(s.speaker_transcript) }))
@@ -380,7 +488,7 @@ function OverviewPanel({
     return joined.length > 500 ? joined.slice(0, 500) + "..." : joined;
   }, [scenes]);
 
-  const summaryText = summaryData?.summary || captionFallback || fullTranscript;
+  const summaryText = summaryData?.summary || captionFallback || transcriptPlainForSummary;
   const hasSummary = Boolean(summaryData?.summary);
   const displaySummary = summaryText.length > 500 ? summaryText.slice(0, 500) + "..." : summaryText;
 
@@ -395,17 +503,29 @@ function OverviewPanel({
   }, []);
 
   return (
-    <div>
-      <div className="mt-2">
+    // figma: 1602:38512 — 행동요약 + 스크립트 sections; the surrounding card
+    // (radius/shadow/padding) is provided by VideoDetailPage's outer wrapper.
+    <div className="flex flex-col gap-6">
+      {/* figma: 1602:38474 (행동요약) — 제목 우측에 복사 아이콘 + AI/수정/재생성 뱃지 */}
+      <section className="flex flex-col gap-5">
         <div className="flex items-center gap-3">
-          <h3 className="text-lg font-bold text-gray-900">행동 요약</h3>
+          <h3 className="text-lg font-semibold tracking-[-0.45px] text-neutral-h-black">행동 요약</h3>
+          <button
+            type="button"
+            onClick={() => handleCopy(summaryText, "summary")}
+            className="inline-flex items-center text-neutral-h-500 transition-colors hover:text-grayscale-800"
+            aria-label="행동 요약 복사"
+            title={copiedSection === "summary" ? "복사됨" : "복사"}
+          >
+            <CopyIcon className="h-4 w-4 text-neutral-h-500" />
+          </button>
           {summaryLoading && (
             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500 animate-pulse">
               생성 중...
             </span>
           )}
           {!summaryLoading && hasSummary && !summaryData?.is_edited && (
-            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-600">AI</span>
+            <span className="rounded-full bg-grayscale-100 px-2 py-0.5 text-xs font-medium text-heimdex-navy-500">AI</span>
           )}
           {!summaryLoading && summaryData?.is_edited && (
             <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-600">수정됨</span>
@@ -421,43 +541,45 @@ function OverviewPanel({
           )}
         </div>
         {hasSummary ? (
-          <div className="mt-4">
-            <InlineEditField
-              value={summaryData?.summary ?? ""}
-              fieldName="video_summary"
-              isEdited={summaryData?.is_edited}
-              onSave={handleSaveSummary}
-              onReset={summaryData?.is_edited ? handleResetSummary : undefined}
-              multiline
-              maxLength={5000}
-              placeholder="요약 정보가 없습니다."
-            />
-          </div>
+          <InlineEditField
+            value={summaryData?.summary ?? ""}
+            fieldName="video_summary"
+            isEdited={summaryData?.is_edited}
+            onSave={handleSaveSummary}
+            onReset={summaryData?.is_edited ? handleResetSummary : undefined}
+            multiline
+            maxLength={5000}
+            placeholder="요약 정보가 없습니다."
+          />
         ) : (
-          <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+          <p className="whitespace-pre-wrap text-sm leading-[1.6] text-grayscale-600">
             {displaySummary || "요약 정보가 없습니다."}
           </p>
         )}
-        <button
-          type="button"
-          onClick={() => handleCopy(summaryText, "summary")}
-          className="mt-3 inline-flex items-center gap-1.5 text-sm text-gray-400 transition-colors hover:text-gray-600"
-        >
-          <CopyIcon />
-          {copiedSection === "summary" ? "복사됨" : ""}
-        </button>
-      </div>
+      </section>
 
-      <div className="mt-8">
-        <h3 className="text-lg font-bold text-gray-900">스크립트</h3>
+      {/* figma: 1602:38542 (스크립트) — 제목 우측에 복사 아이콘, 본문만 독립 스크롤 */}
+      <section className="flex flex-col gap-5">
+        <div className="flex items-center gap-3">
+          <h3 className="text-lg font-semibold tracking-[-0.45px] text-neutral-h-black">스크립트</h3>
+          <button
+            type="button"
+            onClick={() => handleCopy(fullTranscript, "script")}
+            className="inline-flex items-center text-neutral-h-500 transition-colors hover:text-grayscale-800"
+            aria-label="스크립트 복사"
+            title={copiedSection === "script" ? "복사됨" : "복사"}
+          >
+            <CopyIcon className="h-4 w-4 text-neutral-h-500" />
+          </button>
+        </div>
         {hasDiarization ? (
-          <div className="mt-4 max-h-[500px] overflow-y-auto space-y-3">
+          <div className="max-h-[800px] overflow-y-auto space-y-3">
             {diarizedScenes.map((ds, si) => (
               <div key={si}>
                 <div className="space-y-1">
                   {ds.turns.map((turn, ti) => (
                     <div key={ti} className={cn("flex gap-2 text-sm leading-relaxed", turn.color.border, "border-l-2 pl-2")}>
-                      <span className={cn("inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold mt-0.5", turn.color.bg, turn.color.text)}>
+                      <span className={cn("inline-flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-medium mt-0.5", turn.color.bg, turn.color.text)}>
                         {turn.label}
                       </span>
                       {turn.timestamp && (
@@ -471,19 +593,11 @@ function OverviewPanel({
             ))}
           </div>
         ) : (
-          <div className="mt-4 max-h-[500px] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+          <div className="max-h-[800px] overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
             {fullTranscript || "스크립트가 없습니다."}
           </div>
         )}
-        <button
-          type="button"
-          onClick={() => handleCopy(fullTranscript, "script")}
-          className="mt-3 inline-flex items-center gap-1.5 text-sm text-gray-400 transition-colors hover:text-gray-600"
-        >
-          <CopyIcon />
-          {copiedSection === "script" ? "복사됨" : ""}
-        </button>
-      </div>
+      </section>
     </div>
   );
 }
@@ -526,7 +640,7 @@ export function SceneCard({
   }, [isSelected]);
 
   const durationSec = Math.round((scene.end_ms - scene.start_ms) / 1000);
-  const timeRange = `${formatTimestamp(scene.start_ms)} - ${formatTimestamp(scene.end_ms)}`;
+  const timeRange = `${formatVideoTimestampHMS(scene.start_ms)} - ${formatVideoTimestampHMS(scene.end_ms)}`;
   const transcriptPreview = scene.transcript_raw.length > 100
     ? scene.transcript_raw.slice(0, 100) + "..."
     : scene.transcript_raw;
@@ -537,172 +651,194 @@ export function SceneCard({
     ? captionText.slice(0, 100) + "..."
     : captionText;
 
+  void aspectRatio;
+  void summaryExpanded;
+  void setSummaryExpanded;
+  void subtitleExpanded;
+  void setSubtitleExpanded;
+  void speakerExpanded;
+  void setSpeakerExpanded;
+  void transcriptPreview;
+  void captionPreview;
+
+  // Both portrait and landscape orientations now share the same
+  // LandscapeSceneCard layout so the time chip, checkbox, and inline editors
+  // stay consistent across aspect-ratio settings.
+  return (
+    <LandscapeSceneCard
+      scene={scene}
+      index={index}
+      videoId={videoId}
+      agentAvailable={agentAvailable}
+      isSelected={isSelected}
+      onToggle={onToggle}
+      onSeek={onSeek}
+      isPlaying={isPlaying}
+      timeRange={timeRange}
+      durationSec={durationSec}
+      captionText={captionText}
+      speakerTurns={speakerTurns}
+      hasSpeakers={hasSpeakers}
+      onSaveOverride={onSaveOverride}
+      onResetOverride={onResetOverride}
+    />
+  );
+}
+
+
+// figma: 1602:39052 (장면 분석 카드, 16:9 가로형)
+function LandscapeSceneCard({
+  scene,
+  index,
+  videoId,
+  agentAvailable,
+  isSelected,
+  onToggle,
+  onSeek,
+  isPlaying,
+  timeRange,
+  durationSec,
+  captionText,
+  speakerTurns,
+  hasSpeakers,
+  onSaveOverride,
+  onResetOverride,
+}: {
+  scene: VideoScene;
+  index: number;
+  videoId: string;
+  agentAvailable: boolean;
+  isSelected: boolean;
+  onToggle: (id: string) => void;
+  onSeek?: (startMs: number) => void;
+  isPlaying?: boolean;
+  timeRange: string;
+  durationSec: number;
+  captionText: string;
+  speakerTurns: ReturnType<typeof parseSpeakerTranscript>;
+  hasSpeakers: boolean;
+  onSaveOverride?: (sceneId: string, fieldName: string, value: string | string[]) => Promise<void>;
+  onResetOverride?: (sceneId: string, fieldName: string) => Promise<void>;
+}) {
+  const bodyText = captionText || scene.transcript_raw;
+  const bodyField = captionText ? "scene_caption" : "transcript_raw";
+
   return (
     <div
       className={cn(
-        "rounded-xl border bg-white transition-all",
-        isPlaying
-          ? "border-indigo-500 border-l-4 border-l-indigo-500 ring-2 ring-indigo-500/20"
-          : isSelected
-            ? "border-indigo-500 ring-2 ring-indigo-500/20"
-            : "border-gray-200",
+        "overflow-hidden rounded-card bg-white transition-all",
+        isPlaying || isSelected
+          ? "border-2 border-heimdex-navy-500"
+          : "border border-grayscale-100",
       )}
     >
-      <div className="flex gap-0">
-        <div className={cn("flex-shrink-0", getDetailThumbnailClass(aspectRatio))}>
-          <button
-            type="button"
-            onClick={() => onSeek?.(scene.start_ms)}
-            className="relative group w-full cursor-pointer"
-            title={`장면${index + 1} 재생`}
-          >
-            <SceneThumbnail
-              videoId={videoId}
-              sceneId={scene.scene_id}
-              agentAvailable={agentAvailable}
-              className={cn("w-full rounded-tl-xl", getThumbnailAspectClass(aspectRatio))}
-            />
-            <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/30 transition-colors rounded-tl-xl">
-              <svg
-                className="h-10 w-10 text-white opacity-0 group-hover:opacity-100 transition-opacity drop-shadow-lg"
-                fill="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path d="M8 5v14l11-7z" />
-              </svg>
-            </div>
-          </button>
-        </div>
-
-        <div className="flex-1 min-w-0 p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-bold text-gray-900">장면{index + 1}</span>
-            <div className="flex items-center gap-2">
-              <span className="rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{timeRange}</span>
-              <span className="text-xs text-gray-500">{durationSec}초</span>
-              <button type="button" onClick={() => onToggle(scene.scene_id)}>
-                <CheckCircleIcon filled={isSelected} />
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-3 border-t border-gray-100 pt-3">
-            <button
-              type="button"
-              onClick={() => setSummaryExpanded((v) => !v)}
-              className="flex w-full items-center justify-between"
+      <div className="flex items-stretch">
+        <button
+          type="button"
+          onClick={() => onSeek?.(scene.start_ms)}
+          className="group relative w-[180px] flex-shrink-0 self-stretch overflow-hidden bg-black"
+          title={`장면${index + 1} 재생`}
+        >
+          <SceneThumbnail
+            videoId={videoId}
+            sceneId={scene.scene_id}
+            agentAvailable={agentAvailable}
+            className="h-full w-full object-cover"
+          />
+          <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30">
+            <svg
+              className="h-10 w-10 text-white opacity-0 drop-shadow-lg transition-opacity group-hover:opacity-100"
+              fill="currentColor"
+              viewBox="0 0 24 24"
             >
-              <div className="flex items-center gap-2 text-sm text-gray-700">
-                <ClipboardIcon />
-                <span className="font-medium">행동 요약</span>
-                {captionText && (
-                  <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">AI</span>
-                )}
-              </div>
-              {summaryExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
-            </button>
-            {summaryExpanded && onSaveOverride ? (
-              <div className="mt-2">
-                <InlineEditField
-                  value={captionText || scene.transcript_raw}
-                  fieldName={captionText ? "scene_caption" : "transcript_raw"}
-                  isEdited={scene.edited_fields?.includes(captionText ? "scene_caption" : "transcript_raw")}
-                  onSave={async (field, val) => { await onSaveOverride(scene.scene_id, field, val); }}
-                  onReset={onResetOverride ? async (field) => { await onResetOverride(scene.scene_id, field); } : undefined}
-                />
-              </div>
-            ) : (
-              <p className={cn(
-                "mt-2 text-sm leading-relaxed text-gray-600",
-                !summaryExpanded && "line-clamp-2",
-              )}>
-                {captionText
-                  ? (summaryExpanded ? captionText : captionPreview)
-                  : (summaryExpanded ? scene.transcript_raw : transcriptPreview)}
-              </p>
-            )}
+              <path d="M8 5v14l11-7z" />
+            </svg>
           </div>
+        </button>
 
-          {hasSpeakers ? (
-            <div className="mt-3 border-t border-gray-100 pt-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-4 p-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-grayscale-800">장면{index + 1}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="inline-flex h-5 items-center rounded bg-grayscale-100 px-1 text-[10px] font-medium text-grayscale-500">
+                {timeRange}
+              </span>
+              <span className="text-[10px] font-medium text-grayscale-500">{durationSec}초</span>
               <button
                 type="button"
-                onClick={() => setSpeakerExpanded((v) => !v)}
-                className="flex w-full items-center justify-between"
+                onClick={() => onToggle(scene.scene_id)}
+                aria-label={isSelected ? "선택 해제" : "선택"}
+                aria-pressed={isSelected}
+                className={cn(
+                  "inline-flex h-[22px] w-[22px] items-center justify-center rounded-checkbox border transition-colors",
+                  isSelected
+                    ? "border-heimdex-navy-500 bg-heimdex-navy-500 text-white"
+                    : "border-grayscale-300 bg-white text-transparent hover:border-heimdex-navy-500",
+                )}
               >
-                <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <CcIcon />
-                  <span className="font-medium">자막</span>
-                  {(scene.speaker_count ?? 0) > 1 && (
-                    <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
-                      화자 {scene.speaker_count}명
-                    </span>
-                  )}
-                </div>
-                {speakerExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
               </button>
-              {speakerExpanded && onSaveOverride ? (
-                <div className="mt-2">
-                  <InlineEditField
-                    value={scene.speaker_transcript ?? ""}
-                    fieldName="speaker_transcript"
-                    isEdited={scene.edited_fields?.includes("speaker_transcript")}
-                    onSave={async (field, val) => { await onSaveOverride(scene.scene_id, field, val); }}
-                    onReset={onResetOverride ? async (field) => { await onResetOverride(scene.scene_id, field); } : undefined}
-                    placeholder="화자 자막을 입력하세요"
-                  />
-                </div>
-              ) : (
-                <div className={cn("mt-2 space-y-1", !speakerExpanded && "max-h-[4.5rem] overflow-hidden")}>
-                  {speakerTurns.map((turn, i) => (
-                    <div key={i} className={cn("flex gap-2 text-sm leading-relaxed", turn.color.border, "border-l-2 pl-2")}>
-                      <span className={cn("inline-flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold mt-0.5", turn.color.bg, turn.color.text)}>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2.5">
+            {onSaveOverride ? (
+              <InlineEditField
+                value={bodyText}
+                fieldName={bodyField}
+                isEdited={scene.edited_fields?.includes(bodyField)}
+                onSave={async (field, val) => {
+                  await onSaveOverride(scene.scene_id, field, val);
+                }}
+                onReset={
+                  onResetOverride
+                    ? async (field) => {
+                        await onResetOverride(scene.scene_id, field);
+                      }
+                    : undefined
+                }
+              />
+            ) : (
+              <p className="text-[10px] leading-[1.6] tracking-[-0.25px] text-grayscale-800">
+                {bodyText}
+              </p>
+            )}
+
+            <hr className="border-0 border-t border-grayscale-100" />
+
+            <div className="flex flex-col gap-2">
+              {hasSpeakers ? (
+                speakerTurns.map((turn, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <div className="flex flex-shrink-0 items-center gap-1">
+                      <span
+                        className={cn(
+                          "inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-medium",
+                          turn.color.bg,
+                          turn.color.text,
+                        )}
+                      >
                         {turn.label}
                       </span>
                       {turn.timestamp && (
-                        <span className="text-gray-400 font-mono text-xs flex-shrink-0 mt-0.5">{turn.timestamp}</span>
+                        <span className="text-[10px] font-medium text-grayscale-500">{turn.timestamp}</span>
                       )}
-                      <span className="text-gray-700">{turn.text}</span>
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="mt-3 border-t border-gray-100 pt-3">
-              <button
-                type="button"
-                onClick={() => setSubtitleExpanded((v) => !v)}
-                className="flex w-full items-center justify-between"
-              >
-                <div className="flex items-center gap-2 text-sm text-gray-700">
-                  <CcIcon />
-                  <span className="font-medium">자막</span>
-                </div>
-                {subtitleExpanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
-              </button>
-              {subtitleExpanded && onSaveOverride ? (
-                <div className="mt-2">
-                  <InlineEditField
-                    value={scene.transcript_raw}
-                    fieldName="transcript_raw"
-                    isEdited={scene.edited_fields?.includes("transcript_raw")}
-                    onSave={async (field, val) => { await onSaveOverride(scene.scene_id, field, val); }}
-                    onReset={onResetOverride ? async (field) => { await onResetOverride(scene.scene_id, field); } : undefined}
-                    placeholder="자막을 입력하세요"
-                  />
-                </div>
+                    <p className="flex-1 text-[10px] leading-[1.6] tracking-[-0.25px] text-grayscale-800">
+                      {turn.text}
+                    </p>
+                  </div>
+                ))
               ) : (
-                <p className={cn(
-                  "mt-2 text-sm leading-relaxed text-gray-600",
-                  !subtitleExpanded && "line-clamp-2",
-                )}>
-                  <span className="text-gray-400 font-mono text-xs">[{formatTimestamp(scene.start_ms)}]</span>{" "}
-                  {subtitleExpanded ? scene.transcript_raw : transcriptPreview}
+                <p className="text-[10px] leading-[1.6] tracking-[-0.25px] text-grayscale-800">
+                  <span className="font-mono text-grayscale-400">[{formatTimestamp(scene.start_ms)}]</span>{" "}
+                  {scene.transcript_raw}
                 </p>
               )}
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>
@@ -715,7 +851,7 @@ function ScenesPanel({
   videoId,
   agentAvailable,
   onSeekToScene,
-  onAutoShortsClick,
+  onBlurClick,
   activeSceneMs,
   getToken,
   aspectRatio,
@@ -725,10 +861,7 @@ function ScenesPanel({
   videoId: string;
   agentAvailable: boolean;
   onSeekToScene?: (startMs: number) => void;
-  /** Optional override — when set, the AutoShorts CTA fires this callback
-   *  (used by the inline-wizard flow on the detail page) instead of
-   *  navigating to the legacy standalone wizard route. */
-  onAutoShortsClick?: () => void;
+  onBlurClick: () => void;
   activeSceneMs?: number | null;
   getToken: () => Promise<string | null>;
   aspectRatio: ThumbnailAspectRatio;
@@ -832,39 +965,19 @@ function ScenesPanel({
     });
   }, []);
 
-  const pageNumbers = useMemo(() => {
-    const result: (number | "ellipsis")[] = [];
-    if (totalPages <= 7) {
-      for (let i = 1; i <= totalPages; i++) result.push(i);
-    } else {
-      result.push(1);
-      let start = Math.max(2, currentPage - 1);
-      let end = Math.min(totalPages - 1, currentPage + 1);
-      if (currentPage <= 3) { start = 2; end = Math.min(5, totalPages - 1); }
-      else if (currentPage >= totalPages - 2) { start = Math.max(2, totalPages - 4); end = totalPages - 1; }
-      if (start > 2) result.push("ellipsis");
-      for (let i = start; i <= end; i++) result.push(i);
-      if (end < totalPages - 1) result.push("ellipsis");
-      result.push(totalPages);
-    }
-    return result;
-  }, [currentPage, totalPages]);
-
-  const btnBase = "inline-flex h-8 w-8 items-center justify-center rounded text-sm transition-colors";
-
   return (
     <div>
-      <h2 className="text-lg font-bold text-gray-900">장면 검색</h2>
-
-      <form onSubmit={handleSearch} className="mt-4 flex items-center gap-3">
-        <div className="relative flex-1">
-          <SearchIcon className="absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+      {/* figma: 1602:39045 — border-grayscale/500 p-16 r-10, Enter to submit;
+          no trailing 검색 button per the new spec. */}
+      <form onSubmit={handleSearch}>
+        <div className="relative">
+          <SearchIcon className="absolute left-4 top-1/2 h-6 w-6 -translate-y-1/2 text-grayscale-500" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="파일 내에서 원하는 장면을 검색하여 찾아보세요."
-            className="w-full rounded-lg border border-gray-200 bg-gray-50 py-3 pl-12 pr-10 text-sm placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            placeholder="영상 내에서 원하는 장면을 검색하여 찾아보세요."
+            className="w-full rounded-[10px] border border-grayscale-500 bg-white p-[16px] pl-[52px] pr-10 text-[16px] font-medium leading-[1.4] tracking-[-0.4px] text-grayscale-800 placeholder:text-neutral-h-300 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
           />
           {activeSearch && (
             <button
@@ -876,7 +989,8 @@ function ScenesPanel({
                 setSearchTotal(0);
                 setCurrentPage(1);
               }}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-grayscale-400 hover:text-grayscale-800"
+              aria-label="검색어 지우기"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
@@ -884,12 +998,6 @@ function ScenesPanel({
             </button>
           )}
         </div>
-        <button
-          type="submit"
-          className="rounded-lg bg-indigo-500 px-6 py-3 text-sm font-medium text-white transition-colors hover:bg-indigo-600"
-        >
-          검색
-        </button>
       </form>
 
       {initialTotal >= 5 && !activeSearch && (
@@ -933,24 +1041,30 @@ function ScenesPanel({
               : `${displayTotal}개 장면`}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <AutoShortsCTA videoId={videoId} onClick={onAutoShortsClick} />
+        {/* figma: 1602:39047 — 결과 헤더 우측 [블러 처리][쇼츠 제작] */}
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={onBlurClick}
+            className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-100"
+          >
+            블러 처리
+          </button>
           <button
             type="button"
             disabled={selectedIds.size === 0}
             onClick={() => {
               if (selectedIds.size > 0) {
-                router.push(`/export/shorts/create?videoId=${videoId}&sceneIds=${Array.from(selectedIds).join(",")}`);
+                router.push(`/export/shorts/editor?videoId=${videoId}&sceneIds=${Array.from(selectedIds).join(",")}`);
               }
             }}
             className={cn(
-              "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors",
+              "inline-flex h-8 items-center justify-center rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors",
               selectedIds.size > 0
-                ? "bg-indigo-500 text-white hover:bg-indigo-600"
-                : "bg-gray-300 text-gray-500 cursor-not-allowed",
+                ? "bg-heimdex-navy-500 text-white hover:bg-heimdex-navy-600"
+                : "bg-grayscale-200 text-grayscale-500 cursor-not-allowed",
             )}
           >
-            <ScissorsIcon />
             쇼츠 제작
           </button>
         </div>
@@ -1005,60 +1119,13 @@ function ScenesPanel({
         </div>
       )}
 
-      {totalPages > 1 && !groupingEnabled && (
-        <nav className="mt-8 flex items-center justify-center gap-1">
-          <button
-            type="button"
-            disabled={currentPage === 1}
-            onClick={() => setCurrentPage(1)}
-            className={cn(btnBase, currentPage === 1 ? "cursor-not-allowed text-gray-300" : "text-gray-500 hover:bg-gray-100")}
-          >
-            &laquo;
-          </button>
-          <button
-            type="button"
-            disabled={currentPage === 1}
-            onClick={() => setCurrentPage((p) => p - 1)}
-            className={cn(btnBase, currentPage === 1 ? "cursor-not-allowed text-gray-300" : "text-gray-500 hover:bg-gray-100")}
-          >
-            &lsaquo;
-          </button>
-          {pageNumbers.map((p, i) =>
-            p === "ellipsis" ? (
-              <span key={`ell-${i}`} className="inline-flex h-8 w-8 items-center justify-center text-sm text-gray-400">
-                &hellip;
-              </span>
-            ) : (
-              <button
-                key={p}
-                type="button"
-                onClick={() => setCurrentPage(p)}
-                className={cn(
-                  btnBase,
-                  currentPage === p ? "bg-indigo-500 font-medium text-white" : "text-gray-600 hover:bg-gray-100",
-                )}
-              >
-                {p}
-              </button>
-            ),
-          )}
-          <button
-            type="button"
-            disabled={currentPage === totalPages}
-            onClick={() => setCurrentPage((p) => p + 1)}
-            className={cn(btnBase, currentPage === totalPages ? "cursor-not-allowed text-gray-300" : "text-gray-500 hover:bg-gray-100")}
-          >
-            &rsaquo;
-          </button>
-          <button
-            type="button"
-            disabled={currentPage === totalPages}
-            onClick={() => setCurrentPage(totalPages)}
-            className={cn(btnBase, currentPage === totalPages ? "cursor-not-allowed text-gray-300" : "text-gray-500 hover:bg-gray-100")}
-          >
-            &raquo;
-          </button>
-        </nav>
+      {!groupingEnabled && (
+        <Pagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          onPageChange={setCurrentPage}
+          className="mt-8"
+        />
       )}
     </div>
   );
@@ -1233,6 +1300,12 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
   const videoTitle = meta?.video_title || videoId;
 
+  const backSlot = useMemo(
+    () => ({ label: "동영상 검색", onClick: () => router.back() }),
+    [router],
+  );
+  useTopHeaderBack(backSlot);
+
   if (isLoading) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
@@ -1272,15 +1345,6 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
 
   return (
     <div className="mx-auto max-w-6xl pt-4">
-      <div className="mb-4 flex items-center gap-3 text-sm text-gray-500 min-w-0">
-        <button type="button" onClick={() => router.back()} className="shrink-0 rounded-full p-1 hover:bg-gray-200">
-          <BackArrowIcon />
-        </button>
-        <button type="button" onClick={() => router.back()} className="shrink-0 hover:text-gray-700">동영상 검색</button>
-        <span className="shrink-0">&gt;</span>
-        <span className="text-gray-700 truncate min-w-0">{videoTitle}</span>
-      </div>
-
       {reprocessStatus && !reprocessDismissed && (
         <div className={cn(
           "mb-6 rounded-lg p-4 text-sm font-medium flex items-center justify-between",
@@ -1312,45 +1376,22 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
         </div>
       )}
 
-      <nav className="mb-6 flex items-center border-b border-gray-200">
-        {([
-          { key: "overview" as const, label: "개요", badge: undefined as number | undefined },
-          { key: "scenes" as const, label: "장면 분석", badge: totalScenes > 0 ? totalScenes : undefined },
-          { key: "people" as const, label: "인물 관리", badge: undefined as number | undefined },
-        ]).map((tab) => (
-          <button
-            key={tab.key}
-            type="button"
-            onClick={() => handleViewChange(tab.key)}
-            className={cn(
-              "relative px-4 py-2.5 text-sm font-medium -mb-px border-b-2 transition-colors",
-              view === tab.key
-                ? "border-indigo-500 text-indigo-600"
-                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300",
-            )}
-          >
-            {tab.label}
-            {tab.badge != null && (
-              <span className="ml-1.5 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-                {tab.badge}
-              </span>
-            )}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => router.push(`/export/shorts/create?videoId=${videoId}`)}
-          className="ml-auto mb-1 inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
-        >
-          <DownloadIcon />
-          내보내기
-        </button>
-      </nav>
-
-      <div className="flex items-start gap-8">
+      {/* In auto-shorts view both columns share one row height per figma
+          1602:36766 — items-stretch keeps the option panel matching the
+          video card height. Other views keep the sticky video card so it
+          stays in view while scrolling long overview/scenes lists. */}
+      <div
+        className={cn(
+          "flex gap-[20px]",
+          view === "auto-shorts" ? "items-stretch" : "items-start",
+        )}
+      >
         {showVideoPanel && (
           <div
-            className="sticky top-4 w-[45%] flex-shrink-0 self-start"
+            className={cn(
+              "w-[341px] flex-shrink-0",
+              view === "auto-shorts" ? "self-stretch" : "sticky top-4 self-start",
+            )}
             data-testid="video-info-panel-slot"
           >
             <VideoInfoPanel
@@ -1359,16 +1400,68 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               scenes={scenes}
               seekMs={seekMs}
               seekKey={seekKey}
-              onReprocessClick={() => setIsReprocessDialogOpen(true)}
-              isReprocessing={isReprocessing}
-              onBlurClick={handleBlurClick}
-              hasBlurJob={hasBlurJob}
-              blurDisabled={blurDisabled}
             />
           </div>
         )}
 
-        <div className="flex-1 min-w-0">
+        {/* figma: 1602:38985 — right card holds the view tabs and the
+            active panel (overview / scenes / people / auto-shorts).
+            In auto-shorts view we hide the nav (tabs + action row) per
+            figma 1602:36766 so the wizard takes the full card height,
+            visually matching the left VideoInfoPanel. */}
+        <div className="min-w-0 flex-1 rounded-dialog bg-white p-[20px] shadow-card">
+          {view !== "auto-shorts" && (
+            <nav className="mb-6 flex items-center border-b border-grayscale-100">
+              {([
+                { key: "overview" as const, label: "개요", badge: undefined as number | undefined },
+                { key: "scenes" as const, label: "장면 분석", badge: undefined as number | undefined },
+                { key: "people" as const, label: "인물 관리", badge: undefined as number | undefined },
+              ]).map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => handleViewChange(tab.key)}
+                  className={cn(
+                    "relative -mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+                    view === tab.key
+                      ? "border-heimdex-navy-500 text-heimdex-navy-500"
+                      : "border-transparent text-grayscale-500 hover:border-grayscale-200 hover:text-grayscale-800",
+                  )}
+                >
+                  {tab.label}
+                  {tab.badge != null && (
+                    <span className="ml-1.5 inline-flex items-center rounded-full bg-grayscale-100 px-2 py-0.5 text-xs font-medium text-grayscale-500">
+                      {tab.badge}
+                    </span>
+                  )}
+                </button>
+              ))}
+              <div className="mb-1 ml-auto flex items-center gap-2.5">
+                {!isReprocessing && (
+                  <button
+                    type="button"
+                    onClick={() => setIsReprocessDialogOpen(true)}
+                    className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-10"
+                  >
+                    장면 재분석
+                  </button>
+                )}
+                <AutoShortsCTA
+                  videoId={videoId}
+                  onClick={() => handleViewChange("auto-shorts")}
+                  renderWhileProbing
+                />
+                <button
+                  type="button"
+                  onClick={() => router.push(`/export/shorts/editor?videoId=${videoId}`)}
+                  className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-10"
+                >
+                  내보내기
+                </button>
+              </div>
+            </nav>
+          )}
+
           {view === "overview" ? (
             <OverviewPanel
               scenes={scenes}
@@ -1382,7 +1475,7 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
               videoId={videoId}
               agentAvailable={agentAvailable}
               onSeekToScene={handleSeekToScene}
-              onAutoShortsClick={() => handleViewChange("auto-shorts")}
+              onBlurClick={handleBlurClick}
               activeSceneMs={seekMs}
               getToken={getAccessToken}
               aspectRatio={aspectRatio}

@@ -4,7 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { Sidebar } from "./Sidebar";
+import { EditorSidebar } from "./EditorSidebar";
 import { TopHeader } from "./TopHeader";
+import { TopHeaderActionsProvider } from "./TopHeaderActionsContext";
 import { cn } from "@/lib/utils";
 
 interface AppLayoutProps {
@@ -13,6 +15,20 @@ interface AppLayoutProps {
 
 const NO_LAYOUT_ROUTES = ["/login", "/auth/"];
 const SIDEBAR_STORAGE_KEY = "heimdex-sidebar-collapsed";
+
+// 사용자 spec 2026-05-16 — editor 라우트에서만 64px 콜랩스 LNB 마운트.
+// 2026-05-17 fix — /export/shorts/editor (query param 기반 신규 진입) 누락 추가.
+const EDITOR_ROUTE_PATTERNS: RegExp[] = [
+  /^\/shorts\/editor(?:\/|$|\?)/,
+  /^\/shorts\/[^/]+\/edit(?:\/|$|\?)/,
+  /^\/export\/shorts\/editor(?:\/|$|\?)/,
+  /^\/export\/shorts\/[^/]+\/edit(?:\/|$|\?)/,
+  /^\/export\/shorts\/auto\/wizard\/[^/]+\/result\/[^/]+\/edit-clips(?:\/|$|\?)/,
+];
+
+function isEditorRoute(pathname: string): boolean {
+  return EDITOR_ROUTE_PATTERNS.some((re) => re.test(pathname));
+}
 
 function readSidebarState(): boolean {
   if (typeof window === "undefined") return false;
@@ -71,21 +87,29 @@ export function AppLayout({ children }: AppLayoutProps) {
     );
   }
 
+  const editorMode = isEditorRoute(pathname);
+
   return (
-    <div className="flex min-h-screen overflow-hidden">
-      <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
-      <div
-        className={cn(
-          "flex min-w-0 flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
-          sidebarCollapsed ? "ml-0" : "ml-[200px]",
+    <TopHeaderActionsProvider>
+      <div className="flex min-h-screen overflow-hidden">
+        {editorMode ? (
+          <EditorSidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+        ) : (
+          <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
         )}
-      >
-        <TopHeader
-          sidebarCollapsed={sidebarCollapsed}
-          onToggleSidebar={toggleSidebar}
-        />
-        <main className="min-w-0 flex-1 overflow-hidden px-6 pb-6">{children}</main>
+        <div
+          className={cn(
+            "flex min-w-0 flex-1 flex-col transition-[margin-left] duration-300 ease-in-out",
+            sidebarCollapsed ? "ml-0" : editorMode ? "ml-16" : "ml-[270px]",
+          )}
+        >
+          <TopHeader
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={toggleSidebar}
+          />
+          <main className="min-w-0 flex-1 overflow-hidden px-6 pb-6">{children}</main>
+        </div>
       </div>
-    </div>
+    </TopHeaderActionsProvider>
   );
 }

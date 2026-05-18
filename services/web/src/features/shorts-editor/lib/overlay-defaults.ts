@@ -82,6 +82,9 @@ export function createDefaultBackgroundOverlay(args: {
   startMs: number;
   endMs?: number;
   layerIndex?: number;
+  // ActionBar (figma 1602:40004 배경 섹션) 의 단색 배경 추가 버튼이
+  // 색상 팔레트에서 고른 hex 를 전달한다. 미지정 시 기본값 #000000.
+  fillColor?: string;
 }): EditorBackgroundOverlay {
   return {
     kind: "background",
@@ -95,6 +98,6 @@ export function createDefaultBackgroundOverlay(args: {
       heightPx: DEFAULT_BG_HEIGHT_PX,
     },
     effects: { ...DEFAULT_EFFECTS },
-    fillColor: "#000000",
+    fillColor: args.fillColor ?? "#000000",
   };
 }

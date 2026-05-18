@@ -1,0 +1,6 @@
+./features/shorts/components/SavedShortsPage.tsx
+./features/shorts-editor/components/ShortsEditorPage.tsx
+./features/videos/components/VideoDetailPage.tsx
+features/shorts/components/SavedShortsPage.tsx
+features/shorts-editor/components/ShortsEditorPage.tsx
+features/videos/components/VideoDetailPage.tsx

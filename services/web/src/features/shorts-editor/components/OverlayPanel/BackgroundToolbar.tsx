@@ -1,5 +1,9 @@
 "use client";
 
+// figma: 1713:275432  (cache: .figma-cache/1713-275432_phase5_editor-3.api.json)
+// node-name: 배경 툴바 (line-spacing placeholder + layer order + fill color)
+// spec: gap=1 (mx-1 separator), radius·padding 은 ToolbarButton/Dropdown primitive 사용
+
 import { ColorSwatchButton } from "../primitives/ColorSwatchButton";
 import { Dropdown } from "../primitives/Dropdown";
 import { LayerStackIcon, LineSpacingIcon } from "../primitives/icons";
@@ -36,7 +40,7 @@ export function BackgroundToolbar({
         <LineSpacingIcon />
       </ToolbarButton>
 
-      <span className="mx-1 h-5 w-px bg-gray-200" />
+      <span className="mx-1 h-5 w-px bg-grayscale-200" />
 
       <ToolbarButton ariaLabel={t.background.layerOrder}>
         <LayerStackIcon />
@@ -51,7 +55,7 @@ export function BackgroundToolbar({
         className="!px-1.5 !py-1 !text-xs"
       />
 
-      <span className="mx-1 h-5 w-px bg-gray-200" />
+      <span className="mx-1 h-5 w-px bg-grayscale-200" />
 
       <ColorSwatchButton
         color={overlay.fillColor}

@@ -10,7 +10,7 @@ export default function ShortsCreateRedirect() {
 
   useEffect(() => {
     const qs = params.toString();
-    router.replace(`/export/shorts/create${qs ? `?${qs}` : ""}`);
+    router.replace(`/export/shorts/editor${qs ? `?${qs}` : ""}`);
   }, [params, router]);
 
   return null;

@@ -180,8 +180,9 @@ describe("InlineWizardProductPanel", () => {
     expect(cards[0]!.dataset.selected).toBe("true");
     expect(cards[1]!.dataset.selected).toBe("true");
     expect(cards[2]!.dataset.selected).toBe("false");
-    // The at-cap card is also disabled visually (button.disabled).
-    expect((cards[2]! as HTMLButtonElement).disabled).toBe(true);
+    // Single-mode: cap-blocked card stays clickable but rendered with opacity-60
+    // (Phase 2 design — silent no-op instead of disabled attribute).
+    expect(cards[2]!.className).toContain("opacity-60");
   });
 
   it("counter renders K/N format", async () => {

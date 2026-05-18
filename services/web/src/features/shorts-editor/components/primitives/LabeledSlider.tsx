@@ -40,7 +40,7 @@ export function LabeledSlider({
         type="button"
         onClick={() => onChange(Math.max(min, value - step))}
         disabled={disabled || value <= min}
-        className="text-gray-400 transition-colors hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-200"
+        className="text-grayscale-400 transition-colors hover:text-grayscale-800 disabled:cursor-not-allowed disabled:text-grayscale-200"
         aria-label="감소"
       >
         −
@@ -53,18 +53,18 @@ export function LabeledSlider({
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         disabled={disabled}
-        className="flex-1 accent-indigo-500 disabled:cursor-not-allowed"
+        className="flex-1 accent-heimdex-navy-500 disabled:cursor-not-allowed"
       />
       <button
         type="button"
         onClick={() => onChange(Math.min(max, value + step))}
         disabled={disabled || value >= max}
-        className="text-gray-400 transition-colors hover:text-gray-700 disabled:cursor-not-allowed disabled:text-gray-200"
+        className="text-grayscale-400 transition-colors hover:text-grayscale-800 disabled:cursor-not-allowed disabled:text-grayscale-200"
         aria-label="증가"
       >
         +
       </button>
-      <span className="min-w-[3.5rem] rounded-lg border border-gray-200 px-2 py-1 text-center text-xs text-gray-700">
+      <span className="min-w-[3.5rem] rounded-lg border border-grayscale-200 px-2 py-1 text-center text-xs text-grayscale-500">
         {readout}
       </span>
     </div>

@@ -33,10 +33,10 @@ function PencilIcon() {
   );
 }
 
-function ArrowRightIcon() {
+function ArrowUpRightIcon() {
   return (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h10v10M7 17 17 7" />
     </svg>
   );
 }
@@ -278,51 +278,70 @@ export function VideoPeoplePanel({
   }, []);
 
   return (
-    <div>
+    // figma: 1602:38985 — outer card lives in VideoDetailPage's right wrapper;
+    // this panel renders sections only so we don't double-shadow.
+    <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-gray-900">인물 관리</h2>
+        <h2 className="text-[18px] font-semibold tracking-[-0.45px] text-black">인물 관리</h2>
         <Link
           href="/settings/people"
-          className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-gray-700"
+          className="inline-flex items-center gap-1 text-[14px] font-medium tracking-[-0.35px] text-heimdex-navy-500 transition-colors hover:text-heimdex-navy-600"
         >
-          전체 인물 관리
-          <ArrowRightIcon />
+          인물 라벨 관리
+          <ArrowUpRightIcon />
         </Link>
       </div>
 
       {error && (
-        <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
         </div>
       )}
 
       {isLoading ? (
         <div className="flex min-h-[200px] items-center justify-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-500" />
+          <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-heimdex-navy-500" />
         </div>
       ) : people.length === 0 ? (
-        <div className="mt-8 flex flex-col items-center py-12">
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gray-100">
-            <PersonIcon className="h-8 w-8 text-gray-400" />
-          </div>
-          <h3 className="mt-4 text-sm font-medium text-gray-900">
-            이 영상에서 인식된 인물이 없습니다.
-          </h3>
-          <p className="mt-1 text-xs text-gray-500">
-            얼굴 인식은 영상 업로드 후 자동으로 처리됩니다.
+        // figma layout preview — renders 7 placeholder avatars (varied colors
+        // + Korean initials) so the 4-col grid wrap reads naturally even
+        // before face recognition runs on this video.
+        <div className="flex flex-col gap-4">
+          <p className="text-xs text-neutral-h-500">
+            예시 데이터 (인식된 인물이 없습니다)
           </p>
+          <div className="grid grid-cols-4 gap-x-10 gap-y-6">
+            {[
+              { name: "김민지", initial: "민", bg: "bg-heimdex-navy-500" },
+              { name: "이서연", initial: "서", bg: "bg-red-h-500" },
+              { name: "박지훈", initial: "지", bg: "bg-green-h-500" },
+              { name: "최도윤", initial: "도", bg: "bg-amber-h-500" },
+              { name: "정하늘", initial: "하", bg: "bg-heimdex-navy-300" },
+              { name: "장유나", initial: "유", bg: "bg-grayscale-500" },
+              { name: "조시우", initial: "시", bg: "bg-heimdex-navy-400" },
+            ].map((person, i) => (
+              <div key={i} className="flex flex-col items-center gap-1">
+                <div className={cn("flex h-16 w-16 items-center justify-center rounded-full text-white", person.bg)}>
+                  <span className="text-[24px] font-semibold">{person.initial}</span>
+                </div>
+                <span className="text-[12px] font-medium tracking-[-0.3px] text-grayscale-800">
+                  {person.name}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       ) : (
-        <>
+        <div className="flex flex-col gap-6">
           <DndContext
             sensors={sensors}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             onDragCancel={handleDragCancel}
           >
-            <div className="mt-6 max-h-[380px] overflow-y-auto">
+            <div className="flex max-h-[380px] flex-col gap-5 overflow-y-auto">
               {labelled.length > 0 && (
-                <div className="grid grid-cols-4 gap-5">
+                <div className="grid grid-cols-4 gap-x-10 gap-y-6">
                   {labelled.map((person) => (
                     <VideoPersonAvatar
                       key={person.person_cluster_id}
@@ -338,10 +357,10 @@ export function VideoPeoplePanel({
                 </div>
               )}
               {labelled.length > 0 && unlabelled.length > 0 && (
-                <hr className="my-4 border-gray-200" />
+                <div className="h-px w-full bg-neutral-h-100" />
               )}
               {unlabelled.length > 0 && (
-                <div className="grid grid-cols-4 gap-5">
+                <div className="grid grid-cols-4 gap-x-10 gap-y-6">
                   {unlabelled.map((person) => (
                     <VideoPersonAvatar
                       key={person.person_cluster_id}
@@ -363,10 +382,10 @@ export function VideoPeoplePanel({
                   <AvatarThumbnail
                     person={activeDragPerson}
                     agentAvailable={agentAvailable}
-                    className="ring-2 ring-indigo-400 shadow-lg"
+                    className="ring-2 ring-heimdex-navy-500 shadow-lg"
                   />
                   {activeDragPerson.label && (
-                    <span className="max-w-[96px] truncate text-xs text-gray-600">
+                    <span className="max-w-[96px] truncate text-[12px] font-medium tracking-[-0.3px] text-grayscale-800">
                       {activeDragPerson.label}
                     </span>
                   )}
@@ -376,7 +395,7 @@ export function VideoPeoplePanel({
           </DndContext>
 
           {selectedPerson && (
-            <div className="mt-6 space-y-4">
+            <div className="space-y-4">
               <InlinePersonDetail
                 person={selectedPerson}
                 onRename={renamePerson}
@@ -394,7 +413,7 @@ export function VideoPeoplePanel({
               )}
             </div>
           )}
-        </>
+        </div>
       )}
 
       <DeletePersonDialog

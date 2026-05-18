@@ -12,16 +12,17 @@ export interface SpeakerColor {
   border: string;
 }
 
-// Ordered for maximum visual contrast between adjacent speakers.
+// Figma P3 1713:270773 매핑: 화자 A = red-h.400 (#d53b49), B = green-h.400 (#3fb675).
+// 3번째 화자부터는 보조 팔레트.
 const SPEAKER_COLORS: SpeakerColor[] = [
-  { bg: "bg-blue-100",   text: "text-blue-700",   border: "border-blue-300" },
-  { bg: "bg-rose-100",   text: "text-rose-700",   border: "border-rose-300" },
-  { bg: "bg-emerald-100", text: "text-emerald-700", border: "border-emerald-300" },
-  { bg: "bg-amber-100",  text: "text-amber-700",  border: "border-amber-300" },
-  { bg: "bg-violet-100", text: "text-violet-700",  border: "border-violet-300" },
-  { bg: "bg-cyan-100",   text: "text-cyan-700",   border: "border-cyan-300" },
-  { bg: "bg-pink-100",   text: "text-pink-700",   border: "border-pink-300" },
-  { bg: "bg-teal-100",   text: "text-teal-700",   border: "border-teal-300" },
+  { bg: "bg-red-h-50",    text: "text-red-h-400",   border: "border-red-h-400" },
+  { bg: "bg-green-h-50",  text: "text-green-h-400", border: "border-green-h-400" },
+  { bg: "bg-blue-100",    text: "text-blue-700",    border: "border-blue-300" },
+  { bg: "bg-amber-100",   text: "text-amber-700",   border: "border-amber-300" },
+  { bg: "bg-violet-100",  text: "text-violet-700",  border: "border-violet-300" },
+  { bg: "bg-cyan-100",    text: "text-cyan-700",    border: "border-cyan-300" },
+  { bg: "bg-pink-100",    text: "text-pink-700",    border: "border-pink-300" },
+  { bg: "bg-teal-100",    text: "text-teal-700",    border: "border-teal-300" },
 ];
 
 function indexToLabel(index: number): string {

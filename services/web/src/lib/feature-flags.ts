@@ -28,5 +28,10 @@ function readBoolean(envValue: string | undefined): boolean {
  * the web container's environment.
  */
 export function isShortsEditorV2Enabled(): boolean {
-  return readBoolean(process.env.NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED);
+  // V2 panel is the new figma-aligned editor surface; the env override is
+  // kept only as an opt-out path while the legacy implementation lingers.
+  if (process.env.NEXT_PUBLIC_EXPORT_SHORTS_EDITOR_V2_ENABLED === "false") {
+    return false;
+  }
+  return true;
 }

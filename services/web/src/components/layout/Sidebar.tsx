@@ -3,8 +3,37 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LogoIcon, LogoText } from "@/components/login/HeimdexLogo";
+import { PanelLeft } from "lucide-react";
+import { HeimdexBrand } from "@/components/icons/figma";
 import { cn } from "@/lib/utils";
+
+function SettingsCubeIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden
+    >
+      <path
+        d="M17.5 13.3329V6.66626C17.4997 6.37399 17.4225 6.08693 17.2763 5.8339C17.13 5.58086 16.9198 5.37073 16.6667 5.22459L10.8333 1.89126C10.58 1.74498 10.2926 1.66797 10 1.66797C9.70744 1.66797 9.42003 1.74498 9.16667 1.89126L3.33333 5.22459C3.08022 5.37073 2.86998 5.58086 2.72372 5.8339C2.57745 6.08693 2.5003 6.37399 2.5 6.66626V13.3329C2.5003 13.6252 2.57745 13.9123 2.72372 14.1653C2.86998 14.4183 3.08022 14.6285 3.33333 14.7746L9.16667 18.1079C9.42003 18.2542 9.70744 18.3312 10 18.3312C10.2926 18.3312 10.58 18.2542 10.8333 18.1079L16.6667 14.7746C16.9198 14.6285 17.13 14.4183 17.2763 14.1653C17.4225 13.9123 17.4997 13.6252 17.5 13.3329Z"
+        stroke="currentColor"
+        strokeWidth="1.66667"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M10 13.3329C11.8409 13.3329 13.3333 11.8405 13.3333 9.99959C13.3333 8.15864 11.8409 6.66626 10 6.66626C8.15905 6.66626 6.66667 8.15864 6.66667 9.99959C6.66667 11.8405 8.15905 13.3329 10 13.3329Z"
+        stroke="currentColor"
+        strokeWidth="1.66667"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 type NavLinkItem = { kind: "link"; label: string; href: string; badge?: string };
 type NavGroupItem = {
@@ -54,23 +83,6 @@ function writeExportGroupState(expanded: boolean): void {
   } catch {
     /* localStorage unavailable */
   }
-}
-
-function CollapseChevron({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg
-      className={cn(
-        "h-4 w-4 transition-transform duration-300",
-        collapsed && "rotate-180",
-      )}
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-    </svg>
-  );
 }
 
 function GroupChevron({ expanded }: { expanded: boolean }) {
@@ -207,14 +219,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     <aside
       className={cn(
         "fixed left-0 top-0 z-40 h-screen border-r border-gray-200 bg-white transition-[width] duration-300 ease-in-out",
-        collapsed ? "w-0 overflow-hidden" : "w-[200px]",
+        collapsed ? "w-0 overflow-hidden" : "w-[270px]",
       )}
     >
-      <div className="flex w-[200px] flex-col h-full">
+      <div className="flex w-[270px] flex-col h-full">
         <div className="flex items-center justify-between pr-2">
-          <Link href="/" className="flex items-center gap-2 px-5 py-6">
-            <LogoIcon className="h-7 w-7 flex-shrink-0" />
-            <LogoText className="w-[100px]" />
+          <Link href="/" className="flex items-center px-5 py-6">
+            <HeimdexBrand />
           </Link>
 
           <button
@@ -223,7 +234,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             className="rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
             aria-label="사이드바 접기"
           >
-            <CollapseChevron collapsed={collapsed} />
+            <PanelLeft className="h-5 w-5" strokeWidth={2} />
           </button>
         </div>
 
@@ -246,6 +257,22 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             ),
           )}
         </nav>
+
+        <div className="mt-auto border-t border-gray-200 px-2 py-3">
+          <Link
+            href="/settings"
+            aria-label="설정"
+            className={cn(
+              "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
+              pathname === "/settings"
+                ? "bg-gray-100 font-medium text-gray-900"
+                : "text-gray-600 hover:bg-gray-50",
+            )}
+          >
+            <SettingsCubeIcon className="h-5 w-5" />
+            <span>설정</span>
+          </Link>
+        </div>
       </div>
     </aside>
   );
