@@ -182,20 +182,21 @@ export function ResultCard({
       <button
         type="button"
         onClick={onOpenEditor}
-        disabled={!isCompleted}
-        aria-label={isCompleted ? "편집 페이지 열기" : "쇼츠 생성 중"}
+        // Clicking is always allowed (2026-05-18) — operators wanted to
+        // open the editor even while the render is still in progress to
+        // inspect the source clips. Editor surfaces a "준비 중" state
+        // when the render isn't done yet.
+        aria-label={isCompleted ? "편집 페이지 열기" : "쇼츠 생성 중 (편집 페이지 열기)"}
         data-testid="result-card-open-editor"
-        className="group relative h-full w-[150px] shrink-0 overflow-hidden bg-heimdex-navy-500 text-left transition-opacity disabled:cursor-not-allowed"
+        className="group relative h-full w-[150px] shrink-0 overflow-hidden bg-[#E9E9E9] text-left transition-opacity"
       >
-        {/* Heimdex-navy skeleton — visible until the thumbnail resolves
-            so the card never flashes a plain dark block while the
-            render-job fetch (or the slow cloud thumbnail) is in flight. */}
+        {/* Neutral #E9E9E9 skeleton — visible until the thumbnail
+            resolves so the card never flashes a plain dark block while
+            the render-job fetch (or the slow cloud thumbnail) is in
+            flight. */}
         <div
           aria-hidden
-          className={cn(
-            "absolute inset-0 animate-pulse bg-gradient-to-br from-heimdex-navy-500 to-heimdex-navy-600 transition-opacity",
-            thumbnailSrc ? "opacity-100" : "opacity-100",
-          )}
+          className="absolute inset-0 animate-pulse bg-[#E9E9E9]"
         />
         {thumbnailSrc ? (
           <img

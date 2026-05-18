@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -35,16 +34,8 @@ from app.config import Settings
 from app.logging_config import get_logger
 from app.modules.shorts_auto_product.models import (
     ACTIVE_SCAN_STAGES,
-    SCAN_STAGE_ASSEMBLING,
-    SCAN_STAGE_CANCELLED,
-    SCAN_STAGE_DONE,
-    SCAN_STAGE_ENUMERATING,
-    SCAN_STAGE_ENUMERATION_DONE,
     SCAN_STAGE_FAILED,
     SCAN_STAGE_FANNED_OUT,
-    SCAN_STAGE_QUEUED,
-    SCAN_STAGE_RENDERING,
-    SCAN_STAGE_TRACKING,
     TERMINAL_SCAN_STAGES,
     ProductCatalogEntry,
     ProductScanJob,
@@ -1018,12 +1009,29 @@ class ProductScanService:
             1 for c in children_responses
             if c.failed_at is not None or c.cancelled_at is not None
         )
+        # Build the criteria summary from the parent scan_order job so
+        # the wizard's result page can render the 쇼츠 길이 / 개수 / 시간
+        # range chips without an extra round-trip. The parent always
+        # carries these fields for scan_order mode rows.
+        from app.modules.shorts_auto_product.schemas import (
+            CriteriaSummary as _CriteriaSummary,
+        )
+
+        criteria = _CriteriaSummary(
+            length_seconds=parent.length_seconds,
+            requested_count=parent.requested_count,
+            time_range_start_ms=parent.time_range_start_ms,
+            time_range_end_ms=parent.time_range_end_ms,
+            product_distribution=parent.product_distribution,
+            intent=parent.intent,
+        )
         return ScanOrderStatusResponse(
             parent=_job_to_status_response(parent),
             children=children_responses,
             children_complete=complete_count,
             children_failed=failed_count,
             children_total=len(children_responses),
+            criteria=criteria,
         )
 
     async def cancel_scan_order(

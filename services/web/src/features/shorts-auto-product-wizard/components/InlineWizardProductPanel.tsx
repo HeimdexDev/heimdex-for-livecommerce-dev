@@ -39,6 +39,7 @@ import { formatVideoTimestampHMS } from "@/lib/timeline";
 import type { CatalogProductSummary } from "@/lib/types/shorts-auto-product-wizard";
 import { cn } from "@/lib/utils";
 
+import { IndexingProgressPanel } from "./IndexingProgressPanel";
 import { InlineWizardBreadcrumb } from "./InlineWizardBreadcrumb";
 import type { WizardCriteriaDraft } from "./InlineWizardCriteriaPanel";
 import { normalizeTimeRangeForSubmit } from "./VideoSegmentRangeSlider";
@@ -351,17 +352,21 @@ export function InlineWizardProductPanel({
         ) : null}
 
         {pollState === "enumerating" ? (
-          <div
-            className="space-y-3 rounded-md border border-gray-100 bg-white p-6 text-center"
-            data-testid="inline-product-loading"
-          >
-            <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-gray-900 border-t-transparent" />
-            <p className="text-sm text-gray-700">
-              영상에서 제품을 찾고 있어요... (보통 30–90초 소요)
-            </p>
-            <p className="text-xs text-gray-500">
-              이미 스캔한 영상이라면 즉시 결과가 표시됩니다.
-            </p>
+          // 2026-05-18 redesign: surface the 4-stage indexing panel
+          // (분석 중 / 제품 확인 / 분류 중 / 마무리 중) instead of a single
+          // spinner. Step 2-1 only runs enumeration; the remaining
+          // stages stay queued until the user submits the scan_order on
+          // step 3. Percent indicator hidden — no reliable backend %
+          // during enumeration alone, the static "보통 30-90초 소요"
+          // copy already sets expectations.
+          <div data-testid="inline-product-loading">
+            <IndexingProgressPanel
+              progress={0}
+              currentStage="enumerating"
+              completedStages={[]}
+              hideHeaderActions
+              hidePercent
+            />
           </div>
         ) : null}
 

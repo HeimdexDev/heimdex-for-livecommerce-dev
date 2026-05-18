@@ -250,9 +250,9 @@ export function SavedShortsPage() {
   );
 
   const [exportProgress, setExportProgress] = useState<{ current: number; total: number } | null>(null);
-  // TODO: mock progress wiring — once useExportBatch is exposed at app
-  // level, replace the sequential loop below with the batch hook's state
-  // map.
+  // Sequential mock progress for now — once useExportBatch is exposed
+  // at app level, this loop will swap to the batch hook's state map.
+  // Tracked as a separate follow-up.
   const [summarizingIds, setSummarizingIds] = useState<Set<string>>(() => new Set());
   const [summaryErrors, setSummaryErrors] = useState<Map<string, string>>(() => new Map());
 

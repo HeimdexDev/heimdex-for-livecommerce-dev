@@ -61,7 +61,9 @@ export function createDefaultTextOverlay(args: {
     fontWeight: 400,
     italic: false,
     underline: false,
-    fontColor: "#FFFFFF",
+    // Black default reads better against bright livecommerce frames
+    // (2026-05-18 review).
+    fontColor: "#000000",
     textAlign: "center",
     lineHeight: 1.3,
     letterSpacing: 0,

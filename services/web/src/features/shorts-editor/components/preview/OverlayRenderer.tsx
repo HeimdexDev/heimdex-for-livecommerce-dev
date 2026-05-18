@@ -200,7 +200,11 @@ function BackgroundOverlayBox({
     ...(overlay.imageUrl
       ? {
           backgroundImage: `url(${overlay.imageUrl})`,
-          backgroundSize: "cover",
+          // "contain" keeps the picture's natural aspect ratio inside
+          // the overlay box (2026-05-18 review). Use "cover" instead
+          // when the box has been explicitly sized to the canvas, e.g.
+          // for full-frame stills.
+          backgroundSize: "contain",
           backgroundPosition: "center",
           backgroundRepeat: "no-repeat",
         }

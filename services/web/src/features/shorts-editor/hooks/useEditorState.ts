@@ -675,13 +675,9 @@ export function useEditorState() {
     [],
   );
 
-  // Solid + image background adds now persist for the whole timeline
-  // and size to the full canvas (2026-05-18 review). The operator no
-  // longer needs to drag the block to extend it — the new overlay spans
-  // 0 → totalDuration and fills the 9:16 frame so a horizontal clip's
-  // top/bottom letterbox is covered by the chosen color (or image).
-  // When the timeline is empty we fall back to the DEFAULT_OVERLAY
-  // duration so the overlay still has a non-zero window.
+  // Solid color backgrounds span the whole timeline AND fill the full
+  // canvas — used to cover the black letterbox area when a 16:9 clip
+  // sits inside the 9:16 frame (2026-05-18 review).
   const addBackgroundOverlayAtPlayhead = useCallback(
     (fillColor?: string) => {
       const totalMs = state.totalDurationMs > 0
@@ -702,6 +698,12 @@ export function useEditorState() {
     [state.totalDurationMs],
   );
 
+  // Image insert is intentionally NOT canvas-sized — the operator
+  // wants the picture to retain its natural aspect, centered on the
+  // preview, with the renderer's "contain" sizing fitting it into the
+  // canvas. We span the whole timeline so the image persists for the
+  // full composition, but we leave width/height at the factory default
+  // so the picture isn't stretched to the 9:16 frame.
   const addImageBackgroundOverlayAtPlayhead = useCallback(
     (imageUrl: string) => {
       const totalMs = state.totalDurationMs > 0
@@ -712,11 +714,6 @@ export function useEditorState() {
         endMs: totalMs,
         imageUrl,
       });
-      overlay.transform = {
-        ...overlay.transform,
-        widthPx: DEFAULT_OUTPUT.width,
-        heightPx: DEFAULT_OUTPUT.height,
-      };
       dispatch({ type: "ADD_OVERLAY", overlay });
     },
     [state.totalDurationMs],
