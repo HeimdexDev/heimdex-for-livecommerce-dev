@@ -135,7 +135,7 @@ _RESPONSE_JSON_SCHEMA: dict[str, Any] = {
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["hook_score", "has_cta", "importance_score", "primary_catalog_match"],
+                    "required": ["hook_score", "has_cta", "importance_score", "primary_catalog_match"],  # noqa: E501
                     "properties": {
                         "hook_score": {
                             "type": "number",

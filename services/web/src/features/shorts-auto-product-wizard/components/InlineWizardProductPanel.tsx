@@ -396,7 +396,7 @@ export function InlineWizardProductPanel({
         purge and doesn't depend on the parent's responsive width.
       */}
       <div
-        className="flex flex-col items-start justify-center gap-[20px] rounded-card bg-white p-[20px] shadow-card"
+        className="flex flex-col items-start justify-center gap-[20px] p-[20px]"
         style={{ width: 943, height: 454 }}
       >
         <div className="flex items-center justify-between gap-4">

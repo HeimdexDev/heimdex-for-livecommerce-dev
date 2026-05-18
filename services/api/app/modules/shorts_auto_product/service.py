@@ -34,6 +34,7 @@ from app.config import Settings
 from app.logging_config import get_logger
 from app.modules.shorts_auto_product.models import (
     ACTIVE_SCAN_STAGES,
+    SCAN_STAGE_ENUMERATION_DONE,
     SCAN_STAGE_FAILED,
     SCAN_STAGE_FANNED_OUT,
     TERMINAL_SCAN_STAGES,

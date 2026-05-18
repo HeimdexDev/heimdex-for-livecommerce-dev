@@ -41,6 +41,8 @@ from pydantic import ValidationError
 
 from app.lib.whisper_transcribe.budget import (
     BudgetExceededError as _BudgetExceededError,
+)
+from app.lib.whisper_transcribe.budget import (
     BudgetTracker as _BudgetTracker,
 )
 from app.logging_config import get_logger
@@ -52,9 +54,11 @@ from app.modules.shorts_auto_product.track_stt.storyboard.heuristic_picker impor
     HeuristicStoryboardPicker,
 )
 from app.modules.shorts_auto_product.track_stt.storyboard.llm_prompt import (
-    PROMPT_VERSION as _MODULE_PROMPT_VERSION,
     _SYSTEM_PROMPT,
     build_user_prompt,
+)
+from app.modules.shorts_auto_product.track_stt.storyboard.llm_prompt import (
+    PROMPT_VERSION as _MODULE_PROMPT_VERSION,
 )
 from app.modules.shorts_auto_product.track_stt.storyboard.llm_schemas import (
     _RESPONSE_JSON_SCHEMA,
@@ -68,7 +72,6 @@ from app.modules.shorts_auto_product.track_stt.storyboard.types import (
     StoryboardFragment,
     StoryboardPlan,
 )
-
 
 logger = get_logger(__name__)
 

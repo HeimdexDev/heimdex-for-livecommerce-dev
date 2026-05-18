@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.shorts_auto_product.models import ProductCatalogEntry
 
-
 # Prefixes encoded in ``rejected_reason`` by the consolidation pipeline.
 # ``has_consolidation_markers`` keys off these to make consolidation
 # idempotent without adding a new column. Mirrored by

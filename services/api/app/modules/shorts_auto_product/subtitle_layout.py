@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from heimdex_media_contracts.composition.schemas import SubtitleStyleSpec
 
-
 # Default canvas dimensions — match heimdex_media_contracts'
 # ``OutputSpec`` defaults (406 × 720, 9:16 portrait at 720p height).
 # Bumping these requires updating both this constant AND the

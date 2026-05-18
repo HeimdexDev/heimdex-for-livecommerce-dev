@@ -25,7 +25,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.shorts_auto_product.models import (
     ACTIVE_SCAN_STAGES,
-    SCAN_MODE_ENUMERATE,
     SCAN_MODE_RENDER_CHILD,
     SCAN_MODE_SCAN_ORDER,
     SCAN_STAGE_ASSEMBLING,

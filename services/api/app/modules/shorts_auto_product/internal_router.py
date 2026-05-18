@@ -38,10 +38,6 @@ from app.db.base import get_db_session
 from app.dependencies import verify_internal_token
 from app.modules.shorts_auto_product.models import (
     ACTIVE_SCAN_STAGES,
-    SCAN_STAGE_ASSEMBLING,
-    SCAN_STAGE_ENUMERATING,
-    SCAN_STAGE_RENDERING,
-    SCAN_STAGE_TRACKING,
 )
 from app.modules.shorts_auto_product.repositories import (
     ProductAppearanceRepository,
@@ -754,9 +750,10 @@ async def enqueue_render_for_scan_job(
     Returns the new ``RenderJob.id`` so the caller can pass it to
     ``/internal/products/{job_id}/complete`` as ``render_job_id``.
     """
+    from heimdex_media_contracts.composition import CompositionSpec
+
     from app.dependencies import get_shorts_render_service
     from app.modules.shorts_render.schemas import RenderJobCreate
-    from heimdex_media_contracts.composition import CompositionSpec
 
     job_repo = ProductScanJobRepository(db)
     job = await job_repo.get_internal(job_id=job_id)
