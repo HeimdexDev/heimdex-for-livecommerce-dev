@@ -22,6 +22,9 @@ from app.modules.shorts_auto_product.repositories.job import (
     ProductScanJobRepository,
 )
 
+from app.modules.shorts_auto_product.repositories.catalog import (
+    ProductCatalogRepository,
+)
 
 @pytest.fixture
 def session():
@@ -655,3 +658,65 @@ class TestCreateRenderChildren:
         parent = self._make_parent(mode=SCAN_MODE_ENUMERATE)
         with pytest.raises(ValueError, match="non-scan_order"):
             await repo.create_render_children(parent=parent, count=3)
+
+ # ---------- invalidate_video_catalog: consolidation marker reset ----------
+
+
+def _make_rowcount_result(n: int) -> MagicMock:
+    """Mock Result whose ``.rowcount`` is an int (UPDATE shape)."""
+    result = MagicMock()
+    result.rowcount = n
+    return result
+
+
+class TestInvalidateVideoCatalogClearsConsolidationMarkers:
+    """Regression for the consolidate-skip bug (2026-05-18):
+
+    invalidate_video_catalog used to only touch ``rejected_at IS NULL``
+    rows, leaving prior consolidate rows with ``duplicate_of:`` /
+    ``non_sellable:`` reasons. has_consolidation_markers() then stayed
+    True forever and every re-enumeration's consolidate short-circuited
+    with ``consolidate_skipped_already_done``.
+
+    Invalidation must also neutralize those markers to
+    ``rescan_invalidated`` (the precondition has_consolidation_markers
+    documents for an un-consolidated video).
+    """
+
+    @pytest.mark.asyncio
+    async def test_invalidation_emits_second_update_for_consolidation_markers(
+        self,
+    ):
+        session = AsyncMock()
+        session.add = MagicMock()
+        session.execute = AsyncMock(return_value=_make_rowcount_result(3))
+        repo = ProductCatalogRepository(session)
+
+        await repo.invalidate_video_catalog(
+            org_id=uuid4(), video_id=uuid4(),
+        )
+
+        # 1st = active-row invalidation, 2nd = marker neutralization
+        assert session.execute.await_count == 2
+        marker_sql = _compile(session.execute.await_args_list[1].args[0])
+        assert "product_catalog_entries" in marker_sql
+        assert "duplicate_of:%" in marker_sql
+        assert "non_sellable:%" in marker_sql
+        assert "rejected_reason" in marker_sql
+        assert "rescan_invalidated" in marker_sql
+
+    @pytest.mark.asyncio
+    async def test_marker_update_is_scoped_to_org_and_video(self):
+        session = AsyncMock()
+        session.add = MagicMock()
+        session.execute = AsyncMock(return_value=_make_rowcount_result(0))
+        repo = ProductCatalogRepository(session)
+
+        org_id, video_id = uuid4(), uuid4()
+        await repo.invalidate_video_catalog(
+            org_id=org_id, video_id=video_id,
+        )
+
+        marker_sql = _compile(session.execute.await_args_list[1].args[0])
+        assert str(org_id) in marker_sql
+        assert str(video_id) in marker_sql

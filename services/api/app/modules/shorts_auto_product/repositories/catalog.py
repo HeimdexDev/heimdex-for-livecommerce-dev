@@ -396,4 +396,28 @@ class ProductCatalogRepository:
             )
         )
         result = await self.session.execute(stmt)
+        # Rescan/version-bump must also clear stale consolidation markers,
+        # otherwise has_consolidation_markers() stays True forever and every
+        # future re-enumeration's consolidate short-circuits (the #182 idempotency
+        # guard's stated precondition is "un-consolidated video has only
+        # rescan_invalidated"). These rows are already rejected — only the
+        # reason string needs neutralizing, not rejected_at.
+        marker_stmt = (
+            update(ProductCatalogEntry)
+            .where(
+                ProductCatalogEntry.org_id == org_id,
+                ProductCatalogEntry.video_id == video_id,
+                ProductCatalogEntry.rejected_reason.is_not(None),
+                (
+                    ProductCatalogEntry.rejected_reason.like(
+                        f"{_CONSOLIDATION_DUPLICATE_PREFIX}%",
+                    )
+                    | ProductCatalogEntry.rejected_reason.like(
+                        f"{_CONSOLIDATION_NON_SELLABLE_PREFIX}%",
+                    )
+                ),
+            )
+            .values(rejected_reason=reason)
+        )
+        await self.session.execute(marker_stmt)
         return int(result.rowcount or 0)
