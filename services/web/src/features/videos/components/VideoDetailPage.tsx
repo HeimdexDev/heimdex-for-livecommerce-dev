@@ -1000,37 +1000,6 @@ function ScenesPanel({
         </div>
       </form>
 
-      {initialTotal >= 5 && !activeSearch && (
-        <div className="mt-4 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              const next = !groupingEnabled;
-              setGroupingEnabled(next);
-              if (next && !sceneGroups.data) {
-                sceneGroups.fetchGroups();
-              }
-            }}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-              groupingEnabled
-                ? "bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300"
-                : "bg-gray-100 text-gray-600 hover:bg-gray-200",
-            )}
-          >
-            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
-            </svg>
-            의미 그룹
-          </button>
-          {groupingEnabled && sceneGroups.isLoading && (
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-300 border-t-indigo-600" />
-          )}
-          {groupingEnabled && sceneGroups.error && (
-            <span className="text-xs text-red-500">{sceneGroups.error}</span>
-          )}
-        </div>
-      )}
 
       <div className="mt-6 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
