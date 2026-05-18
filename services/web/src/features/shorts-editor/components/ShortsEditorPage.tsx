@@ -467,10 +467,17 @@ export function ShortsEditorPage() {
         if (sceneIdsParam && scenes.length > 0) {
           const v2Active = isShortsEditorV2Enabled();
           for (let i = 0; i < scenes.length; i++) {
-            const subs = generateSubtitlesFromTranscript(
-              scenes[i].speaker_transcript,
-              clips[i],
-            );
+            // Prefer the speaker-tagged transcript when present (carries
+            // diarisation + timestamps) and fall back to ``transcript_raw``
+            // so older indexing runs without diarisation still produce
+            // usable subtitle lines. The generator's synthetic-turn
+            // fallback handles plain text either way.
+            const speaker = scenes[i].speaker_transcript;
+            const sourceText =
+              speaker && speaker.trim().length > 0
+                ? speaker
+                : scenes[i].transcript_raw;
+            const subs = generateSubtitlesFromTranscript(sourceText, clips[i]);
             for (const sub of subs) {
               if (v2Active) {
                 editor.addTextOverlay({
