@@ -234,7 +234,11 @@ describe("WizardStepResult — open editor", () => {
     );
   });
 
-  it("open-editor icon is disabled while render is not completed", () => {
+  it("open-editor icon stays clickable while render is still in progress", () => {
+    // 2026-05-18: operators wanted to open the editor even before a
+    // child render completes so they can inspect the source clips.
+    // The card no longer disables the thumbnail button — it just
+    // swaps the aria-label to reflect the in-progress state.
     useScanOrderMock.mockReturnValue({
       status: makeStatus("fanned_out", 1, [
         makeChild({ stage: "rendering", render_status: "rendering" }),
@@ -243,7 +247,12 @@ describe("WizardStepResult — open editor", () => {
       cancel: cancelMock,
     });
     render(<WizardStepResult videoId="gd_test" parentJobId="parent-1" />);
-    expect(screen.getByTestId("result-card-open-editor")).toBeDisabled();
+    const button = screen.getByTestId("result-card-open-editor");
+    expect(button).not.toBeDisabled();
+    expect(button).toHaveAttribute(
+      "aria-label",
+      "쇼츠 생성 중 (편집 페이지 열기)",
+    );
   });
 });
 
