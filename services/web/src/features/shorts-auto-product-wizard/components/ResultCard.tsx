@@ -1,6 +1,23 @@
+// figma 1699:252725 (단일 상품) + 1699:252759 (다수 상품, +N 오버플로우)
+//
+// Card layout — total 287 × 253, no shadow, border-neutral-100 rounded-10:
+//
+//   ┌─[thumbnail w-150 h-253]─┬─[right column flex-1 px-12 py-16]─────┐
+//   │  product chip(s) at     │ 쇼츠 N             (14px semibold)    │
+//   │  bottom-left (8px       │                                       │
+//   │  inset), up to 2 +      │ 쇼츠 길이    1분 32초                   │
+//   │  "+N" overflow chip     │ 진행률       100%                       │
+//   │                         │                                       │
+//   │                         │ 요약 캡션 … (12px medium neutral-800)  │
+//   │                         │                       [상태 chip]      │
+//   └─────────────────────────┴───────────────────────────────────────┘
+
 "use client";
 
+import { useState } from "react";
+
 import type { JobStatusResponse } from "@/lib/types/shorts-auto-product-wizard";
+import { getAgentThumbnailUrl } from "@/lib/agent";
 import { cn } from "@/lib/utils";
 
 import {
@@ -11,18 +28,24 @@ import { ResultCardMenu } from "./ResultCardMenu";
 
 interface Props {
   child: JobStatusResponse;
+  /** Parent video_id — feeds the thumbnail loader. */
+  videoId: string;
   /** 1-based ordinal shown as "쇼츠 N". Falls back to ``shorts_index + 1``. */
   ordinal: number;
   /** Original criteria.length_seconds for the parent scan order. */
   lengthSeconds?: number | null;
-  /** Up to 2 product names to display as overlay chips. */
+  /**
+   * Selected-product labels for this child. The thumbnail surfaces up to
+   * two as bottom-left chips; the third+ collapse into a single "+N"
+   * overflow chip (figma 1699:252759).
+   */
   productLabels?: string[];
-  // figma: 1699:252725 (쇼츠 카드) — 우측 컬럼 요약 텍스트. 50자(공백 포함) 초과 시 ellipsis truncate.
+  // figma 1699:252790 — 우측 컬럼 요약 텍스트. 50자(공백 포함) 초과 시 truncate.
   summary?: string | null;
   /**
    * Custom title set by the user via the "제목 변경" menu entry. When
    * present, replaces the default "쇼츠 {ordinal}" headline so the
-   * operator's chosen label (e.g., "센트롬_강조_1") sticks.
+   * operator's chosen label sticks.
    */
   title?: string | null;
   onRename: () => void;
@@ -33,6 +56,9 @@ interface Props {
 }
 
 const SUMMARY_MAX_CHARS = 50;
+// Visible product chips before the row collapses into a "+N" overflow
+// chip — matches figma 1699:252759 which shows 2 chips + "+4".
+const MAX_VISIBLE_PRODUCT_CHIPS = 2;
 
 function formatLength(seconds: number | null | undefined): string {
   if (seconds == null) return "—";
@@ -51,6 +77,7 @@ function truncateSummary(text: string | null | undefined): string {
 
 export function ResultCard({
   child,
+  videoId,
   ordinal,
   lengthSeconds,
   productLabels = [],
@@ -67,15 +94,19 @@ export function ResultCard({
   const isCompleted = state === "done";
   const progressPct = Math.max(0, Math.min(100, Math.round(child.progress_pct)));
   const summaryText = truncateSummary(summary);
+  // Resolve product chip rows: up to MAX_VISIBLE chips plus a single
+  // "+N" overflow tag when there are more labels than slots.
+  const visibleChips = productLabels.slice(0, MAX_VISIBLE_PRODUCT_CHIPS);
+  const overflowCount = Math.max(0, productLabels.length - visibleChips.length);
+  // ``getAgentThumbnailUrl(videoId)`` returns the video-level keyframe
+  // when the per-scene id is unknown. If the agent isn't reachable the
+  // <img> falls back to the dark placeholder via onError.
+  const [hasThumbError, setHasThumbError] = useState(false);
+  const thumbnailSrc = videoId && !hasThumbError ? getAgentThumbnailUrl(videoId) : null;
 
-  // The standalone "open editor" icon button (lucide/square-arrow-out-up-
-  // right) was removed per the 2026-05-18 goal capture; the affordance now
-  // lives on the thumbnail itself. Clicking the thumbnail invokes
-  // onOpenEditor when the render is completed, matching the user-facing
-  // mental model ("open this clip" = "click the clip").
   return (
     <article
-      className="flex h-[253px] w-[287px] gap-[10px] rounded-card bg-white p-[10px] shadow-card"
+      className="relative flex h-[253px] w-[287px] items-start overflow-clip rounded-card border border-grayscale-100 bg-white"
       data-testid={`result-card-${ordinal}`}
     >
       <button
@@ -84,18 +115,36 @@ export function ResultCard({
         disabled={!isCompleted}
         aria-label={isCompleted ? "편집 페이지 열기" : "쇼츠 생성 중"}
         data-testid="result-card-open-editor"
-        className="group relative h-full aspect-[9/16] shrink-0 overflow-hidden rounded-[8px] bg-grayscale-800 text-left transition-opacity disabled:cursor-not-allowed"
+        className="group relative h-full w-[150px] shrink-0 overflow-hidden bg-grayscale-800 text-left transition-opacity disabled:cursor-not-allowed"
       >
-        {productLabels.length > 0 ? (
-          <div className="absolute left-[8px] bottom-[8px] z-10 flex flex-wrap gap-[4px]">
-            {productLabels.slice(0, 2).map((label, i) => (
+        {thumbnailSrc ? (
+          <img
+            src={thumbnailSrc}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="absolute inset-0 h-full w-full object-cover"
+            onError={() => setHasThumbError(true)}
+          />
+        ) : null}
+        {visibleChips.length > 0 || overflowCount > 0 ? (
+          <div className="absolute left-[8px] bottom-[8px] z-10 flex items-center gap-[2px]">
+            {visibleChips.map((label, i) => (
               <span
                 key={`${label}-${i}`}
-                className="rounded-[4px] bg-black/60 px-[6px] py-[2px] font-pretendard text-[10px] font-medium text-white"
+                className="inline-flex items-center justify-center rounded-[4px] bg-black/50 px-[4px] py-[2px] font-pretendard text-[8px] font-medium text-white"
               >
                 {label}
               </span>
             ))}
+            {overflowCount > 0 ? (
+              <span
+                className="inline-flex items-center justify-center rounded-[4px] bg-black/50 px-[4px] py-[2px] font-pretendard text-[8px] font-medium text-white"
+                data-testid="result-card-product-overflow"
+              >
+                +{overflowCount}
+              </span>
+            ) : null}
           </div>
         ) : null}
         {isCompleted ? (
@@ -106,55 +155,56 @@ export function ResultCard({
         ) : null}
       </button>
 
-      <div className="flex h-full flex-1 flex-col justify-between py-[4px]">
+      <div className="flex h-full flex-1 flex-col items-end gap-[20px] self-stretch px-[12px] py-[16px]">
+        {/* Top group: title + stats (label/value pairs) — Figma stacks
+            them with a 20px gap inside one flex-col so the spacing
+            between header and "쇼츠 길이" stays at exactly 20px. */}
+        <div className="flex w-full flex-col items-start gap-[20px]">
+          <p
+            className="font-pretendard text-[14px] font-semibold tracking-[-0.35px] leading-[1.4] text-grayscale-800 line-clamp-1"
+            data-testid="result-card-title"
+            title={displayTitle}
+          >
+            {displayTitle}
+          </p>
+
+          <dl className="flex w-full items-start gap-[10px] font-pretendard text-[12px] font-medium leading-[1.4] tracking-[-0.3px]">
+            <div className="flex flex-col items-start gap-[10px] text-grayscale-500">
+              <dt>쇼츠 길이</dt>
+              <dt>진행률</dt>
+            </div>
+            <div className="flex flex-col items-start gap-[10px] text-grayscale-800">
+              <dd>{formatLength(lengthSeconds)}</dd>
+              <dd data-testid="result-card-progress">{progressPct}%</dd>
+            </div>
+          </dl>
+        </div>
+
+        {/* Summary takes the remaining space between the stats block and
+            the status chip; truncates to 50 chars per Figma. When the
+            backend hasn't generated a summary yet we render a quiet
+            placeholder so the slot doesn't collapse and the chip
+            position stays stable. */}
         <p
-          className={cn(
-            "font-pretendard text-[14px] font-semibold tracking-[-0.35px] leading-[1.4] line-clamp-2",
-            isCompleted ? "text-grayscale-800" : "text-grayscale-800",
-          )}
-          data-testid="result-card-title"
-          title={displayTitle}
+          className="flex-1 w-full self-start font-pretendard text-[12px] font-medium leading-[1.4] text-grayscale-800"
+          data-testid="result-card-summary"
         >
-          {displayTitle}
+          {summaryText || (
+            <span className="text-grayscale-400">요약 생성 중…</span>
+          )}
         </p>
 
-        <dl className="flex flex-col gap-[8px]">
-          <div className="flex items-baseline justify-between">
-            <dt className="font-pretendard text-[12px] font-medium text-grayscale-500">
-              쇼츠 길이
-            </dt>
-            <dd className="font-pretendard text-[12px] font-medium text-grayscale-800">
-              {formatLength(lengthSeconds)}
-            </dd>
-          </div>
-          <div className="flex items-baseline justify-between">
-            <dt className="font-pretendard text-[12px] font-medium text-grayscale-500">
-              진행률
-            </dt>
-            <dd
-              className="font-pretendard text-[12px] font-medium text-grayscale-800"
-              data-testid="result-card-progress"
-            >
-              {progressPct}%
-            </dd>
-          </div>
-        </dl>
-
-        {summaryText ? (
-          <p
-            className="font-pretendard text-[12px] font-medium leading-[1.4] text-grayscale-600"
-            data-testid="result-card-summary"
-          >
-            {summaryText}
-          </p>
-        ) : null}
-
-        <div className="flex items-center justify-between">
-          <ResultStatusChip state={state} />
-        </div>
+        <ResultStatusChip
+          state={state}
+          className="shrink-0 self-end"
+        />
       </div>
 
-      <div className="flex h-full w-[24px] shrink-0 flex-col items-center gap-[8px] py-[4px]">
+      {/* Dot-3 menu is overlaid at the card's top-right corner so it
+          doesn't consume right-column width (figma omits the dedicated
+          24px column — the menu is an affordance, not part of the
+          rhythm). */}
+      <div className="absolute right-[4px] top-[4px] z-20">
         <ResultCardMenu
           isCompleted={isCompleted}
           onRename={onRename}

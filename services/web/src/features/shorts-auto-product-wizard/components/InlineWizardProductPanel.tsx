@@ -270,6 +270,24 @@ export function InlineWizardProductPanel({
     [],
   );
 
+  // Entry toast (figma 1713:288207) — fires once per panel mount in
+  // multi mode so users learn the cap rule before they hit it. Auto-
+  // dismisses after 4s; reuses the cap snackbar slot so only one is
+  // ever on screen at a time.
+  const introShownRef = useRef(false);
+  useEffect(() => {
+    if (introShownRef.current) return;
+    if (criteria.product_distribution !== "multi") return;
+    if (pollState !== "ready") return;
+    introShownRef.current = true;
+    setShowCapSnackbar(true);
+    if (capSnackbarTimerRef.current) clearTimeout(capSnackbarTimerRef.current);
+    capSnackbarTimerRef.current = setTimeout(
+      () => setShowCapSnackbar(false),
+      4000,
+    );
+  }, [criteria.product_distribution, pollState]);
+
   const isMulti = criteria.product_distribution === "multi";
   const guidanceCopy = isMulti
     ? `선택한 상품마다 하나씩, 별도의 쇼츠 ${criteria.requested_count}개를 생성합니다. 상품은 최대 ${cap}개까지 선택 가능합니다.`
