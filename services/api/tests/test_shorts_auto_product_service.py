@@ -19,6 +19,7 @@ from app.config import Settings
 from app.modules.shorts_auto_product.models import (
     ACTIVE_SCAN_STAGES,
     SCAN_STAGE_ENUMERATING,
+    SCAN_STAGE_ENUMERATION_DONE,
     SCAN_STAGE_FAILED,
     SCAN_STAGE_QUEUED,
 )
@@ -216,6 +217,63 @@ async def test_idempotency_short_circuits():
     assert response.deduped is True
     assert response.job_id == existing.id
     svc.job_repo.create_enumeration_job.assert_not_called()
+
+# ---------- completion signal  ----------
+
+@pytest.mark.asyncio
+async def test_completed_enumeration_short_circuits():
+    svc = _build_service(_settings())
+    done = MagicMock(id=uuid4(), stage=SCAN_STAGE_ENUMERATION_DONE)
+    svc.job_repo.find_latest_enumeration_for_video = AsyncMock(return_value=done)
+    svc.job_repo.create_enumeration_job = AsyncMock()
+    import app.sqs_producer as sqs_producer
+    sqs_producer.publish_product_enumerate_job = MagicMock()
+    resp = await svc.enqueue_scan(
+        org_id=uuid4(), video_id=uuid4(), user_id=uuid4(),
+        duration_preset_sec=60,
+    )
+    assert resp.deduped is True
+    assert resp.job_id == done.id
+    svc.job_repo.create_enumeration_job.assert_not_called()
+    sqs_producer.publish_product_enumerate_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_failed_enumeration_still_rescans():
+    svc = _build_service(_settings())
+    failed = MagicMock(id=uuid4(), stage=SCAN_STAGE_FAILED)
+    svc.job_repo.find_latest_enumeration_for_video = AsyncMock(return_value=failed)
+    fake_job = MagicMock(id=uuid4())
+    svc.job_repo.create_enumeration_job = AsyncMock(return_value=fake_job)
+    import app.sqs_producer as sqs_producer
+    sqs_producer.publish_product_enumerate_job = MagicMock()
+    resp = await svc.enqueue_scan(
+        org_id=uuid4(), video_id=uuid4(), user_id=uuid4(),
+        duration_preset_sec=60,
+    )
+    assert resp.deduped is False
+    assert resp.job_id == fake_job.id
+    svc.job_repo.create_enumeration_job.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_rescan_bypasses_completion_guard():
+    svc = _build_service(_settings())
+    svc.catalog_repo.invalidate_video_catalog = AsyncMock(return_value=7)
+    fake_job = MagicMock(id=uuid4())
+    svc.job_repo.create_enumeration_job = AsyncMock(return_value=fake_job)
+    svc.job_repo.find_latest_enumeration_for_video = AsyncMock(
+        return_value=MagicMock(id=uuid4(), stage=SCAN_STAGE_ENUMERATION_DONE),
+    )
+    import app.sqs_producer as sqs_producer
+    sqs_producer.publish_product_enumerate_job = MagicMock()
+    resp = await svc.rescan(
+        org_id=uuid4(), video_id=uuid4(), user_id=uuid4(),
+        duration_preset_sec=60,
+    )
+    svc.job_repo.create_enumeration_job.assert_called_once()
+    assert resp.invalidated_count == 7
+    assert resp.job_id == fake_job.id
 
 
 # ---------- catalog entry not found ----------

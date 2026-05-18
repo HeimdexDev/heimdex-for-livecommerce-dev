@@ -311,6 +311,18 @@ class ProductScanService:
         )
         if existing is not None:
             return ScanResponse(job_id=existing.id, deduped=True)
+        
+        # Completion signal: skip re-enumeration when this video already
+        # has a successfully completed enumeration. Prevents catalog row
+        # pile-up on repeated scans. FAILED stays re-scannable (stage !=
+        # ENUMERATION_DONE). 0-product videos count as done (no loop).
+        # rescan() is unaffected — it is a SEPARATE method that does not
+        # call enqueue_scan (verified service.py).
+        latest = await self.job_repo.find_latest_enumeration_for_video(
+            org_id=org_id, video_id=video_id,
+        )
+        if latest is not None and latest.stage == SCAN_STAGE_ENUMERATION_DONE:
+            return ScanResponse(job_id=latest.id, deduped=True)
 
         await self._require_concurrency_slot(org_id)
 

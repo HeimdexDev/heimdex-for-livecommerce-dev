@@ -457,6 +457,19 @@ def schedule_stt_enumeration_task(
                             video_db_id=video_db_id,
                             settings=settings,
                         )
+                # Mirror the vision-path trigger:
+                # consolidate also runs after STT enumeration so STT-only flows
+                # get dedup too. run_consolidation() is idempotent via
+                # has_consolidation_markers — when both vision and STT complete,
+                # the second scheduled task short-circuits.
+                from app.modules.shorts_auto_product.consolidate.service import (
+                    schedule_consolidation_task,
+                )
+                schedule_consolidation_task(
+                    settings=settings,
+                    org_id=org_id,
+                    video_db_id=video_db_id,
+                )
             finally:
                 # Best-effort cleanup — the OS / OpenAI clients hold
                 # connection pools we should release even on failure.
