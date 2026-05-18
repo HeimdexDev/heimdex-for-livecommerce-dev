@@ -30,7 +30,6 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import httpx
-from heimdex_media_contracts.product import EnumerationPrompt
 from heimdex_media_pipelines.product_enum import (
     CanonicalProduct,
     EnumerationConfig,
@@ -176,12 +175,18 @@ def handle_enumerate_job(
             enumeration_version=decoded.enumeration_version,
         )
         try:
+            # Prompts are ignored by ``OpenAIVlmClient`` in the OWLv2
+            # two-stage refactor — the client owns its own label prompt
+            # (``src.owlv2_prompts.LABEL_PROMPT_SYSTEM``) and OWLv2
+            # takes a query list, not a free-form system prompt. We
+            # pass empty strings to satisfy the protocol while keeping
+            # the pipeline call site unchanged.
             products, total_cost = enumerate_products(
                 keyframes=keyframes,
                 vlm_client=vlm_client,
                 embedder=lambda imgs: embed_pil_image_batch(imgs, loaded=siglip),
-                system_prompt=EnumerationPrompt.SYSTEM,
-                user_prompt_template=EnumerationPrompt.USER_TEMPLATE,
+                system_prompt="",
+                user_prompt_template="",
                 config=config,
             )
         except VlmTimeoutError as exc:

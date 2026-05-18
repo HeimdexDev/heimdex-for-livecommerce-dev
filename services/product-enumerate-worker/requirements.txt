@@ -1,8 +1,12 @@
-# Phase 2: shorts-auto product enumerate worker — gpt-4o-mini vision +
-# SigLIP2 (google/siglip2-base-patch16-256) on CUDA 12.4 + torch 2.4.1.
+# Phase 2 (+ OWLv2 two-stage refactor): shorts-auto product enumerate
+# worker — OWLv2 (open-vocab detector, stage 1) + gpt-4o-mini per-crop
+# labeler (stage 2) + SigLIP2 (google/siglip2-base-patch16-256) clusterer,
+# all on CUDA 12.4 + torch 2.4.1.
 #
-# No insightface / OWLv2 — the enumerate stage doesn't need them. SAM2
-# is reserved for the track worker (Phase 3, separate image).
+# OWLv2 (google/owlv2-base-patch16-ensemble) ships inside transformers
+# — no separate package needed. Pre-downloading the weights at image
+# build time avoids first-boot stall; see Dockerfile.gpu.
+# SAM2 is still reserved for the track worker (Phase 3, separate image).
 #
 # Torch wheels need the cu124 extra index — supplied in Dockerfile.gpu
 # via `pip install --extra-index-url https://download.pytorch.org/whl/cu124`.

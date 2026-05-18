@@ -62,7 +62,28 @@ class WorkerSettings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_timeout_sec: float = 30.0
     openai_max_retries: int = 3
-    openai_batch_size: int = 10
+    # Per-keyframe in the new 2-stage pipeline (OWLv2 detects, gpt-4o-mini
+    # labels each crop). Keep at 1 — batch>1 has no benefit since OWLv2
+    # runs per-frame and per-crop labels are parallelized by
+    # ``openai_label_concurrency`` instead.
+    openai_batch_size: int = 1
+    # Concurrent gpt-4o-mini label-crop calls per keyframe.
+    openai_label_concurrency: int = 8
+
+    # ---------- OWLv2 (open-vocab detector, stage 1) ----------
+
+    owlv2_model_id: str = "google/owlv2-base-patch16-ensemble"
+    # OWLv2's internal post-processor expects square padding; the
+    # processor pads to 960x960, so resizing the long edge to 960 avoids
+    # wasted compute on letterbox bands.
+    owlv2_max_image_side: int = 960
+    owlv2_threshold: float = 0.475
+    owlv2_nms_iou: float = 0.5
+    owlv2_max_dets_per_keyframe: int = 5
+    # Padding around each OWLv2 bbox when cropping for the labeling
+    # call. Gives gpt-4o-mini a sliver of context to disambiguate
+    # 'sweater on hanger' vs 'sweater on model', etc.
+    owlv2_crop_pad_frac: float = 0.05
 
     # ---------- pipeline thresholds ----------
 
@@ -72,6 +93,15 @@ class WorkerSettings(BaseSettings):
     enum_prominence_floor_pct: float = 0.03
     enum_cluster_cosine_threshold: float = 0.85
     enum_min_supporting_keyframes: int = 2
+    # CALIBRATION (OWLv2 refactor): this floor was tuned for
+    # gpt-4o-mini's self-reported confidence (0–1, "I'm confident this
+    # is a product"). In the 2-stage pipeline ``EnumerationDetection.
+    # confidence`` carries OWLv2's softmax score instead, which sits in
+    # ~0.45–0.7 for true positives after ``owlv2_threshold=0.45``.
+    # Keeping the floor at 0.6 will reject a wide band of legitimate
+    # OWLv2 detections. Re-derive against staging goldens before
+    # promoting this branch — likely lower to ~0.45 (redundant with
+    # the OWLv2 threshold) or remove the floor entirely.
     enum_min_confidence: float = 0.6
 
     # ---------- safety ----------

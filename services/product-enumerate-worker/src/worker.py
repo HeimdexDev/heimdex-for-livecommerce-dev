@@ -2,17 +2,20 @@
 mode v2 enumeration jobs.
 
 Mirrors drive-blur-worker/src/worker.py in shape so devops operates a
-single pattern across GPU workers. The substantive change vs blur:
-SigLIP2 + OpenAI replace OWLv2 + SCRFD as the warmed-up models.
+single pattern across GPU workers. As of the OWLv2 two-stage refactor
+the warmed-up models are **SigLIP2 + OWLv2** (gpt-4o-mini is HTTP-only
+and lazily connected — no boot warmup needed).
 
 Boot sequence:
   1. Load WorkerSettings (pydantic-settings → env)
   2. Refuse to start if product_v2_enabled=false OR (no GPU AND
      enumerate_allow_cpu=false)
   3. Warm up SigLIP2 (loads google/siglip2-base-patch16-256)
-  4. Construct OpenAIVlmClient (lazy connect — no network on boot)
-  5. Build the SQS consumer loop bound to sqs_product_enumerate_queue_url
-  6. Block on SIGTERM / SIGINT
+  4. Warm up OWLv2 (loads google/owlv2-base-patch16-ensemble onto GPU)
+  5. Construct OpenAIVlmClient — receives the preloaded OWLv2
+     processor/model and the OpenAI API key. No network on boot.
+  6. Build the SQS consumer loop bound to sqs_product_enumerate_queue_url
+  7. Block on SIGTERM / SIGINT
 """
 
 from __future__ import annotations
@@ -60,6 +63,29 @@ def _warm_siglip2(settings: WorkerSettings) -> None:
     drive-visual-embed-worker. Idempotent on subsequent calls."""
     from heimdex_media_pipelines.siglip2 import SiglipConfig, load
     load(SiglipConfig(model_id=settings.siglip2_model_id))
+
+
+def _load_owlv2(settings: WorkerSettings):
+    """Load OWLv2 processor + model onto the inference device.
+
+    Returns ``(processor, model, device)``. Run once at boot so per-job
+    dispatch doesn't pay the ~600MB weight-load cost on every message.
+
+    Device selection mirrors ``_gpu_available``: CUDA if available,
+    otherwise CPU (only reachable when ``enumerate_allow_cpu=true``).
+    """
+    import torch
+    from transformers import Owlv2ForObjectDetection, Owlv2Processor
+
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    )
+    processor = Owlv2Processor.from_pretrained(settings.owlv2_model_id)
+    model = Owlv2ForObjectDetection.from_pretrained(
+        settings.owlv2_model_id
+    ).to(device)
+    model.eval()
+    return processor, model, device
 
 
 def _make_callback(settings: WorkerSettings, vlm_client: OpenAIVlmClient):
@@ -118,17 +144,30 @@ def main() -> None:
         "enumerate_worker_booting",
         gpu=gpu_available,
         siglip2_model=settings.siglip2_model_id,
+        owlv2_model=settings.owlv2_model_id,
         openai_model=settings.openai_model,
     )
 
     _warm_siglip2(settings)
     log.info("siglip2_warmed")
 
+    owlv2_processor, owlv2_model, owlv2_device = _load_owlv2(settings)
+    log.info("owlv2_warmed", device=str(owlv2_device))
+
     vlm_client = OpenAIVlmClient(
         api_key=settings.openai_api_key,
+        owlv2_processor=owlv2_processor,
+        owlv2_model=owlv2_model,
+        owlv2_device=owlv2_device,
         model=settings.openai_model,
         timeout_sec=settings.openai_timeout_sec,
         max_retries=settings.openai_max_retries,
+        threshold=settings.owlv2_threshold,
+        nms_iou=settings.owlv2_nms_iou,
+        max_dets_per_keyframe=settings.owlv2_max_dets_per_keyframe,
+        max_image_side=settings.owlv2_max_image_side,
+        crop_pad_frac=settings.owlv2_crop_pad_frac,
+        label_concurrency=settings.openai_label_concurrency,
     )
 
     semaphore = _init_semaphore(settings.drive_product_enumerate_concurrency)
@@ -170,6 +209,7 @@ def main() -> None:
             level="INFO",
             metadata={
                 "siglip2_model": settings.siglip2_model_id,
+                "owlv2_model": settings.owlv2_model_id,
                 "openai_model": settings.openai_model,
                 "gpu": gpu_available,
             },

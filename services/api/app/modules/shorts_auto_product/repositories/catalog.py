@@ -24,6 +24,14 @@ _CONSOLIDATION_DUPLICATE_PREFIX = "duplicate_of:"
 _CONSOLIDATION_NON_SELLABLE_PREFIX = "non_sellable:"
 
 
+# Prefixes encoded in ``rejected_reason`` by the consolidation pipeline.
+# ``has_consolidation_markers`` keys off these to make consolidation
+# idempotent without adding a new column. Mirrored by
+# ``consolidate.service`` when it formats the strings on write.
+_CONSOLIDATION_DUPLICATE_PREFIX = "duplicate_of:"
+_CONSOLIDATION_NON_SELLABLE_PREFIX = "non_sellable:"
+
+
 class ProductCatalogRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session: AsyncSession = session
