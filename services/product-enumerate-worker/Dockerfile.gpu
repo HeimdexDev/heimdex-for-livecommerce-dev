@@ -2,10 +2,15 @@
 #
 # Mirrors drive-blur-worker/Dockerfile.gpu so devops operates a single
 # pattern across GPU workers. The substantive changes vs blur:
-#   * No insightface / OWLv2 — no face detection here.
-#   * Pre-downloads google/siglip2-base-patch16-256 weights into the
-#     image so cold-starts on Aircloud don't pay HuggingFace download
-#     time on every container restart.
+#   * No insightface — no face detection here. OWLv2 is used for
+#     open-vocab product detection (PR #204), not faces.
+#   * Pre-downloads BOTH google/siglip2-base-patch16-256 (clusterer)
+#     AND google/owlv2-base-patch16-ensemble (stage-1 detector) into
+#     the image so cold-starts on Aircloud don't pay HuggingFace
+#     download time on every container restart. Missing this for any
+#     model means Aircloud's liveness probe expires while the worker
+#     downloads ~600MB at first boot → container marked unhealthy →
+#     restarted → cache lost → loop forever.
 #   * No `heimdex-media-pipelines` PyPI pin — the package is not yet
 #     published; we install from the sibling source checkout so local
 #     and GHA builds use the same code path.
@@ -98,17 +103,28 @@ RUN pip install --no-cache-dir /tmp/heimdex-media-pipelines \
 # owned correctly on cold start.
 RUN useradd -m -u 1000 appuser
 
-# Pre-warm SigLIP2 weights. Variant must match drive-visual-embed-worker
-# exactly so OS scene-level vectors stay reusable as the coarse
-# pre-filter for Phase 3 tracking. Build fails immediately if the
-# download is unreachable — broken pulls must be visible at build
-# time, not at 2 am during an enumerate run.
+# Pre-warm SigLIP2 + OWLv2 weights. SigLIP2 variant must match
+# drive-visual-embed-worker exactly so OS scene-level vectors stay
+# reusable as the coarse pre-filter for Phase 3 tracking. OWLv2 is the
+# stage-1 detector added in PR #204 (two-stage OWLv2 → gpt-4o-mini
+# per-crop labeling). Both must live in the image — any missed model
+# means Aircloud cold-starts download ~600MB at first boot and the
+# liveness probe times out before the worker is ready.
+#
+# Build fails immediately if any download is unreachable — broken
+# pulls must be visible at build time, not at 2am during an enumerate
+# run when the Aircloud worker comes back unhealthy.
 RUN mkdir -p /models/hf \
     && python -c "\
-from transformers import AutoImageProcessor, SiglipVisionModel; \
+from transformers import (\
+    AutoImageProcessor, SiglipVisionModel, \
+    Owlv2ForObjectDetection, Owlv2Processor, \
+); \
 SiglipVisionModel.from_pretrained('google/siglip2-base-patch16-256'); \
 AutoImageProcessor.from_pretrained('google/siglip2-base-patch16-256'); \
-print('siglip2 cached')"
+Owlv2ForObjectDetection.from_pretrained('google/owlv2-base-patch16-ensemble'); \
+Owlv2Processor.from_pretrained('google/owlv2-base-patch16-ensemble'); \
+print('siglip2 + owlv2 cached')"
 
 COPY dev-heimdex-for-livecommerce/services/product-enumerate-worker/src/ src/
 
