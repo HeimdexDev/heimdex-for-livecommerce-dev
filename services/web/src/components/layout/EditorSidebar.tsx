@@ -146,7 +146,14 @@ export function EditorSidebar({ collapsed }: EditorSidebarProps) {
             expanded ? "justify-between px-3" : "justify-center",
           )}
         >
-          {expanded && <HeimdexBrand className="h-[33px] shrink-0" />}
+          {expanded && (
+            // Wrap the brand in a link so clicking the logo from the
+            // editor LNB jumps back to the landing page — matches the
+            // main Sidebar UX (Sidebar.tsx:227) the operator is used to.
+            <Link href="/" className="flex shrink-0 items-center" aria-label="홈으로 이동">
+              <HeimdexBrand className="h-[33px] shrink-0" />
+            </Link>
+          )}
           <button
             type="button"
             onClick={() => setExpanded((prev) => !prev)}

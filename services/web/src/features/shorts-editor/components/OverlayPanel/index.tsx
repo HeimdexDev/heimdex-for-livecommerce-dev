@@ -178,14 +178,12 @@ export function OverlayPanel({
             presetsApi itself is preserved because the GNB still calls it. */}
       </div>
 
-      {/* Selection drag tracker so the user can click a different overlay
-          via the layer order without switching tabs. Hidden until > 1 overlay. */}
-      {state.overlays.length > 1 && (
-        <OverlaySelectorRow
-          state={state}
-          onSelect={onSelectOverlay}
-        />
-      )}
+      {/* OverlaySelectorRow (every-overlay chip strip) was pulled on
+          2026-05-18 — once auto-subtitle wiring added many text overlays
+          per session, the row filled the right wrapper with ``T: ...``
+          tags, which the user surfaced as a regression. Selecting a
+          different overlay still works via the preview / left subtitle
+          list, so the chip strip wasn't carrying weight either. */}
     </div>
   );
 }
