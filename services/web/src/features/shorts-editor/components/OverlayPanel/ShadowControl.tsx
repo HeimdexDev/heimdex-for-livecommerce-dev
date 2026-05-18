@@ -56,32 +56,47 @@ export function ShadowControl({
     onChange({ offsetX, offsetY, spread, color, blur, ...patch });
   };
 
+  // figma 2026-05-18 redesign — row 1 packs position (X/Y) + spread (px) +
+  // color chip under their own sub-labels; row 2 is the blur slider. The
+  // older layout (position → blur → spread in separate full-width rows)
+  // was dropped because the right wrapper is only 371px wide and the goal
+  // capture shows all three primary numeric controls on a single line.
   return (
-    <div className="space-y-2">
-      <div className="grid grid-cols-[80px_1fr_auto] items-center gap-2">
-        <span className="text-xs text-grayscale-500">
-          {t.effects.shadowPositionColor}
-        </span>
-        <div className="flex gap-2">
+    <div className="space-y-3">
+      <div className="grid grid-cols-[1fr_auto_auto] items-end gap-2">
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-grayscale-500">{t.effects.position}</span>
+          <div className="grid grid-cols-2 gap-1">
+            <NumericStepper
+              value={offsetX}
+              min={-100}
+              max={100}
+              onChange={(v) => emit({ offsetX: v })}
+              unit="X"
+              ariaLabel="shadow offset X"
+              disabled={disabled}
+            />
+            <NumericStepper
+              value={offsetY}
+              min={-100}
+              max={100}
+              onChange={(v) => emit({ offsetY: v })}
+              unit="Y"
+              ariaLabel="shadow offset Y"
+              disabled={disabled}
+            />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-grayscale-500">{t.effects.spread}</span>
           <NumericStepper
-            value={offsetX}
-            min={-100}
+            value={spread}
+            min={0}
             max={100}
-            onChange={(v) => emit({ offsetX: v })}
-            unit="X"
-            ariaLabel="shadow offset X"
+            onChange={(v) => emit({ spread: v })}
+            unit="px"
+            ariaLabel={t.effects.spread}
             disabled={disabled}
-            className="flex-1"
-          />
-          <NumericStepper
-            value={offsetY}
-            min={-100}
-            max={100}
-            onChange={(v) => emit({ offsetY: v })}
-            unit="Y"
-            ariaLabel="shadow offset Y"
-            disabled={disabled}
-            className="flex-1"
           />
         </div>
         {onColorClick ? (
@@ -108,8 +123,8 @@ export function ShadowControl({
         )}
       </div>
 
-      <div className="grid grid-cols-[80px_1fr] items-center gap-2">
-        <span className="text-xs text-grayscale-500">{t.effects.blur}</span>
+      <div className="flex flex-col gap-1">
+        <span className="text-[10px] font-medium text-grayscale-500">{t.effects.blur}</span>
         <LabeledSlider
           value={blur}
           onChange={(v) => emit({ blur: v })}
@@ -117,19 +132,6 @@ export function ShadowControl({
           max={200}
           formatReadout={(v) => `${v}px`}
           ariaLabel={t.effects.blur}
-          disabled={disabled}
-        />
-      </div>
-
-      <div className="grid grid-cols-[80px_1fr] items-center gap-2">
-        <span className="text-xs text-grayscale-500">{t.effects.spread}</span>
-        <NumericStepper
-          value={spread}
-          min={0}
-          max={100}
-          onChange={(v) => emit({ spread: v })}
-          unit="px"
-          ariaLabel={t.effects.spread}
           disabled={disabled}
         />
       </div>

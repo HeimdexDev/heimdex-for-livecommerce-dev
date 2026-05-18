@@ -280,7 +280,13 @@ export function VideoPeoplePanel({
   return (
     // figma: 1602:38985 — outer card lives in VideoDetailPage's right wrapper;
     // this panel renders sections only so we don't double-shadow.
-    <div className="flex flex-col gap-6">
+    //
+    // gap-5 (20px) instead of the prior gap-6 (24px): the 4px the user
+    // surfaced — clicking a person rendered the selected blue border so
+    // tight against the header that the top stroke was being clipped by
+    // the right-wrapper scroll surface. Tightening the gap by 4px gives
+    // the selected outline room without losing visual breathing space.
+    <div className="flex flex-col gap-5">
       <div className="flex items-center justify-between">
         <h2 className="text-[18px] font-semibold tracking-[-0.45px] text-black">인물 관리</h2>
         <Link

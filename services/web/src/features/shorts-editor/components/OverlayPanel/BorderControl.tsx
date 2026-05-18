@@ -38,39 +38,42 @@ export function BorderControl({
   disabled = false,
 }: BorderControlProps) {
   return (
-    <div className="grid grid-cols-[80px_1fr_auto] items-center gap-2">
-      <span className="text-xs text-grayscale-500">{t.effects.stroke}</span>
-      <NumericStepper
-        value={width}
-        min={0}
-        max={50}
-        onChange={onWidthChange}
-        unit="px"
-        ariaLabel={`${t.effects.stroke} width`}
-        disabled={disabled}
-      />
-      {onColorClick ? (
-        <button
-          type="button"
-          onClick={onColorClick}
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] font-medium text-grayscale-500">{t.effects.width}</span>
+      <div className="flex items-stretch gap-2">
+        <NumericStepper
+          value={width}
+          min={0}
+          max={50}
+          onChange={onWidthChange}
+          unit="px"
+          ariaLabel={`${t.effects.stroke} width`}
           disabled={disabled}
-          aria-label={`${t.effects.stroke} color`}
-          className="h-9 w-9 rounded-lg border border-grayscale-200 bg-white p-0.5 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <span
-            className="block h-full w-full rounded"
-            style={{ backgroundColor: color }}
-          />
-        </button>
-      ) : (
-        <ColorSwatchButton
-          color={color}
-          onChange={onColorChange}
-          ariaLabel={`${t.effects.stroke} color`}
-          size="md"
-          disabled={disabled}
+          className="flex-1"
         />
-      )}
+        {onColorClick ? (
+          <button
+            type="button"
+            onClick={onColorClick}
+            disabled={disabled}
+            aria-label={`${t.effects.stroke} color`}
+            className="h-9 w-9 rounded-lg border border-grayscale-200 bg-white p-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <span
+              className="block h-full w-full rounded"
+              style={{ backgroundColor: color }}
+            />
+          </button>
+        ) : (
+          <ColorSwatchButton
+            color={color}
+            onChange={onColorChange}
+            ariaLabel={`${t.effects.stroke} color`}
+            size="md"
+            disabled={disabled}
+          />
+        )}
+      </div>
     </div>
   );
 }

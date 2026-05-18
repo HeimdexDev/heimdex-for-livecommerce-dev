@@ -202,10 +202,11 @@ export function VideoSegmentRangeSlider({
           onClick={() => toggleTooltip("start")}
           disabled={disabled}
           className={cn(
-            "shrink-0 rounded-[10px] border bg-white px-[10px] py-[6px] text-[14px] font-medium leading-[1.4] tracking-[-0.35px]",
-            openTooltip === "start"
-              ? "border-heimdex-navy-500 text-heimdex-navy-500"
-              : "border-neutral-h-100 text-neutral-h-400",
+            // Heimdex-navy border on both states per the 2026-05-18 goal —
+            // the inactive neutral-h-100 border read as broken/disabled.
+            // Text colour still differentiates open vs closed tooltip.
+            "shrink-0 rounded-[10px] border border-heimdex-navy-500 bg-white px-[10px] py-[6px] text-[14px] font-medium leading-[1.4] tracking-[-0.35px]",
+            openTooltip === "start" ? "text-heimdex-navy-500" : "text-neutral-h-400",
           )}
           data-testid="range-label-start"
           data-active={openTooltip === "start"}
@@ -225,19 +226,12 @@ export function VideoSegmentRangeSlider({
               className="absolute h-full bg-heimdex-navy-500"
               style={{ left: `${startPct}%`, right: `${100 - endPct}%` }}
             />
-            {snapTargetsMs && durationMs > 0
-              ? snapTargetsMs
-                  .filter((t) => t > 0 && t < durationMs)
-                  .map((t, i) => (
-                    <span
-                      key={`snap-${i}-${t}`}
-                      className="absolute top-1/2 h-3 w-px -translate-x-1/2 -translate-y-1/2 bg-grayscale-400"
-                      style={{ left: `${(t / durationMs) * 100}%` }}
-                      data-testid="range-snap-tick"
-                      aria-hidden="true"
-                    />
-                  ))
-              : null}
+            {/* Scene-boundary snap targets used to render as visible ticks
+                (h-3 w-px grayscale-400 lines) across the whole track, which
+                the user surfaced as visual noise — 100+ vertical hairlines
+                made the slider look dirty. Snapping behavior stays (parent
+                still consumes the boundaries via onChange), but the ticks
+                are no longer painted. */}
             <button
               type="button"
               role="slider"
@@ -292,10 +286,10 @@ export function VideoSegmentRangeSlider({
           onClick={() => toggleTooltip("end")}
           disabled={disabled}
           className={cn(
-            "shrink-0 rounded-[10px] border bg-white px-[10px] py-[6px] text-[14px] font-medium leading-[1.4] tracking-[-0.35px]",
-            openTooltip === "end"
-              ? "border-heimdex-navy-500 text-heimdex-navy-500"
-              : "border-neutral-h-100 text-neutral-h-400",
+            // Match the start-side button — heimdex-navy border in both
+            // tooltip states; only the text colour switches on open.
+            "shrink-0 rounded-[10px] border border-heimdex-navy-500 bg-white px-[10px] py-[6px] text-[14px] font-medium leading-[1.4] tracking-[-0.35px]",
+            openTooltip === "end" ? "text-heimdex-navy-500" : "text-neutral-h-400",
           )}
           data-testid="range-label-end"
           data-active={openTooltip === "end"}

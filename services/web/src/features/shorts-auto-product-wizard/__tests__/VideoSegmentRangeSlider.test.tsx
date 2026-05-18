@@ -253,7 +253,7 @@ describe("VideoSegmentRangeSlider — D4 snap behavior", () => {
   const ONE_MIN = 60_000;
   const FIVE_MIN = 300_000;
 
-  it("renders snap-target ticks for interior boundaries", () => {
+  it("does not paint snap-target ticks even when boundaries are supplied", () => {
     render(
       <VideoSegmentRangeSlider
         durationMs={FIVE_MIN}
@@ -263,8 +263,10 @@ describe("VideoSegmentRangeSlider — D4 snap behavior", () => {
         snapTargetsMs={[0, 60_000, 120_000, 180_000, 240_000, FIVE_MIN]}
       />,
     );
-    // Ticks render only for interior boundaries (exclude 0 and durationMs).
-    expect(screen.getAllByTestId("range-snap-tick")).toHaveLength(4);
+    // Ticks were removed per the 2026-05-18 cleanup — the slider stays
+    // visually clean while snapping behaviour remains intact via the
+    // boundaries the parent forwards through `snapTargetsMs`.
+    expect(screen.queryAllByTestId("range-snap-tick")).toHaveLength(0);
   });
 
   it("renders no ticks when snapTargetsMs is undefined", () => {

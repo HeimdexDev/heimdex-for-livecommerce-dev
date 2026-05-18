@@ -23,26 +23,32 @@ interface EffectsSectionProps {
   hideStroke?: boolean;
 }
 
-const DEFAULT_STROKE: StrokeProps = { color: "#FF0000", widthPx: 2 };
+const DEFAULT_STROKE: StrokeProps = { color: "#FF0000", widthPx: 25 };
 const DEFAULT_SHADOW: ShadowProps = {
   color: "#FF0000",
   offsetX: 0,
-  offsetY: 4,
+  offsetY: 99,
   blurPx: 12,
-  spreadPx: 0,
+  spreadPx: 25,
 };
 
 /**
  * Combined Opacity / Stroke / Shadow controls.
  *
- * Section-per-effect to mirror Figma. Opacity always present; stroke + shadow
- * have an "off" state (null) that the toggle blanks out the sub-controls
- * with a default object on enable.
+ * Section-per-effect to mirror Figma 2026-05-18 redesign. ON/OFF toggles
+ * were removed — all sub-controls render unconditionally. When the
+ * underlying overlay has a null stroke / shadow we render the controls
+ * against DEFAULT values; the first user interaction materialises the
+ * effect in state. This matches the figma capture where every section
+ * shows live values regardless of whether the user has enabled them yet.
  */
 export function EffectsSection({ effects, onChange, hideStroke = false }: EffectsSectionProps) {
   const update = (patch: Partial<EffectsProps>) => {
     onChange({ ...effects, ...patch });
   };
+
+  const stroke = effects.stroke ?? DEFAULT_STROKE;
+  const shadow = effects.shadow ?? DEFAULT_SHADOW;
 
   return (
     <div className="space-y-4">
@@ -62,57 +68,37 @@ export function EffectsSection({ effects, onChange, hideStroke = false }: Effect
       {/* Stroke — hidden when the panel hosts it alongside Transform ------------ */}
       {!hideStroke && (
         <section>
-          <Header
-            label={t.effects.stroke}
-            enabled={effects.stroke != null}
-            onToggle={() =>
-              update({ stroke: effects.stroke ? null : { ...DEFAULT_STROKE } })
-            }
+          <Header label={t.effects.stroke} />
+          <BorderControl
+            width={stroke.widthPx}
+            color={stroke.color}
+            onWidthChange={(widthPx) => update({ stroke: { ...stroke, widthPx } })}
+            onColorChange={(color) => update({ stroke: { ...stroke, color } })}
           />
-          {effects.stroke && (
-            <BorderControl
-              width={effects.stroke.widthPx}
-              color={effects.stroke.color}
-              onWidthChange={(widthPx) =>
-                update({ stroke: { ...(effects.stroke as StrokeProps), widthPx } })
-              }
-              onColorChange={(color) =>
-                update({ stroke: { ...(effects.stroke as StrokeProps), color } })
-              }
-            />
-          )}
         </section>
       )}
 
       {/* Shadow -------------------------------------------------------------- */}
       <section>
-        <Header
-          label={t.effects.shadow}
-          enabled={effects.shadow != null}
-          onToggle={() =>
-            update({ shadow: effects.shadow ? null : { ...DEFAULT_SHADOW } })
+        <Header label={t.effects.shadow} />
+        <ShadowControl
+          offsetX={shadow.offsetX}
+          offsetY={shadow.offsetY}
+          spread={shadow.spreadPx}
+          blur={shadow.blurPx}
+          color={shadow.color}
+          onChange={(next) =>
+            update({
+              shadow: {
+                color: next.color,
+                offsetX: next.offsetX,
+                offsetY: next.offsetY,
+                blurPx: next.blur,
+                spreadPx: next.spread,
+              },
+            })
           }
         />
-        {effects.shadow && (
-          <ShadowControl
-            offsetX={effects.shadow.offsetX}
-            offsetY={effects.shadow.offsetY}
-            spread={effects.shadow.spreadPx}
-            blur={effects.shadow.blurPx}
-            color={effects.shadow.color}
-            onChange={(next) =>
-              update({
-                shadow: {
-                  color: next.color,
-                  offsetX: next.offsetX,
-                  offsetY: next.offsetY,
-                  blurPx: next.blur,
-                  spreadPx: next.spread,
-                },
-              })
-            }
-          />
-        )}
       </section>
     </div>
   );
@@ -127,64 +113,26 @@ export function StrokeBlock({
   effects: EffectsProps;
   onChange: (effects: EffectsProps) => void;
 }) {
+  const stroke = effects.stroke ?? DEFAULT_STROKE;
   return (
     <section>
-      <Header
-        label={t.effects.stroke}
-        enabled={effects.stroke != null}
-        onToggle={() =>
-          onChange({
-            ...effects,
-            stroke: effects.stroke ? null : { ...DEFAULT_STROKE },
-          })
+      <Header label={t.effects.stroke} />
+      <BorderControl
+        width={stroke.widthPx}
+        color={stroke.color}
+        onWidthChange={(widthPx) =>
+          onChange({ ...effects, stroke: { ...stroke, widthPx } })
+        }
+        onColorChange={(color) =>
+          onChange({ ...effects, stroke: { ...stroke, color } })
         }
       />
-      {effects.stroke && (
-        <BorderControl
-          width={effects.stroke.widthPx}
-          color={effects.stroke.color}
-          onWidthChange={(widthPx) =>
-            onChange({
-              ...effects,
-              stroke: { ...(effects.stroke as StrokeProps), widthPx },
-            })
-          }
-          onColorChange={(color) =>
-            onChange({
-              ...effects,
-              stroke: { ...(effects.stroke as StrokeProps), color },
-            })
-          }
-        />
-      )}
     </section>
   );
 }
 
-function Header({
-  label,
-  enabled,
-  onToggle,
-}: {
-  label: string;
-  enabled?: boolean;
-  onToggle?: () => void;
-}) {
-  if (onToggle == null) {
-    return (
-      <h3 className="mb-2 text-xs font-semibold text-grayscale-800">{label}</h3>
-    );
-  }
+function Header({ label }: { label: string }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className="mb-2 flex w-full items-center justify-between text-xs font-semibold text-grayscale-800 hover:text-heimdex-navy-500"
-    >
-      <span>{label}</span>
-      <span
-        className={enabled ? "text-heimdex-navy-500" : "text-grayscale-300"}
-      >{enabled ? "ON" : "OFF"}</span>
-    </button>
+    <h3 className="mb-2 text-xs font-semibold text-grayscale-800">{label}</h3>
   );
 }

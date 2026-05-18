@@ -56,8 +56,10 @@ export const t = {
     stroke: "윤곽선",
     shadow: "그림자",
     shadowPositionColor: "위치/색상",
+    position: "위치",
     blur: "블러",
     spread: "확산",
+    width: "굵기",
   },
   preset: {
     sectionLabel: "프리셋",

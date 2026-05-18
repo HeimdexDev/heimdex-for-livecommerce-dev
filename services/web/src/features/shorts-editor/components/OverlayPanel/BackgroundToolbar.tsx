@@ -34,8 +34,12 @@ export function BackgroundToolbar({
   onChange,
   onReorder,
 }: BackgroundToolbarProps) {
+  // Goal capture (background wrapper) — action bar is right-aligned: the
+  // three icons (line-spacing / layer / paint bucket) cluster against the
+  // wrapper's right edge with empty space to the left. Using justify-end
+  // keeps the same component tree and only flips the row alignment.
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center justify-end gap-1">
       <ToolbarButton ariaLabel={t.text.lineSpacing} disabled>
         <LineSpacingIcon />
       </ToolbarButton>

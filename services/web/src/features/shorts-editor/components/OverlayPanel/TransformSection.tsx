@@ -29,80 +29,75 @@ export function TransformSection({ overlay, onChange }: TransformSectionProps) {
   const yPct = Math.round(tf.y * 100);
   const rotInt = Math.round(tf.rotationDeg);
 
+  // figma 2026-05-18 redesign — split the row under the 변형 header into two
+  // sub-labelled columns: position (X/Y) and rotation (°). Background
+  // overlays add an extra size (W/H) row below. The earlier "위치/회전"
+  // single-row layout with three steppers did not match the goal capture.
   return (
-    <section className="space-y-3">
+    <section className="space-y-2">
       <header className="text-xs font-semibold text-grayscale-800">
         {t.transform.sectionLabel}
       </header>
 
-      {/* Background-only: explicit W/H */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-grayscale-500">위치</span>
+          <div className="grid grid-cols-2 gap-1">
+            <NumericStepper
+              value={xPct}
+              min={0}
+              max={100}
+              onChange={(v) => updateTransform({ x: v / 100 })}
+              unit="X"
+              ariaLabel="X position"
+            />
+            <NumericStepper
+              value={yPct}
+              min={0}
+              max={100}
+              onChange={(v) => updateTransform({ y: v / 100 })}
+              unit="Y"
+              ariaLabel="Y position"
+            />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-grayscale-500">회전</span>
+          <NumericStepper
+            value={rotInt}
+            min={-360}
+            max={360}
+            onChange={(v) => updateTransform({ rotationDeg: v })}
+            unit="°"
+            ariaLabel="rotation"
+          />
+        </div>
+      </div>
+
+      {/* Background-only: explicit W/H underneath 위치/회전 */}
       {overlay.kind === "background" && (
-        <Row label={t.transform.size}>
-          <NumericStepper
-            value={tf.widthPx ?? 0}
-            min={1}
-            max={10000}
-            onChange={(v) => updateTransform({ widthPx: v })}
-            unit={t.transform.width}
-            ariaLabel={`${t.transform.size} width`}
-            className="flex-1"
-          />
-          <NumericStepper
-            value={tf.heightPx ?? 0}
-            min={1}
-            max={10000}
-            onChange={(v) => updateTransform({ heightPx: v })}
-            unit={t.transform.height}
-            ariaLabel={`${t.transform.size} height`}
-            className="flex-1"
-          />
-        </Row>
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium text-grayscale-500">{t.transform.size}</span>
+          <div className="grid grid-cols-2 gap-1">
+            <NumericStepper
+              value={tf.widthPx ?? 0}
+              min={1}
+              max={10000}
+              onChange={(v) => updateTransform({ widthPx: v })}
+              unit={t.transform.width}
+              ariaLabel={`${t.transform.size} width`}
+            />
+            <NumericStepper
+              value={tf.heightPx ?? 0}
+              min={1}
+              max={10000}
+              onChange={(v) => updateTransform({ heightPx: v })}
+              unit={t.transform.height}
+              ariaLabel={`${t.transform.size} height`}
+            />
+          </div>
+        </div>
       )}
-
-      <Row label={t.transform.positionRotation}>
-        <NumericStepper
-          value={xPct}
-          min={0}
-          max={100}
-          onChange={(v) => updateTransform({ x: v / 100 })}
-          unit="X"
-          ariaLabel="X position"
-          className="flex-1"
-        />
-        <NumericStepper
-          value={yPct}
-          min={0}
-          max={100}
-          onChange={(v) => updateTransform({ y: v / 100 })}
-          unit="Y"
-          ariaLabel="Y position"
-          className="flex-1"
-        />
-        <NumericStepper
-          value={rotInt}
-          min={-360}
-          max={360}
-          onChange={(v) => updateTransform({ rotationDeg: v })}
-          unit="°"
-          ariaLabel="rotation"
-          className="flex-1"
-        />
-      </Row>
     </section>
-  );
-}
-
-function Row({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="grid grid-cols-[80px_1fr] items-center gap-2">
-      <span className="text-xs text-grayscale-500">{label}</span>
-      <div className="flex items-stretch gap-2">{children}</div>
-    </div>
   );
 }

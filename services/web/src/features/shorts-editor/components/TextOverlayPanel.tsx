@@ -166,11 +166,12 @@ export function TextOverlayPanel({
               </div>
             </div>
 
-            {/* Presets */}
-            <PresetSection
-              currentStyle={subtitle.style}
-              onApplyPreset={(style) => onUpdateSubtitle(subtitleIndex, { style })}
-            />
+            {/* Preset section (inline preset save + apply inside the
+                wrapper) was dropped per the 2026-05-18 goal capture — the
+                GNB TemplateSaveMenu + the right-wrapper 템플릿 tab cover the
+                same surface. Same reasoning as the V2 OverlayPanel. The
+                local PresetSection helper below is retained as dead code
+                but no longer rendered. */}
 
             {/* Delete */}
             <button

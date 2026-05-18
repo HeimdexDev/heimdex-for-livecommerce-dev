@@ -97,9 +97,38 @@ export function LayerStackIcon({ className }: { className?: string }) {
 }
 
 export function PaintBucketIcon({ className }: { className?: string }) {
+  // figma 1602:40067 — lucide/paint-bucket. The earlier path was actually
+  // lucide/eraser (the diagonal-stroke shape staging users saw). Swapped
+  // for the canonical paint-bucket: tilted body + dripping paint drop.
   return (
     <svg {...ICON_PROPS} className={className ?? ICON_PROPS.className}>
-      <path d="M19 11l-8 8a2 2 0 01-2.83 0L4 14.83a2 2 0 010-2.83l8-8m7 7l-7-7M5 21l-2-2" />
+      <path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z" />
+      <path d="m5 2 5 5" />
+      <path d="M2 13h15" />
+      <path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z" />
+    </svg>
+  );
+}
+
+// Canvas-level alignment trigger — centers the overlay vertically (default)
+// or horizontally (when `rotated` is true). The default shape is a
+// horizontal bar between two stacked boxes; `rotated` applies a -90deg
+// transform so the same path doubles as the horizontal-center icon. The
+// adjacent chevron-down (in TextToolbar) toggles `rotated`, mirroring the
+// text-align cycle UX.
+export function CanvasAlignCenterIcon({
+  className,
+  rotated = false,
+}: { className?: string; rotated?: boolean }) {
+  return (
+    <svg
+      {...ICON_PROPS}
+      className={className ?? ICON_PROPS.className}
+      style={rotated ? { transform: "rotate(-90deg)" } : undefined}
+    >
+      <rect x="6" y="3.5" width="12" height="6" rx="1" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <rect x="6" y="14.5" width="12" height="6" rx="1" />
     </svg>
   );
 }

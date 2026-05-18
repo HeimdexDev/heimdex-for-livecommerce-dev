@@ -8,7 +8,6 @@ import { Dropdown } from "../primitives/Dropdown";
 import { ActionBar } from "./ActionBar";
 import { BackgroundToolbar } from "./BackgroundToolbar";
 import { EffectsSection, StrokeBlock } from "./EffectsSection";
-import { PresetSection } from "./PresetSection";
 import { TextToolbar } from "./TextToolbar";
 import { TransformSection } from "./TransformSection";
 import { useOverlaySelection } from "../../hooks/useOverlaySelection";
@@ -26,7 +25,6 @@ import type {
   EditorTextOverlay,
   EffectsProps,
   TransformProps,
-  WirePreset,
 } from "../../lib/overlay-types";
 import type { EditorState } from "../../lib/types";
 
@@ -173,16 +171,11 @@ export function OverlayPanel({
           />
         )}
 
-        {selectedForTab && (
-          <PresetSection
-            overlay={selectedForTab}
-            presetsApi={presetsApi}
-            onApply={(preset: WirePreset) => {
-              const merged = presetsApi.applyTo(selectedForTab, preset);
-              onUpdateOverlay(selectedForTab.id, merged);
-            }}
-          />
-        )}
+        {/* PresetSection (inline preset save + apply inside the wrapper) was
+            dropped per the 2026-05-18 goal capture. The GNB TemplateSaveMenu
+            and the right wrapper's 템플릿 tab already cover the same surface,
+            so keeping a third inline entrypoint just created conflicts.
+            presetsApi itself is preserved because the GNB still calls it. */}
       </div>
 
       {/* Selection drag tracker so the user can click a different overlay
