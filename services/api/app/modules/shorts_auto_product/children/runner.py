@@ -70,7 +70,6 @@ import asyncio
 import logging
 import os
 import socket
-from contextlib import asynccontextmanager
 from datetime import datetime
 from decimal import Decimal
 from typing import AsyncIterator, Awaitable, Callable
@@ -83,7 +82,6 @@ from app.lib.product_track.config import TrackingConfig
 from app.lib.product_track.stitching import build_stitch_plan
 from app.lib.product_track.subset_selector import (
     GreedyPicker,
-    ScoredWindow,
     score_windows,
     select_subset,
 )
@@ -986,16 +984,6 @@ class ChildRunner:
                         "auto_shorts_product_v2_mention_dominance_threshold",
                         0.0,
                     ),
-                    min_mention_scenes=getattr(
-                        self.settings,
-                        "auto_shorts_product_v2_stt_min_mention_scenes",
-                        0,
-                    ),
-                    min_mention_score=getattr(
-                        self.settings,
-                        "auto_shorts_product_v2_stt_min_mention_score",
-                        0.0,
-                    ),
                     # chunk-level LLM catalog match
                     other_catalog_names=other_catalog_names,
                     chunk_catalog_match_threshold=getattr(
@@ -1437,7 +1425,7 @@ class ChildRunner:
 
 def _appearance_to_annotated_window(
     appearance: ProductAppearance,
-) -> "AnnotatedWindow":
+) -> "AnnotatedWindow":  # noqa: F821
     """Adapt a DB-side :class:`ProductAppearance` into the lib-side
     :class:`AnnotatedWindow` the picker stack consumes.
 

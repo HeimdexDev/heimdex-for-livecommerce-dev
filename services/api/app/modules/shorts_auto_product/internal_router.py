@@ -38,10 +38,6 @@ from app.db.base import get_db_session
 from app.dependencies import verify_internal_token
 from app.modules.shorts_auto_product.models import (
     ACTIVE_SCAN_STAGES,
-    SCAN_STAGE_ASSEMBLING,
-    SCAN_STAGE_ENUMERATING,
-    SCAN_STAGE_RENDERING,
-    SCAN_STAGE_TRACKING,
 )
 from app.modules.shorts_auto_product.repositories import (
     ProductAppearanceRepository,
@@ -381,21 +377,6 @@ async def complete(
             job_id=job_id,
             claimed_by=body.claimed_by,
             cost_delta_usd=body.cost_delta_usd,
-        )
-        # v0.17.0 — post-enumeration consolidation. Fire-and-forget so
-        # the worker callback returns immediately; the task sleeps
-        # ``consolidate_grace_s`` (default 105s) to let the parallel STT
-        # path land its rows before running one gpt-4o call that
-        # consolidates duplicates and filters non-sellable rows. Failure
-        # is silent (raw catalog stays visible). No-op when the feature
-        # flag is off or there's no OpenAI key.
-        from app.modules.shorts_auto_product.consolidate.service import (
-            schedule_consolidation_task,
-        )
-        schedule_consolidation_task(
-            settings=_settings,
-            org_id=job.org_id,
-            video_db_id=job.video_id,
         )
     else:
         # ``legacy_tracking`` derives catalog_entry_id from the job row;
@@ -754,9 +735,10 @@ async def enqueue_render_for_scan_job(
     Returns the new ``RenderJob.id`` so the caller can pass it to
     ``/internal/products/{job_id}/complete`` as ``render_job_id``.
     """
+    from heimdex_media_contracts.composition import CompositionSpec
+
     from app.dependencies import get_shorts_render_service
     from app.modules.shorts_render.schemas import RenderJobCreate
-    from heimdex_media_contracts.composition import CompositionSpec
 
     job_repo = ProductScanJobRepository(db)
     job = await job_repo.get_internal(job_id=job_id)

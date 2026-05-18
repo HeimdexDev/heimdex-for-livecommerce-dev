@@ -1,582 +1,210 @@
-// figma: 1713:288042  (cache: .figma-cache/1713-288042_phase3_wizard-result.api.json)
-// node-name: Component2-6.e AI 쇼츠 생성(생성 결과)
-// spec: 외곽 카드 padL/R/T/B=20 radius=10(rounded-card) shadow=card bg=white
 // ============================================================================
-// Auto-shorts wizard — result screen (Figma 1713:288042).
+// Auto-shorts wizard — loading screen.
 //
-// Single-page result grid replacing the previous "loading + redirect"
-// pattern. Per Phase 3 redesign:
+// Subscribes to the parent job's aggregate status via useScanOrder (3s
+// polling) and presents a progress bar + per-child status chips while
+// renders are in flight. As soon as ANY child render reaches
+// ``render_status === "completed"`` the page redirects to /edit-clips —
+// regardless of parent stage. EditClipsPage owns its own useScanOrder
+// instance and continues polling for late-arriving siblings.
 //
-//   1. Polls parent + children via useScanOrder (3s).
-//   2. Header shows "생성된 쇼츠 N개" + 모두 저장/내보내기 (bulk actions).
-//   3. Grid renders one ResultCard per child with per-clip status chip
-//      (대기/생성/완료/실패) + ⋮ menu + 편집 아이콘.
-//   4. Each card's ⋮ + open-in-new affordance lets the operator drill into
-//      the existing /edit-clips editor (Phase 5 redesign pending).
-//
-// Cancel/save/export per-clip backends are not wired yet — see the
-// // NOTE(export-backend-tbd) markers below. The whole-order cancel via
-// ``useScanOrder.cancel`` is preserved as the row-level cancel action so
-// the affordance is functional out of the box.
+// Why not wait for parent terminal: parent stage only flips to
+// ``committed`` after *every* child reaches a terminal stage. In a
+// 1-of-N success scenario (one render finishes far ahead of its
+// siblings) the old "parent terminal AND any completed" predicate
+// stalled — the user had to reload to see results.
 // ============================================================================
 
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
-import { Button } from "@/components/ui/Button";
 import type {
   JobStatusResponse,
   ScanOrderStatusResponse,
   ScanStage,
 } from "@/lib/types/shorts-auto-product-wizard";
 import { useAuth } from "@/lib/auth";
-import { cancelAutoShortJob } from "@/lib/api/shorts-auto-product-wizard";
-import { createSavedShort } from "@/lib/api/shorts";
-import {
-  getRenderJob,
-  getShortComposition,
-  updateRenderJobTitle,
-} from "@/lib/api/shorts-render";
 
-import { ResultCard } from "../components/ResultCard";
-import {
-  IndexingProgressPanel,
-  type IndexingStage,
-} from "../components/IndexingProgressPanel";
 import { InlineWizardBreadcrumb } from "../components/InlineWizardBreadcrumb";
-import type { WizardCriteriaDraft } from "../components/InlineWizardCriteriaPanel";
-import type { CriteriaSummary } from "@/lib/types/shorts-auto-product-wizard";
+import { LoadingShortsProgress } from "../components/LoadingShortsProgress";
+import { LoadingShortsSkeleton } from "../components/LoadingShortsSkeleton";
+import { LoadingShortsSpinner } from "../components/LoadingShortsSpinner";
 import { useScanOrder } from "../hooks/useScanOrder";
-import {
-  useTopHeaderBack,
-  useTopHeaderLeftActions,
-} from "@/components/layout/TopHeaderActionsContext";
-
-// Map the backend CriteriaSummary shape to the wizard's WizardCriteriaDraft
-// so IndexingProgressPanel can render its option summary badge directly.
-// Missing fields fall back to DEFAULT_CRITERIA values.
-function summaryFromCriteria(
-  c: CriteriaSummary | null | undefined,
-): WizardCriteriaDraft | undefined {
-  if (!c) return undefined;
-  const dist =
-    c.product_distribution === "single" || c.product_distribution === "multi"
-      ? c.product_distribution
-      : "single";
-  return {
-    length_seconds: c.length_seconds ?? 60,
-    requested_count: c.requested_count ?? 5,
-    time_range_start_ms: c.time_range_start_ms,
-    time_range_end_ms: c.time_range_end_ms,
-    product_distribution: dist,
-  };
-}
-
-const INDEXING_STAGES: ReadonlyArray<IndexingStage> = [
-  "enumerating",
-  "tracking",
-  "assembling",
-  "rendering",
-];
-
-function mapStageToIndexing(stage: ScanStage | undefined): IndexingStage | null {
-  return stage === "enumerating" ||
-    stage === "tracking" ||
-    stage === "assembling" ||
-    stage === "rendering"
-    ? stage
-    : null;
-}
-
-function computeCompletedStages(
-  stage: ScanStage | undefined,
-): ReadonlyArray<IndexingStage> {
-  switch (stage) {
-    case "enumeration_done":
-    case "tracking":
-      return ["enumerating"];
-    case "assembling":
-      return ["enumerating", "tracking"];
-    case "rendering":
-      return ["enumerating", "tracking", "assembling"];
-    case "preview_ready":
-    case "fanned_out":
-    case "committed":
-    case "done":
-      return INDEXING_STAGES;
-    default:
-      return [];
-  }
-}
 
 interface Props {
   videoId: string;
   parentJobId: string;
 }
 
+const SUCCESS_STAGES: ReadonlySet<ScanStage> = new Set<ScanStage>([
+  "done",
+  "committed",
+]);
+
 const FAILURE_STAGES: ReadonlySet<ScanStage> = new Set<ScanStage>([
   "failed",
   "cancelled",
 ]);
 
-function isWholeOrderFailed(status: ScanOrderStatusResponse | null): boolean {
-  if (!status) return false;
-  return FAILURE_STAGES.has(status.parent.stage);
+interface DerivedState {
+  /** Parent stage is failure-terminal, OR parent reached success-terminal
+   *  with every child in failed/cancelled state. */
+  failure: boolean;
+  /** At least one child has ``render_status === "completed"`` — an MP4
+   *  is viewable in /edit-clips regardless of parent stage. */
+  redirectable: boolean;
+}
+
+function deriveState(status: ScanOrderStatusResponse | null): DerivedState {
+  if (!status) return { failure: false, redirectable: false };
+  const parentStage = status.parent.stage;
+  // Parent explicitly failed or cancelled — no MP4 will ever land.
+  if (FAILURE_STAGES.has(parentStage)) {
+    return { failure: true, redirectable: false };
+  }
+  // Any child render produced an MP4 → redirect immediately. Parent
+  // stage is intentionally ignored: in a 1-of-N success scenario the
+  // parent sits at ``fanned_out`` until every sibling reaches a
+  // terminal stage, which can be tens of seconds after the first
+  // render lands.
+  const anyRenderCompleted = status.children.some(
+    (c: JobStatusResponse) => c.render_status === "completed",
+  );
+  if (anyRenderCompleted) {
+    return { failure: false, redirectable: true };
+  }
+  // Whole-batch failure: parent reached terminal-success AND every
+  // child settled into a no-MP4 terminal state. The terminal stages
+  // are ``done | failed | cancelled``; given the early return above
+  // we already know no child reached ``render_status === "completed"``,
+  // so a child stuck at ``done`` here was completed by
+  // ``children/runner.py::_complete_no_render`` (no-mentions /
+  // transcript-unavailable / live-block-too-short). Without this
+  // branch the user stares at the loading spinner forever — there's
+  // nothing for the redirect to point at, but the UI never surfaces
+  // a friendly message either.
+  if (
+    SUCCESS_STAGES.has(parentStage) &&
+    status.children_total > 0 &&
+    status.children.length === status.children_total &&
+    status.children.every(
+      (c: JobStatusResponse) =>
+        c.stage === "done" ||
+        c.stage === "failed" ||
+        c.stage === "cancelled",
+    )
+  ) {
+    return { failure: true, redirectable: false };
+  }
+  return { failure: false, redirectable: false };
 }
 
 export function WizardStepResult({ videoId, parentJobId }: Props) {
   const { getAccessToken } = useAuth();
   const router = useRouter();
-  // Breadcrumb (GNB step indicator) — pinned to step 3 for both the
-  // loading and result-grid states. Previously the hook only fired
-  // through IndexingProgressPanel, which doesn't mount once children
-  // arrive, so the breadcrumb disappeared as soon as the grid rendered.
-  const breadcrumbSlot = useMemo(
-    () => <InlineWizardBreadcrumb currentStep={3} />,
-    [],
-  );
-  useTopHeaderLeftActions(breadcrumbSlot);
-  // 뒤로가기 — the wizard pages don't set a TopHeader back slot, so
-  // step 3 landed with no way to return to step 2 via the GNB. Wire
-  // router.back so the chevron pops the user back to the product
-  // selection screen they came from.
-  const backSlot = useMemo(
-    () => ({ label: "뒤로가기", onClick: () => router.back() }),
-    [router],
-  );
-  useTopHeaderBack(backSlot);
-  // ``cancel`` from useScanOrder is the whole-order cancel — replaced by
-  // per-child cancelAutoShortJob below so a single card's cancel doesn't
-  // kill the rest of the batch.
-  const { status, error } = useScanOrder(parentJobId, getAccessToken);
+  const { status, error, cancel } = useScanOrder(parentJobId, getAccessToken);
 
-  // Local map of user-set render-job titles, keyed by render_job_id. The
-  // backend persists the new title via PATCH /api/shorts/render/{id}, but
-  // the scan-order poll response doesn't carry it back, so we mirror the
-  // value here for immediate UI feedback. The map is intentionally not
-  // re-hydrated on mount; reopening the page falls back to the default
-  // "쇼츠 N" label until the backend response is extended to include it.
-  const [renamedTitles, setRenamedTitles] = useState<Record<string, string>>({});
+  const { failure, redirectable } = useMemo(() => deriveState(status), [status]);
 
-  const children = status?.children ?? [];
-  const childrenTotal = status?.children_total ?? 0;
-  const failure = useMemo(() => isWholeOrderFailed(status), [status]);
-
-  const completedCount = useMemo(
-    () =>
-      children.filter((c: JobStatusResponse) => c.render_status === "completed")
-        .length,
-    [children],
-  );
-  const anyCompleted = completedCount > 0;
-
-  const openEditor = (child: JobStatusResponse) => {
-    // 2026-05-18 — route into the new ShortsEditorPage which loads the
-    // saved composition (scene clips + subtitles + overlay styles) via
-    // ``shortId={render_job_id}``. The legacy ``/edit-clips`` page is
-    // still routable but was the pre-redesign editor; the operator
-    // expects the new editor surface so timing / fonts / overlay
-    // styles render exactly as they're stored on the render job.
-    // When the render job isn't ready yet we fall back to the legacy
-    // path so the operator at least lands somewhere meaningful.
-    const renderJobId = child.render_job_id;
-    if (renderJobId) {
-      router.push(
-        `/export/shorts/editor?shortId=${encodeURIComponent(renderJobId)}`,
-      );
-      return;
-    }
-    router.push(
-      `/export/shorts/auto/wizard/${encodeURIComponent(videoId)}` +
-        `/result/${encodeURIComponent(parentJobId)}/edit-clips`,
+  // Fire ``router.replace`` exactly once when the redirect predicate becomes
+  // true. ``router.replace`` (not push) keeps the browser back-button from
+  // trapping the user on a now-stale spinner. The ref guards against the
+  // effect firing multiple times if useScanOrder's status updates after the
+  // redirect has already kicked off (next.js navigation is async).
+  const redirectedRef = useRef(false);
+  useEffect(() => {
+    if (!redirectable || redirectedRef.current) return;
+    redirectedRef.current = true;
+    router.replace(
+      `/export/shorts/auto/wizard/${encodeURIComponent(
+        videoId,
+      )}/result/${encodeURIComponent(parentJobId)}/edit-clips`,
     );
-  };
-
-  // Persist a completed auto-shorts child to the SavedShort library so it
-  // shows up in /export/shorts. The wizard creates ShortsRenderJob rows
-  // directly; this wraps the render job's input_spec into a SavedShort row
-  // (scene_ids + timing) so the saved-shorts list treats it like any other
-  // user-saved short. Render must be completed (we need scene_clips from
-  // the composition) — disabled caller-side until child.render_status is
-  // "completed".
-  const saveChildToLibrary = useCallback(
-    async (child: JobStatusResponse, ordinal: number): Promise<void> => {
-      if (!child.render_job_id) {
-        throw new Error("render_job_id missing — cannot resolve composition");
-      }
-      const composition = await getShortComposition(
-        child.render_job_id,
-        getAccessToken,
-      );
-      const sceneClips =
-        (composition.composition as { scene_clips?: Array<{ scene_id: string; start_ms?: number; end_ms?: number; timeline_start_ms?: number }> })
-          ?.scene_clips ?? [];
-      const sceneIds = sceneClips
-        .map((c) => c.scene_id)
-        .filter((id): id is string => Boolean(id));
-      if (sceneIds.length === 0) {
-        throw new Error("composition has no scene clips");
-      }
-      const startMs = sceneClips[0]?.timeline_start_ms ?? 0;
-      const lastClip = sceneClips[sceneClips.length - 1];
-      const endMs =
-        lastClip?.timeline_start_ms != null && lastClip?.end_ms != null && lastClip?.start_ms != null
-          ? lastClip.timeline_start_ms + (lastClip.end_ms - lastClip.start_ms)
-          : null;
-      const compositionTitle =
-        (composition.composition as { title?: string | null })?.title ?? null;
-      await createSavedShort(
-        {
-          video_id: videoId,
-          scene_ids: sceneIds,
-          title: compositionTitle ?? `쇼츠 ${ordinal}`,
-          start_ms: startMs,
-          end_ms: endMs,
-        },
-        getAccessToken,
-      );
-    },
-    [getAccessToken, videoId],
-  );
-
-  // Trigger a browser download for a single child render job. Pulls the
-  // presigned ``download_url`` from the render-job detail endpoint (the
-  // poll response doesn't carry it) and opens it via an anchor click —
-  // browsers honour the ``download`` attribute on the same-origin or
-  // CORS-aware S3 URL the backend returns.
-  const downloadChild = useCallback(
-    async (child: JobStatusResponse, ordinal: number): Promise<void> => {
-      if (!child.render_job_id) {
-        throw new Error("render_job_id missing — cannot resolve download URL");
-      }
-      const job = await getRenderJob(child.render_job_id, getAccessToken);
-      if (!job.download_url) {
-        throw new Error("download_url not available yet — render not complete?");
-      }
-      const a = document.createElement("a");
-      a.href = job.download_url;
-      a.download = `${job.title ?? `shorts_${ordinal}`}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    },
-    [getAccessToken],
-  );
-
-  const handleSaveCard = useCallback(
-    (child: JobStatusResponse, ordinal: number) => {
-      void (async () => {
-        try {
-          await saveChildToLibrary(child, ordinal);
-          router.push("/export/shorts");
-        } catch (err) {
-          // Surface the failure in the console — no toast surface in this
-          // page yet. Save errors are rare (composition is fetched fresh
-          // from the same render_job already shown on this card).
-          console.error("[wizard] save card failed", err);
-        }
-      })();
-    },
-    [router, saveChildToLibrary],
-  );
-
-  const handleExportCard = useCallback(
-    (child: JobStatusResponse, ordinal: number) => {
-      void downloadChild(child, ordinal).catch((err) => {
-        console.error("[wizard] export card failed", err);
-      });
-    },
-    [downloadChild],
-  );
-
-  const handleCancelCard = useCallback(
-    (child: JobStatusResponse) => {
-      void cancelAutoShortJob(child.job_id, getAccessToken).catch((err) => {
-        console.error("[wizard] cancel card failed", err);
-      });
-    },
-    [getAccessToken],
-  );
-
-  const handleRenameCard = useCallback(
-    (child: JobStatusResponse, ordinal: number) => {
-      if (!child.render_job_id) return;
-      const currentTitle =
-        renamedTitles[child.render_job_id] ?? `쇼츠 ${ordinal}`;
-      // window.prompt is intentionally lightweight here — the wizard
-      // result page has no dialog primitive of its own and the rename
-      // UX is "one-shot text override," not a multi-field form. A custom
-      // dialog can replace this when the design lands.
-      const next = window.prompt("새 제목을 입력하세요.", currentTitle);
-      if (next == null) return;
-      const trimmed = next.trim();
-      if (trimmed.length === 0 || trimmed === currentTitle) return;
-      void (async () => {
-        try {
-          await updateRenderJobTitle(
-            child.render_job_id as string,
-            trimmed,
-            getAccessToken,
-          );
-          setRenamedTitles((prev) => ({
-            ...prev,
-            [child.render_job_id as string]: trimmed,
-          }));
-        } catch (err) {
-          console.error("[wizard] rename card failed", err);
-        }
-      })();
-    },
-    [getAccessToken, renamedTitles],
-  );
-
-  const handleBulkSave = useCallback(() => {
-    void (async () => {
-      const targets = children.filter(
-        (c) => c.render_status === "completed" && c.render_job_id,
-      );
-      try {
-        for (let i = 0; i < targets.length; i++) {
-          await saveChildToLibrary(
-            targets[i],
-            targets[i].shorts_index ?? i + 1,
-          );
-        }
-        router.push("/export/shorts");
-      } catch (err) {
-        console.error("[wizard] bulk save failed", err);
-      }
-    })();
-  }, [children, router, saveChildToLibrary]);
-
-  const handleBulkExport = useCallback(() => {
-    void (async () => {
-      const targets = children.filter(
-        (c) => c.render_status === "completed" && c.render_job_id,
-      );
-      // Stagger downloads so popup blockers / browser concurrency limits
-      // don't drop later clips. 150ms beats the typical concurrent-download
-      // throttling without making the operator wait noticeably.
-      for (let i = 0; i < targets.length; i++) {
-        try {
-          await downloadChild(
-            targets[i],
-            targets[i].shorts_index ?? i + 1,
-          );
-        } catch (err) {
-          console.error("[wizard] bulk export item failed", err);
-        }
-        if (i < targets.length - 1) {
-          await new Promise((r) => setTimeout(r, 150));
-        }
-      }
-    })();
-  }, [children, downloadChild]);
+  }, [redirectable, router, videoId, parentJobId]);
 
   return (
     <div
-      className="mx-auto flex max-w-[1024px] flex-col gap-[20px] p-[24px]"
+      className="mx-auto max-w-5xl space-y-6 p-6"
       data-testid="wizard-step-result"
     >
-      <header className="flex items-center justify-between gap-[10px]">
-        <div className="flex items-baseline gap-[6px]">
-          <h1 className="font-pretendard text-[18px] font-bold tracking-[-0.45px] leading-[1.4] text-neutral-h-800">
-            생성된 쇼츠
-          </h1>
-          <span
-            className="font-pretendard text-[14px] font-semibold text-heimdex-navy-500"
-            data-testid="result-header-count"
-          >
-            {childrenTotal}개
-          </span>
-        </div>
-        <div className="flex items-center gap-[10px]">
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!anyCompleted}
-            // Iterates the completed children, POSTs each through
-            // createSavedShort, then navigates to /export/shorts. The
-            // user explicitly wants the saved-shorts list as the landing
-            // surface after a bulk save (per 2026-05-18 spec).
-            onClick={handleBulkSave}
-            data-testid="result-bulk-save"
-          >
-            모두 저장하기
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={!anyCompleted}
-            // Per-completed-child download. Backend doesn't expose a ZIP
-            // bundle endpoint, so we stagger the individual presigned
-            // downloads with a 150ms gap to keep popup blockers happy.
-            onClick={handleBulkExport}
-            data-testid="result-bulk-export"
-          >
-            모두 내보내기
-          </Button>
-        </div>
+      <header className="flex items-center justify-between gap-4">
+        <Link
+          href={`/videos/${encodeURIComponent(videoId)}?view=auto-shorts`}
+          className="text-sm text-gray-500 hover:text-gray-700"
+          data-testid="result-back-link"
+        >
+          &lt; 뒤로가기
+        </Link>
+        <InlineWizardBreadcrumb variant="two-step" currentStep={2} />
       </header>
 
       {error ? (
         <div
-          className="rounded-card bg-red-h-50 p-[12px] font-pretendard text-[14px] text-red-h-500"
+          className="rounded-md bg-red-50 p-3 text-sm text-red-700"
           data-testid="wizard-status-error"
         >
           상태 조회 실패: {error.message}
         </div>
       ) : null}
 
-      {failure && status ? <FailureBanner status={status} /> : null}
-
-      {childrenTotal === 0 ? (
-        <div data-testid="result-grid-empty">
-          <IndexingProgressPanel
-            progress={(status?.parent.progress_pct ?? 0) / 100}
-            currentStage={mapStageToIndexing(status?.parent.stage)}
-            completedStages={computeCompletedStages(status?.parent.stage)}
-            criteria={summaryFromCriteria(status?.criteria)}
-            videoDurationMs={
-              // No dedicated video-duration field on the response yet —
-              // fall back to time_range_end_ms (set when the user picked
-              // a range in step 1). undefined hides the badge.
-              status?.criteria?.time_range_end_ms ?? undefined
-            }
-          />
-        </div>
+      {failure && status ? (
+        <FailureState status={status} />
       ) : (
-        // Render exactly `requested_count` slots so the grid reflects the
-        // count the user picked in step 1. Children are indexed by
-        // `shorts_index`; slots that don't yet have a backing child get a
-        // placeholder card (same visual rhythm, no menu) so the layout
-        // doesn't reflow as children come in over the polling window.
-        (() => {
-          const requestedCount = Math.max(
-            children.length,
-            status?.criteria?.requested_count ?? 0,
-          );
-          const lengthSeconds = status?.criteria?.length_seconds ?? null;
-          // Backend assigns ``shorts_index`` from 1..N (see
-          // ``repositories/job.py`` fan-out). The slot iterator is 0..N-1
-          // so we offset by +1 when matching — otherwise slot 0 never
-          // finds a backing child and the first card sticks on the
-          // PendingResultCard placeholder forever (2026-05-18 bug).
-          const slots = Array.from({ length: requestedCount }, (_, i) =>
-            children.find((c) => (c.shorts_index ?? -1) === i + 1) ?? null,
-          );
-          return (
-            <div
-              className="flex flex-wrap gap-[20px] rounded-card bg-white p-[20px] shadow-card"
-              data-testid="result-grid"
-            >
-              {slots.map((child, i) => {
-                if (!child) {
-                  return (
-                    <PendingResultCard
-                      key={`slot-${i}`}
-                      ordinal={i + 1}
-                      lengthSeconds={lengthSeconds}
-                    />
-                  );
-                }
-                // ``shorts_index`` is already 1-based on the backend,
-                // so map it through unchanged; only fall back to the
-                // slot index + 1 when the field is missing.
-                const ordinal = child.shorts_index ?? i + 1;
-                const renamedTitle =
-                  child.render_job_id != null
-                    ? renamedTitles[child.render_job_id]
-                    : undefined;
-                return (
-                  <ResultCard
-                    key={child.job_id}
-                    child={child}
-                    videoId={videoId}
-                    ordinal={ordinal}
-                    lengthSeconds={lengthSeconds}
-                    productLabels={child.product_labels ?? []}
-                    summary={child.render_summary ?? null}
-                    title={renamedTitle ?? null}
-                    onRename={() => handleRenameCard(child, ordinal)}
-                    onSave={() => handleSaveCard(child, ordinal)}
-                    onExport={() => handleExportCard(child, ordinal)}
-                    onCancel={() => handleCancelCard(child)}
-                    onOpenEditor={() => openEditor(child)}
-                  />
-                );
-              })}
-            </div>
-          );
-        })()
+        <LoadingState
+          count={status?.children_total ?? 0}
+          childJobs={status?.children ?? []}
+          // Cancellation is meaningful only while we're actually loading.
+          // Once redirect has fired the page is about to unmount; hide the
+          // button to avoid a doomed POST race.
+          onCancel={redirectedRef.current ? undefined : () => void cancel()}
+        />
       )}
     </div>
   );
 }
 
-// Visual placeholder for a card slot whose backing child job hasn't been
-// emitted by the backend yet. Mirrors ResultCard's outer dimensions so
-// the grid stays stable as children stream in.
-function PendingResultCard({
-  ordinal,
-  lengthSeconds,
-}: {
-  ordinal: number;
-  lengthSeconds: number | null;
-}) {
-  const lengthLabel =
-    lengthSeconds == null
-      ? "—"
-      : lengthSeconds % 60 === 0
-        ? `${lengthSeconds / 60}분`
-        : `${Math.floor(lengthSeconds / 60)}분 ${lengthSeconds % 60}초`;
-  return (
-    <article
-      className="relative flex h-[253px] w-[287px] items-start overflow-clip rounded-card border border-grayscale-100 bg-white opacity-60"
-      data-testid={`result-card-${ordinal}-pending`}
-    >
-      <div className="h-full w-[150px] shrink-0 bg-neutral-h-100" />
-      <div className="flex h-full flex-1 flex-col items-end gap-[20px] self-stretch px-[12px] py-[16px]">
-        <div className="flex w-full flex-col items-start gap-[20px]">
-          <p className="font-pretendard text-[14px] font-semibold tracking-[-0.35px] leading-[1.4] text-grayscale-500">
-            쇼츠 {ordinal}
-          </p>
-          <dl className="flex w-full items-start gap-[10px] font-pretendard text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-grayscale-500">
-            <div className="flex flex-col items-start gap-[10px]">
-              <dt>쇼츠 길이</dt>
-              <dt>진행률</dt>
-            </div>
-            <div className="flex flex-col items-start gap-[10px]">
-              <dd>{lengthLabel}</dd>
-              <dd>0%</dd>
-            </div>
-          </dl>
-        </div>
-        <div className="flex-1" />
-        <span className="inline-flex items-center justify-center rounded-[4px] bg-grayscale-100 px-[6px] py-[3px] font-pretendard text-[12px] font-semibold tracking-[-0.3px] leading-[1.4] text-grayscale-500">
-          대기 중
-        </span>
-      </div>
-    </article>
-  );
-}
-
-interface FailureBannerProps {
+interface FailureStateProps {
   status: ScanOrderStatusResponse;
 }
 
-function FailureBanner({ status }: FailureBannerProps) {
+function FailureState({ status }: FailureStateProps) {
   const parentError = status.parent.error_code
     ? friendlyParentError(status.parent.error_code, status.parent.error_message)
     : null;
+  // Distinct failure shapes — distinguish so the user gets a precise
+  // explanation rather than a generic "something broke":
+  //   1. Parent has an error_code      → friendlyParentError
+  //   2. Parent stage = cancelled      → "취소되었어요"
+  //   3. All children completed without producing a render — covers
+  //      the ``_complete_no_render`` paths from the STT pipeline
+  //      (no_mentions / transcript_unavailable / live_block_too_short).
+  //      The runner doesn't set error_code on the parent for these,
+  //      so they reach FailureState via ``deriveState``'s
+  //      "all children terminal AND no render produced" predicate.
+  //      → "쇼츠를 만들 수 있는 구간을 찾지 못했어요"
+  //   4. All children failed (rare;    → "생성 요청한 모든 쇼츠가 실패했어요"
+  //      parent terminal-success but
+  //      children_failed === total)
+  const allChildrenDoneNoRender =
+    status.children_total > 0 &&
+    status.children.length === status.children_total &&
+    status.children.every(
+      (c) =>
+        c.stage === "done" && c.render_status !== "completed",
+    );
 
   let body: string;
   if (parentError) {
     body = parentError;
   } else if (status.parent.stage === "cancelled") {
     body = "취소되었어요.";
+  } else if (allChildrenDoneNoRender) {
+    body =
+      "선택하신 영상에서는 쇼츠를 만들 수 있는 구간을 찾지 못했어요. " +
+      "다른 길이나 다른 영상을 시도해 주세요.";
   } else if (
     status.children_total > 0 &&
     status.children_failed === status.children_total
@@ -585,16 +213,49 @@ function FailureBanner({ status }: FailureBannerProps) {
   } else {
     body = "쇼츠 생성에 실패했어요. 잠시 후 다시 시도해 주세요.";
   }
-
   return (
     <div
-      className="space-y-1 rounded-card border border-red-h-400 bg-red-h-50 p-[16px]"
+      className="space-y-2 rounded-lg border border-red-200 bg-red-50 p-6"
       data-testid="wizard-failure-state"
     >
-      <h2 className="font-pretendard text-[14px] font-semibold text-red-h-500">
+      <h2 className="text-base font-semibold text-red-800">
         쇼츠 생성에 실패했어요
       </h2>
-      <p className="font-pretendard text-[12px] text-red-h-500">{body}</p>
+      <p className="text-sm text-red-700">{body}</p>
+    </div>
+  );
+}
+
+interface LoadingStateProps {
+  count: number;
+  childJobs: JobStatusResponse[];
+  onCancel?: () => void;
+}
+
+function LoadingState({ count, childJobs, onCancel }: LoadingStateProps) {
+  // Before fan-out lands ``children_total`` is 0 — no per-clip data to
+  // show, so render the indeterminate spinner. Once the parent's
+  // children fan out we have a concrete N and live per-child stages,
+  // which the progress component visualizes as a determinate bar +
+  // chips.
+  const hasChildren = count > 0;
+  return (
+    <div
+      className="grid gap-6 md:grid-cols-[260px_1fr]"
+      data-testid="wizard-loading-state"
+    >
+      <LoadingShortsSkeleton count={count} />
+      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-gray-200 bg-white">
+        {hasChildren ? (
+          <LoadingShortsProgress
+            children={childJobs}
+            childrenTotal={count}
+            onCancel={onCancel}
+          />
+        ) : (
+          <LoadingShortsSpinner onCancel={onCancel} />
+        )}
+      </div>
     </div>
   );
 }

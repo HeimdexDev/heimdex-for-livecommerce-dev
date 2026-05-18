@@ -1,9 +1,3 @@
-// figma: 1713:288149  (cache: .figma-cache/1713-288149_phase2_wizard-product-single.api.json)
-// figma: 1713:288182  (cache: .figma-cache/1713-288182_phase2_wizard-product-multi.api.json)
-// node-name: 2-6.c/d AI 쇼츠 생성 (상품 선택)
-//   spec: card radius=10(rounded-card) shadow=shadow-card padL/R/T/B=20(p-5) gap=20(space-y-5)
-//   grid: max-w=7xl cols 2/3/4(sm/lg) gap=20(gap-5)  // Q3 — 5-col 미채택, 4-col 유지
-//   checkbox: 24×24(h-6 w-6) radius=6(rounded-md) top/right=8(top-2 right-2) check icon 16(h-4 w-4)
 // ============================================================================
 // Inline-wizard Step 2 (상품 선택) panel — props-driven product selection.
 // Same enumeration polling logic as the legacy ``WizardStepSelectProduct``
@@ -20,11 +14,8 @@
 
 "use client";
 
-import { Check } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { Button, Snackbar } from "@/components/ui/figma-index";
-import { useTopHeaderLeftActions } from "@/components/layout/TopHeaderActionsContext";
 import {
   WizardBudgetExceededError,
   WizardFeatureDisabledError,
@@ -85,7 +76,6 @@ export function InlineWizardProductPanel({
   onSubmitOrder,
   onBack,
 }: Props) {
-  void onBack; // back affordance moved to TopHeader chevron (2026-05-18)
   const { getAccessToken } = useAuth();
 
   const [entries, setEntries] = useState<CatalogProductSummary[]>([]);
@@ -99,13 +89,7 @@ export function InlineWizardProductPanel({
   );
   const [submitting, setSubmitting] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
-  // multi-mode cap toast — fired when an at-cap user tries to add another
-  // card. Auto-dismisses after 2.5s so the snackbar doesn't stack.
-  const [showCapSnackbar, setShowCapSnackbar] = useState(false);
   const startedAtRef = useRef<number>(Date.now());
-  const capSnackbarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
 
   // Effect duplicates legacy polling logic verbatim. Once the legacy
   // page is deleted (Phase D3), the polling loop has only one home.
@@ -234,10 +218,9 @@ export function InlineWizardProductPanel({
   const cap = criteria.requested_count;
   const atCap = selectedCount >= cap;
 
-  // Card click toggles membership. At-cap clicks on unselected cards are
-  // silently ignored for single-mode (the K/N counter is the visible cue),
-  // but multi-mode fires a Snackbar per Figma 1713:288182 — the cap is
-  // the user-visible affordance there. De-selecting is always allowed.
+  // PR 3: card click toggles membership. At-cap clicks on unselected
+  // cards are silently ignored (the K/N counter is the visible cue).
+  // De-selecting is always allowed regardless of cap.
   const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
       if (prev.has(id)) {
@@ -245,116 +228,75 @@ export function InlineWizardProductPanel({
         next.delete(id);
         return next;
       }
-      if (prev.size >= cap) {
-        if (criteria.product_distribution === "multi") {
-          if (capSnackbarTimerRef.current) {
-            clearTimeout(capSnackbarTimerRef.current);
-          }
-          setShowCapSnackbar(true);
-          capSnackbarTimerRef.current = setTimeout(
-            () => setShowCapSnackbar(false),
-            2500,
-          );
-        }
-        return prev;
-      }
+      if (prev.size >= cap) return prev;
       const next = new Set(prev);
       next.add(id);
       return next;
     });
   };
 
-  useEffect(
-    () => () => {
-      if (capSnackbarTimerRef.current) clearTimeout(capSnackbarTimerRef.current);
-    },
-    [],
-  );
-
-  // Entry toast (figma 1713:288207) — fires once per panel mount in
-  // multi mode so users learn the cap rule before they hit it. Auto-
-  // dismisses after 4s; reuses the cap snackbar slot so only one is
-  // ever on screen at a time.
-  const introShownRef = useRef(false);
-  useEffect(() => {
-    if (introShownRef.current) return;
-    if (criteria.product_distribution !== "multi") return;
-    if (pollState !== "ready") return;
-    introShownRef.current = true;
-    setShowCapSnackbar(true);
-    if (capSnackbarTimerRef.current) clearTimeout(capSnackbarTimerRef.current);
-    capSnackbarTimerRef.current = setTimeout(
-      () => setShowCapSnackbar(false),
-      4000,
-    );
-  }, [criteria.product_distribution, pollState]);
-
-  const isMulti = criteria.product_distribution === "multi";
-  const guidanceCopy = isMulti
-    ? `선택한 상품마다 하나씩, 별도의 쇼츠 ${criteria.requested_count}개를 생성합니다. 상품은 최대 ${cap}개까지 선택 가능합니다.`
-    : `선택한 상품을 모두 포함한 쇼츠 ${criteria.requested_count}개를 생성합니다.`;
-
-  // Step indicator lives in the global TopHeader (GNB) per Figma 1602:36766.
-  const headerSlot = useMemo(
-    () => <InlineWizardBreadcrumb currentStep={2} />,
-    [],
-  );
-  useTopHeaderLeftActions(headerSlot);
-
   return (
-    <div className="space-y-[20px] font-pretendard">
-      {/* 뒤로가기 header was removed 2026-05-18 — TopHeader's back chevron
-          already covers the navigation, and the nested header row
-          created a visible extra-wrapper effect inside the card. The
-          ``onBack`` callback is preserved for callers that still want
-          to surface it elsewhere. */}
+    <div className="space-y-6">
+      <header className="flex items-center justify-between gap-4">
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-sm text-gray-500 hover:text-gray-700"
+          data-testid="inline-product-back"
+        >
+          &lt; 뒤로가기
+        </button>
+        <InlineWizardBreadcrumb currentStep={2} />
+      </header>
+
       {/*
         Frame spec (2026-05-18, user-supplied):
-          display: flex; width: 943px; height: 640px;
+          display: flex; width: 943px; height: 454px;
           padding: 20px; flex-direction: column;
           justify-content: center; align-items: flex-start; gap: 20px;
-        Height bumped from 454 → 640 after the 2026-05-18 rollback so
-        the product grid + guidance copy fit without internal scroll.
         Inline style so the pixel-perfect frame survives Tailwind's
         purge and doesn't depend on the parent's responsive width.
       */}
       <div
         className="flex flex-col items-start justify-center gap-[20px] rounded-card bg-white p-[20px] shadow-card"
-        style={{ width: 943, height: 640 }}
+        style={{ width: 943, height: 454 }}
       >
         <div className="flex items-center justify-between gap-4">
-          <h2 className="text-[18px] font-semibold tracking-[-0.45px] text-grayscale-800">
-            상품 선택{" "}
-            <span className="ml-[4px] text-[14px] font-medium text-grayscale-500">
-              {entries.length}개 중 {selectedCount}개 선택
-            </span>
-          </h2>
-          <div className="flex items-center gap-[12px]">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">
+              상품 선택{" "}
+              <span className="text-sm font-normal text-gray-500">
+                {entries.length}개 중 {selectedCount}/{cap}개 선택
+              </span>
+            </h2>
+          </div>
+          <div className="flex items-center gap-3">
             <span
-              className="rounded-full bg-neutral-h-50 px-[12px] py-[6px] text-[12px] font-medium text-grayscale-500"
+              className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600"
               data-testid="inline-product-summary-chip"
             >
               {summaryChip(criteria, videoDurationMs)}
             </span>
-            <Button
-              variant="primary"
-              size="sm"
+            <button
+              type="button"
               onClick={handleSubmit}
               disabled={
                 selectedIds.size === 0 ||
                 submitting ||
                 pollState !== "ready"
               }
+              className="rounded-md bg-gray-900 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-gray-800 disabled:bg-gray-300 disabled:text-gray-500"
               data-testid="inline-product-next"
             >
               {submitting ? "생성 중..." : "다음"}
-            </Button>
+            </button>
           </div>
         </div>
 
         {pollState === "ready" ? (
-          <p className="rounded-[8px] bg-neutral-h-50 px-[12px] py-[10px] text-center text-[12px] font-medium text-heimdex-navy-500">
-            {guidanceCopy}
+          <p className="rounded-md bg-gray-50 p-3 text-center text-xs text-gray-600">
+            선택한 상품을 모두 포함한 쇼츠 {criteria.requested_count}개를
+            생성합니다.
           </p>
         ) : null}
 
@@ -436,32 +378,30 @@ export function InlineWizardProductPanel({
 
         {pollState === "ready" && entries.length > 0 ? (
           <div
-            className="mx-auto grid max-w-7xl grid-cols-2 gap-5 sm:grid-cols-3 lg:grid-cols-4"
+            className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4"
             data-testid="inline-product-grid"
           >
             {entries.map((entry) => {
               const isSelected = selectedIds.has(entry.catalog_entry_id);
-              const blockedByCap = !isSelected && atCap;
+              const disabled = !isSelected && atCap;
               return (
                 <button
                   key={entry.catalog_entry_id}
                   type="button"
                   onClick={() => toggleSelect(entry.catalog_entry_id)}
+                  disabled={disabled}
                   className={cn(
-                    "group relative overflow-hidden rounded-card bg-white text-left transition",
+                    "group relative overflow-hidden rounded-lg border bg-white text-left transition",
                     isSelected
-                      ? "border-2 border-heimdex-navy-500"
-                      : "border border-grayscale-100 hover:border-heimdex-navy-400",
-                    // Cap-blocked cards stay clickable in multi-mode so the
-                    // Snackbar can fire; single-mode swallows the click via
-                    // toggleSelect's no-op return path.
-                    blockedByCap && !isMulti && "opacity-60",
+                      ? "border-gray-900 ring-2 ring-gray-900"
+                      : "border-gray-200 hover:border-gray-400",
+                    disabled && "cursor-not-allowed opacity-50",
                   )}
                   data-testid="inline-product-card"
                   data-selected={isSelected}
                   data-catalog-entry-id={entry.catalog_entry_id}
                 >
-                  <div className="aspect-square overflow-hidden bg-neutral-h-50">
+                  <div className="aspect-square overflow-hidden bg-gray-100">
                     {entry.canonical_crop_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
@@ -471,28 +411,26 @@ export function InlineWizardProductPanel({
                         loading="lazy"
                       />
                     ) : (
-                      <div className="flex h-full items-center justify-center text-[12px] text-grayscale-500">
+                      <div className="flex h-full items-center justify-center text-xs text-gray-400">
                         이미지 없음
                       </div>
                     )}
                     <span
                       className={cn(
-                        "absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-md transition",
+                        "absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-md border-2 transition",
                         isSelected
-                          ? "bg-heimdex-navy-500 text-white"
-                          : "border-2 border-grayscale-100 bg-white/80",
+                          ? "border-gray-900 bg-gray-900 text-white"
+                          : "border-gray-300 bg-white/80 text-transparent",
                       )}
                       aria-hidden="true"
                       data-testid="inline-product-checkmark"
                     >
-                      {isSelected ? (
-                        <Check className="h-4 w-4" strokeWidth={3} />
-                      ) : null}
+                      ✓
                     </span>
                   </div>
-                  <div className="px-[12px] py-[10px]">
+                  <div className="p-3">
                     <p
-                      className="line-clamp-1 text-[14px] font-medium tracking-[-0.35px] text-grayscale-800"
+                      className="line-clamp-1 text-sm font-medium text-gray-900"
                       title={entry.label}
                     >
                       {entry.label}
@@ -506,25 +444,13 @@ export function InlineWizardProductPanel({
 
         {pollState === "ready" && errorMessage ? (
           <p
-            className="rounded-[8px] bg-red-h-50 p-[12px] text-[13px] font-medium text-red-h-500"
+            className="rounded-md bg-red-50 p-3 text-sm text-red-700"
             data-testid="inline-product-submit-error"
           >
             {errorMessage}
           </p>
         ) : null}
       </div>
-
-      {showCapSnackbar ? (
-        <div data-testid="inline-product-cap-snackbar">
-          <Snackbar
-            tone="warning"
-            position="bottom-center"
-            title={`최대 ${cap}개까지 선택할 수 있어요`}
-            body="적게 고르면 나머지는 AI가 자동으로 채워줘요"
-            onClose={() => setShowCapSnackbar(false)}
-          />
-        </div>
-      ) : null}
     </div>
   );
 }

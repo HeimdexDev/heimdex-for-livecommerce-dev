@@ -20,7 +20,6 @@ async def backfill_aliases_for_video(
     """
     from openai import AsyncOpenAI
 
-    from app.storage.s3 import S3Client
     from app.modules.shorts_auto_product.aliases import (
         AliasGenerationBudgetExceeded,
         AliasGenerationError,
@@ -34,6 +33,7 @@ async def backfill_aliases_for_video(
     from app.modules.shorts_auto_product.repositories.catalog import (
         ProductCatalogRepository,
     )
+    from app.storage.s3 import S3Client
 
     openai_client = AsyncOpenAI(
         api_key=settings.openai_api_key, timeout=15.0,

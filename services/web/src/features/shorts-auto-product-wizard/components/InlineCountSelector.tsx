@@ -7,9 +7,6 @@
 // range).
 // ============================================================================
 
-// figma: 1713-288216  (cache: .figma-cache/1713-288216_phase2_wizard-criteria.api.json)
-// node-name: 쇼츠 개수 section  · spec: label=16/600 grayscale-800
-
 "use client";
 
 import { formatVideoTimestampHMS } from "@/lib/timeline";
@@ -82,11 +79,11 @@ export function InlineCountSelector({
   const suggestion = computeSmartCountSuggestion(rangeMs);
 
   return (
-    <div className="space-y-[12px] font-pretendard">
-      <label className="block text-[16px] font-semibold text-grayscale-800">
+    <div className="space-y-2">
+      <label className="block text-sm font-medium text-gray-900">
         쇼츠 개수
       </label>
-      <div className="grid grid-cols-10 gap-2">
+      <div className="flex flex-wrap gap-2">
         {PRESETS.map((preset) => {
           const isActive = value === preset;
           return (
@@ -96,10 +93,10 @@ export function InlineCountSelector({
               onClick={() => onChange(preset)}
               disabled={disabled}
               className={cn(
-                "w-full rounded-card bg-white px-1 py-3 text-base font-semibold tracking-tight transition",
+                "min-w-[48px] rounded-md border px-3 py-2 text-sm font-medium transition",
                 isActive
-                  ? "border-2 border-heimdex-navy-500 text-heimdex-navy-500"
-                  : "border border-grayscale-100 text-grayscale-500 hover:border-heimdex-navy-400 hover:text-heimdex-navy-400",
+                  ? "border-gray-900 bg-white text-gray-900 ring-2 ring-gray-900"
+                  : "border-gray-200 bg-white text-gray-500 hover:border-gray-400 hover:text-gray-700",
                 disabled && "cursor-not-allowed opacity-50",
               )}
               data-testid={`inline-count-preset-${preset}`}
@@ -112,21 +109,14 @@ export function InlineCountSelector({
       </div>
       {suggestion ? (
         <p
-          className="rounded-[8px] bg-neutral-h-50 px-[12px] py-[8px] text-center text-[12px] font-medium tracking-[-0.3px] text-grayscale-500"
+          className="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600"
           data-testid="inline-count-suggestion"
         >
-          <span className="font-semibold text-heimdex-navy-500">
-            {suggestion.rangeLabel}
-          </span>{" "}
-          영상에서{" "}
-          <span className="font-semibold text-heimdex-navy-500">
-            {lengthSeconds}초
-          </span>{" "}
-          쇼츠라면{" "}
-          <span className="font-semibold text-heimdex-navy-500">
-            {suggestion.lo}~{suggestion.hi}개가 적합
+          {suggestion.rangeLabel} 영상에서 {lengthSeconds}초 쇼츠라면{" "}
+          <span className="font-semibold text-gray-900">
+            {suggestion.lo}~{suggestion.hi}개
           </span>
-          합니다.
+          가 적합합니다.
         </p>
       ) : null}
     </div>

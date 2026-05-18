@@ -18,8 +18,8 @@ from app.modules.shorts_auto_product.track_stt.storyboard.factory import (
     build_storyboard_picker_from_settings,
 )
 from app.modules.shorts_auto_product.track_stt.storyboard.heuristic_picker import (
-    HeuristicStoryboardPicker,
     INTRO_IMPORTANCE_FLOOR,
+    HeuristicStoryboardPicker,
 )
 from app.modules.shorts_auto_product.track_stt.storyboard.picker_protocol import (
     StoryboardPicker,

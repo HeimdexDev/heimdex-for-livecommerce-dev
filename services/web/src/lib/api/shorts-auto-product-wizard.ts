@@ -79,29 +79,6 @@ async function detailMessage(res: Response): Promise<string> {
   }
 }
 
-/**
- * Map a 404 response to the right error subclass.
- *
- * The backend service raises 404 for several distinct reasons:
- *   - rollout gate / feature flag off ("product mode v2 is not enabled")
- *   - missing video / parent / job rows
- *   - cascading cancel found no rows to transition
- *
- * Previously every 404 was bucketed into ``WizardFeatureDisabledError``,
- * so a missing-row case lit the "이 조직에는 마법사 기능이 활성화되지 않았습니다"
- * banner intermittently when a stale tab hit a different code path.
- * Match on the upstream detail string so only the true feature-flag
- * cases surface that copy.
- */
-async function classify404(res: Response, fallback: string): Promise<Error> {
-  const detail = await detailMessage(res);
-  const lower = detail.toLowerCase();
-  if (lower.includes("not enabled")) {
-    return new WizardFeatureDisabledError(detail);
-  }
-  return new Error(`${fallback}: ${detail}`);
-}
-
 // ----------------------------------------------------------------------
 // POST /api/shorts/auto/scan-orders/videos/{video_id}
 // ----------------------------------------------------------------------
@@ -121,7 +98,9 @@ export async function createScanOrder(
     },
   );
   if (res.status === 404) {
-    throw await classify404(res, "createScanOrder failed");
+    throw new WizardFeatureDisabledError(
+      "Wizard is not enabled for this org",
+    );
   }
   if (res.status === 402) {
     throw new WizardBudgetExceededError(await detailMessage(res));
@@ -155,7 +134,9 @@ export async function getScanOrderStatus(
     },
   );
   if (res.status === 404) {
-    throw await classify404(res, "getScanOrderStatus failed");
+    throw new WizardFeatureDisabledError(
+      "Scan order not found or wizard disabled",
+    );
   }
   if (!res.ok) {
     throw new Error(`getScanOrderStatus failed: ${await detailMessage(res)}`);
@@ -189,34 +170,6 @@ export async function cancelScanOrder(
 }
 
 // ----------------------------------------------------------------------
-// POST /api/shorts/auto/jobs/{job_id}/cancel
-//
-// Per-child cancel — cooperatively marks a single scan/clip job as
-// ``cancelled``. The worker drops out at its next heartbeat. Already-
-// terminal jobs return 404 and we treat that as success.
-// ----------------------------------------------------------------------
-
-export async function cancelAutoShortJob(
-  jobId: string,
-  tokenGetter: TokenGetter,
-): Promise<void> {
-  const res = await fetch(
-    `${getApiBaseUrl()}/api/shorts/auto/jobs/${encodeURIComponent(jobId)}/cancel`,
-    {
-      method: "POST",
-      credentials: "include",
-      headers: await authHeader(tokenGetter),
-    },
-  );
-  if (res.status === 404) {
-    return;
-  }
-  if (!res.ok) {
-    throw new Error(`cancelAutoShortJob failed: ${await detailMessage(res)}`);
-  }
-}
-
-// ----------------------------------------------------------------------
 // POST /api/shorts/auto/products/{video_id}/scan
 //
 // V1 enumeration trigger — wizard's product-select step calls this on
@@ -240,7 +193,9 @@ export async function triggerEnumeration(
     },
   );
   if (res.status === 404) {
-    throw await classify404(res, "triggerEnumeration failed");
+    throw new WizardFeatureDisabledError(
+      "Product mode v2 is not enabled for this org",
+    );
   }
   if (res.status === 402) {
     throw new WizardBudgetExceededError(await detailMessage(res));
@@ -276,7 +231,9 @@ export async function getProductCatalog(
     },
   );
   if (res.status === 404) {
-    throw await classify404(res, "getProductCatalog failed");
+    throw new WizardFeatureDisabledError(
+      "Product mode v2 is not enabled for this org",
+    );
   }
   if (!res.ok) {
     throw new Error(`getProductCatalog failed: ${await detailMessage(res)}`);

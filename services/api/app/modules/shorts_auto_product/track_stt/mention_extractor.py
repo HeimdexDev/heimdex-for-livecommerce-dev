@@ -470,7 +470,7 @@ def _hit_to_scene(
         # carries the on-screen-evidence signal separately.
         matched_field = "scene_caption"
 
-    matched_aliases = [t for t in tokens if _contains_ci(transcript + " " + caption + " " + ocr_text, t)]
+    matched_aliases = [t for t in tokens if _contains_ci(transcript + " " + caption + " " + ocr_text, t)]  # noqa: E501
 
     return MentionedScene(
         scene_id=scene_id,

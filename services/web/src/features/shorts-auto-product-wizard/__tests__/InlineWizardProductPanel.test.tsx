@@ -180,12 +180,11 @@ describe("InlineWizardProductPanel", () => {
     expect(cards[0]!.dataset.selected).toBe("true");
     expect(cards[1]!.dataset.selected).toBe("true");
     expect(cards[2]!.dataset.selected).toBe("false");
-    // Single-mode: cap-blocked card stays clickable but rendered with opacity-60
-    // (Phase 2 design — silent no-op instead of disabled attribute).
-    expect(cards[2]!.className).toContain("opacity-60");
+    // The at-cap card is also disabled visually (button.disabled).
+    expect((cards[2]! as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("counter renders catalog total + selected count", async () => {
+  it("counter renders K/N format", async () => {
     triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
     getProductCatalogMock.mockResolvedValue({
       video_id: "gd_test",
@@ -194,12 +193,9 @@ describe("InlineWizardProductPanel", () => {
     });
     renderPanel({ criteria: { requested_count: 4 } });
     await waitFor(() => screen.getByTestId("inline-product-grid"));
-    // The cap divisor was dropped on 2026-05-18 so the chip reads as
-    // plain progress against the catalog total. The cap is still
-    // surfaced in the header copy / snackbar elsewhere on the panel.
-    expect(screen.getByText(/2개 중 0개 선택/)).toBeInTheDocument();
+    expect(screen.getByText(/2개 중 0\/4개 선택/)).toBeInTheDocument();
     fireEvent.click(screen.getAllByTestId("inline-product-card")[0]!);
-    expect(screen.getByText(/2개 중 1개 선택/)).toBeInTheDocument();
+    expect(screen.getByText(/2개 중 1\/4개 선택/)).toBeInTheDocument();
   });
 
   it("submits with hardcoded language=ko + intent=commit + sorted catalog_entry_ids", async () => {
@@ -319,10 +315,17 @@ describe("InlineWizardProductPanel", () => {
     expect(screen.getByTestId("inline-product-retry")).toBeInTheDocument();
   });
 
-  // 2026-05-18 — the inline 뒤로가기 button was retired in favor of the
-  // TopHeader chevron; the panel no longer renders ``inline-product-back``.
-  // The ``onBack`` prop is preserved for callers but no in-panel DOM
-  // element wires to it, so the corresponding click test was dropped.
+  it("Back button fires onBack", async () => {
+    triggerEnumerationMock.mockResolvedValue({ job_id: "j1", deduped: false });
+    getProductCatalogMock.mockResolvedValue({
+      video_id: "gd_test",
+      products: [],
+      scan_status: "in_progress",
+    });
+    const { onBack } = renderPanel();
+    fireEvent.click(screen.getByTestId("inline-product-back"));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
 
   it("normalizes XOR-mismatched time range at submit (belt-and-braces)", async () => {
     // The slider already emits both-or-neither, but if criteria arrives

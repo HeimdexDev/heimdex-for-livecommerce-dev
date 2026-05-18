@@ -1,43 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { useContext } from "react";
 
 import {
   InlineWizardCriteriaPanel,
   DEFAULT_CRITERIA,
   type WizardCriteriaDraft,
 } from "../components/InlineWizardCriteriaPanel";
-import {
-  TopHeaderActionsContext,
-  TopHeaderActionsProvider,
-} from "@/components/layout/TopHeaderActionsContext";
 
 const FIVE_MIN_MS = 300_000;
-
-function HeaderActionsProbe() {
-  const ctx = useContext(TopHeaderActionsContext);
-  return (
-    <div data-testid="header-actions-probe">
-      {ctx?.leftActions ?? null}
-      {ctx?.actions ?? null}
-    </div>
-  );
-}
 
 function renderPanel(overrides: Partial<WizardCriteriaDraft> = {}) {
   const onCriteriaChange = vi.fn();
   const onNext = vi.fn();
   const utils = render(
-    <TopHeaderActionsProvider>
-      <InlineWizardCriteriaPanel
-        videoId="gd_test"
-        videoDurationMs={FIVE_MIN_MS}
-        criteria={{ ...DEFAULT_CRITERIA, ...overrides }}
-        onCriteriaChange={onCriteriaChange}
-        onNext={onNext}
-      />
-      <HeaderActionsProbe />
-    </TopHeaderActionsProvider>,
+    <InlineWizardCriteriaPanel
+      videoId="gd_test"
+      videoDurationMs={FIVE_MIN_MS}
+      criteria={{ ...DEFAULT_CRITERIA, ...overrides }}
+      onCriteriaChange={onCriteriaChange}
+      onNext={onNext}
+    />,
   );
   return { ...utils, onCriteriaChange, onNext };
 }

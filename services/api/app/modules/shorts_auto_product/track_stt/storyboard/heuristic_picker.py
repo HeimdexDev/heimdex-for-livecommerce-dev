@@ -29,7 +29,6 @@ outputs to detect drift.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable
 from uuid import UUID
 
 from app.logging_config import get_logger

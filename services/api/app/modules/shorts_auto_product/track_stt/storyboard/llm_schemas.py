@@ -28,7 +28,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-
 # ====================================================================
 # OpenAI structured-output schema. Sent verbatim as ``response_format``.
 # ``strict=True`` enables the server-side enforcement layer (no extra

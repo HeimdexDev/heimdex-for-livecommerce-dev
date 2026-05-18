@@ -1,12 +1,8 @@
-// figma: 1602:36819  (영상 구간 설정 — slider with start/end time boxes + adjust tooltips)
-//
-// Layout (single row):
-//   [start time box] [progress track w/ two handles] [end time box]
-//
-// Clicking either time box toggles a black adjuster tooltip directly under
-// the box with [−] [m:ss] [+] for fine-grained nudging (1s steps). The box
-// itself also displays the current value (HH:MM:SS) and adopts a navy
-// outline while its tooltip is open.
+// ============================================================================
+// Two-handle range slider over a video duration. Replaces the mm:ss text
+// inputs in the inline criteria step (legacy ``WizardStepCriteria`` already
+// flagged this as a follow-up). Self-contained — no shared timeline state,
+// no external dep.
 //
 // Semantics:
 //   * ``startMs === null && endMs === null`` ⇒ user hasn't constrained the
@@ -23,20 +19,19 @@
 //   * Handles maintain ``MIN_SEPARATION_MS`` between them so the criteria
 //     step's aggregate-cap warning doesn't trip on a degenerate 0-length
 //     range.
+// ============================================================================
 
 "use client";
 
-import { Minus, Plus } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { formatVideoTimestampHMS } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
-const MIN_SEPARATION_MS = 1_000;
-const KEYBOARD_STEP_MS = 1_000;
-const KEYBOARD_STEP_LARGE_MS = 10_000;
-const DEFAULT_SNAP_RADIUS_MS = 500;
-const TOOLTIP_NUDGE_MS = 1_000;
+const MIN_SEPARATION_MS = 1_000; // 1s — keeps the range meaningful
+const KEYBOARD_STEP_MS = 1_000; // arrow keys nudge by 1s
+const KEYBOARD_STEP_LARGE_MS = 10_000; // shift+arrow nudge by 10s
+const DEFAULT_SNAP_RADIUS_MS = 500; // ±0.5s grace zone around scene boundaries
 
 type Handle = "start" | "end";
 
@@ -45,7 +40,14 @@ interface Props {
   startMs: number | null;
   endMs: number | null;
   onChange: (next: { startMs: number | null; endMs: number | null }) => void;
+  /**
+   * Optional list of timestamps (ms) the handles should snap to when
+   * dragged within ``snapRadiusMs``. Pass scene boundaries (start_ms,
+   * end_ms of each scene) so the user lands on natural cut points.
+   * Empty / undefined disables snap entirely (free dragging).
+   */
   snapTargetsMs?: number[];
+  /** Snap grace zone in ms. Default 500. Set to 0 to require exact hits. */
   snapRadiusMs?: number;
   disabled?: boolean;
   className?: string;
@@ -55,13 +57,14 @@ function clamp(value: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, value));
 }
 
-function formatMmSs(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
+/**
+ * Belt-and-braces normalization at submit time. The slider itself already
+ * emits both-or-neither, but if any future caller mutates the criteria
+ * draft outside the slider (or a malformed cache state arrives), this
+ * function guarantees the API body stays XOR-valid: both null OR both
+ * real numbers, never one of each. Pure — safe to call from any submit
+ * site that has the video duration in scope.
+ */
 export function normalizeTimeRangeForSubmit(
   startMs: number | null,
   endMs: number | null,
@@ -73,6 +76,12 @@ export function normalizeTimeRangeForSubmit(
   return { startMs: startMs ?? 0, endMs: endMs ?? durationMs };
 }
 
+/**
+ * Snap ``ms`` to the nearest target within ``radiusMs``. If no target is
+ * within the grace zone (or targets is empty), returns ``ms`` unchanged so
+ * the user can still pick arbitrary off-boundary values. Pure — exported
+ * for direct unit testability.
+ */
 export function snapToNearest(
   ms: number,
   targets: number[],
@@ -102,10 +111,12 @@ export function VideoSegmentRangeSlider({
   className,
 }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
   const [draggingHandle, setDraggingHandle] = useState<Handle | null>(null);
-  const [openTooltip, setOpenTooltip] = useState<Handle | null>(null);
 
+  // For display + interaction we treat null as "extreme" — but we never
+  // synthesize a non-null value into onChange unless the user actually
+  // moves the handle. That's why we have effective* (display) and the
+  // onChange path stays null-aware.
   const effectiveStart = startMs ?? 0;
   const effectiveEnd = endMs ?? durationMs;
 
@@ -114,10 +125,18 @@ export function VideoSegmentRangeSlider({
 
   const commit = useCallback(
     (handle: Handle, ms: number) => {
+      // Snap BEFORE clamp/separation so that a snap target at the
+      // duration boundary is reachable, and BEFORE the min-separation
+      // floor/ceiling so a snap target near the other handle still
+      // clamps correctly.
       const snapped = snapTargetsMs
         ? snapToNearest(ms, snapTargetsMs, snapRadiusMs)
         : ms;
       const clampedToDuration = clamp(snapped, 0, durationMs);
+      // Backfill the unmoved side to its effective extreme so the wizard
+      // never submits {number, null} (backend XOR-validates the pair).
+      // Without this, dragging only one handle from the default
+      // {null, null} state produces a 422 on submit.
       if (handle === "start") {
         const ceiling = (endMs ?? durationMs) - MIN_SEPARATION_MS;
         const next = clamp(clampedToDuration, 0, Math.max(0, ceiling));
@@ -166,196 +185,101 @@ export function VideoSegmentRangeSlider({
     commit(handle, current + delta);
   };
 
-  const toggleTooltip = (handle: Handle) => {
-    if (disabled) return;
-    setOpenTooltip((prev) => (prev === handle ? null : handle));
-  };
-
-  const nudge = (handle: Handle, deltaMs: number) => {
-    const current = handle === "start" ? effectiveStart : effectiveEnd;
-    commit(handle, current + deltaMs);
-  };
-
-  // Close the open tooltip when the user clicks outside the slider root.
-  useEffect(() => {
-    if (openTooltip === null) return;
-    const onDocMouseDown = (e: MouseEvent) => {
-      const root = rootRef.current;
-      if (!root) return;
-      if (!root.contains(e.target as Node)) setOpenTooltip(null);
-    };
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [openTooltip]);
-
+  // Defensive: if durationMs flips to 0 (rare, e.g. a video without scenes),
+  // hide the slider. The criteria step should fall back to mm:ss text inputs
+  // in that path — caller's responsibility, not ours.
   if (durationMs <= 0) return null;
 
   return (
     <div
-      ref={rootRef}
-      className={cn("relative font-pretendard", disabled && "opacity-50", className)}
+      className={cn("space-y-3", disabled && "opacity-50", className)}
       data-testid="video-segment-range-slider"
     >
-      <div className="flex h-[46px] items-center justify-between gap-[8px]">
-        <button
-          type="button"
-          onClick={() => toggleTooltip("start")}
-          disabled={disabled}
-          className={cn(
-            // Heimdex-navy border on both states per the 2026-05-18 goal —
-            // the inactive neutral-h-100 border read as broken/disabled.
-            // Text colour still differentiates open vs closed tooltip.
-            "shrink-0 rounded-[10px] border border-heimdex-navy-500 bg-white px-[10px] py-[6px] text-[14px] font-medium leading-[1.4] tracking-[-0.35px]",
-            openTooltip === "start" ? "text-heimdex-navy-500" : "text-neutral-h-400",
-          )}
-          data-testid="range-label-start"
-          data-active={openTooltip === "start"}
-          aria-expanded={openTooltip === "start"}
-        >
-          {formatVideoTimestampHMS(effectiveStart)}
-        </button>
-
-        <div className="flex flex-1 items-center justify-center gap-[8px] px-[8px] py-[6px]">
-          <div
-            ref={trackRef}
-            className="relative h-[6px] w-full bg-neutral-h-200"
-            role="group"
-            aria-label="영상 구간 범위"
-          >
-            <div
-              className="absolute h-full bg-heimdex-navy-500"
-              style={{ left: `${startPct}%`, right: `${100 - endPct}%` }}
-            />
-            {/* Scene-boundary snap targets used to render as visible ticks
-                (h-3 w-px grayscale-400 lines) across the whole track, which
-                the user surfaced as visual noise — 100+ vertical hairlines
-                made the slider look dirty. Snapping behavior stays (parent
-                still consumes the boundaries via onChange), but the ticks
-                are no longer painted. */}
-            <button
-              type="button"
-              role="slider"
-              aria-label="시작 시간"
-              aria-valuemin={0}
-              aria-valuemax={durationMs}
-              aria-valuenow={effectiveStart}
-              aria-valuetext={formatVideoTimestampHMS(effectiveStart)}
-              tabIndex={disabled ? -1 : 0}
-              disabled={disabled}
-              onPointerDown={handlePointerDown("start")}
-              onPointerMove={handlePointerMove("start")}
-              onPointerUp={handlePointerUp("start")}
-              onPointerCancel={handlePointerUp("start")}
-              onKeyDown={handleKeyDown("start")}
-              className={cn(
-                "absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-heimdex-navy-500",
-                "focus:outline-none focus:ring-2 focus:ring-heimdex-navy-300",
-                disabled && "cursor-not-allowed",
-              )}
-              style={{ left: `${startPct}%` }}
-              data-testid="range-handle-start"
-            />
-            <button
-              type="button"
-              role="slider"
-              aria-label="종료 시간"
-              aria-valuemin={0}
-              aria-valuemax={durationMs}
-              aria-valuenow={effectiveEnd}
-              aria-valuetext={formatVideoTimestampHMS(effectiveEnd)}
-              tabIndex={disabled ? -1 : 0}
-              disabled={disabled}
-              onPointerDown={handlePointerDown("end")}
-              onPointerMove={handlePointerMove("end")}
-              onPointerUp={handlePointerUp("end")}
-              onPointerCancel={handlePointerUp("end")}
-              onKeyDown={handleKeyDown("end")}
-              className={cn(
-                "absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-heimdex-navy-500",
-                "focus:outline-none focus:ring-2 focus:ring-heimdex-navy-300",
-                disabled && "cursor-not-allowed",
-              )}
-              style={{ left: `${endPct}%` }}
-              data-testid="range-handle-end"
-            />
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => toggleTooltip("end")}
-          disabled={disabled}
-          className={cn(
-            // Match the start-side button — heimdex-navy border in both
-            // tooltip states; only the text colour switches on open.
-            "shrink-0 rounded-[10px] border border-heimdex-navy-500 bg-white px-[10px] py-[6px] text-[14px] font-medium leading-[1.4] tracking-[-0.35px]",
-            openTooltip === "end" ? "text-heimdex-navy-500" : "text-neutral-h-400",
-          )}
-          data-testid="range-label-end"
-          data-active={openTooltip === "end"}
-          aria-expanded={openTooltip === "end"}
-        >
-          {formatVideoTimestampHMS(effectiveEnd)}
-        </button>
-      </div>
-
-      {openTooltip ? (
-        <RangeAdjustTooltip
-          align={openTooltip}
-          value={openTooltip === "start" ? effectiveStart : effectiveEnd}
-          onDecrement={() => nudge(openTooltip, -TOOLTIP_NUDGE_MS)}
-          onIncrement={() => nudge(openTooltip, TOOLTIP_NUDGE_MS)}
+      <div
+        ref={trackRef}
+        className="relative h-1.5 rounded-full bg-gray-200"
+        role="group"
+        aria-label="영상 구간 범위"
+      >
+        {/* Filled segment between handles */}
+        <div
+          className="absolute h-full rounded-full bg-gray-900"
+          style={{ left: `${startPct}%`, right: `${100 - endPct}%` }}
         />
-      ) : null}
-    </div>
-  );
-}
-
-interface TooltipProps {
-  align: Handle;
-  value: number;
-  onDecrement: () => void;
-  onIncrement: () => void;
-}
-
-function RangeAdjustTooltip({ align, value, onDecrement, onIncrement }: TooltipProps) {
-  return (
-    <div
-      className={cn(
-        "absolute top-full mt-[5px] flex items-center justify-center gap-[4px] rounded-[6px] bg-grayscale-700 p-[8px]",
-        align === "start" ? "left-0" : "right-0",
-      )}
-      role="tooltip"
-      data-testid={`range-tooltip-${align}`}
-    >
-      <span
-        className="absolute -top-[8px] h-[8px] w-[10px] -translate-x-1/2"
-        style={{ left: "50%" }}
-        aria-hidden="true"
-      >
-        <span className="absolute inset-x-0 top-0 border-x-[5px] border-b-[8px] border-x-transparent border-b-grayscale-700" />
-      </span>
-      <button
-        type="button"
-        onClick={onDecrement}
-        className="flex h-[16px] w-[16px] items-center justify-center text-white"
-        aria-label="시간 감소"
-        data-testid={`range-tooltip-${align}-minus`}
-      >
-        <Minus className="h-[16px] w-[16px]" strokeWidth={2} />
-      </button>
-      <span className="text-[16px] font-normal leading-none text-white">
-        {formatMmSs(value)}
-      </span>
-      <button
-        type="button"
-        onClick={onIncrement}
-        className="flex h-[16px] w-[16px] items-center justify-center text-white"
-        aria-label="시간 증가"
-        data-testid={`range-tooltip-${align}-plus`}
-      >
-        <Plus className="h-[16px] w-[16px]" strokeWidth={2} />
-      </button>
+        {/* Snap-target tick marks (scene boundaries). Only meaningful when
+            durationMs > 0 — when 0, the component already returns null
+            above. Filtered to interior boundaries (skip 0 and durationMs)
+            so the start/end edges aren't doubled by handle visuals. */}
+        {snapTargetsMs && durationMs > 0
+          ? snapTargetsMs
+              .filter((t) => t > 0 && t < durationMs)
+              .map((t, i) => (
+                <span
+                  key={`snap-${i}-${t}`}
+                  className="absolute top-1/2 h-3 w-px -translate-x-1/2 -translate-y-1/2 bg-gray-400"
+                  style={{ left: `${(t / durationMs) * 100}%` }}
+                  data-testid="range-snap-tick"
+                  aria-hidden="true"
+                />
+              ))
+          : null}
+        {/* Start handle */}
+        <button
+          type="button"
+          role="slider"
+          aria-label="시작 시간"
+          aria-valuemin={0}
+          aria-valuemax={durationMs}
+          aria-valuenow={effectiveStart}
+          aria-valuetext={formatVideoTimestampHMS(effectiveStart)}
+          tabIndex={disabled ? -1 : 0}
+          disabled={disabled}
+          onPointerDown={handlePointerDown("start")}
+          onPointerMove={handlePointerMove("start")}
+          onPointerUp={handlePointerUp("start")}
+          onPointerCancel={handlePointerUp("start")}
+          onKeyDown={handleKeyDown("start")}
+          className={cn(
+            "absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-gray-900 bg-white shadow",
+            "focus:outline-none focus:ring-2 focus:ring-indigo-300",
+            disabled && "cursor-not-allowed",
+          )}
+          style={{ left: `${startPct}%` }}
+          data-testid="range-handle-start"
+        />
+        {/* End handle */}
+        <button
+          type="button"
+          role="slider"
+          aria-label="종료 시간"
+          aria-valuemin={0}
+          aria-valuemax={durationMs}
+          aria-valuenow={effectiveEnd}
+          aria-valuetext={formatVideoTimestampHMS(effectiveEnd)}
+          tabIndex={disabled ? -1 : 0}
+          disabled={disabled}
+          onPointerDown={handlePointerDown("end")}
+          onPointerMove={handlePointerMove("end")}
+          onPointerUp={handlePointerUp("end")}
+          onPointerCancel={handlePointerUp("end")}
+          onKeyDown={handleKeyDown("end")}
+          className={cn(
+            "absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-gray-900 bg-white shadow",
+            "focus:outline-none focus:ring-2 focus:ring-indigo-300",
+            disabled && "cursor-not-allowed",
+          )}
+          style={{ left: `${endPct}%` }}
+          data-testid="range-handle-end"
+        />
+      </div>
+      <div className="flex items-center justify-between text-xs text-gray-600">
+        <span data-testid="range-label-start">
+          {formatVideoTimestampHMS(effectiveStart)}
+        </span>
+        <span data-testid="range-label-end">
+          {formatVideoTimestampHMS(effectiveEnd)}
+        </span>
+      </div>
     </div>
   );
 }

@@ -34,7 +34,6 @@ from app.modules.shorts_auto_product.track_stt.storyboard.types import (
     SlotBudgets,
 )
 
-
 # ====================================================================
 # PROMPT_VERSION — bump on every system-prompt edit. Eval cache keys
 # on this. Mirror the bump in

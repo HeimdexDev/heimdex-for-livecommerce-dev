@@ -1,6 +1,4 @@
 // ============================================================================
-// figma: 1713:288141 (Frame 1707484839 — wizard GNB step indicator overlay)
-//
 // Step breadcrumb for the inline auto-shorts wizard. Two visual variants:
 //
 //   * ``three-step`` (default) — used by criteria + product steps:
@@ -17,8 +15,6 @@
 // ============================================================================
 
 "use client";
-
-import { ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -53,23 +49,25 @@ export function InlineWizardBreadcrumb(props: Props) {
 
   return (
     <nav
-      className={cn(
-        "flex items-center gap-[10px] font-pretendard",
-        props.className,
-      )}
+      className={cn("flex items-center gap-3 text-sm", props.className)}
       aria-label="쇼츠 생성 진행 단계"
       data-testid="inline-wizard-breadcrumb"
       data-variant={variant}
     >
       {steps.map((step, i) => {
         const isActive = step.idx === props.currentStep;
+        const isUpcoming = step.idx > props.currentStep;
         return (
-          <div key={step.idx} className="flex items-center gap-[10px]">
-            <div className="flex items-center gap-[8px]">
+          <div key={step.idx} className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
               <span
                 className={cn(
-                  "flex h-[24px] w-[24px] items-center justify-center rounded-full text-[12px] font-semibold leading-none text-white",
-                  isActive ? "bg-heimdex-navy-500" : "bg-neutral-h-300",
+                  "flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium",
+                  isActive
+                    ? "bg-gray-900 text-white"
+                    : isUpcoming
+                      ? "bg-gray-200 text-gray-500"
+                      : "bg-gray-300 text-gray-600",
                 )}
                 data-testid={`inline-wizard-breadcrumb-step-${step.idx}-circle`}
                 data-active={isActive}
@@ -78,19 +76,17 @@ export function InlineWizardBreadcrumb(props: Props) {
               </span>
               <span
                 className={cn(
-                  "whitespace-nowrap text-[20px] font-semibold leading-none",
-                  isActive ? "text-black" : "text-neutral-h-300",
+                  "font-medium",
+                  isActive ? "text-gray-900" : "text-gray-400",
                 )}
               >
                 {step.label}
               </span>
             </div>
             {i < steps.length - 1 ? (
-              <ChevronRight
-                className="h-[24px] w-[24px] text-neutral-h-300"
-                strokeWidth={2}
-                aria-hidden="true"
-              />
+              <span className="text-gray-300" aria-hidden="true">
+                ›
+              </span>
             ) : null}
           </div>
         );

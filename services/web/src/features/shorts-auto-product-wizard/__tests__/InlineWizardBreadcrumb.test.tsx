@@ -21,14 +21,14 @@ describe("InlineWizardBreadcrumb", () => {
     expect(c3.dataset.active).toBe("false");
   });
 
-  it("uses heimdex-navy-500 background only on the active circle", () => {
+  it("uses gray-900 background only on the active circle", () => {
     render(<InlineWizardBreadcrumb currentStep={2} />);
     const active = screen.getByTestId("inline-wizard-breadcrumb-step-2-circle");
     const upcoming = screen.getByTestId(
       "inline-wizard-breadcrumb-step-3-circle",
     );
-    expect(active.className).toMatch(/bg-heimdex-navy-500/);
-    expect(upcoming.className).not.toMatch(/bg-heimdex-navy-500/);
+    expect(active.className).toMatch(/bg-gray-900/);
+    expect(upcoming.className).not.toMatch(/bg-gray-900/);
   });
 
   it("renders divider chevrons between steps but not after the last", () => {
@@ -61,7 +61,7 @@ describe("InlineWizardBreadcrumb — two-step variant", () => {
     expect(c2.dataset.active).toBe("true");
   });
 
-  it("uses heimdex-navy-500 background only on the active circle", () => {
+  it("uses gray-900 background only on the active circle", () => {
     render(
       <InlineWizardBreadcrumb variant="two-step" currentStep={2} />,
     );
@@ -69,8 +69,8 @@ describe("InlineWizardBreadcrumb — two-step variant", () => {
     const upcoming = screen.getByTestId(
       "inline-wizard-breadcrumb-step-1-circle",
     );
-    expect(active.className).toMatch(/bg-heimdex-navy-500/);
-    expect(upcoming.className).not.toMatch(/bg-heimdex-navy-500/);
+    expect(active.className).toMatch(/bg-gray-900/);
+    expect(upcoming.className).not.toMatch(/bg-gray-900/);
   });
 
   it("renders exactly one chevron between the two steps", () => {

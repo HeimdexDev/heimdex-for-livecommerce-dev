@@ -4,9 +4,6 @@
 // (matches backend ``length_seconds: ge=10, le=120``).
 // ============================================================================
 
-// figma: 1713-288216  (cache: .figma-cache/1713-288216_phase2_wizard-criteria.api.json)
-// node-name: 쇼츠 길이 section  · spec: label=16/600 grayscale-800
-
 "use client";
 
 import { cn } from "@/lib/utils";
@@ -21,11 +18,11 @@ interface Props {
 
 export function InlineLengthSelector({ value, onChange, disabled }: Props) {
   return (
-    <div className="space-y-[12px] font-pretendard">
-      <label className="block text-[16px] font-semibold text-grayscale-800">
+    <div className="space-y-2">
+      <label className="block text-sm font-medium text-gray-900">
         쇼츠 길이
       </label>
-      <div className="flex flex-wrap gap-[12px]">
+      <div className="flex flex-wrap gap-2">
         {PRESETS.map((preset) => {
           const isActive = value === preset;
           return (
@@ -35,10 +32,10 @@ export function InlineLengthSelector({ value, onChange, disabled }: Props) {
               onClick={() => onChange(preset)}
               disabled={disabled}
               className={cn(
-                "min-w-[88px] rounded-[10px] bg-white px-[16px] py-[12px] text-[16px] font-semibold tracking-[-0.4px] transition",
+                "min-w-[64px] rounded-md border px-4 py-2 text-sm font-medium transition",
                 isActive
-                  ? "border-2 border-heimdex-navy-500 text-heimdex-navy-500"
-                  : "border border-grayscale-100 text-grayscale-500 hover:border-heimdex-navy-400 hover:text-heimdex-navy-400",
+                  ? "border-gray-900 bg-white text-gray-900 ring-2 ring-gray-900"
+                  : "border-gray-200 bg-white text-gray-500 hover:border-gray-400 hover:text-gray-700",
                 disabled && "cursor-not-allowed opacity-50",
               )}
               data-testid={`inline-length-preset-${preset}`}

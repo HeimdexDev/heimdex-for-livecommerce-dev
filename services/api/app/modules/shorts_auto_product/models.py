@@ -19,7 +19,7 @@ Three core tables + a daily-cost ledger:
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, final
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
@@ -27,8 +27,6 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
-    Enum as SAEnum,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -36,13 +34,15 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy import Date as SADate
+from sqlalchemy import (
+    Enum as SAEnum,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, REAL
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from app.db.base import Base, TimestampMixin, UUIDMixin
-
 
 # ---------- product_scan_jobs.stage ENUM ----------
 #
