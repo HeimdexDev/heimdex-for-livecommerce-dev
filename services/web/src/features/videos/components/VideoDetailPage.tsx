@@ -1376,10 +1376,22 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
         </div>
       )}
 
-      <div className="flex items-start gap-[20px]">
+      {/* In auto-shorts view both columns share one row height per figma
+          1602:36766 — items-stretch keeps the option panel matching the
+          video card height. Other views keep the sticky video card so it
+          stays in view while scrolling long overview/scenes lists. */}
+      <div
+        className={cn(
+          "flex gap-[20px]",
+          view === "auto-shorts" ? "items-stretch" : "items-start",
+        )}
+      >
         {showVideoPanel && (
           <div
-            className="sticky top-4 w-[341px] flex-shrink-0 self-start"
+            className={cn(
+              "w-[341px] flex-shrink-0",
+              view === "auto-shorts" ? "self-stretch" : "sticky top-4 self-start",
+            )}
             data-testid="video-info-panel-slot"
           >
             <VideoInfoPanel
@@ -1393,58 +1405,62 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
         )}
 
         {/* figma: 1602:38985 — right card holds the view tabs and the
-            active panel (overview / scenes / people / auto-shorts) so
-            행동요약, 스크립트, 장면분석, 인물관리 all share one wrapper. */}
+            active panel (overview / scenes / people / auto-shorts).
+            In auto-shorts view we hide the nav (tabs + action row) per
+            figma 1602:36766 so the wizard takes the full card height,
+            visually matching the left VideoInfoPanel. */}
         <div className="min-w-0 flex-1 rounded-dialog bg-white p-[20px] shadow-card">
-          <nav className="mb-6 flex items-center border-b border-grayscale-100">
-            {([
-              { key: "overview" as const, label: "개요", badge: undefined as number | undefined },
-              { key: "scenes" as const, label: "장면 분석", badge: undefined as number | undefined },
-              { key: "people" as const, label: "인물 관리", badge: undefined as number | undefined },
-            ]).map((tab) => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => handleViewChange(tab.key)}
-                className={cn(
-                  "relative -mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
-                  view === tab.key
-                    ? "border-heimdex-navy-500 text-heimdex-navy-500"
-                    : "border-transparent text-grayscale-500 hover:border-grayscale-200 hover:text-grayscale-800",
+          {view !== "auto-shorts" && (
+            <nav className="mb-6 flex items-center border-b border-grayscale-100">
+              {([
+                { key: "overview" as const, label: "개요", badge: undefined as number | undefined },
+                { key: "scenes" as const, label: "장면 분석", badge: undefined as number | undefined },
+                { key: "people" as const, label: "인물 관리", badge: undefined as number | undefined },
+              ]).map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => handleViewChange(tab.key)}
+                  className={cn(
+                    "relative -mb-px border-b-2 px-4 py-2.5 text-sm font-medium transition-colors",
+                    view === tab.key
+                      ? "border-heimdex-navy-500 text-heimdex-navy-500"
+                      : "border-transparent text-grayscale-500 hover:border-grayscale-200 hover:text-grayscale-800",
+                  )}
+                >
+                  {tab.label}
+                  {tab.badge != null && (
+                    <span className="ml-1.5 inline-flex items-center rounded-full bg-grayscale-100 px-2 py-0.5 text-xs font-medium text-grayscale-500">
+                      {tab.badge}
+                    </span>
+                  )}
+                </button>
+              ))}
+              <div className="mb-1 ml-auto flex items-center gap-2.5">
+                {!isReprocessing && (
+                  <button
+                    type="button"
+                    onClick={() => setIsReprocessDialogOpen(true)}
+                    className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-10"
+                  >
+                    장면 재분석
+                  </button>
                 )}
-              >
-                {tab.label}
-                {tab.badge != null && (
-                  <span className="ml-1.5 inline-flex items-center rounded-full bg-grayscale-100 px-2 py-0.5 text-xs font-medium text-grayscale-500">
-                    {tab.badge}
-                  </span>
-                )}
-              </button>
-            ))}
-            <div className="mb-1 ml-auto flex items-center gap-2.5">
-              {!isReprocessing && (
+                <AutoShortsCTA
+                  videoId={videoId}
+                  onClick={() => handleViewChange("auto-shorts")}
+                  renderWhileProbing
+                />
                 <button
                   type="button"
-                  onClick={() => setIsReprocessDialogOpen(true)}
+                  onClick={() => router.push(`/export/shorts/editor?videoId=${videoId}`)}
                   className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-10"
                 >
-                  장면 재분석
+                  내보내기
                 </button>
-              )}
-              <AutoShortsCTA
-                videoId={videoId}
-                onClick={() => handleViewChange("auto-shorts")}
-                renderWhileProbing
-              />
-              <button
-                type="button"
-                onClick={() => router.push(`/export/shorts/editor?videoId=${videoId}`)}
-                className="inline-flex h-8 items-center justify-center rounded-lg border border-neutral-500 bg-white px-2.5 py-1.5 text-xs font-semibold text-neutral-500 transition-colors hover:bg-grayscale-10"
-              >
-                내보내기
-              </button>
-            </div>
-          </nav>
+              </div>
+            </nav>
+          )}
 
           {view === "overview" ? (
             <OverviewPanel
