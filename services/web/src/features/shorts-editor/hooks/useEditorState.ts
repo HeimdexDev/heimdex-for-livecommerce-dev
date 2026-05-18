@@ -466,15 +466,53 @@ export function generateSubtitlesFromTranscript(
 
   const subtitles: EditorSubtitle[] = [];
 
+  // Transcripts can store timestamps two ways: absolute video time
+  // (offset from video start, so offsetMs ≥ clip.trimStartMs) or
+  // scene-relative (offset from scene start, so offsetMs ≥ 0 and
+  // < clipDuration). Pick the interpretation that places MORE turns
+  // inside the scene's window — sampling a single turn was brittle
+  // because a single near-zero stamp at the head of a mismatched
+  // transcript flipped the whole scene to interpretRel, which then
+  // crammed unrelated turns into the clip ("다른 런타임의 자막" symptom
+  // surfaced on 2026-05-18). Mixed-mode transcripts are not supported;
+  // when neither interpretation explains a majority of turns we leave
+  // the timed branch empty so the caller can fall back to even-
+  // distribution rather than emit misaligned subtitles.
+  const interpretAbs = (offsetMs: number) => offsetMs - clip.trimStartMs;
+  const interpretRel = (offsetMs: number) => offsetMs;
+  let interpretMs: (offsetMs: number) => number = interpretAbs;
+  let interpretationConfident = false;
   if (turnsWithTs.length > 0) {
+    let absHits = 0;
+    let relHits = 0;
+    for (const { ms } of turnsWithTs) {
+      const a = interpretAbs(ms);
+      if (a >= 0 && a < clipDuration) absHits++;
+      const r = interpretRel(ms);
+      if (r >= 0 && r < clipDuration) relHits++;
+    }
+    // Require a clear majority (≥60% of turns) to commit to an
+    // interpretation. The threshold lets a few stray turns from
+    // boundary-rounding survive without flipping the decision.
+    const threshold = Math.max(1, Math.ceil(turnsWithTs.length * 0.6));
+    if (absHits >= relHits && absHits >= threshold) {
+      interpretMs = interpretAbs;
+      interpretationConfident = true;
+    } else if (relHits > absHits && relHits >= threshold) {
+      interpretMs = interpretRel;
+      interpretationConfident = true;
+    }
+  }
+
+  if (turnsWithTs.length > 0 && interpretationConfident) {
     // Timestamp-based: chunk each turn, distribute chunks within the turn's time slot
     for (let i = 0; i < turnsWithTs.length; i++) {
       const { turn, ms: offsetMs } = turnsWithTs[i];
-      const relativeMs = offsetMs - clip.trimStartMs;
+      const relativeMs = interpretMs(offsetMs);
       if (relativeMs < 0 || relativeMs >= clipDuration) continue;
 
       const nextRelative = i + 1 < turnsWithTs.length
-        ? turnsWithTs[i + 1].ms - clip.trimStartMs
+        ? interpretMs(turnsWithTs[i + 1].ms)
         : clipDuration;
       const slotDuration = Math.min(nextRelative - relativeMs, DEFAULT_SUBTITLE_DURATION_MS * 3);
 
@@ -497,11 +535,14 @@ export function generateSubtitlesFromTranscript(
     }
   }
 
-  // Fall through to even-distribution when the timestamp branch produced
-  // nothing — happens when the transcript carries scene-relative offsets
-  // (e.g., "0:00" means "scene start") that the absolute-timestamp math
-  // above filters out as negative relativeMs.
-  if (subtitles.length === 0) {
+  // Fall through to even-distribution only when the transcript HAS NO
+  // timestamps at all (i.e., the indexer emitted raw text without
+  // diarisation). When timestamps were present but we couldn't confidently
+  // pick an interpretation, the transcript is likely mismatched to this
+  // scene (cross-runtime artifact reported on 2026-05-18) — emitting
+  // evenly-distributed text would surface the wrong scene's content
+  // inside this clip. Skip rather than mislead.
+  if (subtitles.length === 0 && turnsWithTs.length === 0) {
     // No timestamps: distribute all chunks evenly across clip
     const chunkDuration = Math.max(800, Math.floor(clipDuration / allChunks.length));
     if (chunkDuration < 500) return [];
@@ -657,6 +698,24 @@ export function useEditorState() {
     [state.playheadMs, state.totalDurationMs],
   );
 
+  // "Insert image" path — seeds a new background overlay with the
+  // data URL the file picker returned. Kept separate from the solid-
+  // background factory so the call sites don't have to juggle a
+  // discriminated argument shape.
+  const addImageBackgroundOverlayAtPlayhead = useCallback(
+    (imageUrl: string) => {
+      const { startMs, endMs } = _clampOverlayWindow(
+        state.playheadMs,
+        state.totalDurationMs,
+      );
+      dispatch({
+        type: "ADD_OVERLAY",
+        overlay: createDefaultBackgroundOverlay({ startMs, endMs, imageUrl }),
+      });
+    },
+    [state.playheadMs, state.totalDurationMs],
+  );
+
   const updateOverlay = useCallback(
     (id: string, updates: Partial<EditorOverlay>) => {
       dispatch({ type: "UPDATE_OVERLAY", id, updates });
@@ -715,6 +774,7 @@ export function useEditorState() {
     addTextOverlay,
     addTextOverlayAtPlayhead,
     addBackgroundOverlayAtPlayhead,
+    addImageBackgroundOverlayAtPlayhead,
     updateOverlay,
     removeOverlay,
     selectOverlay,

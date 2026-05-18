@@ -7,10 +7,15 @@ interface Props {
   anchorRef: React.RefObject<HTMLElement>;
   onClose: () => void;
   children: React.ReactNode;
+  // "anchored" pins the popover to the trigger's right edge (legacy).
+  // "centered" centers the popover inside the editor right wrapper —
+  // preferred for the 2026-05-18 redesign so the palette opens in the
+  // middle of the right wrapper regardless of which control was clicked.
+  mode?: "anchored" | "centered";
 }
 
 const POPOVER_WIDTH = 260;
-const POPOVER_MAX_HEIGHT = 592;
+const POPOVER_MAX_HEIGHT = 640;
 const GAP = 8;
 const VIEWPORT_MARGIN = 8;
 
@@ -22,61 +27,74 @@ interface Pos {
 /**
  * Portal wrapper for the color palette popover.
  *
- * Color triggers live inside the editor right wrapper, which scrolls via
- * ``overflow-y-auto``. An absolutely positioned popover inside that
- * scroll surface was getting clipped by the wrapper bounds — the palette
- * would "open" in the DOM but never become visible to the user. Portalling
- * to ``document.body`` escapes the clip, and we anchor with fixed
- * coordinates derived from the trigger's bounding rect.
+ * Two positioning modes:
+ *   anchored — pin right edge to the trigger's right edge (drop below /
+ *     flip above when there isn't room). Used by callers that still want
+ *     the popover visually attached to its trigger.
+ *   centered — center the popover inside the editor right wrapper
+ *     (``[data-editor-right-panel]``). Falls back to viewport-center when
+ *     the wrapper isn't found.
  *
- * Position policy:
- *   1. Anchor the popover's right edge to the trigger's right edge
- *      (matches the figma redesign — palette opens leftward).
- *   2. Anchor the popover's top edge ``GAP`` below the trigger.
- *   3. Flip above the trigger when there isn't enough space below.
- *   4. Clamp to viewport margins so the chip can never be drawn off-
- *      screen on either axis.
- *
- * Click-outside / scroll / resize handling lives here too so the popover
- * tracks the trigger when the underlying surface scrolls.
+ * Either way the popover is portalled to document.body so the
+ * surrounding ``overflow-y-auto`` scroll surfaces can't clip it.
  */
-export function ColorPalettePortal({ anchorRef, onClose, children }: Props) {
+export function ColorPalettePortal({
+  anchorRef,
+  onClose,
+  children,
+  mode = "centered",
+}: Props) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(false);
   const [pos, setPos] = useState<Pos>({ top: -9999, left: -9999 });
 
-  // Defer first render to client — createPortal requires document.body.
   useEffect(() => {
     setMounted(true);
   }, []);
 
   const recompute = () => {
-    const anchor = anchorRef.current;
-    if (!anchor) return;
-    const rect = anchor.getBoundingClientRect();
     const viewportH = window.innerHeight;
     const viewportW = window.innerWidth;
+    const popoverH = popoverRef.current?.offsetHeight ?? POPOVER_MAX_HEIGHT;
 
-    // Preferred: drop below the trigger, right-aligned.
-    let top = rect.bottom + GAP;
-    let left = rect.right - POPOVER_WIDTH;
+    let top: number;
+    let left: number;
 
-    // Flip above when there isn't enough room beneath the trigger but
-    // there is above (popover is tall — 592px — so this matters often).
-    const spaceBelow = viewportH - rect.bottom - GAP;
-    const spaceAbove = rect.top - GAP;
-    if (spaceBelow < POPOVER_MAX_HEIGHT && spaceAbove > spaceBelow) {
-      top = rect.top - POPOVER_MAX_HEIGHT - GAP;
+    if (mode === "centered") {
+      // Center on the editor right wrapper if we can find it; otherwise
+      // fall back to viewport center. Using the wrapper rect keeps the
+      // palette visually associated with the panel that owns it.
+      const wrapper = document.querySelector<HTMLElement>(
+        "[data-editor-right-panel]",
+      );
+      const rect = wrapper?.getBoundingClientRect();
+      if (rect && rect.width > 0) {
+        left = rect.left + rect.width / 2 - POPOVER_WIDTH / 2;
+        top = rect.top + rect.height / 2 - popoverH / 2;
+      } else {
+        left = viewportW / 2 - POPOVER_WIDTH / 2;
+        top = viewportH / 2 - popoverH / 2;
+      }
+    } else {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const r = anchor.getBoundingClientRect();
+      top = r.bottom + GAP;
+      left = r.right - POPOVER_WIDTH;
+      const spaceBelow = viewportH - r.bottom - GAP;
+      const spaceAbove = r.top - GAP;
+      if (spaceBelow < popoverH && spaceAbove > spaceBelow) {
+        top = r.top - popoverH - GAP;
+      }
     }
 
-    // Clamp inside viewport so we never paint a chip past either edge.
     if (left < VIEWPORT_MARGIN) left = VIEWPORT_MARGIN;
     if (left + POPOVER_WIDTH > viewportW - VIEWPORT_MARGIN) {
       left = viewportW - POPOVER_WIDTH - VIEWPORT_MARGIN;
     }
     if (top < VIEWPORT_MARGIN) top = VIEWPORT_MARGIN;
-    if (top + POPOVER_MAX_HEIGHT > viewportH - VIEWPORT_MARGIN) {
-      top = Math.max(VIEWPORT_MARGIN, viewportH - POPOVER_MAX_HEIGHT - VIEWPORT_MARGIN);
+    if (top + popoverH > viewportH - VIEWPORT_MARGIN) {
+      top = Math.max(VIEWPORT_MARGIN, viewportH - popoverH - VIEWPORT_MARGIN);
     }
 
     setPos({ top, left });
@@ -85,11 +103,8 @@ export function ColorPalettePortal({ anchorRef, onClose, children }: Props) {
   useLayoutEffect(() => {
     recompute();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mounted]);
 
-  // Keep the popover anchored when the underlying surface scrolls or the
-  // window resizes. ``capture: true`` catches scroll events on nested
-  // overflow containers (the editor right wrapper scrolls internally).
   useEffect(() => {
     const onChange = () => recompute();
     window.addEventListener("resize", onChange);
@@ -101,9 +116,6 @@ export function ColorPalettePortal({ anchorRef, onClose, children }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Close when the user clicks anywhere outside the popover OR the
-  // anchor. Hooking ``mousedown`` instead of ``click`` makes the close
-  // happen as soon as the press lands, mirroring the native menu UX.
   useEffect(() => {
     function handle(e: MouseEvent) {
       const target = e.target as Node;

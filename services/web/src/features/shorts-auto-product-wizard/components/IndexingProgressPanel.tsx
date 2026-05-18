@@ -20,14 +20,11 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { useMemo } from "react";
 
 import { Button } from "@/components/ui/figma-index";
-import { useTopHeaderLeftActions } from "@/components/layout/TopHeaderActionsContext";
 import { formatVideoTimestampHMS } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
-import { InlineWizardBreadcrumb } from "./InlineWizardBreadcrumb";
 import type { WizardCriteriaDraft } from "./InlineWizardCriteriaPanel";
 import { StageConnectorDots } from "./StageConnectorDots";
 
@@ -94,12 +91,9 @@ export function IndexingProgressPanel({
   const percent = clampPercent(progress);
   const completedSet = new Set(completedStages);
 
-  // Step indicator lives in the global TopHeader (GNB) per Figma 1602:36766.
-  const headerSlot = useMemo(
-    () => <InlineWizardBreadcrumb currentStep={3} />,
-    [],
-  );
-  useTopHeaderLeftActions(headerSlot);
+  // Breadcrumb (step indicator) was moved up to WizardStepResult so it
+  // also renders for the result-grid path. Leaving it here too would
+  // double-set the slot when both components mount on the same render.
 
   return (
     <div className="space-y-[20px] font-pretendard">

@@ -25,7 +25,13 @@ export function SubtitleBlock({
   onUpdate,
 }: SubtitleBlockProps) {
   const leftPx = msToPixels(subtitle.startMs, zoom);
-  const widthPx = msToPixels(subtitle.endMs - subtitle.startMs, zoom);
+  // Subtract a 2px gutter from the rendered width so back-to-back
+  // subtitle blocks at minimum zoom show a 2px gap between them — the
+  // 2026-05-18 review surfaced that adjacent blocks were merging into a
+  // single solid bar when the timeline was compressed. The minimum
+  // visual width is still 8px so very short subtitles stay clickable.
+  const rawWidthPx = msToPixels(subtitle.endMs - subtitle.startMs, zoom);
+  const widthPx = Math.max(rawWidthPx - 2, 8);
   const draggingRef = useRef<"move" | "start" | "end" | null>(null);
   const startXRef = useRef(0);
   const startValuesRef = useRef({ startMs: 0, endMs: 0 });
@@ -96,7 +102,7 @@ export function SubtitleBlock({
           ? "z-10 bg-heimdex-navy-300/40 ring-2 ring-heimdex-navy-500"
           : "bg-heimdex-navy-300 hover:brightness-110",
       )}
-      style={{ left: leftPx, width: Math.max(widthPx, 8) }}
+      style={{ left: leftPx, width: widthPx }}
       onClick={(e) => { e.stopPropagation(); onSelect(); }}
     >
       {/* Left resize handle */}

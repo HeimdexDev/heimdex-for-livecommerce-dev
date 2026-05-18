@@ -63,9 +63,15 @@ export function SubtitleTrack({
 
   return (
     <div className="relative">
-      {/* Track with blocks — figma 1669:154010 (펼침, h-12) / 1669:49002 (접힘, h-8) */}
+      {/* Track with blocks. Track height locked to h-12 regardless of zoom
+          per 2026-05-18 review — the operator expected only the
+          horizontal extent of the lane to react to zoom out, not the
+          vertical thickness of the subtitle row. The earlier
+          expanded ? "h-12" : "h-8" switch was visually shrinking the
+          row on zoom-out. ``expanded`` prop is kept on the interface so
+          callers don't break but no longer drives layout. */}
       <div
-        className={`relative ${expanded ? "h-12" : "h-8"} bg-grayscale-10 transition-[height] duration-150`}
+        className="relative h-12 bg-grayscale-10"
         style={{ width: totalWidth }}
         onDoubleClick={handleTrackDoubleClick}
       >

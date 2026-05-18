@@ -300,13 +300,15 @@ export function ShortsEditorPage() {
 
   const headerLeftSlot = useMemo(() => {
     if (isLoading || loadError) return null;
-    // figma: 1669:48308 — title input + "N개 장면" pair, gap=10. Input width
-    // hugs the content via the `size` attribute so the "N개 장면" label sits
-    // 10px to the right of the title's last character. Cap raised so longer
-    // titles render fully instead of clipping at ~10ch.
+    // figma: 1669:48308 — title input + "N개 장면" pair, gap=10. The input
+    // hugs its content so the "N개 장면" label sits ~10px to the right of
+    // the last character with no extra dead space. ``size`` is set to the
+    // visible character count (no +1 buffer) and we drop the lower bound
+    // via inline width so short titles like "쇼츠1" don't reserve a
+    // 60px-wide column. Long titles can grow to the safe ~640px cap.
     const placeholder = meta?.video_title ?? "제목 없음";
     const measureSource = title || placeholder;
-    const sizeChars = Math.max(4, Math.min(measureSource.length + 1, 40));
+    const sizeChars = Math.max(2, Math.min(measureSource.length, 60));
     return (
       <div className="flex items-center gap-[10px]">
         <input
@@ -316,7 +318,8 @@ export function ShortsEditorPage() {
           onChange={(e) => setTitle(e.target.value)}
           placeholder={placeholder}
           aria-label="영상 제목"
-          className="min-w-[60px] max-w-[480px] rounded-md border border-transparent px-1 text-[18px] font-semibold leading-[1.4] tracking-[-0.45px] text-black placeholder-grayscale-300 hover:border-grayscale-100 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
+          className="rounded-md border border-transparent px-1 text-[18px] font-semibold leading-[1.4] tracking-[-0.45px] text-black placeholder-grayscale-300 hover:border-grayscale-100 focus:border-heimdex-navy-500 focus:outline-none focus:ring-1 focus:ring-heimdex-navy-500"
+          style={{ maxWidth: "640px" }}
         />
         <span className="whitespace-nowrap text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-neutral-h-500">
           {state.clips.length}개 장면
@@ -707,6 +710,7 @@ export function ShortsEditorPage() {
                   state={state}
                   onAddTextOverlay={editor.addTextOverlayAtPlayhead}
                   onAddBackgroundOverlay={editor.addBackgroundOverlayAtPlayhead}
+                  onAddImageBackgroundOverlay={editor.addImageBackgroundOverlayAtPlayhead}
                   onUpdateOverlay={editor.updateOverlay}
                   onRemoveOverlay={editor.removeOverlay}
                   onSelectOverlay={editor.selectOverlay}

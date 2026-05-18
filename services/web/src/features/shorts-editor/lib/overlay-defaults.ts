@@ -85,7 +85,15 @@ export function createDefaultBackgroundOverlay(args: {
   // ActionBar (figma 1602:40004 배경 섹션) 의 단색 배경 추가 버튼이
   // 색상 팔레트에서 고른 hex 를 전달한다. 미지정 시 기본값 #000000.
   fillColor?: string;
+  // Image source — the "insert image" path reads a file as a data URL
+  // and seeds it here so the new background overlay carries the image.
+  imageUrl?: string;
 }): EditorBackgroundOverlay {
+  // Image inserts default to a larger canvas so the picked photo gets
+  // an immediately visible footprint instead of being squeezed into the
+  // 240×80 solid-color rectangle. Solid color inserts keep the legacy
+  // dimensions so existing flows don't shift.
+  const isImage = !!args.imageUrl;
   return {
     kind: "background",
     id: generateOverlayId("bg"),
@@ -94,10 +102,13 @@ export function createDefaultBackgroundOverlay(args: {
     layerIndex: args.layerIndex ?? 0,
     transform: {
       ...DEFAULT_TRANSFORM,
-      widthPx: DEFAULT_BG_WIDTH_PX,
-      heightPx: DEFAULT_BG_HEIGHT_PX,
+      widthPx: isImage ? 480 : DEFAULT_BG_WIDTH_PX,
+      heightPx: isImage ? 480 : DEFAULT_BG_HEIGHT_PX,
     },
     effects: { ...DEFAULT_EFFECTS },
-    fillColor: args.fillColor ?? "#000000",
+    // Images render on top of a transparent fill by default so the
+    // picture isn't tinted by an accidental black backing.
+    fillColor: args.fillColor ?? (isImage ? "transparent" : "#000000"),
+    imageUrl: args.imageUrl ?? null,
   };
 }

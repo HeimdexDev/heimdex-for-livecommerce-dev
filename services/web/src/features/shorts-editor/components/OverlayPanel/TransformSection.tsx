@@ -4,7 +4,7 @@
 // 변형 섹션 — 위치 X/Y + 회전°. 배경 패널에선 크기 W/H 추가.
 // X/Y w=97 h=40, 회전 w=53 h=40, gap=8. radius·padding 은 NumericStepper primitive 위임.
 
-import { NumericStepper } from "../primitives/NumericStepper";
+import { ValueBox, ValueBoxXY, ValueBoxWH } from "../primitives/ValueBox";
 import { t } from "../../lib/i18n/strings";
 import type { EditorOverlay, TransformProps } from "../../lib/overlay-types";
 
@@ -39,37 +39,33 @@ export function TransformSection({ overlay, onChange }: TransformSectionProps) {
         {t.transform.sectionLabel}
       </header>
 
+      {/* Position + rotation are display-first: operators drag the
+          overlay in the preview to move it, and the boxes mirror the
+          resulting transform.x / transform.y / transform.rotationDeg
+          values. Typing in either box still updates the overlay, but
+          we drop the +/- stepper chrome per 2026-05-18 figma. */}
       <div className="grid grid-cols-2 gap-2">
         <div className="flex flex-col gap-1">
           <span className="text-[10px] font-medium text-grayscale-500">위치</span>
-          <div className="grid grid-cols-2 gap-1">
-            <NumericStepper
-              value={xPct}
-              min={0}
-              max={100}
-              onChange={(v) => updateTransform({ x: v / 100 })}
-              unit="X"
-              ariaLabel="X position"
-            />
-            <NumericStepper
-              value={yPct}
-              min={0}
-              max={100}
-              onChange={(v) => updateTransform({ y: v / 100 })}
-              unit="Y"
-              ariaLabel="Y position"
-            />
-          </div>
+          <ValueBoxXY
+            x={xPct}
+            y={yPct}
+            min={0}
+            max={100}
+            onChangeX={(v) => updateTransform({ x: v / 100 })}
+            onChangeY={(v) => updateTransform({ y: v / 100 })}
+            ariaLabel="overlay position"
+          />
         </div>
         <div className="flex flex-col gap-1">
           <span className="text-[10px] font-medium text-grayscale-500">회전</span>
-          <NumericStepper
+          <ValueBox
             value={rotInt}
             min={-360}
             max={360}
             onChange={(v) => updateTransform({ rotationDeg: v })}
-            unit="°"
-            ariaLabel="rotation"
+            suffix="°"
+            ariaLabel="overlay rotation"
           />
         </div>
       </div>
@@ -78,24 +74,15 @@ export function TransformSection({ overlay, onChange }: TransformSectionProps) {
       {overlay.kind === "background" && (
         <div className="flex flex-col gap-1">
           <span className="text-[10px] font-medium text-grayscale-500">{t.transform.size}</span>
-          <div className="grid grid-cols-2 gap-1">
-            <NumericStepper
-              value={tf.widthPx ?? 0}
-              min={1}
-              max={10000}
-              onChange={(v) => updateTransform({ widthPx: v })}
-              unit={t.transform.width}
-              ariaLabel={`${t.transform.size} width`}
-            />
-            <NumericStepper
-              value={tf.heightPx ?? 0}
-              min={1}
-              max={10000}
-              onChange={(v) => updateTransform({ heightPx: v })}
-              unit={t.transform.height}
-              ariaLabel={`${t.transform.size} height`}
-            />
-          </div>
+          <ValueBoxWH
+            width={tf.widthPx ?? 0}
+            height={tf.heightPx ?? 0}
+            min={1}
+            max={10000}
+            onChangeWidth={(v) => updateTransform({ widthPx: v })}
+            onChangeHeight={(v) => updateTransform({ heightPx: v })}
+            ariaLabel={t.transform.size}
+          />
         </div>
       )}
     </section>

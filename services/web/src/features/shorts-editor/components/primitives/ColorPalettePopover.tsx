@@ -1,12 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // figma: 1602:41332 — color palette popover.
-// Header (색상 + close), a basic-color grid, an "in use" swatch, the
-// currently selected color readout, and an opacity slider.
+//
+// Sections (top to bottom):
+//   - Header (색상 + close)
+//   - 사용 중인 색상 (figma 1602:41339) — rainbow wheel triggers a custom
+//     color picker, plus a chip showing the currently selected color.
+//   - 기본 색상 (transparent + neutrals + 6×5 tonal grid)
+//   - 선택 색상 (hex readout)
+//   - 불투명도 slider (optional)
 //
 // The popover keeps state local for color + opacity and pushes the
 // composite (hex + alpha) back to the parent via onChange.
@@ -38,6 +44,13 @@ const PALETTE_COLUMNS: string[][] = [
   ["#A34426", "#CC552F", "#EC613B", "#F1916E", "#F8CEC0"],
 ];
 
+// figma 1602:41339 — conic-gradient rainbow swatch used as the custom
+// color picker entry. Picked to roughly match the figma reference; exact
+// stops don't need to match the design system since this is just the
+// visual hint that the user can pick any color from here.
+const RAINBOW_WHEEL_GRADIENT =
+  "conic-gradient(from 90deg, #F9CE5B, #F3A33E, #EC613B, #CC552F, #A34426, #4E2677, #613095, #8F40AB, #5F6FBB, #3B4FA5, #2F4083, #2B6CA2, #3787CB, #47A7ED, #4E6C30, #61873D, #88AF53, #F9CE5B)";
+
 export function ColorPalettePopover({
   color,
   opacity = 1,
@@ -47,15 +60,11 @@ export function ColorPalettePopover({
   showOpacity = true,
 }: ColorPalettePopoverProps) {
   const [localOpacity, setLocalOpacity] = useState(opacity);
+  // Hidden ``<input type="color">`` — clicked via its ref to surface the
+  // native picker without a visible chrome input on the card.
+  const nativePickerRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => setLocalOpacity(opacity), [opacity]);
-
-  // Click-outside / scroll tracking is handled by the wrapping
-  // ColorPalettePortal — the popover itself stays presentational so the
-  // same component can be rendered through the portal (preferred) or
-  // anchored inline (legacy callers) without double-binding the document
-  // mousedown listener (which caused an open/close race on the swatch
-  // trigger).
 
   const handleOpacity = useCallback(
     (value: number) => {
@@ -66,6 +75,10 @@ export function ColorPalettePopover({
   );
 
   const opacityPct = Math.round(localOpacity * 100);
+  const isTransparent = color === "transparent";
+  // ``<input type="color">`` requires a 7-char hex; fall back to black
+  // when the current value is "transparent" or otherwise unparseable.
+  const nativeInitial = /^#([0-9A-F]{6})$/i.test(color) ? color : "#000000";
 
   return (
     <div
@@ -86,13 +99,73 @@ export function ColorPalettePopover({
         </button>
       </div>
 
+      {/* figma 1602:41339 — 사용 중인 색상.
+          Rainbow wheel is the custom-picker affordance (triggers the
+          hidden native color input). The chip next to it shows the
+          color the user just picked so they can spot it without
+          scanning the grid. */}
+      <div className="flex flex-col gap-[8px]">
+        <p className="text-[12px] font-medium tracking-[-0.3px] text-grayscale-800">
+          사용 중인 색상
+        </p>
+        <div className="flex items-center gap-[10px]">
+          <button
+            type="button"
+            onClick={() => nativePickerRef.current?.click()}
+            aria-label="사용자 정의 색상 선택"
+            className="relative grid h-[30px] w-[30px] place-items-center overflow-hidden rounded-full border border-grayscale-300"
+            style={{ background: RAINBOW_WHEEL_GRADIENT }}
+          >
+            {/* Crosshair / picker icon centered on a white disc. */}
+            <span className="grid h-[16px] w-[16px] place-items-center rounded-full bg-white text-grayscale-800">
+              <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden>
+                <circle cx="8" cy="8" r="2" fill="currentColor" />
+                <path
+                  d="M8 1v3M8 12v3M1 8h3M12 8h3"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </span>
+          </button>
+          <input
+            ref={nativePickerRef}
+            type="color"
+            value={nativeInitial}
+            onChange={(e) => onChange(e.target.value.toUpperCase())}
+            aria-hidden
+            tabIndex={-1}
+            className="pointer-events-none absolute h-0 w-0 opacity-0"
+          />
+          {/* Currently-selected chip — gives the user a "you picked this"
+              cue. Renders the transparent diagonal when no color set. */}
+          <div
+            className={cn(
+              "relative h-[30px] w-[30px] overflow-hidden rounded-[6px] border",
+              "border-grayscale-300",
+            )}
+            style={{
+              backgroundColor: isTransparent ? "#FFFFFF" : color,
+            }}
+            aria-label={`선택 색상 ${color}`}
+          >
+            {isTransparent && (
+              <span
+                aria-hidden
+                className="absolute left-1/2 top-1/2 block h-[2px] w-[41px] -translate-x-1/2 -translate-y-1/2 rotate-[-47deg] bg-red-h-400"
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
       <div className="flex flex-col gap-[8px]">
         <p className="text-[12px] font-medium tracking-[-0.3px] text-grayscale-800">
           기본 색상
         </p>
         {/* figma 1602:41348 — diagonal line swatch acts as the "no color /
-            transparent" pick. Selecting it clears the fill. Kept as the
-            first chip so it never reflows when the grid below changes. */}
+            transparent" pick. Selecting it clears the fill. */}
         <button
           type="button"
           onClick={() => onChange("transparent")}
@@ -110,9 +183,7 @@ export function ColorPalettePopover({
             <ColorChip key={c} color={c} active={c === color} onClick={() => onChange(c)} />
           ))}
         </div>
-        {/* figma 1602:41357 — 6 columns × 5 rows tonal grid (purple, blue,
-            cyan, green, orange, red). PALETTE_COLUMNS is column-major so
-            each inner array stacks vertically. */}
+        {/* figma 1602:41357 — 6 columns × 5 rows tonal grid. */}
         <div className="flex justify-between gap-[8px]">
           {PALETTE_COLUMNS.map((column, idx) => (
             <div key={idx} className="flex flex-col gap-[10px]">
@@ -128,9 +199,6 @@ export function ColorPalettePopover({
         <p className="text-[12px] font-medium tracking-[-0.3px] text-grayscale-800">
           선택 색상
         </p>
-        {/* figma 1602:41396 — 100px-wide chip aligned to the right side of
-            the section, swatch + hex pair. Aligned right per figma so the
-            section header has clear left-aligned label whitespace. */}
         <div className="flex justify-end">
           <div className="flex w-[100px] items-center gap-[10px] rounded-[6px] border border-grayscale-300 p-[5px]">
             <span className="block h-5 w-5 rounded-[4px]" style={{ backgroundColor: color }} />
@@ -157,7 +225,6 @@ export function ColorPalettePopover({
               aria-label={`불투명도 ${opacityPct}%`}
               className="h-[2px] flex-1 cursor-pointer accent-grayscale-800"
             />
-            {/* figma 1602:41412 — accordion-style readout box (46×40, r-10). */}
             <div className="flex h-10 items-center rounded-[10px] border border-grayscale-300 px-2 py-2.5">
               <span className="text-[14px] font-medium tracking-[-0.35px] text-grayscale-800">
                 {opacityPct}%
@@ -186,8 +253,6 @@ function ColorChip({
       aria-label={`색상 ${color}`}
       className={cn(
         "rounded-[6px] border transition-shadow",
-        // figma 1602:41344 — selected chip nests a smaller swatch inside a
-        // 32×32 ring to make the active state obvious.
         active
           ? "border-[1.333px] border-heimdex-navy-300 p-[2.667px]"
           : "border-grayscale-300",

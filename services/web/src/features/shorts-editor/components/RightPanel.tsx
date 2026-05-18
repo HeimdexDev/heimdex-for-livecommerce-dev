@@ -31,7 +31,12 @@ export function RightPanel({
   }
 
   return (
-    <div className="flex h-full flex-col gap-[16px] p-[20px]">
+    // data-editor-right-panel: anchor for the color palette portal so the
+    // popover can center on this surface instead of the trigger button.
+    <div
+      data-editor-right-panel
+      className="flex h-full flex-col gap-[16px] p-[20px]"
+    >
       <RightPanelTabs active={activeTab} onChange={setActiveTab} />
       <div className="min-h-0 flex-1 overflow-y-auto">{body}</div>
     </div>

@@ -45,9 +45,11 @@ import {
   IndexingProgressPanel,
   type IndexingStage,
 } from "../components/IndexingProgressPanel";
+import { InlineWizardBreadcrumb } from "../components/InlineWizardBreadcrumb";
 import type { WizardCriteriaDraft } from "../components/InlineWizardCriteriaPanel";
 import type { CriteriaSummary } from "@/lib/types/shorts-auto-product-wizard";
 import { useScanOrder } from "../hooks/useScanOrder";
+import { useTopHeaderLeftActions } from "@/components/layout/TopHeaderActionsContext";
 
 // Map the backend CriteriaSummary shape to the wizard's WizardCriteriaDraft
 // so IndexingProgressPanel can render its option summary badge directly.
@@ -124,6 +126,15 @@ function isWholeOrderFailed(status: ScanOrderStatusResponse | null): boolean {
 export function WizardStepResult({ videoId, parentJobId }: Props) {
   const { getAccessToken } = useAuth();
   const router = useRouter();
+  // Breadcrumb (GNB step indicator) — pinned to step 3 for both the
+  // loading and result-grid states. Previously the hook only fired
+  // through IndexingProgressPanel, which doesn't mount once children
+  // arrive, so the breadcrumb disappeared as soon as the grid rendered.
+  const breadcrumbSlot = useMemo(
+    () => <InlineWizardBreadcrumb currentStep={3} />,
+    [],
+  );
+  useTopHeaderLeftActions(breadcrumbSlot);
   // ``cancel`` from useScanOrder is the whole-order cancel — replaced by
   // per-child cancelAutoShortJob below so a single card's cancel doesn't
   // kill the rest of the batch.
@@ -444,6 +455,7 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
                   <ResultCard
                     key={child.job_id}
                     child={child}
+                    videoId={videoId}
                     ordinal={ordinal}
                     lengthSeconds={lengthSeconds}
                     productLabels={child.product_labels ?? []}
@@ -466,8 +478,8 @@ export function WizardStepResult({ videoId, parentJobId }: Props) {
 }
 
 // Visual placeholder for a card slot whose backing child job hasn't been
-// emitted by the backend yet. Mirrors ResultCard's outer dimensions /
-// padding so the grid stays stable as children stream in.
+// emitted by the backend yet. Mirrors ResultCard's outer dimensions so
+// the grid stays stable as children stream in.
 function PendingResultCard({
   ordinal,
   lengthSeconds,
@@ -483,33 +495,28 @@ function PendingResultCard({
         : `${Math.floor(lengthSeconds / 60)}분 ${lengthSeconds % 60}초`;
   return (
     <article
-      className="flex h-[253px] w-[287px] gap-[10px] rounded-card bg-white p-[10px] shadow-card opacity-60"
+      className="relative flex h-[253px] w-[287px] items-start overflow-clip rounded-card border border-grayscale-100 bg-white opacity-60"
       data-testid={`result-card-${ordinal}-pending`}
     >
-      <div className="relative h-full aspect-[9/16] shrink-0 overflow-hidden rounded-[8px] bg-neutral-h-100" />
-      <div className="flex h-full flex-1 flex-col justify-between py-[4px]">
-        <p className="font-pretendard text-[14px] font-semibold tracking-[-0.35px] leading-[1.4] text-grayscale-500">
-          쇼츠 {ordinal}
-        </p>
-        <dl className="flex flex-col gap-[8px]">
-          <div className="flex items-baseline justify-between">
-            <dt className="font-pretendard text-[12px] font-medium text-grayscale-500">
-              쇼츠 길이
-            </dt>
-            <dd className="font-pretendard text-[12px] font-medium text-grayscale-500">
-              {lengthLabel}
-            </dd>
-          </div>
-          <div className="flex items-baseline justify-between">
-            <dt className="font-pretendard text-[12px] font-medium text-grayscale-500">
-              진행률
-            </dt>
-            <dd className="font-pretendard text-[12px] font-medium text-grayscale-500">
-              0%
-            </dd>
-          </div>
-        </dl>
-        <span className="inline-flex items-center self-start rounded-full bg-neutral-h-50 px-[8px] py-[2px] font-pretendard text-[10px] font-medium text-grayscale-500">
+      <div className="h-full w-[150px] shrink-0 bg-neutral-h-100" />
+      <div className="flex h-full flex-1 flex-col items-end gap-[20px] self-stretch px-[12px] py-[16px]">
+        <div className="flex w-full flex-col items-start gap-[20px]">
+          <p className="font-pretendard text-[14px] font-semibold tracking-[-0.35px] leading-[1.4] text-grayscale-500">
+            쇼츠 {ordinal}
+          </p>
+          <dl className="flex w-full items-start gap-[10px] font-pretendard text-[12px] font-medium leading-[1.4] tracking-[-0.3px] text-grayscale-500">
+            <div className="flex flex-col items-start gap-[10px]">
+              <dt>쇼츠 길이</dt>
+              <dt>진행률</dt>
+            </div>
+            <div className="flex flex-col items-start gap-[10px]">
+              <dd>{lengthLabel}</dd>
+              <dd>0%</dd>
+            </div>
+          </dl>
+        </div>
+        <div className="flex-1" />
+        <span className="inline-flex items-center justify-center rounded-[4px] bg-grayscale-100 px-[6px] py-[3px] font-pretendard text-[12px] font-semibold tracking-[-0.3px] leading-[1.4] text-grayscale-500">
           대기 중
         </span>
       </div>

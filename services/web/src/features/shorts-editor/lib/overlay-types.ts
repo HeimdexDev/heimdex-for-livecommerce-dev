@@ -81,6 +81,18 @@ export interface EditorBackgroundOverlay {
   effects: EffectsProps;
 
   fillColor: string;
+  /**
+   * Optional image source painted on top of the fillColor. Set when the
+   * operator uses "이미지 삽입" in the background tab — accepts data URLs
+   * (frontend-only flow, persisted in client state) and HTTP(S) URLs
+   * (future: presigned uploads from the backend). When ``null`` the
+   * overlay renders as a solid color rectangle.
+   *
+   * Wire serialisation depends on backend support — until the contracts
+   * field lands the builder strips this on submit so renders still go
+   * through unchanged.
+   */
+  imageUrl: string | null;
 }
 
 export type EditorOverlay = EditorTextOverlay | EditorBackgroundOverlay;

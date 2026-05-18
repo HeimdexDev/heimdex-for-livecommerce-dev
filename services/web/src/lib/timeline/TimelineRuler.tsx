@@ -100,7 +100,12 @@ export function TimelineRuler({ totalDurationMs, zoom, onSeek }: TimelineRulerPr
         return (
           <span key={mark.ms}>
             <span
-              className="absolute inset-y-0 flex items-center whitespace-nowrap text-[12px] font-medium leading-none tracking-[-0.3px] text-grayscale-800"
+              // ``flex items-center`` em-centred the line box but the
+              // Pretendard glyph cap-height sits above the em-box mid-
+              // line, so "1s/2s" still read ~4px above the dot row. A
+              // small paddingTop pushes the visual cap-height into line
+              // with the 2px dot row sitting at top: 11 / center 12.
+              className="absolute inset-y-0 flex items-center pt-[3px] whitespace-nowrap text-[12px] font-medium leading-none tracking-[-0.3px] text-grayscale-800"
               style={{ left: mark.px }}
             >
               {mark.label}

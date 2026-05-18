@@ -24,7 +24,6 @@ import { ReprocessDialog } from "./ReprocessDialog";
 import { BlurRunDialog } from "@/features/blur/components/BlurRunDialog";
 import { useBlurJobsForFile } from "@/features/blur/hooks/useBlurJob";
 import { createBlurJob, type BlurCategory } from "@/lib/api/blur";
-import { SceneGroupCard } from "./SceneGroupCard";
 import { VideoPeoplePanel } from "./VideoPeoplePanel";
 import { AutoShortsCTA } from "@/features/shorts-auto";
 import {
@@ -32,7 +31,6 @@ import {
   type InlineWizardStep,
 } from "@/features/shorts-auto-product-wizard/components/InlineWizardContainer";
 import { useOrgSettings } from "@/lib/orgSettings";
-import { useSceneGroups } from "@/features/videos/hooks/useSceneGroups";
 import { getDetailThumbnailClass, getThumbnailAspectClass, type ThumbnailAspectRatio } from "@/lib/thumbnailUtils";
 import { Pagination } from "@/components/ui/Pagination";
 import { useTopHeaderBack } from "@/components/layout/TopHeaderActionsContext";
@@ -874,8 +872,10 @@ function ScenesPanel({
   const [isSearching, setIsSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
-  const [groupingEnabled, setGroupingEnabled] = useState(false);
-  const sceneGroups = useSceneGroups(videoId, getToken);
+  // 의미 그룹 grouping toggle was retired on 2026-05-18 review —
+  // operators preferred the flat paginated list. ``useSceneGroups`` /
+  // SceneGroupCard kept around in case the feature returns, but no
+  // entry point is rendered.
 
   const [sceneOverrides, setSceneOverrides] = useState<Record<string, Partial<VideoScene>>>({});
   const displayScenes = (searchResults ?? initialScenes).map((s) => {
@@ -1004,11 +1004,7 @@ function ScenesPanel({
       <div className="mt-6 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
           <h3 className="text-lg font-bold text-gray-900">결과</h3>
-          <span className="text-sm text-gray-500">
-            {groupingEnabled && sceneGroups.data && !activeSearch
-              ? `${sceneGroups.data.total_groups}개 그룹 (${sceneGroups.data.total_scenes}개 장면)`
-              : `${displayTotal}개 장면`}
-          </span>
+          <span className="text-sm text-gray-500">{displayTotal}개 장면</span>
         </div>
         {/* figma: 1602:39047 — 결과 헤더 우측 [블러 처리][쇼츠 제작] */}
         <div className="flex items-center gap-2.5">
@@ -1039,63 +1035,45 @@ function ScenesPanel({
         </div>
       </div>
 
-      {groupingEnabled && sceneGroups.data && !activeSearch ? (
-        <div className="mt-4 space-y-4">
-          {sceneGroups.data.groups.map((group) => (
-            <SceneGroupCard
-              key={group.group_index}
-              group={group}
-              videoId={videoId}
-              agentAvailable={agentAvailable}
-              onSeekToScene={onSeekToScene}
-              activeSceneMs={activeSceneMs}
-              aspectRatio={aspectRatio}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="mt-4 space-y-4">
-          {isSearching ? (
-            <div className="flex items-center justify-center py-12">
-              <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-500" />
-            </div>
-          ) : paginatedScenes.length === 0 ? (
-            <div className="py-12 text-center text-sm text-gray-400">
-              {activeSearch ? "검색 결과가 없습니다." : "장면이 없습니다."}
-            </div>
-          ) : (
-            paginatedScenes.map((scene, i) => {
-              const playing = activeSceneMs === scene.start_ms;
-              return (
-                <div key={scene.scene_id} ref={playing ? activeSceneRef : undefined}>
-                  <SceneCard
-                    scene={scene}
-                    index={(currentPage - 1) * SCENES_PER_PAGE + i}
-                    videoId={videoId}
-                    agentAvailable={agentAvailable}
-                    isSelected={selectedIds.has(scene.scene_id)}
-                    onToggle={toggleSelection}
-                    onSeek={onSeekToScene}
-                    isPlaying={playing}
-                    aspectRatio={aspectRatio}
-                    onSaveOverride={handleSaveOverride}
-                    onResetOverride={handleResetOverride}
-                  />
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
+      <div className="mt-4 space-y-4">
+        {isSearching ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-indigo-500" />
+          </div>
+        ) : paginatedScenes.length === 0 ? (
+          <div className="py-12 text-center text-sm text-gray-400">
+            {activeSearch ? "검색 결과가 없습니다." : "장면이 없습니다."}
+          </div>
+        ) : (
+          paginatedScenes.map((scene, i) => {
+            const playing = activeSceneMs === scene.start_ms;
+            return (
+              <div key={scene.scene_id} ref={playing ? activeSceneRef : undefined}>
+                <SceneCard
+                  scene={scene}
+                  index={(currentPage - 1) * SCENES_PER_PAGE + i}
+                  videoId={videoId}
+                  agentAvailable={agentAvailable}
+                  isSelected={selectedIds.has(scene.scene_id)}
+                  onToggle={toggleSelection}
+                  onSeek={onSeekToScene}
+                  isPlaying={playing}
+                  aspectRatio={aspectRatio}
+                  onSaveOverride={handleSaveOverride}
+                  onResetOverride={handleResetOverride}
+                />
+              </div>
+            );
+          })
+        )}
+      </div>
 
-      {!groupingEnabled && (
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={setCurrentPage}
-          className="mt-8"
-        />
-      )}
+      <Pagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        onPageChange={setCurrentPage}
+        className="mt-8"
+      />
     </div>
   );
 }
@@ -1379,11 +1357,22 @@ export function VideoDetailPage({ videoId }: { videoId: string }) {
             figma 1602:36766 so the wizard takes the full card height,
             visually matching the left VideoInfoPanel.
 
-            Card length is locked to 653×841 across every tab (figma 통일
-            요청, 2026-05-18) so switching between 개요 / 장면 분석 / 인물 관리
-            never reflows the surrounding layout; the active panel scrolls
-            internally if its content exceeds the available height. */}
-        <div className="flex h-[841px] w-[653px] flex-shrink-0 flex-col rounded-dialog bg-white p-[20px] shadow-card">
+            Size policy (2026-05-18 review):
+            - 개요 / 장면 분석 / 인물 관리: locked to 653 × 841 so switching
+              tabs never reflows the surrounding layout — internal scroll
+              handles overflow.
+            - auto-shorts (wizard) view: revert to flex-1 so the product
+              grid + multi-step wizard surfaces aren't squeezed into the
+              narrower 653px lane — that capture (aishorts2-2단계) was
+              clearly clipped after the lock was applied uniformly. */}
+        <div
+          className={cn(
+            "flex flex-col rounded-dialog bg-white p-[20px] shadow-card",
+            view === "auto-shorts"
+              ? "min-w-0 flex-1 self-stretch"
+              : "h-[841px] w-[653px] flex-shrink-0",
+          )}
+        >
           {view !== "auto-shorts" && (
             <nav className="mb-6 flex items-center border-b border-grayscale-100">
               {([

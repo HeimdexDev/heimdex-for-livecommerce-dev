@@ -3,6 +3,7 @@
 // figma: 1669:48897 (default) / 1669:48312 (compressed) — timeline shell
 // figma: 1669:153949 (toolbar row) — trash + timecode • transport • controls • zoom
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { Maximize, Pause, Trash2, Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EditorClip, EditorSubtitle } from "../lib/types";
@@ -59,54 +60,127 @@ function SpeedPopover({
   onChange?: (rate: number) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handle(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handle);
-    return () => document.removeEventListener("mousedown", handle);
-  }, [open]);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <div ref={ref} className="relative">
+    <>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => onChange && setOpen((v) => !v)}
         disabled={!onChange}
         aria-label={`재생 속도 ${rate.toFixed(1)}x`}
+        aria-expanded={open}
         className="flex h-8 items-center justify-center rounded-[8px] bg-neutral-h-50 px-[10px] py-[2px] text-[14px] font-semibold tracking-[-0.35px] text-neutral-h-800 transition-colors hover:bg-neutral-h-100 disabled:cursor-not-allowed disabled:opacity-30"
       >
         {rate.toFixed(1)}x
       </button>
       {open && (
-        <div className="absolute bottom-full left-1/2 z-40 mb-2 flex -translate-x-1/2 flex-col items-center gap-[10px] rounded-[6px] bg-neutral-h-50 p-[6px] shadow-dialog">
-          {PLAYBACK_OPTIONS.map((r) => {
-            const selected = Math.abs(r - rate) < 0.01;
-            return (
-              <button
-                key={r}
-                type="button"
-                onClick={() => {
-                  onChange?.(r);
-                  setOpen(false);
-                }}
-                className={cn(
-                  "flex items-center justify-center rounded-[4px] px-1 text-[14px] font-semibold tracking-[-0.35px] text-neutral-h-800",
-                  selected && "bg-neutral-h-200",
-                )}
-              >
-                {r.toFixed(1)}x
-              </button>
-            );
-          })}
-        </div>
+        // Portalled so the popover escapes the timeline card's
+        // overflow-hidden chrome. Anchored above the trigger via
+        // AnchoredAbovePopover so it can still pop up out of the
+        // editor's bottom toolbar.
+        <AnchoredAbovePopover anchorRef={buttonRef} onClose={() => setOpen(false)}>
+          <div className="flex flex-col items-center gap-[10px] rounded-[6px] bg-neutral-h-50 p-[6px] shadow-dialog">
+            {PLAYBACK_OPTIONS.map((r) => {
+              const selected = Math.abs(r - rate) < 0.01;
+              return (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => {
+                    onChange?.(r);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "flex items-center justify-center rounded-[4px] px-1 text-[14px] font-semibold tracking-[-0.35px] text-neutral-h-800",
+                    selected && "bg-neutral-h-200",
+                  )}
+                >
+                  {r.toFixed(1)}x
+                </button>
+              );
+            })}
+          </div>
+        </AnchoredAbovePopover>
       )}
-    </div>
+    </>
+  );
+}
+
+// Portal-based popover that anchors above the supplied trigger element.
+// Lives here (vs in a shared primitive) because only TimelinePanel's
+// speed + volume popovers need this exact "above the trigger" placement
+// and they both share the same overflow-clip issue with the bottom
+// editor card.
+function AnchoredAbovePopover({
+  anchorRef,
+  onClose,
+  children,
+}: {
+  anchorRef: React.RefObject<HTMLElement>;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ top: -9999, left: -9999 });
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Position the popover above the anchor, centred horizontally over it.
+  // The actual width is content-driven, so we render to the DOM first,
+  // measure, then recompute — handles both the speed list (auto width)
+  // and the vertical volume slider (28px wide).
+  useEffect(() => {
+    const place = () => {
+      const anchor = anchorRef.current;
+      const popover = popoverRef.current;
+      if (!anchor || !popover) return;
+      const arect = anchor.getBoundingClientRect();
+      const prect = popover.getBoundingClientRect();
+      let top = arect.top - prect.height - 8;
+      let left = arect.left + arect.width / 2 - prect.width / 2;
+      const margin = 8;
+      if (top < margin) top = margin;
+      if (left < margin) left = margin;
+      if (left + prect.width > window.innerWidth - margin) {
+        left = window.innerWidth - prect.width - margin;
+      }
+      setPos({ top, left });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [anchorRef]);
+
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      const target = e.target as Node;
+      if (popoverRef.current && popoverRef.current.contains(target)) return;
+      if (anchorRef.current && anchorRef.current.contains(target)) return;
+      onClose();
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [anchorRef, onClose]);
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      ref={popoverRef}
+      style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 50 }}
+    >
+      {children}
+    </div>,
+    document.body,
   );
 }
 
@@ -180,45 +254,41 @@ function VolumePopover({
   onChange?: (volume: number) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handle(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handle);
-    return () => document.removeEventListener("mousedown", handle);
-  }, [open]);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <div ref={ref} className="relative">
+    <>
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => onChange && setOpen((v) => !v)}
         disabled={!onChange}
         aria-label={`볼륨 ${Math.round(volume * 100)}%`}
+        aria-expanded={open}
         className={PILL_BUTTON}
       >
         <Volume2 className="h-5 w-5" strokeWidth={1.5} />
       </button>
       {open && (
-        <div className="absolute bottom-full left-1/2 z-40 mb-2 flex h-[112px] w-[28px] -translate-x-1/2 items-center justify-center rounded-[4px] bg-neutral-h-50 px-[9px] py-[2px] shadow-dialog">
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={volume}
-            onChange={(e) => onChange?.(Number(e.target.value))}
-            aria-label={`볼륨 ${Math.round(volume * 100)}%`}
-            className="h-[2px] w-[88px] -rotate-90 cursor-pointer accent-grayscale-800"
-          />
-        </div>
+        // Portalled so the vertical slider doesn't get clipped by the
+        // timeline card's overflow-hidden chrome; matches SpeedPopover's
+        // anchoring approach.
+        <AnchoredAbovePopover anchorRef={buttonRef} onClose={() => setOpen(false)}>
+          <div className="flex h-[112px] w-[28px] items-center justify-center rounded-[4px] bg-neutral-h-50 px-[9px] py-[2px] shadow-dialog">
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={volume}
+              onChange={(e) => onChange?.(Number(e.target.value))}
+              aria-label={`볼륨 ${Math.round(volume * 100)}%`}
+              className="h-[2px] w-[88px] -rotate-90 cursor-pointer accent-grayscale-800"
+            />
+          </div>
+        </AnchoredAbovePopover>
       )}
-    </div>
+    </>
   );
 }
 
@@ -293,10 +363,13 @@ export function TimelinePanel({
     }
   }, [playheadMs, isPlaying, zoom]);
 
-  // figma: 1669:154010 (펼침) / 1669:49002 (접힘) — zoom ≥ 100 일 때 자막 트랙 펼침
-  const isSubtitleExpanded = zoom >= 100;
-  // playhead spans ruler (24px) + clip track (48px) + subtitle track (32 또는 48) + padding
-  const trackHeight = 88 + (isSubtitleExpanded ? 48 : 32);
+  // Subtitle track height is now locked to 48px regardless of zoom
+  // (2026-05-18 review — operators expected the row's vertical extent
+  // to stay constant while zoom only changed horizontal span). The
+  // ``expanded`` prop on SubtitleTrack is no longer load-bearing.
+  const isSubtitleExpanded = true;
+  // playhead spans ruler (24px) + clip track (48px) + subtitle track (48px) + padding
+  const trackHeight = 88 + 48;
 
   return (
     <div className="flex h-full flex-col">

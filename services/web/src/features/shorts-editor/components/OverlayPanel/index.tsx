@@ -40,6 +40,9 @@ interface OverlayPanelProps {
   // 팝업을 띄우고, 선택한 색이 신규 background overlay 의 fillColor 로
   // 주입된다. 인자가 없으면 기본 색이 적용된다.
   onAddBackgroundOverlay: (fillColor?: string) => void;
+  // "Insert image" — seeds a new background overlay with the data URL
+  // the file picker returned, painted on top of a transparent fill.
+  onAddImageBackgroundOverlay: (imageUrl: string) => void;
   onUpdateOverlay: (id: string, updates: Partial<EditorOverlay>) => void;
   onRemoveOverlay: (id: string) => void;
   onSelectOverlay: (id: string | null) => void;
@@ -66,6 +69,7 @@ export function OverlayPanel({
   state,
   onAddTextOverlay,
   onAddBackgroundOverlay,
+  onAddImageBackgroundOverlay,
   onUpdateOverlay,
   onRemoveOverlay,
   onSelectOverlay,
@@ -142,6 +146,7 @@ export function OverlayPanel({
           kind={tab}
           onAddText={onAddTextOverlay}
           onAddBackground={onAddBackgroundOverlay}
+          onAddImage={onAddImageBackgroundOverlay}
         />
 
         {tab === "text" ? (
@@ -178,14 +183,12 @@ export function OverlayPanel({
             presetsApi itself is preserved because the GNB still calls it. */}
       </div>
 
-      {/* Selection drag tracker so the user can click a different overlay
-          via the layer order without switching tabs. Hidden until > 1 overlay. */}
-      {state.overlays.length > 1 && (
-        <OverlaySelectorRow
-          state={state}
-          onSelect={onSelectOverlay}
-        />
-      )}
+      {/* OverlaySelectorRow (every-overlay chip strip) was pulled on
+          2026-05-18 — once auto-subtitle wiring added many text overlays
+          per session, the row filled the right wrapper with ``T: ...``
+          tags, which the user surfaced as a regression. Selecting a
+          different overlay still works via the preview / left subtitle
+          list, so the chip strip wasn't carrying weight either. */}
     </div>
   );
 }
@@ -219,6 +222,8 @@ function TextEditingBody({
         // border, 10px radius, px-14 py-16.
         className="h-[114px] w-full resize-none rounded-[10px] border-2 border-heimdex-navy-500 bg-white px-[14px] py-[16px] text-[14px] tracking-[-0.35px] text-neutral-h-800 placeholder-neutral-h-300 focus:outline-none"
       />
+
+      <hr className="border-grayscale-100" />
 
       <div className="grid grid-cols-[1fr_120px] gap-2">
         <Dropdown
@@ -282,6 +287,12 @@ function BackgroundEditingBody({
 }) {
   return (
     <div className={cn("space-y-4", isPlaceholder && "opacity-60")}>
+      {/* Thin separator between the ActionBar (add background / insert
+          image) and the toolbar row. The 2026-05-18 spec calls out a
+          dedicated divider here so the add-row reads as a section of
+          its own rather than blending into the icon strip below. */}
+      <hr className="border-grayscale-100" />
+
       <BackgroundToolbar
         overlay={overlay}
         onChange={onUpdate}
@@ -362,37 +373,7 @@ function NumericFieldWithUnit({
   );
 }
 
-function OverlaySelectorRow({
-  state,
-  onSelect,
-}: {
-  state: EditorState;
-  onSelect: (id: string | null) => void;
-}) {
-  const sorted = [...state.overlays].sort(
-    (a, b) => b.layerIndex - a.layerIndex,
-  );
-  return (
-    <div className="border-t border-grayscale-200 p-2">
-      <div className="flex flex-wrap gap-1">
-        {sorted.map((o) => (
-          <button
-            key={o.id}
-            type="button"
-            onClick={() => onSelect(o.id)}
-            className={cn(
-              "rounded border px-2 py-1 text-[10px]",
-              state.selectedOverlayId === o.id
-                ? "border-heimdex-navy-400 bg-grayscale-10 text-heimdex-navy-500"
-                : "border-grayscale-200 text-grayscale-500 hover:bg-grayscale-10",
-            )}
-          >
-            {o.kind === "text"
-              ? `T: ${(o as EditorTextOverlay).text.slice(0, 12) || "…"}`
-              : "BG"}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
+// OverlaySelectorRow (the every-overlay ``T: ...`` chip strip) was
+// removed entirely on 2026-05-18 — it filled the right wrapper once
+// auto-subtitle wiring added many text overlays. Function definition
+// dropped to make sure nothing accidentally re-mounts it.

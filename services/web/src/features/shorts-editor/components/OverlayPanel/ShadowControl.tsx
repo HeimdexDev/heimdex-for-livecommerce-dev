@@ -7,6 +7,7 @@
 import { ColorSwatchButton } from "../primitives/ColorSwatchButton";
 import { LabeledSlider } from "../primitives/LabeledSlider";
 import { NumericStepper } from "../primitives/NumericStepper";
+import { ValueBoxXY } from "../primitives/ValueBox";
 import { t } from "../../lib/i18n/strings";
 
 export interface ShadowControlValue {
@@ -66,26 +67,15 @@ export function ShadowControl({
       <div className="grid grid-cols-[1fr_auto_auto] items-end gap-2">
         <div className="flex flex-col gap-1">
           <span className="text-[10px] font-medium text-grayscale-500">{t.effects.position}</span>
-          <div className="grid grid-cols-2 gap-1">
-            <NumericStepper
-              value={offsetX}
-              min={-100}
-              max={100}
-              onChange={(v) => emit({ offsetX: v })}
-              unit="X"
-              ariaLabel="shadow offset X"
-              disabled={disabled}
-            />
-            <NumericStepper
-              value={offsetY}
-              min={-100}
-              max={100}
-              onChange={(v) => emit({ offsetY: v })}
-              unit="Y"
-              ariaLabel="shadow offset Y"
-              disabled={disabled}
-            />
-          </div>
+          <ValueBoxXY
+            x={offsetX}
+            y={offsetY}
+            min={-100}
+            max={100}
+            onChangeX={disabled ? undefined : (v) => emit({ offsetX: v })}
+            onChangeY={disabled ? undefined : (v) => emit({ offsetY: v })}
+            ariaLabel="shadow offset"
+          />
         </div>
         <div className="flex flex-col gap-1">
           <span className="text-[10px] font-medium text-grayscale-500">{t.effects.spread}</span>
