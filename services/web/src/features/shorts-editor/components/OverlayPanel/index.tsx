@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
-import { Dropdown } from "../primitives/Dropdown";
+import { FontDropdown } from "../primitives/FontDropdown";
 import { ActionBar } from "./ActionBar";
 import { BackgroundToolbar } from "./BackgroundToolbar";
 import { EffectsSection, StrokeBlock } from "./EffectsSection";
@@ -21,7 +21,6 @@ import { runOneTimePresetMigration } from "../../lib/preset-migration";
 import type {
   EditorBackgroundOverlay,
   EditorOverlay,
-  EditorOverlayKind,
   EditorTextOverlay,
   EffectsProps,
   TransformProps,
@@ -72,27 +71,25 @@ export function OverlayPanel({
   onSelectOverlay,
   onReorderOverlay,
 }: OverlayPanelProps) {
+  void onAddBackgroundOverlay;
+  void onAddImageBackgroundOverlay;
+  void onReorderOverlay;
   const { selected } = useOverlaySelection(state);
-  const [tab, setTab] = useState<EditorOverlayKind>("text");
   const { getAccessToken } = useAuth();
 
-  // Auto-switch tab when the selected overlay's kind doesn't match — the
-  // user clicked an overlay in the preview, the panel should follow.
-  useEffect(() => {
-    if (selected && selected.kind !== tab) {
-      setTab(selected.kind);
-    }
-  }, [selected, tab]);
-
-  // Selected overlay only counts when its kind matches the current tab.
-  // When no overlay is selected we still render the full control surface
-  // (figma 1663:45752 expects controls present at all times) — the
-  // editor body just binds to a stable default overlay so the inputs
-  // show sensible default values and onUpdate is a no-op until the user
-  // explicitly adds an overlay via the "+ 텍스트 추가" / "+ 단색 배경
-  // 추가" button or selects an existing one in the timeline / preview.
-  const selectedForTab =
-    selected && selected.kind === tab ? selected : null;
+  // 2026-05-19 — OverlayPanel is mounted ONLY as the RightPanel "텍스트"
+  // tab content. The background tab has its own dedicated BackgroundPanel
+  // instance. The previous internal ``tab`` state + auto-switch effect
+  // would flip this panel into background-editing mode whenever the
+  // currently selected overlay was a background, which surfaced as
+  // "텍스트 섹션이 배경 섹션 내용으로 채워진다" — the text tab in the
+  // outer RightPanel still rendered, but the inner panel showed the
+  // background editor controls. Dropping the internal tab pins the
+  // panel to text-only and the background overlay no longer bleeds in.
+  const selectedTextOverlay =
+    selected && selected.kind === "text"
+      ? (selected as EditorTextOverlay)
+      : null;
 
   // Stable defaults so the controls render with stable identities. startMs
   // = 0 is meaningless here because the overlay never enters state — these
@@ -101,13 +98,9 @@ export function OverlayPanel({
     () => createDefaultTextOverlay({ startMs: 0 }),
     [],
   );
-  const defaultBgOverlay = useMemo(
-    () => createDefaultBackgroundOverlay({ startMs: 0 }),
-    [],
-  );
 
   const presetsApi = usePresets({
-    kind: tab,
+    kind: "text",
     getToken: getAccessToken,
     enabled: true,
   });
@@ -140,38 +133,20 @@ export function OverlayPanel({
           rendering a duplicate row inside the same surface. */}
       <div className="flex-1 space-y-4 overflow-y-auto">
         <ActionBar
-          kind={tab}
+          kind="text"
           onAddText={onAddTextOverlay}
-          onAddBackground={onAddBackgroundOverlay}
-          onAddImage={onAddImageBackgroundOverlay}
+          onAddBackground={() => {}}
+          onAddImage={() => {}}
         />
 
-        {tab === "text" ? (
-          <TextEditingBody
-            overlay={
-              (selectedForTab as EditorTextOverlay | null) ?? defaultTextOverlay
-            }
-            onUpdate={(updates) => {
-              if (selectedForTab) onUpdateOverlay(selectedForTab.id, updates);
-            }}
-            isPlaceholder={selectedForTab == null}
-          />
-        ) : (
-          <BackgroundEditingBody
-            overlay={
-              (selectedForTab as EditorBackgroundOverlay | null) ??
-              defaultBgOverlay
-            }
-            onUpdate={(updates) => {
-              if (selectedForTab) onUpdateOverlay(selectedForTab.id, updates);
-            }}
-            onReorder={(direction) => {
-              if (selectedForTab)
-                onReorderOverlay(selectedForTab.id, direction);
-            }}
-            isPlaceholder={selectedForTab == null}
-          />
-        )}
+        <TextEditingBody
+          overlay={selectedTextOverlay ?? defaultTextOverlay}
+          onUpdate={(updates) => {
+            if (selectedTextOverlay)
+              onUpdateOverlay(selectedTextOverlay.id, updates);
+          }}
+          isPlaceholder={selectedTextOverlay == null}
+        />
 
         {/* PresetSection (inline preset save + apply inside the wrapper) was
             dropped per the 2026-05-18 goal capture. The GNB TemplateSaveMenu
@@ -223,7 +198,7 @@ function TextEditingBody({
       <hr className="border-grayscale-100" />
 
       <div className="grid grid-cols-[1fr_120px] gap-2">
-        <Dropdown
+        <FontDropdown
           value={overlay.fontFamily}
           options={FONT_OPTIONS}
           onChange={(v) =>
