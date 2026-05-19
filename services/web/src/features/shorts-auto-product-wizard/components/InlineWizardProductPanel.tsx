@@ -407,7 +407,12 @@ export function InlineWizardProductPanel({
         className="flex flex-col items-start justify-start gap-[20px] p-[20px]"
         style={{ width: 943, minHeight: 454 }}
       >
-        <div className="flex items-center justify-between gap-4">
+        {/* 2026-05-19 — pin the title row + summary chip + 다음 button to
+            the top of the wrapper so it stays visible while the grid
+            scrolls. ``-mx-[20px] -mt-[20px] px-[20px] py-[16px]`` cancels
+            the wrapper's outer padding so the sticky band spans edge to
+            edge with its own padding. */}
+        <div className="sticky top-0 z-20 -mx-[20px] -mt-[20px] flex w-[943px] items-center justify-between gap-4 border-b border-grayscale-100 bg-white px-[20px] py-[16px]">
           <h2 className="text-[18px] font-semibold tracking-[-0.45px] text-grayscale-800">
             상품 선택{" "}
             <span className="ml-[4px] text-[14px] font-medium text-grayscale-500">

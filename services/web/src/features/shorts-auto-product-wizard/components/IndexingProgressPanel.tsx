@@ -1,32 +1,34 @@
-// figma: 1713:288103  (cache: .figma-cache/1713-288103_phase2_wizard-indexing.api.json)
-// node-name: Component2-6.b AI 쇼츠 생성(인덱싱 중)
-// spec: card padL/R/T/B=20 radius=10(rounded-card) shadow=card | pill radius=999(rounded-full) padL/R=16 padT/B=12
-// spec: percent 16/600 (Q4 Figma 채택, was 48/600) | connector 31×4 (StageConnectorDots)
 // ============================================================================
-// Inline-wizard Step 3 (인덱싱 진행) panel — purely presentational. Renders the
-// 4-stage pipeline + progress percent + ETA per Figma 1713:288103. Stage
-// labels map to backend ``ScanStage`` values:
+// Inline-wizard step 2-1 (인덱싱 진행) progress panel.
 //
+// 2026-05-19 redesign: drop the pill-style stage chips that wrapped
+// their inline labels vertically when the wrapper width was squeezed.
+// New layout is a step indicator — circle + label-below — with a
+// single horizontal connector line that passes UNDER the circles
+// (z-index trick) so there is no visible gap between line and circle.
+//
+// Stage labels map to backend ``ScanStage`` values:
 //   enumerating → "분석 중"
-//   tracking    → "제품 확인"
+//   tracking    → "상품 확인"
 //   assembling  → "분류 중"
 //   rendering   → "마무리 중"
 //
-// The mount condition is owned by the caller (the wizard container or
-// result page). This component takes the derived ``progress``,
-// ``currentStage`` and ``completedStages`` as props so it stays stateless.
+// The mount condition is owned by the caller. This component takes
+// the derived ``progress``, ``currentStage`` and ``completedStages``
+// as props so it stays stateless.
 // ============================================================================
 
 "use client";
-
-import { Check } from "lucide-react";
 
 import { Button } from "@/components/ui/figma-index";
 import { formatVideoTimestampHMS } from "@/lib/timeline";
 import { cn } from "@/lib/utils";
 
 import type { WizardCriteriaDraft } from "./InlineWizardCriteriaPanel";
-import { StageConnectorDots } from "./StageConnectorDots";
+
+const NAVY = "#234C77";
+const GREEN_CHECK = "#3FB675";
+const QUEUED_GRAY = "#E5E7EB";
 
 export type IndexingStage =
   | "enumerating"
@@ -36,15 +38,12 @@ export type IndexingStage =
 
 const STAGES: ReadonlyArray<{ id: IndexingStage; label: string }> = [
   { id: "enumerating", label: "분석 중" },
-  { id: "tracking", label: "제품 확인" },
+  { id: "tracking", label: "상품 확인" },
   { id: "assembling", label: "분류 중" },
   { id: "rendering", label: "마무리 중" },
 ];
 
 interface Props {
-  // criteria + videoDurationMs are optional so the result-page can mount
-  // this panel without the wizard-criteria context (no summary chip / 다음
-  // button — the right cluster is hidden entirely when either is omitted).
   criteria?: WizardCriteriaDraft;
   videoDurationMs?: number;
   /** Overall progress in [0, 1]. */
@@ -53,17 +52,13 @@ interface Props {
   currentStage: IndexingStage | null;
   /** Stages already finished, in pipeline order. */
   completedStages?: ReadonlyArray<IndexingStage>;
-  /** Hide the option-summary chip + 다음 button on the right (step 2-1). */
   hideHeaderActions?: boolean;
-  /** Hide the percent indicator (some hosts already show their own). */
   hidePercent?: boolean;
-  /** Legacy ETA prop — now always replaced with the static "보통 30-90초" copy. */
+  /** Accepted for backward-compat, never read. */
   estimatedRemainingSeconds?: number;
   /**
-   * When true, drop the outer white card + heading row so the panel
-   * sits flush inside a parent surface (step 2-1's product picker
-   * already provides its own wrapper). The stage list + percent + ETA
-   * still render — just without their own framing.
+   * Drop the outer white card + heading row so the panel sits flush
+   * inside a parent surface.
    */
   bare?: boolean;
 }
@@ -91,6 +86,37 @@ function clampPercent(progress: number): number {
   return Math.max(0, Math.min(100, Math.round(progress * 100)));
 }
 
+function CheckMarkIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="22"
+      height="22"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect width="24" height="24" rx="12" fill={GREEN_CHECK} />
+      <path
+        d="M17 8.66211L10.125 15.5371L7 12.4121"
+        stroke="white"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function Spinner() {
+  return (
+    <span
+      className="block h-3 w-3 animate-spin rounded-full border-2 border-gray-200"
+      style={{ borderTopColor: NAVY }}
+      aria-hidden="true"
+    />
+  );
+}
+
 export function IndexingProgressPanel({
   criteria,
   videoDurationMs,
@@ -102,13 +128,83 @@ export function IndexingProgressPanel({
   bare = false,
 }: Props) {
   const percent = clampPercent(progress);
-  const completedSet = new Set(completedStages);
+  const completedSet = new Set<string>(completedStages);
   const showHeaderActions =
     !hideHeaderActions && criteria != null && videoDurationMs != null;
 
-  // Breadcrumb (step indicator) was moved up to WizardStepResult so it
-  // also renders for the result-grid path. Leaving it here too would
-  // double-set the slot when both components mount on the same render.
+  const stepper = (
+    <ol
+      className="relative mx-auto flex w-full max-w-[520px] items-start"
+      data-testid="indexing-stage-list"
+      aria-label="쇼츠 생성 파이프라인"
+    >
+      {STAGES.map((stage, i) => {
+        const isCompleted = completedSet.has(stage.id);
+        const isActive = !isCompleted && currentStage === stage.id;
+        const state: "completed" | "active" | "queued" = isCompleted
+          ? "completed"
+          : isActive
+            ? "active"
+            : "queued";
+        return (
+          <li
+            key={stage.id}
+            className="relative flex flex-1 flex-col items-center last:flex-none"
+            data-testid={`indexing-stage-${stage.id}`}
+            data-state={state}
+          >
+            {/* Connector to next stage. Starts at center of this
+                circle (left: 50%) and ends at center of next (right:
+                -50%). z-0 places it UNDER the circles so there's no
+                visible gap at either end. */}
+            {i < STAGES.length - 1 ? (
+              <span
+                aria-hidden="true"
+                className="absolute top-4 z-0 h-[2px] -translate-y-1/2"
+                style={{
+                  left: "50%",
+                  right: "-50%",
+                  backgroundColor: isCompleted ? NAVY : QUEUED_GRAY,
+                }}
+              />
+            ) : null}
+
+            <span
+              className={cn(
+                "relative z-10 flex h-8 w-8 items-center justify-center rounded-full bg-white transition",
+                !isCompleted &&
+                  (isActive
+                    ? "border-2"
+                    : "border-2 border-gray-300"),
+              )}
+              style={isActive ? { borderColor: NAVY } : undefined}
+            >
+              {isCompleted ? (
+                <CheckMarkIcon />
+              ) : isActive ? (
+                <Spinner />
+              ) : (
+                <span className="text-xs font-semibold text-gray-400">
+                  {i + 1}
+                </span>
+              )}
+            </span>
+
+            <span
+              className={cn(
+                "mt-2 whitespace-nowrap text-[12px] font-medium tracking-[-0.3px]",
+                isCompleted || isActive
+                  ? "text-grayscale-800"
+                  : "text-grayscale-500",
+              )}
+            >
+              {stage.label}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
 
   const body = (
     <>
@@ -133,86 +229,36 @@ export function IndexingProgressPanel({
         </div>
       ) : null}
 
-        <ol
-          className="flex items-center gap-[12px]"
-          data-testid="indexing-stage-list"
-          aria-label="쇼츠 생성 파이프라인"
-        >
-          {STAGES.map((stage, i) => {
-            const isCompleted = completedSet.has(stage.id);
-            const isActive = !isCompleted && currentStage === stage.id;
-            const state = isCompleted
-              ? "completed"
-              : isActive
-                ? "active"
-                : "queued";
-            return (
-              <li
-                key={stage.id}
-                className="flex flex-1 items-center gap-[12px]"
-              >
-                <span
-                  className={cn(
-                    "flex flex-1 items-center justify-center gap-[8px] rounded-full px-[16px] py-[12px] text-[14px] font-semibold tracking-[-0.35px] transition",
-                    isCompleted &&
-                      "bg-heimdex-navy-600 text-white",
-                    isActive &&
-                      "border-2 border-heimdex-navy-500 bg-white text-heimdex-navy-500",
-                    state === "queued" &&
-                      "bg-neutral-h-50 text-grayscale-500",
-                  )}
-                  data-testid={`indexing-stage-${stage.id}`}
-                  data-state={state}
-                >
-                  {isCompleted ? (
-                    <Check
-                      className="h-[16px] w-[16px]"
-                      strokeWidth={3}
-                      aria-hidden="true"
-                    />
-                  ) : null}
-                  {isActive ? (
-                    <span
-                      className="inline-flex h-[16px] w-[16px] animate-spin"
-                      aria-hidden="true"
-                    >
-                      <span className="block h-full w-full rounded-full border-2 border-neutral-h-100 border-t-heimdex-navy-500" />
-                    </span>
-                  ) : null}
-                  <span>{stage.label}</span>
-                </span>
-                {i < STAGES.length - 1 ? (
-                  <StageConnectorDots precedingState={state} />
-                ) : null}
-              </li>
-            );
-          })}
-        </ol>
+      <div className="flex w-full flex-col items-center gap-[24px] py-[12px]">
+        {stepper}
 
-      <div className="flex flex-col items-center gap-[8px] pb-[20px] pt-[12px]">
-        {!hidePercent ? (
+        <div className="flex flex-col items-center gap-[6px]">
+          {!hidePercent ? (
+            <p
+              className="text-[16px] font-semibold leading-[1.4] tracking-[-0.4px]"
+              style={{ color: NAVY }}
+              data-testid="indexing-progress-percent"
+            >
+              진행률 {percent}%
+            </p>
+          ) : null}
           <p
-            className="text-[16px] font-semibold leading-[1.4] tracking-[-0.4px] text-heimdex-navy-500"
-            data-testid="indexing-progress-percent"
+            className="text-[14px] font-medium tracking-[-0.35px] text-neutral-h-600"
+            data-testid="indexing-progress-eta"
           >
-            진행률 {percent}%
+            보통 30-90초 소요
           </p>
-        ) : null}
-        {/* Static guidance — accurate per-stage ETA isn't reliable yet,
-            so the 2026-05-18 spec asks for a fixed range message. */}
-        <p
-          className="text-[14px] font-medium tracking-[-0.35px] text-neutral-h-600"
-          data-testid="indexing-progress-eta"
-        >
-          보통 30-90초 소요
-        </p>
+        </div>
       </div>
     </>
   );
 
   if (bare) {
     return (
-      <div className="space-y-[28px] font-pretendard" data-testid="indexing-progress-bare">
+      <div
+        className="space-y-[20px] font-pretendard"
+        data-testid="indexing-progress-bare"
+      >
         {body}
       </div>
     );

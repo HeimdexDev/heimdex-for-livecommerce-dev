@@ -26,7 +26,7 @@ describe("IndexingProgressPanel", () => {
       "분석 중",
     );
     expect(screen.getByTestId("indexing-stage-tracking")).toHaveTextContent(
-      "제품 확인",
+      "상품 확인",
     );
     expect(screen.getByTestId("indexing-stage-assembling")).toHaveTextContent(
       "분류 중",
